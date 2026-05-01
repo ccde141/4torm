@@ -1,0 +1,152 @@
+/**
+ * ============================================================
+ *  Design Tokens — CSS Custom Properties
+ * ============================================================
+ *  所有视觉变量的定义。修改此处即可全局换肤。
+ * ============================================================
+ */
+
+:root {
+  /* ─── 色彩系统 ──────────────────────────────────────── */
+
+  /* 中性色（zinc）— 页面基底 */
+  --color-bg-primary:   #0f172a;  /* 深海军蓝 (slate-900) — 有可见蓝色调，毛玻璃可透出层次 */
+  --color-bg-secondary: #18181b;  /* zinc-900 */
+  --color-bg-tertiary:  #27272a;  /* zinc-800 */
+  --color-bg-elevated:  #3f3f46;  /* zinc-700 */
+
+  /* 文字色 */
+  --color-text-primary:  #fafafa;  /* zinc-50 */
+  --color-text-secondary:#a1a1aa;  /* zinc-400 */
+  --color-text-tertiary: #71717a;  /* zinc-500 */
+  --color-text-inverse:  #18181b;  /* zinc-900 */
+
+  /* 强调色 — 风暴蓝（主色调） */
+  --color-accent:        #3b82f6;  /* blue-500 */
+  --color-accent-hover:  #2563eb;  /* blue-600 */
+  --color-accent-subtle: rgba(59, 130, 246, 0.12);
+  --color-accent-glow:   rgba(59, 130, 246, 0.25);
+
+  /* 点缀色 — 琥珀（闪电/高亮点缀） */
+  --color-accent-secondary:        #f59e0b;  /* amber-500 */
+  --color-accent-secondary-subtle: rgba(245, 158, 11, 0.12);
+
+  /* 语义色 */
+  --color-success:       #22c55e;
+  --color-warning:       #fbbf24;
+  --color-error:         #ef4444;
+  --color-info:          #3b82f6;
+
+  /* 沙盒色 */
+  --color-sandbox:        #7c3aed;
+  --color-sandbox-light:  #a78bfa;
+  --color-sandbox-orange: #f97316;
+
+  /* 状态色（Agent status） */
+  --status-online:       #4ade80;
+  --status-idle:         #a1a1aa;
+  --status-busy:         #fbbf24;
+  --status-offline:      #6b7280;
+  --status-error:        #ef4444;
+
+  /* ─── 边框 ──────────────────────────────────────────── */
+  --border-color:        rgba(255, 255, 255, 0.06);
+  --border-color-hover:  rgba(255, 255, 255, 0.12);
+  --border-radius-sm:    6px;
+  --border-radius-md:    10px;
+  --border-radius-lg:    16px;
+  --border-radius-full:  9999px;
+
+  /* ─── 玻璃质感（frosted glass） ────────────────────── */
+  --glass-bg:           rgba(24, 24, 27, 0.50);
+  --glass-bg-hover:     rgba(39, 39, 42, 0.60);
+  --glass-border:       rgba(255, 255, 255, 0.08);
+  --glass-border-hover: rgba(255, 255, 255, 0.14);
+  --glass-blur:         16px;
+  --glass-shadow:       0 4px 20px rgba(0, 0, 0, 0.4);
+
+  /* ─── 阴影 ──────────────────────────────────────────── */
+  --shadow-sm:           0 1px 2px rgba(0,0,0,0.3);
+  --shadow-md:           0 4px 12px rgba(0,0,0,0.4);
+  --shadow-lg:           0 8px 24px rgba(0,0,0,0.5);
+  --shadow-glow:         0 0 24px var(--color-accent-glow);
+
+  /* ─── 字体 ──────────────────────────────────────────── */
+  --font-sans:           'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono:           'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  --text-xs:             0.75rem;    /* 12px */
+  --text-sm:             0.8125rem;  /* 13px */
+  --text-base:           0.875rem;   /* 14px */
+  --text-lg:             1rem;       /* 16px */
+  --text-xl:             1.125rem;   /* 18px */
+  --text-2xl:            1.5rem;     /* 24px */
+  --text-3xl:            2rem;       /* 32px */
+  --text-4xl:            2.5rem;     /* 40px */
+
+  --leading-tight:       1.25;
+  --leading-normal:      1.6;
+  --leading-relaxed:     1.75;
+
+  --font-normal:         400;
+  --font-medium:         500;
+  --font-semibold:       600;
+  --font-bold:           700;
+
+  /* ─── 间距（4px 基准） ──────────────────────────────── */
+  --space-1:   4px;
+  --space-2:   8px;
+  --space-3:   12px;
+  --space-4:   16px;
+  --space-5:   20px;
+  --space-6:   24px;
+  --space-8:   32px;
+  --space-10:  40px;
+  --space-12:  48px;
+  --space-16:  64px;
+
+  /* ─── 动效 ──────────────────────────────────────────── */
+  --ease-out-expo:   cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-back:   cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-in-out:     cubic-bezier(0.65, 0, 0.35, 1);
+
+  --duration-fast:   150ms;
+  --duration-normal: 250ms;
+  --duration-slow:   400ms;
+
+  /* ─── 背景纹理（默认无，设置 URL 即可叠加） ────────── */
+  --texture: none;
+  --texture-opacity: 0;
+  --texture-blur: 0px;
+  --texture-blend: normal;
+
+  /* ─── 布局 ──────────────────────────────────────────── */
+  --sidebar-width:    260px;
+  --header-height:    56px;
+  --content-max:      1400px;
+
+  /* ─── 别名（兼容旧版命名） ────────────────────────── */
+  --color-surface:            var(--color-bg-secondary);
+  --color-bg:                 var(--color-bg-primary);
+  --color-text:               var(--color-text-primary);
+  --color-border:             var(--border-color);
+  --color-bg-hover:           var(--color-bg-tertiary);
+  --color-text-quaternary:    #52525b;
+
+  --radius-sm:                var(--border-radius-sm);
+  --radius-md:                var(--border-radius-md);
+  --radius-lg:                var(--border-radius-lg);
+  --radius-full:              var(--border-radius-full);
+
+  --font-xs:                  var(--text-xs);
+  --font-sm:                  var(--text-sm);
+  --font-lg:                  var(--text-lg);
+
+  /* ─── 环境光（皮肤氛围色） ────────────────────────── */
+  --ambient-glow-1:           rgba(59, 130, 246, 0.35);
+  --ambient-glow-2:           rgba(59, 130, 246, 0.10);
+
+  /* ─── 玻璃别名 ────────────────────────────────────── */
+  --glass:                    var(--glass-bg);
+  --glass-hover:              var(--glass-bg-hover);
+}

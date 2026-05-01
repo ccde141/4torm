@@ -1,0 +1,12 @@
+{
+  "type": "example_translator",
+  "label": "翻译节点",
+  "category": "custom",
+  "color": "#6366f1",
+  "inputs": 1,
+  "outputs": 1,
+  "config_schema": [
+    { "key": "target_language", "label": "目标语言", "type": "select", "options": ["en", "zh", "ja", "ko", "fr", "de"] },
+    { "key": "tone", "label": "语气", "type": "text", "default": "正式" }
+  ]
+}

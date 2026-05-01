@@ -1,0 +1,15 @@
+{
+  "name": "Git Logger",
+  "description": "获取 Git 仓库最近的提交日志",
+  "type": "custom",
+  "category": "版本控制",
+  "color": "#f59e0b",
+  "icon": "📜",
+  "inputs": 1,
+  "outputs": 1,
+  "executor": "executor.js",
+  "parameters": {
+    "repoPath": { "type": "string", "label": "仓库路径", "default": "" },
+    "maxCommits": { "type": "number", "label": "最大提交数", "default": 10 }
+  }
+}

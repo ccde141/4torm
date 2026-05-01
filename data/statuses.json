@@ -1,0 +1,26 @@
+[
+  {
+    "id": "idle",
+    "label": "空闲",
+    "color": "#4ade80",
+    "isSystem": true
+  },
+  {
+    "id": "busy",
+    "label": "工作中",
+    "color": "#fbbf24",
+    "isSystem": true
+  },
+  {
+    "id": "sandbox",
+    "label": "沙箱中",
+    "color": "#f97316",
+    "isSystem": true
+  },
+  {
+    "id": "offline",
+    "label": "离线",
+    "color": "#ef4444",
+    "isSystem": true
+  }
+]

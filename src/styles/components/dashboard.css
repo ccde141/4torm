@@ -1,0 +1,158 @@
+/**
+ * ============================================================
+ *  Dashboard Page Styles
+ * ============================================================
+ */
+
+/* ─── Layout ─────────────────────────────────────────────── */
+.dashboard {
+  padding: var(--space-6);
+  overflow-y: auto;
+  height: 100%;
+}
+
+/* ─── Info Bar (compact metadata strip) ─────────────────── */
+.dashboard__info-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-3) var(--space-4);
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-md);
+  margin-bottom: var(--space-6);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.dashboard__info-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dashboard__info-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--border-radius-full);
+  background: var(--color-accent);
+  flex-shrink: 0;
+}
+
+.dashboard__info-dot--online {
+  background: var(--color-success);
+  box-shadow: 0 0 4px var(--color-success);
+}
+
+.dashboard__info-dot--agent {
+  background: var(--color-info);
+  box-shadow: 0 0 4px var(--color-info);
+}
+
+.dashboard__info-dot--session {
+  background: var(--color-text-primary);
+}
+
+.dashboard__info-value {
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+}
+
+/* ─── Toolbar ────────────────────────────────────────────── */
+.dashboard__toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-6);
+}
+
+.dashboard__filter-group {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.dashboard__filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--border-radius-full);
+  border: 1px solid;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+  font-family: inherit;
+  border-color: var(--border-color);
+}
+
+.dashboard__filter-btn:hover {
+  color: var(--color-text-secondary);
+  border-color: var(--border-color-hover);
+  transform: scale(1.05);
+}
+
+.dashboard__filter-btn:active {
+  transform: scale(0.95);
+}
+
+.dashboard__filter-btn--active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-subtle);
+}
+
+.dashboard__filter-btn--all {
+  /* default color — shares base styles */
+}
+
+.dashboard__filter-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+/* ─── Create Button ──────────────────────────────────────── */
+.dashboard__create-btn {
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+  border: none;
+  border-radius: var(--border-radius-md);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+
+.dashboard__create-btn:hover {
+  background: var(--color-accent-hover);
+  transform: scale(1.04);
+}
+
+.dashboard__create-btn:active {
+  transform: scale(0.96);
+}
+
+/* ─── Agent Grid ─────────────────────────────────────────── */
+.dashboard__agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-6);
+}
+
+/* ─── Loading Skeleton ───────────────────────────────────── */
+.dashboard__skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-6);
+  padding: var(--space-6);
+}

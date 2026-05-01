@@ -1,0 +1,200 @@
+.sandbox-node {
+  background: var(--color-surface);
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-md);
+  min-width: 160px;
+  min-height: 40px;
+  width: 100%;
+  height: 100%;
+  font-size: var(--text-sm);
+  transition: box-shadow 0.2s ease;
+}
+
+.sandbox-node.selected {
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+
+.sandbox-node--entry {
+  border-color: var(--color-text-tertiary);
+}
+
+.sandbox-node--agent {
+  border-color: var(--color-sandbox);
+}
+
+.sandbox-node--condition {
+  border-style: dashed;
+}
+
+.sandbox-node--loop {
+  border-color: var(--color-info);
+}
+
+.sandbox-node--merge {
+  border-color: var(--color-accent);
+}
+
+.sandbox-node--fork {
+  border-color: var(--color-info);
+}
+
+.sandbox-node--variable {
+  border-color: var(--color-sandbox-light);
+}
+
+.sandbox-node--human-gate {
+  border-color: var(--color-warning);
+  border-style: dashed;
+}
+
+.sandbox-node--errorhandler {
+  border-color: var(--color-error);
+  border-style: dashed;
+}
+
+.sandbox-node--output {
+  border-color: var(--color-success);
+}
+
+.sandbox-node--subflow {
+  border-color: var(--color-info);
+  border-style: dashed;
+}
+
+.sandbox-node-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+}
+
+.sandbox-node-icon {
+  font-size: var(--text-base);
+  flex-shrink: 0;
+}
+
+.sandbox-node-label {
+  font-weight: var(--font-semibold);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sandbox-node-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sandbox-node-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sandbox-node-body {
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.sandbox-node-preview {
+  line-height: 1.4;
+}
+
+.sandbox-node-status {
+  font-size: 10px;
+  font-weight: var(--font-semibold);
+  margin-top: 4px;
+}
+
+.sandbox-node-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sandbox-agent-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: rgba(124, 58, 237, 0.15);
+  color: var(--color-sandbox);
+  font-weight: var(--font-bold);
+  font-size: var(--text-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.react-flow__node.react-flow__node-entry,
+.react-flow__node.react-flow__node-agent,
+.react-flow__node.react-flow__node-condition,
+.react-flow__node.react-flow__node-loopCount,
+.react-flow__node.react-flow__node-loopWhile,
+.react-flow__node.react-flow__node-merge,
+.react-flow__node.react-flow__node-fork,
+.react-flow__node.react-flow__node-variable,
+.react-flow__node.react-flow__node-humanGate,
+.react-flow__node.react-flow__node-errorHandler,
+.react-flow__node.react-flow__node-output,
+.react-flow__node.react-flow__node-subflow {
+  cursor: grab;
+}
+
+.react-flow__node.selected {
+  box-shadow: 0 0 0 2px var(--color-accent) !important;
+}
+
+.react-flow__controls {
+  background: var(--color-surface) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: var(--radius-md) !important;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background: var(--color-surface) !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  fill: var(--color-text-secondary) !important;
+  width: 28px !important;
+  height: 28px !important;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--color-bg) !important;
+}
+
+.react-flow__controls-button svg,
+.react-flow__controls-button path {
+  fill: var(--color-text-secondary) !important;
+}
+
+.react-flow__minimap {
+  background: var(--color-surface) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: var(--radius-md) !important;
+}
+
+.react-flow__minimap-mask {
+  fill: rgba(0, 0, 0, 0.6) !important;
+}
+
+.react-flow__attribution {
+  background: transparent !important;
+  color: var(--color-text-tertiary) !important;
+  font-size: 10px !important;
+}
+
+.react-flow__resize-control {
+  border-color: var(--color-accent) !important;
+}
+
+.react-flow__resize-control.line {
+  border-color: transparent !important;
+}

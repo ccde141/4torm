@@ -1,0 +1,24 @@
+{
+  "providers": [
+    {
+      "id": "pvd_local",
+      "label": "本地模型",
+      "baseUrl": "http://localhost:1234/v1",
+      "apiKey": "",
+      "models": [
+        "example-model-1"
+      ]
+    },
+    {
+      "id": "pvd_example",
+      "label": "示例服务商",
+      "baseUrl": "https://api.example.com",
+      "apiKey": "sk-your-api-key-here",
+      "models": [
+        "example-model-pro",
+        "example-model-flash"
+      ]
+    }
+  ],
+  "activeModel": ""
+}

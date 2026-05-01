@@ -1,0 +1,198 @@
+/**
+ * ============================================================
+ *  Header Component Styles
+ * ============================================================
+ */
+
+.header {
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-8);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 50;
+}
+
+.header__title {
+  font-size: var(--text-xl);
+  font-weight: var(--font-semibold);
+  letter-spacing: -0.02em;
+}
+
+.header__subtitle {
+  font-size: var(--text-sm);
+  color: var(--color-text-tertiary);
+  margin-top: 1px;
+}
+
+.header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.header__search {
+  position: relative;
+}
+
+.header__search-input {
+  width: 240px;
+  height: 36px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-md);
+  padding: 0 var(--space-3) 0 var(--space-10);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  transition: all var(--duration-fast) var(--ease-out-expo);
+  outline: none;
+}
+
+.header__search-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.header__search-input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-subtle);
+  width: 300px;
+}
+
+.header__search-icon {
+  position: absolute;
+  left: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  color: var(--color-text-secondary);
+  pointer-events: none;
+}
+
+.header__btn {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-md);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+
+.header__btn:hover {
+  border-color: var(--border-color-hover);
+  color: var(--color-text-primary);
+  background: var(--color-bg-elevated);
+  transform: scale(1.08);
+}
+
+.header__btn:active {
+  transform: scale(0.94);
+}
+
+.header__btn--active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-subtle);
+}
+
+.header__skin-wrapper {
+  position: relative;
+}
+
+.header__search-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-md);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  max-height: 360px;
+  overflow-y: auto;
+  z-index: 100;
+  padding: var(--space-1);
+}
+
+.header__search-empty {
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.header__search-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--border-radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  transition: background var(--duration-fast) var(--ease-out-expo);
+}
+
+.header__search-item:hover {
+  background: var(--color-bg-elevated);
+}
+
+.header__search-item-icon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--border-radius-sm);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+}
+
+.header__search-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.header__search-item-label {
+  font-weight: var(--font-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header__search-item-sublabel {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header__search-item-type {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-tertiary);
+}

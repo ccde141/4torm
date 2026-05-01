@@ -1,0 +1,7 @@
+{
+  "name": "Code Review",
+  "description": "代码审查技能 — 自动分析 PR 质量、安全漏洞、性能问题，给出评估报告",
+  "category": "开发",
+  "version": "1.0.0",
+  "author": "System"
+}

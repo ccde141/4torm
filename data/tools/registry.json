@@ -1,0 +1,95 @@
+[
+  {
+    "name": "read_file",
+    "description": "读取文件内容，返回全文",
+    "category": "io",
+    "dangerous": false,
+    "executorType": "builtin",
+    "executorFile": "read_file",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filePath": { "type": "string", "description": "相对于工作区根目录的文件路径" }
+      },
+      "required": ["filePath"]
+    }
+  },
+  {
+    "name": "write_file",
+    "description": "创建或覆盖文件",
+    "category": "io",
+    "dangerous": true,
+    "executorType": "builtin",
+    "executorFile": "write_file",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filePath": { "type": "string", "description": "相对于工作区根目录的文件路径" },
+        "content": { "type": "string", "description": "要写入的完整内容" }
+      },
+      "required": ["filePath", "content"]
+    }
+  },
+  {
+    "name": "edit_file",
+    "description": "精确替换文件中的一段文本",
+    "category": "io",
+    "dangerous": true,
+    "executorType": "builtin",
+    "executorFile": "edit_file",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filePath": { "type": "string", "description": "文件路径" },
+        "oldString": { "type": "string", "description": "要被替换的原文本（必须精确匹配）" },
+        "newString": { "type": "string", "description": "替换后的新文本" }
+      },
+      "required": ["filePath", "oldString", "newString"]
+    }
+  },
+  {
+    "name": "list_directory",
+    "description": "列出目录中的所有文件和子目录",
+    "category": "io",
+    "dangerous": false,
+    "executorType": "builtin",
+    "executorFile": "list_directory",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "dirPath": { "type": "string", "description": "目录路径，留空则为工作区根目录" }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "run_command",
+    "description": "在终端执行一条系统命令",
+    "category": "system",
+    "dangerous": true,
+    "executorType": "builtin",
+    "executorFile": "run_command",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command": { "type": "string", "description": "要执行的 shell 命令" }
+      },
+      "required": ["command"]
+    }
+  },
+  {
+    "name": "webfetch",
+    "description": "获取网页或 API 的文本内容",
+    "category": "system",
+    "dangerous": false,
+    "executorType": "builtin",
+    "executorFile": "webfetch",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string", "description": "完整 URL 地址" }
+      },
+      "required": ["url"]
+    }
+  }
+]
