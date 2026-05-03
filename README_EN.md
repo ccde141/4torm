@@ -58,7 +58,7 @@ A `MEMORY.md`-based memory mechanism enables Agents to perceive cross-session co
 Agents can autonomously read documentation and create tools and skills on demand. Built-in executors include file I/O, web search, and code execution — the framework is self-extending at runtime.
 
 ### 🎨 Customizable Skin
-Freely customize primary color + ambient glow, switch between light/dark themes with one click.
+Freely customize primary color + ambient glow.
 
 ### 📦 Pure Frontend
 No backend required. All data is stored locally as JSON files. Configure an API Key and use everything in the browser.
@@ -81,12 +81,6 @@ npm run dev
 
 Open `http://localhost:5173` in your browser, go to Settings in the sidebar to add your API Key, and start using it.
 
-### Production Build
-
-```bash
-npm run build
-npm run preview
-```
 
 ### Dashboard — Home Page
 
@@ -183,8 +177,8 @@ Unified management for multiple model providers. Supports custom API connections
 | Build Tool | Vite |
 | AI SDK | Anthropic Claude API / OpenAI API |
 | State Management | Zustand |
-| Sandbox Engine | Custom visual node orchestration system |
-| Styling | Native CSS + CSS Custom Properties + Dynamic Themes |
+| Sandbox Engine | visual node orchestration system |
+| Styling | Native CSS + CSS Custom Properties |
 
 ## Project Structure
 
