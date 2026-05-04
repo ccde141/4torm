@@ -18,6 +18,7 @@ function buildSelfManagementSection(workspaceDir?: string): string {
 ### 路径说明
 - 你的默认工作区: \`data/agents/{你的AgentID}/.workspace/\`
 - 项目根目录相对路径: \`${toRoot}\`（从工作区到项目根）
+- **文件工具支持 \`data/xxx\` 前缀路径**：read_file、write_file、edit_file、list_directory 可直接传 \`data/skills/...\`、\`data/tools/...\` 等，系统自动定位到项目根
 
 ### 创建新工具（Tool）
 详细参考 \`${toRoot}docs/tools-reference.md\`，简要步骤：

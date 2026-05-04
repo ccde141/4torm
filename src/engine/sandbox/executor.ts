@@ -920,7 +920,7 @@ async function runReActLoop(
   if (resolvedRole) {
     systemPrompt += `\n\n## 角色与任务指令\n${resolvedRole}`;
   }
-  systemPrompt += `\n\n## 环境信息\n- 工作区路径: ${workspace}\n- 所有文件读写操作默认基于工作区路径\n- 使用 read_file / write_file / edit_file 时路径相对于工作区`;
+  systemPrompt += `\n\n## 环境信息\n- 工作区路径: ${workspace}\n- read_file / write_file / edit_file / list_directory 默认基于工作区路径\n- 若要操作项目级文件（如 data/skills/、data/tools/），可直接传以 data/ 开头的路径\n- run_command 的当前目录为项目根，所有路径相对于项目根`;
 
   const taskPrompt = buildTaskPrompt(envelope);
   const chatMessages: Array<{ role: string; content: string }> = [

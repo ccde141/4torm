@@ -5,7 +5,6 @@ const BLOCKED_PATTERNS = [
   /shutdown/i, /reboot/i, /halt/i, /poweroff/i,
   /mkfs/i, /format/i, /fdisk/i,
   /dd\s+if=/i,
-  />:/.test, />>/.test,
   /curl\s+.*\||wget\s+.*\|/i,
   /:\s*rm\s/, /;\s*rm\s/,
 ]
@@ -18,7 +17,7 @@ function isBlocked(cmd) {
     return `命令过长 (${cmd.length} > ${MAX_COMMAND_LENGTH} 字符)`
   }
   for (const pattern of BLOCKED_PATTERNS) {
-    if (typeof pattern === 'function' ? pattern(cmd) : pattern.test(cmd)) {
+    if (pattern.test(cmd)) {
       return `命令包含被禁止的操作: ${pattern}`
     }
   }
@@ -34,14 +33,17 @@ export default async function (args, ctx) {
     return `(安全拦截) ${blocked}`
   }
 
-  const cwd = ctx.workspaceDir
+  const cwd = ctx.projectDir || ctx.workspaceDir
+  // 前置 chcp 65001 强制 UTF-8，解决 Windows CMD 中文输出乱码
+  const wrappedCmd = process.platform === 'win32' ? `chcp 65001 > nul && ${cmd}` : cmd
   try {
-    const output = execSync(cmd, { encoding: 'utf-8', timeout: CMD_TIMEOUT, cwd, maxBuffer: 1024 * 1024 })
+    const output = execSync(wrappedCmd, { encoding: 'utf-8', timeout: CMD_TIMEOUT, cwd, maxBuffer: 1024 * 1024, windowsHide: true })
     return output || '(命令执行完毕，无输出)'
   } catch (e) {
     if (e.signal === 'SIGTERM' || e.killed) {
       return '(命令执行超时，已自动终止)'
     }
-    return e.stdout || e.stderr || e.message
+    const errOutput = e.stdout || e.stderr || e.message
+    return typeof errOutput === 'string' ? errOutput : String(errOutput)
   }
 }

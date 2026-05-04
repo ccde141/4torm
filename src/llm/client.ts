@@ -89,18 +89,16 @@ export async function streamChatCompletion(
   onChunk: (chunk: { content?: string; toolCalls?: Array<{ index: number; id?: string; name?: string; arguments: string }> }) => void,
 ): Promise<void> {
   const url = resolveUrl(opts.baseUrl, '/chat/completions');
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  const mergedSignal = opts.signal
-    ? (AbortSignal as { any?: (sigs: AbortSignal[]) => AbortSignal }).any?.([controller.signal, opts.signal]) ?? controller.signal
-    : controller.signal;
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const activeTCs: Map<number, { id: string; name: string; arguments: string }> = new Map();
 
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: buildHeaders(opts.apiKey, opts.headers),
       body: JSON.stringify({ ...body, stream: true }),
-      signal: mergedSignal,
+      signal: opts.signal,
     });
     if (!res.ok) {
       const errorBody = await res.json().catch(() => null);
@@ -108,12 +106,16 @@ export async function streamChatCompletion(
     }
     const reader = res.body?.getReader();
     if (!reader) throw new Error('Stream not supported');
-    const decoder = new TextDecoder();
-    let buffer = '';
-    const activeTCs: Map<number, { id: string; name: string; arguments: string }> = new Map();
 
     while (true) {
-      const { done, value } = await reader.read();
+      let done: boolean;
+      let value: Uint8Array | undefined;
+      try {
+        ({ done, value } = await reader.read());
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') break;
+        throw e;
+      }
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -143,12 +145,10 @@ export async function streamChatCompletion(
         } catch { /* skip */ }
       }
     }
-
+  } finally {
     const remainingTCs = [...activeTCs.values()].filter(t => t.name);
     if (remainingTCs.length > 0) {
       onChunk({ toolCalls: remainingTCs.map(tc => ({ index: 0, id: tc.id || `call_${Date.now()}`, name: tc.name, arguments: tc.arguments })) });
     }
-  } finally {
-    clearTimeout(timer);
   }
 }

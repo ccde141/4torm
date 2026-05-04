@@ -4,6 +4,9 @@ import { resolve } from 'path'
 export default async function (args, ctx) {
   const skillName = args.skill
   if (!skillName) throw new Error('缺少 skill 参数')
+  if (skillName.includes('..') || skillName.includes('/') || skillName.includes('\\')) {
+    throw new Error(`无效的技能名称: "${skillName}"。技能名称只能是纯字母数字标识符。`)
+  }
   const skillPath = resolve(ctx.dataDir, 'skills', skillName, 'SKILL.md')
   try {
     return readFileSync(skillPath, 'utf-8')

@@ -56,6 +56,7 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<(() => void) | null>(null);
+  const alwaysAllowRef = useRef<HTMLInputElement>(null);
   const userStoppedRef = useRef(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState('');
@@ -460,12 +461,18 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
             for (const act of parsed.actions) {
               if (DANGEROUS_TOOLS.includes(act.tool)) {
                 const perm = permissions[act.tool] || 'ask';
-                if (perm === 'never') continue;
+                if (perm === 'never') {
+                  chatMessages.push({ role: 'user', content: `<result>操作被拦截: ${act.tool} 已被设为禁止执行。如需执行请先在权限设置中允许，或使用 /permission ${act.tool} always 命令。用户未允许执行此工具。</result>` });
+                  continue;
+                }
                 if (perm === 'ask') {
                   const { allowed, always } = await new Promise<{ allowed: boolean; always?: boolean }>(r => {
                     setPendingTool({ tool: act.tool, args: act.args, resolve: (allow, alw) => r({ allowed: allow, always: alw }) });
                   });
-                  if (!allowed) continue;
+                  if (!allowed) {
+                    chatMessages.push({ role: 'user', content: `<result>操作被用户取消: ${act.tool}。请尝试其他方式完成任务，或者向用户解释为什么需要执行此操作。</result>` });
+                    continue;
+                  }
                   if (always) {
                     const updated = { ...permissions, [act.tool]: 'always' };
                     setPermissions(updated);
@@ -488,9 +495,11 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
                 chatMessages.push({ role: 'assistant', content: `${thinkBlock}<action tool="${act.tool}">${JSON.stringify(act.args)}</action>` });
                 chatMessages.push({ role: 'user', content: `<result>${result}</result>` });
               } catch (e) {
-                chatMessages.push({ role: 'user', content: `<result>错误: ${(e as Error).message}</result>` });
+                const errMsg = e instanceof Error ? e.message : String(e);
+                chatMessages.push({ role: 'user', content: `<result>工具执行失败: ${errMsg}。请检查参数是否正确，特别是 [必填] 参数和路径格式。如果是文件操作请确认路径相对于工作区。</result>` });
               }
             }
+            await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel });
             continue;
           }
 
@@ -716,12 +725,12 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
             <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-4)', fontFamily: 'var(--font-mono)' }}>🔧 {pendingTool.tool}</div>
             <pre style={{ padding: 'var(--space-3)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '120px', overflow: 'auto' }}>{JSON.stringify(pendingTool.args, null, 2)}</pre>
             <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginTop: 'var(--space-3)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', cursor: 'pointer' }}>
-              <input type="checkbox" id="always-allow" />
+              <input type="checkbox" id="always-allow" ref={alwaysAllowRef} />
               始终允许此工具
             </label>
             <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-3)', justifyContent: 'flex-end' }}>
-              <button onClick={() => { pendingTool.resolve(false); setPendingTool(null); }} style={{ padding: 'var(--space-2) var(--space-4)', background: 'transparent', color: 'var(--color-text)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', cursor: 'pointer' }}>取消</button>
-              <button onClick={() => { pendingTool.resolve(true); setPendingTool(null); }} style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-warning)', color: 'var(--color-text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer' }}>允许执行</button>
+              <button onClick={() => { pendingTool.resolve(false); setPendingTool(null); if (alwaysAllowRef.current) alwaysAllowRef.current.checked = false; }} style={{ padding: 'var(--space-2) var(--space-4)', background: 'transparent', color: 'var(--color-text)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', cursor: 'pointer' }}>取消</button>
+              <button onClick={() => { pendingTool.resolve(true, alwaysAllowRef.current?.checked); setPendingTool(null); if (alwaysAllowRef.current) alwaysAllowRef.current.checked = false; }} style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-warning)', color: 'var(--color-text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer' }}>允许执行</button>
             </div>
           </div>
         </div>
@@ -781,7 +790,7 @@ function ToolCallMessage({ toolCall, actions }: { toolCall: NonNullable<ChatMess
 
 function buildWorkspaceInfo(agentId: string, workspace?: string): string {
   const ws = workspace || `data/agents/${agentId}/.workspace/`;
-  return `\n\n## 环境信息\n- 工作区路径: ${ws}\n- 所有文件读写操作默认基于工作区路径\n- 使用 read_file / write_file 时路径相对于工作区`;
+  return `\n\n## 环境信息\n- 工作区路径: ${ws}\n- read_file / write_file / edit_file / list_directory 默认基于工作区路径\n- 若要操作项目级文件（如 data/skills/、data/tools/），可直接传以 data/ 开头的路径，系统会自动定位到项目根目录\n- run_command 的当前目录为项目根，所有路径相对于项目根`;
 }
 
 type StreamCtx = {
@@ -831,8 +840,10 @@ async function runStreamLoop(ctx: StreamCtx) {
             setMessages([...allMessages]);
           }
         },
-      ).then(resolve).catch(reject);
+        ).then(() => resolve()).catch(reject);
     });
+
+    await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel });
 
     const parsed = parseStructuredOutput(streamContent, toolDefs);
 
@@ -844,12 +855,18 @@ async function runStreamLoop(ctx: StreamCtx) {
       for (const act of parsed.actions) {
         if (DANGEROUS_TOOLS.includes(act.tool)) {
           const perm = permissions[act.tool] || 'ask';
-          if (perm === 'never') continue;
+          if (perm === 'never') {
+            chatMessages.push({ role: 'user', content: `<result>操作被拦截: ${act.tool} 已被设为禁止执行。如需执行请先在权限设置中允许，或使用 /permission ${act.tool} always 命令。用户未允许执行此工具。</result>` });
+            continue;
+          }
           if (perm === 'ask') {
             const { allowed, always } = await new Promise<{ allowed: boolean; always?: boolean }>(r => {
               setPendingTool({ tool: act.tool, args: act.args, resolve: (allow, alw) => r({ allowed: allow, always: alw }) });
             });
-            if (!allowed) continue;
+            if (!allowed) {
+              chatMessages.push({ role: 'user', content: `<result>操作被用户取消: ${act.tool}。请尝试其他方式完成任务，或者向用户解释为什么需要执行此操作。</result>` });
+              continue;
+            }
             if (always) {
               const updated = { ...permissions, [act.tool]: 'always' };
               setPermissions(updated);
@@ -868,14 +885,17 @@ async function runStreamLoop(ctx: StreamCtx) {
             toolCall: { toolName: act.tool, params: act.args, result, durationMs: 0, status: 'success' },
           };
           allMessages = [...allMessages, toolMsg];
+          setMessages([...allMessages]);
           const thinkBlock = parsed.think ? `<think>${parsed.think}</think>\n` : '';
           chatMessages.push({ role: 'assistant', content: `${thinkBlock}<action tool="${act.tool}">${argsStr}</action>` });
           chatMessages.push({ role: 'user', content: `<result>${result}</result>` });
         } catch (e) {
-          chatMessages.push({ role: 'user', content: `<result>错误: ${(e as Error).message}</result>` });
+          const errMsg = e instanceof Error ? e.message : String(e);
+          chatMessages.push({ role: 'user', content: `<result>工具执行失败: ${errMsg}。请检查参数是否正确，特别是 [必填] 参数和路径格式。如果是文件操作请确认路径相对于工作区。</result>` });
         }
       }
 
+      await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel });
       setMessages([...allMessages]);
       continue;
     }
