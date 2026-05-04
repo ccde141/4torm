@@ -9,9 +9,14 @@
     "parameters": {
       "type": "object",
       "properties": {
-        "filePath": { "type": "string", "description": "相对于工作区根目录的文件路径" }
+        "filePath": {
+          "type": "string",
+          "description": "相对于工作区根目录的文件路径"
+        }
       },
-      "required": ["filePath"]
+      "required": [
+        "filePath"
+      ]
     }
   },
   {
@@ -24,10 +29,19 @@
     "parameters": {
       "type": "object",
       "properties": {
-        "filePath": { "type": "string", "description": "相对于工作区根目录的文件路径" },
-        "content": { "type": "string", "description": "要写入的完整内容" }
+        "filePath": {
+          "type": "string",
+          "description": "相对于工作区根目录的文件路径"
+        },
+        "content": {
+          "type": "string",
+          "description": "要写入的完整内容"
+        }
       },
-      "required": ["filePath", "content"]
+      "required": [
+        "filePath",
+        "content"
+      ]
     }
   },
   {
@@ -40,11 +54,24 @@
     "parameters": {
       "type": "object",
       "properties": {
-        "filePath": { "type": "string", "description": "文件路径" },
-        "oldString": { "type": "string", "description": "要被替换的原文本（必须精确匹配）" },
-        "newString": { "type": "string", "description": "替换后的新文本" }
+        "filePath": {
+          "type": "string",
+          "description": "文件路径"
+        },
+        "oldString": {
+          "type": "string",
+          "description": "要被替换的原文本（必须精确匹配）"
+        },
+        "newString": {
+          "type": "string",
+          "description": "替换后的新文本"
+        }
       },
-      "required": ["filePath", "oldString", "newString"]
+      "required": [
+        "filePath",
+        "oldString",
+        "newString"
+      ]
     }
   },
   {
@@ -57,7 +84,10 @@
     "parameters": {
       "type": "object",
       "properties": {
-        "dirPath": { "type": "string", "description": "目录路径，留空则为工作区根目录" }
+        "dirPath": {
+          "type": "string",
+          "description": "目录路径，留空则为工作区根目录"
+        }
       },
       "required": []
     }
@@ -72,9 +102,14 @@
     "parameters": {
       "type": "object",
       "properties": {
-        "command": { "type": "string", "description": "要执行的 shell 命令" }
+        "command": {
+          "type": "string",
+          "description": "要执行的 shell 命令"
+        }
       },
-      "required": ["command"]
+      "required": [
+        "command"
+      ]
     }
   },
   {
@@ -87,9 +122,34 @@
     "parameters": {
       "type": "object",
       "properties": {
-        "url": { "type": "string", "description": "完整 URL 地址" }
+        "url": {
+          "type": "string",
+          "description": "完整 URL 地址"
+        }
       },
-      "required": ["url"]
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "use_skill",
+    "description": "加载指定技能的提示词指令，获取该领域的专业指导",
+    "category": "system",
+    "dangerous": false,
+    "executorType": "builtin",
+    "executorFile": "use_skill",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "skill": {
+          "type": "string",
+          "description": "技能名称"
+        }
+      },
+      "required": [
+        "skill"
+      ]
     }
   }
 ]

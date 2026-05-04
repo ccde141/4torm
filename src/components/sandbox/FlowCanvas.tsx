@@ -25,7 +25,6 @@ import VariableNode from './nodes/VariableNode';
 import HumanGateNode from './nodes/HumanGateNode';
 import ErrorHandlerNode from './nodes/ErrorHandlerNode';
 import OutputNode from './nodes/OutputNode';
-import SubflowNode from './nodes/SubflowNode';
 import GroupNode from './nodes/GroupNode';
 import NoteNode from './nodes/NoteNode';
 
@@ -33,7 +32,6 @@ const nodeTypes = {
   entry: EntryNode,
   agent: AgentNode,
   condition: ConditionNode,
-  'loop-count': LoopNode,
   'loop-while': LoopNode,
   merge: MergeNode,
   fork: ForkNode,
@@ -41,7 +39,6 @@ const nodeTypes = {
   'human-gate': HumanGateNode,
   'error-handler': ErrorHandlerNode,
   output: OutputNode,
-  subflow: SubflowNode,
   group: GroupNode,
   note: NoteNode,
 };
@@ -61,6 +58,7 @@ interface Props {
   onPaneContextMenu: (e: React.MouseEvent) => void;
   onEdgeContextMenu: (e: React.MouseEvent, edge: Edge) => void;
   onNodeClick: (e: React.MouseEvent, node: Node) => void;
+  onNodeDoubleClick?: (node: Node) => void;
   customNodeTypes?: Record<string, any>;
 }
 
@@ -68,7 +66,7 @@ export default function FlowCanvas({
   nodes, edges, onNodesChange, onEdgesChange, onConnect,
   onEdgeClick, onDrop, activeAgentIds, nodeExecStatus, manualZIndex,
   onNodeContextMenu, onPaneContextMenu, onEdgeContextMenu, onNodeClick,
-  customNodeTypes,
+  onNodeDoubleClick, customNodeTypes,
 }: Props) {
   const mergedNodeTypes = useMemo(() => ({ ...nodeTypes, ...customNodeTypes }), [customNodeTypes]);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
@@ -126,6 +124,7 @@ export default function FlowCanvas({
           onPaneContextMenu={(e: React.MouseEvent) => onPaneContextMenu(e)}
           onEdgeContextMenu={(e: React.MouseEvent, edge: Edge) => onEdgeContextMenu(e, edge)}
           onNodeClick={(e: React.MouseEvent, node: Node) => onNodeClick(e, node)}
+          onNodeDoubleClick={(_e: React.MouseEvent, node: Node) => onNodeDoubleClick?.(node)}
           fitView
           deleteKeyCode={['Backspace', 'Delete']}
           snapToGrid

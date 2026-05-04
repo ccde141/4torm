@@ -29,7 +29,6 @@ export type SandboxNodeType =
   | 'entry'
   | 'agent'
   | 'condition'
-  | 'loop-count'
   | 'loop-while'
   | 'merge'
   | 'fork'
@@ -37,7 +36,6 @@ export type SandboxNodeType =
   | 'human-gate'
   | 'error-handler'
   | 'output'
-  | 'subflow'
   | 'group'
   | 'note';
 
@@ -140,14 +138,6 @@ export interface OutputNodeData {
   errorMessage?: string;
 }
 
-export interface SubflowNodeData {
-  label: string;
-  subflowId: string;
-  subflowName: string;
-  execStatus: NodeExecStatus;
-  errorMessage?: string;
-}
-
 export interface GroupNodeData {
   label: string;
 }
@@ -168,7 +158,6 @@ export type SandboxNodeData =
   | HumanGateNodeData
   | ErrorHandlerNodeData
   | OutputNodeData
-  | SubflowNodeData
   | GroupNodeData
   | NoteNodeData;
 

@@ -106,7 +106,18 @@ export function extractField(env: Envelope, field: string): string {
 }
 
 export function summarizeEnvelope(env: Envelope): string {
-  return env.input.slice(0, 500) || env.context.slice(0, 500) || '';
+  const rolePrefix = env.role ? `[上游角色: ${env.role.slice(0, 80)}]\n` : '';
+  const text = env.input || '';
+  if (!text) return env.context || '';
+  if (text.length <= 1000) return rolePrefix + text;
+  const chunk = text.slice(0, 1000);
+  const lastBreak = Math.max(
+    chunk.lastIndexOf('\n\n'),
+    chunk.lastIndexOf('。'),
+    chunk.lastIndexOf('\n'),
+    500,
+  );
+  return rolePrefix + chunk.slice(0, lastBreak) + '\n...(完整内容见「上游交付内容」)';
 }
 
 function esc(s: string): string {

@@ -43,13 +43,6 @@ export function buildToolsPrompt(tools: ToolDef[]): string {
   return lines.join('\n');
 }
 
-export function toolsToOpenAI(tools: ToolDef[]) {
-  return tools.map(t => ({
-    type: 'function' as const,
-    function: { name: t.name, description: t.description, parameters: t.parameters },
-  }));
-}
-
 export async function getTools(): Promise<ToolDef[]> {
   const data = await readJson<ToolDef[]>(REGISTRY_FILE);
   return data || [];
@@ -115,5 +108,11 @@ export const BUILTIN_TOOLS: ToolDef[] = [
     description: '获取网页或 API 的文本内容',
     category: 'system', dangerous: false, executorType: 'builtin', executorFile: 'webfetch',
     parameters: { type: 'object', properties: { url: { type: 'string', description: '完整 URL 地址' } }, required: ['url'] },
+  },
+  {
+    name: 'use_skill',
+    description: '加载指定技能的提示词指令，获取该领域的专业指导',
+    category: 'system', dangerous: false, executorType: 'builtin', executorFile: 'use_skill',
+    parameters: { type: 'object', properties: { skill: { type: 'string', description: '技能名称' } }, required: ['skill'] },
   },
 ];

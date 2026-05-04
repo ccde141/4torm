@@ -8,9 +8,10 @@ interface Props {
   prompt: string;
   onContinue: (modifiedEnvelope: Envelope) => void;
   onTerminate: () => void;
+  embedded?: boolean;
 }
 
-export default function HumanGateDialog({ nodeName, envelope, prompt, onContinue, onTerminate }: Props) {
+export default function HumanGateDialog({ nodeName, envelope, prompt, onContinue, onTerminate, embedded }: Props) {
   const [editInput, setEditInput] = useState(envelope.input);
   const [editContext, setEditContext] = useState(envelope.context);
 
@@ -20,6 +21,42 @@ export default function HumanGateDialog({ nodeName, envelope, prompt, onContinue
     modified.context = editContext;
     onContinue(modified);
   };
+
+  if (embedded) {
+    return (
+      <>
+        <div style={{ marginBottom: 'var(--space-3)' }}>
+          <label className="config-field-label">当前上下文</label>
+          <textarea className="config-field-textarea" rows={3} value={editContext} onChange={e => setEditContext(e.target.value)} />
+        </div>
+        <div style={{ marginBottom: 'var(--space-3)' }}>
+          <label className="config-field-label">输入内容（可修改）</label>
+          <textarea className="config-field-textarea" rows={5} value={editInput} onChange={e => setEditInput(e.target.value)} />
+        </div>
+        <details style={{ marginBottom: 'var(--space-4)' }}>
+          <summary style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', cursor: 'pointer' }}>
+            查看完整信封
+          </summary>
+          <pre style={{
+            fontSize: '10px', fontFamily: 'var(--font-mono)', color: 'var(--color-text-tertiary)',
+            background: 'var(--color-bg)', padding: 'var(--space-3)', borderRadius: 'var(--radius-sm)',
+            maxHeight: '200px', overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          }}>
+            {serializeEnvelope(envelope)}
+          </pre>
+        </details>
+        <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end' }}>
+          <button className="sandbox-btn" onClick={onTerminate}
+            style={{ borderColor: 'var(--color-error)', color: 'var(--color-error)' }}>
+            终止
+          </button>
+          <button className="sandbox-btn sandbox-btn-primary" onClick={handleContinue}>
+            继续执行
+          </button>
+        </div>
+      </>
+    );
+  }
 
   return (
     <div className="sandbox-node-config-popup" role="dialog" aria-modal="true" aria-label="人工确认">

@@ -33,7 +33,6 @@ import type {
   HumanGateNodeData,
   ErrorHandlerNodeData,
   OutputNodeData,
-  SubflowNodeData,
   GroupNodeData,
   NoteNodeData,
 } from '../../types/sandbox';
@@ -66,8 +65,7 @@ function createNodeData(type: SandboxNodeType): SandboxNodeData {
     case 'variable': return { label: '变量', mode: 'read', variableName: '', sourceField: 'input', execStatus: 'idle' } as VariableNodeData;
     case 'human-gate': return { label: '人工确认', prompt: '请审阅当前内容并选择下一步操作', execStatus: 'idle' } as HumanGateNodeData;
     case 'error-handler': return { label: '错误处理', execStatus: 'idle' } as ErrorHandlerNodeData;
-    case 'output': return { label: '输出', mode: 'final', filePath: 'workflow_output', fileNameTemplate: '{flow}_output', format: 'json', execStatus: 'idle' } as OutputNodeData;
-    case 'subflow': return { label: '子流程', subflowId: '', subflowName: '', execStatus: 'idle' } as SubflowNodeData;
+    case 'output': return { label: '输出', mode: 'final', filePath: 'workflow_output', fileNameTemplate: '{flow}_output', format: 'txt', execStatus: 'idle' } as OutputNodeData;
     case 'group': return { label: '组' } as GroupNodeData;
     case 'note': return { label: '备注', content: '' } as NoteNodeData;
     default: return { label: type, execStatus: 'idle' } as any;
@@ -81,6 +79,8 @@ export default function SandboxPage() {
   const [execStatus, setExecStatus] = useState<FlowExecStatus>('idle');
   const [nodeExecStatus, setNodeExecStatus] = useState<Record<string, string>>({});
   const [logs, setLogs] = useState<ExecutionLog[]>([]);
+  const [outputReport, setOutputReport] = useState<string | null>(null);
+  const [showReport, setShowReport] = useState(false);
   const [humanGate, setHumanGate] = useState<any>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [importMessage, setImportMessage] = useState<string | null>(null);
@@ -459,14 +459,12 @@ export default function SandboxPage() {
     { type: 'entry', label: '入口', icon: '⬇' },
     { type: 'agent', label: 'AI Agent', icon: '🤖' },
     { type: 'condition', label: '条件分支', icon: '◇' },
-    { type: 'loop-while', label: '条件循环', icon: '↻' },
     { type: 'merge', label: '合并', icon: '⊕' },
     { type: 'fork', label: '分叉', icon: '⑂' },
     { type: 'variable', label: '变量', icon: '📦' },
     { type: 'human-gate', label: '人工确认', icon: '👤' },
     { type: 'error-handler', label: '错误处理', icon: '⚠' },
     { type: 'output', label: '输出', icon: '💾' },
-    { type: 'subflow', label: '子流程', icon: '📋' },
   ];
 
   const handleNodeContextMenu = useCallback((e: React.MouseEvent, node: Node) => {
@@ -630,6 +628,8 @@ export default function SandboxPage() {
 
     setExecStatus('running');
     setLogs([]);
+    setOutputReport(null);
+    setShowReport(false);
 
     const ctx: ExecContext = {
       signal: abortController.signal,
@@ -658,6 +658,10 @@ export default function SandboxPage() {
       setExecStatus(result.status);
       await saveExecutionState(workflow.name, result);
       setLogs(result.logs);
+      const outputNodeId = workflow.nodes.find(n => n.type === 'output')?.id;
+      if (outputNodeId && result.envelopes[outputNodeId]?.input) {
+        setOutputReport(result.envelopes[outputNodeId].input);
+      }
     } catch (err) {
       setExecStatus('error');
       setLogs(prev => [...prev, {
@@ -855,6 +859,9 @@ export default function SandboxPage() {
             onPaneContextMenu={handlePaneContextMenu}
             onEdgeContextMenu={handleEdgeContextMenu}
             onNodeClick={handleNodeClick}
+            onNodeDoubleClick={(node: Node) => {
+              if (node.type === 'output' && outputReport) setShowReport(true);
+            }}
             customNodeTypes={customTypes}
           />
         </div>
@@ -864,17 +871,36 @@ export default function SandboxPage() {
           <div style={{
             height: '180px',
             borderTop: '1px solid var(--glass-border)',
-            overflow: 'auto',
-            padding: 'var(--space-3)',
+            overflow: 'hidden',
             background: 'var(--glass-bg)',
             backdropFilter: 'blur(8px)',
             WebkitBackdropFilter: 'blur(8px)',
             flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
           }}>
-            <div className="sandbox-sidebar-label" style={{ marginBottom: 'var(--space-2)' }}>
-              执行日志
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: 'var(--space-2) var(--space-3)',
+              borderBottom: '1px solid var(--border-color)',
+              flexShrink: 0,
+            }}>
+              <span className="sandbox-sidebar-label" style={{ margin: 0 }}>执行日志</span>
+              {outputReport && (
+                <button
+                  onClick={() => setShowReport(true)}
+                  style={{
+                    padding: '3px 12px', fontSize: '11px', lineHeight: 1.4,
+                    background: '#6366f1', color: '#fff', border: 'none',
+                    borderRadius: '4px', cursor: 'pointer', fontWeight: 600,
+                  }}
+                >
+                  📄 查看输出
+                </button>
+              )}
             </div>
-            {logs.map((log, i) => (
+            <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-2) var(--space-3)' }}>
+              {logs.map((log, i) => (
               <div key={i} style={{
                 fontSize: '11px',
                 fontFamily: 'var(--font-mono)',
@@ -888,6 +914,7 @@ export default function SandboxPage() {
                 {log.message}
               </div>
             ))}
+            </div>
           </div>
         )}
       </div>
@@ -950,8 +977,32 @@ export default function SandboxPage() {
                 );
               })}
             </div>
+            {showReport && outputReport && (
+              <div style={{ borderTop: '1px solid var(--border-color)', flexShrink: 0, overflow: 'auto', maxHeight: '40%' }}>
+                <div style={{ padding: 'var(--space-3) var(--space-4)', borderBottom: '1px solid var(--border-color)', fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)', fontWeight: 'var(--font-semibold)' }}>
+                  📄 执行报告
+                  <button onClick={() => setShowReport(false)} style={{ float: 'right', background: 'none', border: 'none', color: 'var(--color-text-tertiary)', cursor: 'pointer', fontSize: 'var(--text-sm)' }}>✕</button>
+                </div>
+                <div style={{ padding: 'var(--space-4)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', lineHeight: 1.6, whiteSpace: 'pre-wrap', color: 'var(--color-text)' }}>
+                  {outputReport}
+                </div>
+              </div>
+            )}
           </div>
         </>
+      )}
+
+      {/* Output Report Standalone Panel */}
+      {showReport && outputReport && !configPanel && (
+        <div className="config-panel">
+          <div className="config-panel-header">
+            <h3>📄 执行报告</h3>
+            <button className="config-panel-close" onClick={() => setShowReport(false)}>✕</button>
+          </div>
+          <div className="config-panel-body" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)', lineHeight: 1.7, whiteSpace: 'pre-wrap', color: 'var(--color-text)' }}>
+            {outputReport}
+          </div>
+        </div>
       )}
 
       {/* Context Menu */}
@@ -961,13 +1012,25 @@ export default function SandboxPage() {
 
       {/* Human gate dialog */}
       {humanGate && (
-        <HumanGateDialog
-          nodeName={humanGate.nodeName}
-          envelope={humanGate.envelope}
-          prompt={humanGate.prompt}
-          onContinue={handleHumanGateContinue}
-          onTerminate={handleHumanGateTerminate}
-        />
+        <div className="config-panel">
+          <div className="config-panel-header">
+            <h3 style={{ color: 'var(--color-warning)' }}>👤 人工介入 — {humanGate.nodeName}</h3>
+            <button className="config-panel-close" onClick={handleHumanGateTerminate}>✕</button>
+          </div>
+          <div className="config-panel-body">
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', margin: '0 0 var(--space-3)' }}>
+              {humanGate.prompt}
+            </p>
+            <HumanGateDialog
+              nodeName={humanGate.nodeName}
+              envelope={humanGate.envelope}
+              prompt={humanGate.prompt}
+              onContinue={handleHumanGateContinue}
+              onTerminate={handleHumanGateTerminate}
+              embedded
+            />
+          </div>
+        </div>
       )}
     </div>
   );

@@ -10,12 +10,22 @@
   transition: box-shadow 0.2s ease;
 }
 
-.sandbox-node.selected {
-  box-shadow: 0 0 0 2px var(--color-accent);
+.sandbox-node.sandbox-node--running {
+  animation: node-pulse-blue 1.5s ease-in-out infinite;
+  border-color: #3b82f6;
+}
+
+.sandbox-node.sandbox-node--error {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.4);
 }
 
 .sandbox-node--entry {
   border-color: var(--color-text-tertiary);
+}
+
+.sandbox-node.selected {
+  box-shadow: 0 0 0 2px var(--color-accent) !important;
 }
 
 .sandbox-node--agent {
@@ -54,11 +64,6 @@
 
 .sandbox-node--output {
   border-color: var(--color-success);
-}
-
-.sandbox-node--subflow {
-  border-color: var(--color-info);
-  border-style: dashed;
 }
 
 .sandbox-node-header {
@@ -142,13 +147,8 @@
 .react-flow__node.react-flow__node-variable,
 .react-flow__node.react-flow__node-humanGate,
 .react-flow__node.react-flow__node-errorHandler,
-.react-flow__node.react-flow__node-output,
-.react-flow__node.react-flow__node-subflow {
+.react-flow__node.react-flow__node-output {
   cursor: grab;
-}
-
-.react-flow__node.selected {
-  box-shadow: 0 0 0 2px var(--color-accent) !important;
 }
 
 .react-flow__controls {
@@ -197,4 +197,13 @@
 
 .react-flow__resize-control.line {
   border-color: transparent !important;
+}
+
+@keyframes node-pulse-blue {
+  0%, 100% {
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(59, 130, 246, 0.5);
+  }
 }

@@ -4,7 +4,7 @@
 
 Skill 是 Agent 的**领域专长模块**，向 Agent 提供专业提示词和（可选的）专属工具。Skill = `SKILL.md`（提示词注入）+ `tools.json`（专属工具定义，可选）+ `executors/`（工具执行器，可选）。
 
-**生命周期：** 创建 → 写入 `data/skills/{skillId}/` → 分配给 Agent → 运行时读取 SKILL.md 注入提示词 + 读取 tools.json 合并工具列表。
+**生命周期：** 创建 → 写入 `data/skills/{skillId}/` → 分配给 Agent → 运行时 Agent 通过 `use_skill` 工具按需加载 SKILL.md 提示词 + 读取 tools.json 合并工具列表。
 
 ---
 
@@ -50,7 +50,7 @@ data/skills/
 
 ## 四、SKILL.md 提示词内容
 
-`SKILL.md` 是技能的核心——定义 Agent 如何使用该技能的指令。它会被注入到系统提示词的末尾。
+`SKILL.md` 是技能的核心——定义 Agent 如何使用该技能的指令。Agent 通过内置 `use_skill` 工具按需加载，Skill 指令以 tool result 形式出现在对话中，用完即过。
 
 **文件格式：** 纯 Markdown，无特定格式约束。推荐包含：
 - **角色定义** — "你是 XXX 专家"
@@ -207,16 +207,20 @@ data/skills/{skillId}/executors/{executorFile}.js
 
 ## 八、运行时加载机制
 
-### 8.1 技能提示词注入
+### 8.1 技能提示词加载 — `use_skill` 按需注入
 
-**当前设计**：Skills 页面副标题写明 _"Skill = 提示词注入 + 专属工具（可选）"_
+Skill 的提示词通过内置的 `use_skill` 工具按需加载。Agent 被分配 Skill 后不会自动注入 SKILL.md 到系统提示词，而是由 Agent **自行判断何时需要**并主动调用 `use_skill("技能名")`。
 
-Agent 执行时：
-1. 通过 `config.skills` 获取分配的 skill ID 列表
-2. 读取每个 skill 的 `SKILL.md` 内容
-3. 将内容注入系统提示词（一般在角色指令之后）
+**设计考量：**
+- **省 Token** — Skill 指令仅在 Agent 调用时以 `<result>` 形式出现在对话中，`/compact` 后可被压缩，不会永久占用上下文。
+- **按需触发** — 与任务无关的 Skill 不会被加载，Agent 自行判断时机。
+- **复用机制** — Chat 与 Sandbox 共用同一套 `use_skill` 执行器，Agent 配置中的技能列表同步生效。
 
-> **注意：** 当前代码中，SKILL.md 的注入方式在 ChatPage 和 Sandbox 中略有不同。ChatPage 通过 `rolePrompt` 字段间接注入；Sandbox 通过 `agentRole` 字段（用户手动编辑）。`use_skill` 工具动态加载机制待实现。
+**执行器路径：** `data/tools/executors/use_skill.js` — 读取 `data/skills/{name}/SKILL.md` 并返回内容。
+
+**动态描述：** Agent 被分配技能后，`use_skill` 工具的 description 字段会自动更新为「加载技能指令。当前可用技能: code-review, web-search」，Agent 从工具列表中即可获知可加载哪些技能。
+
+> **注意：** 之前设计中 SKILL.md 直接注入系统提示词的方式已被废弃，改为 `use_skill` 工具按需加载。旧设计中 ChatPage 通过 `rolePrompt` 间接注入、Sandbox 通过 `agentRole` 手动编辑的方式不再使用。
 
 ### 8.2 技能工具合并
 
@@ -450,7 +454,11 @@ export default async function (args, ctx) {
 │                                                              │
 │  提示词:                                                     │
 │    buildSystemPrompt(mergedToolDefs)                         │
-│    + rolePrompt / agentRole (含 SKILL.md 内容)               │
+│    + rolePrompt / agentRole                                  │
+│                                                              │
+│  技能加载:                                                   │
+│    Agent 调用 use_skill("code-review")                       │
+│    → 返回 SKILL.md 内容 → 上下文注入                          │
 │                                                              │
 │  ReAct 循环:                                                 │
 │    <action tool="git_status"> ... </action>                  │

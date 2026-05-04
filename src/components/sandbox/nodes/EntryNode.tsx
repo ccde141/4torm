@@ -29,8 +29,8 @@ export default function EntryNode({ data, selected }: Props) {
         lineStyle={{ borderColor: 'var(--color-accent)' }}
         handleStyle={{ background: 'var(--color-accent)', border: '2px solid var(--color-bg)', width: 8, height: 8 }}
       />
-      <div className={`sandbox-node sandbox-node--entry${selected ? ' selected' : ''}`}
-        style={{ borderColor }}>
+      <div className={`sandbox-node sandbox-node--entry${data.execStatus === 'running' ? ' sandbox-node--running' : ''}${data.execStatus === 'error' ? ' sandbox-node--error' : ''}${selected ? ' selected' : ''}`}
+        style={data.execStatus === 'running' || data.execStatus === 'error' ? undefined : { borderColor }}>
         <div className="sandbox-node-header">
           <span className="sandbox-node-icon">⬇</span>
           <span className="sandbox-node-label">{data.label || '入口'}</span>

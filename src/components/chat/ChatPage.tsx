@@ -378,6 +378,13 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
         }
       }
 
+      if (skillIds.length > 0) {
+        const useSkill = toolDefs.find(t => t.name === 'use_skill');
+        if (useSkill) {
+          useSkill.description = `加载技能指令。当前可用技能: ${skillIds.join(', ')}`;
+        }
+      }
+
       const rp = session.rolePrompt || '';
       let systemText = '';
 

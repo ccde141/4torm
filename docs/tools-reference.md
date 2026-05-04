@@ -55,6 +55,7 @@ data/
       list_directory.js
       run_command.js
       webfetch.js
+      use_skill.js       ← 按需加载 Skill 提示词
     permissions.json       ← { [agentId]: { [toolName]: "always" | "ask" } }
 ```
 
@@ -72,6 +73,7 @@ data/
 | `list_directory` | io | ❌ | list_directory.js | 列出目录内容 |
 | `run_command` | system | ✅ | run_command.js | 执行 shell 命令 |
 | `webfetch` | system | ❌ | webfetch.js | HTTP GET 获取文本 |
+| `use_skill` | system | ❌ | use_skill.js | 按需加载指定 Skill 的专业提示词 |
 
 **种子机制：** 启动时 `seedTools()` 自动将 `BUILTIN_TOOLS` 中未被注册的工具补充到 `registry.json`（`src/store/tools.ts:62-75`）。
 
@@ -342,10 +344,6 @@ Agent 执行
 ...
 ```
 
-### toolsToOpenAI() — OpenAI Function Calling 格式
-
-`src/store/tools.ts:46-51` — 将 ToolDef[] 转换为 OpenAI API 的 `tools` 参数格式（当前未使用，保留备用）。
-
 ---
 
 ## 十二、API 参考
@@ -367,7 +365,6 @@ Agent 执行
 | `saveTools(tools)` | `src/store/tools.ts:58` | 保存全部工具 |
 | `seedTools()` | `src/store/tools.ts:62` | 补充内置工具到注册表 |
 | `buildToolsPrompt(tools)` | `src/store/tools.ts:33` | 生成人类可读的工具列表 |
-| `toolsToOpenAI(tools)` | `src/store/tools.ts:46` | 转换为 OpenAI function 格式 |
 
 ---
 

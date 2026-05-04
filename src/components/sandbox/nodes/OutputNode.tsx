@@ -30,7 +30,7 @@ export default function OutputNode({ data, selected }: Props) {
         handleStyle={{ background: 'var(--color-accent)', border: '2px solid var(--color-bg)', width: 8, height: 8 }}
       />
       <div
-        className={`sandbox-node sandbox-node--output${selected ? ' selected' : ''}`}
+        className={`sandbox-node sandbox-node--output${data.execStatus === 'running' ? ' sandbox-node--running' : ''}${data.execStatus === 'error' ? ' sandbox-node--error' : ''}${selected ? ' selected' : ''}`}
       >
         <div className="sandbox-node-header">
           <span className="sandbox-node-icon" style={{ color: 'var(--color-success)' }}>💾</span>

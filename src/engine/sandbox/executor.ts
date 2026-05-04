@@ -13,17 +13,14 @@ import type {
   Port,
 } from '../../types/sandbox';
 import { createEnvelope, createEnvelopeFromUpstream, serializeEnvelope, parseEnvelope, resolveTemplate } from './envelope';
-import { setAgentStatus, getAgent } from '../../store/agent';
+import { getAgent } from '../../store/agent';
 import { saveExecutionState } from '../../store/sandbox';
 import { getToolsByNames } from '../../store/tools';
 import { executeTool } from '../../api/tools-executor';
 import type { RequestOptions } from '../../llm';
 import {
-  getProvider,
   getProviderForModel,
-  getAllModels,
   type ProviderEntry,
-  type ModelOption,
 } from '../../llm';
 import { request } from '../../llm/client';
 import { buildSystemPrompt } from '../prompt';
@@ -40,6 +37,10 @@ export interface ExecContext {
   envelopes?: Record<string, Envelope>;
   executionLogs?: ExecutionLog[];
   conditionRoutes?: Record<string, number>;
+  nodeManifest?: Array<{ id: string; name: string }>;
+  topoOrder?: string[];
+  _workflowNodes?: Array<{ id: string; type: string; data: Record<string, unknown> }>;
+  workflowContext?: string;
 }
 
 type NodeExecFn = (node: SandboxNode, envelope: Envelope, ctx: ExecContext) => Promise<Envelope>;
@@ -102,6 +103,28 @@ export async function executeWorkflow(
 ): Promise<ExecutionState> {
   const { nodes, edges } = workflow;
   const { successors, predecessors, inDegree, nodeMap } = buildGraph(nodes, edges);
+
+  const agentManifest = nodes.filter(n => n.type === 'agent').map(n => ({
+    id: n.id,
+    name: getNodeLabel(n.data),
+  }));
+  ctx.nodeManifest = agentManifest;
+  ctx._workflowNodes = nodes.map(n => ({ id: n.id, type: n.type, data: n.data as Record<string, unknown> }));
+
+  // Kahn topological sort for deterministic report ordering
+  const topoOrder: string[] = [];
+  const topoInDeg = { ...inDegree };
+  const queue: string[] = Object.keys(topoInDeg).filter(id => topoInDeg[id] === 0);
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    topoOrder.push(id);
+    for (const succ of (successors[id] || [])) {
+      topoInDeg[succ]--;
+      if (topoInDeg[succ] === 0) queue.push(succ);
+    }
+  }
+  ctx.topoOrder = topoOrder;
+
   const completed = new Set<string>();
   const errored = new Set<string>();
   let { status, envelopes, logs, variables, currentNodeId } = state;
@@ -233,8 +256,37 @@ export async function executeWorkflow(
 
     // Apply arrow inject_role if edge configured (after agent role so it can override)
     const edge = edges.find(e => e.target === nodeId);
-    if (edge?.arrowConfig?.injectRole && edge.arrowConfig.extractField) {
+    if (edge?.arrowConfig?.injectRole) {
       incomingEnvelope.role = incomingEnvelope.input;
+    }
+
+    if (node.type === 'agent' && ctx.nodeManifest) {
+      const myIndex = ctx.nodeManifest.findIndex(m => m.id === nodeId);
+      const parts: string[] = [];
+      parts.push('## 工作流全貌');
+      parts.push('你处于多 Agent 协作工作流中。上游已完成其环节并将产出交付给你，你的输出将成为下游环节的输入。');
+      const manifestLines = ctx.nodeManifest.map((m, i) => {
+        let marker = '';
+        let status = '';
+        if (i === myIndex) marker = ' ← 你';
+        else if (i < myIndex && envelopes[m.id]) status = ' ✓';
+        return `${i + 1}. ${m.name}${marker}${status}`;
+      });
+      parts.push(`\n工作流链路:\n${manifestLines.join('\n')}`);
+      const completedUpstream = ctx.nodeManifest.slice(0, myIndex).filter(m => envelopes[m.id]);
+      if (completedUpstream.length > 0) {
+        parts.push('\n已完成环节:');
+        for (const m of completedUpstream) {
+          const inputLen = (envelopes[m.id]?.input || '').length;
+          parts.push(`  ${m.name}: 已产出内容（约 ${inputLen} 字符）`);
+        }
+      }
+      if (myIndex >= 0) {
+        parts.push(`\n你是第 ${myIndex + 1} 个环节。请输出完整、可独立交付的内容。`);
+      }
+      ctx.workflowContext = parts.join('\n');
+    } else {
+      ctx.workflowContext = undefined;
     }
 
     ctx.onNodeStatus(nodeId, 'running');
@@ -318,142 +370,6 @@ export async function executeWorkflow(
           completed.add(nodeId);
           continue;
         }
-      }
-
-      // Handle loop-while: iterative execution of full body subgraph
-      if (node.type === 'loop-while') {
-        const loopData = node.data as import('../../types/sandbox').LoopNodeData;
-        const maxIter = Math.min(loopData.maxIterations || 10, 20);
-        let lastEnv: Envelope | null = null;
-
-        const upstream = predecessors[nodeId] || [];
-        if (upstream.length > 0 && envelopes[upstream[0]]) {
-          lastEnv = createEnvelopeFromUpstream(envelopes[upstream[0]], {
-            flowId: workflow.id, nodeId, forkIndex: null, iteration: 0,
-          });
-        }
-
-        const bodyEdge = edges.find(e => e.source === nodeId && e.sourceHandle === 'loop-body');
-        const exitEdge = edges.find(e => e.source === nodeId && e.sourceHandle === 'loop-exit');
-
-        // Discover exit-path nodes (excluded from body reset)
-        const exitNodes = new Set<string>();
-        if (exitEdge) {
-          const queue = [exitEdge.target];
-          const visited = new Set<string>([nodeId]);
-          while (queue.length > 0) {
-            const id = queue.shift()!;
-            if (visited.has(id)) continue;
-            visited.add(id);
-            exitNodes.add(id);
-            for (const child of (successors[id] || [])) {
-              if (!visited.has(child)) queue.push(child);
-            }
-          }
-        }
-
-        // Discover all loop-body nodes (BFS from body entry, stopping at exit path)
-        const bodyNodes = new Set<string>();
-        if (bodyEdge) {
-          const queue = [bodyEdge.target];
-          const visited = new Set<string>([nodeId]);
-          while (queue.length > 0) {
-            const id = queue.shift()!;
-            if (visited.has(id) || exitNodes.has(id)) continue;
-            visited.add(id);
-            bodyNodes.add(id);
-            for (const child of (successors[id] || [])) {
-              if (!visited.has(child) && !exitNodes.has(child)) queue.push(child);
-            }
-          }
-        }
-
-        for (let iter = 0; iter < maxIter; iter++) {
-          if (ctx.signal.aborted) break;
-
-          const currentEnv = lastEnv || createEnvelope({
-            flowId: workflow.id, nodeId, forkIndex: null, iteration: iter,
-          });
-          currentEnv.meta.iteration = iter;
-
-          if (iter > 0 && lastEnv) {
-            const fieldValue = extractFromEnvelope(lastEnv, loopData.conditionField);
-            const shouldContinue = evaluateCondition(fieldValue, loopData.conditionOperator as any, loopData.conditionValue);
-            if (!shouldContinue) break;
-
-            // Reset all body nodes for re-execution
-            for (const bid of bodyNodes) {
-              completed.delete(bid);
-              errored.delete(bid);
-              delete envelopes[bid];
-            }
-          }
-
-          envelopes[nodeId] = currentEnv;
-
-          // Execute all body nodes in topological order within this iteration
-          if (bodyEdge && bodyNodes.size > 0) {
-            let bodyProgress = true;
-            while (bodyProgress && !ctx.signal.aborted) {
-              bodyProgress = false;
-              for (const bid of bodyNodes) {
-                if (completed.has(bid) || errored.has(bid)) continue;
-
-                // Check if all predecessors are satisfied
-                const preds = predecessors[bid] || [];
-                const allReady = preds.every(pid => {
-                  if (pid === nodeId) return true;
-                  return completed.has(pid) || errored.has(pid);
-                });
-                if (!allReady) continue;
-
-                const bodyResult = await executeNode(bid);
-                if (bodyResult) {
-                  lastEnv = createEnvelopeFromUpstream(bodyResult, {
-                    flowId: workflow.id, nodeId, forkIndex: null, iteration: iter,
-                  });
-                }
-                bodyProgress = true;
-              }
-            }
-          }
-
-          ctx.onLog({
-            timestamp: new Date().toISOString(),
-            nodeId,
-            nodeName: loopData.label || '条件循环',
-            level: 'info',
-            message: `第 ${iter + 1} 轮迭代完成`,
-          });
-        }
-
-        if (lastEnv) {
-          envelopes[nodeId] = lastEnv;
-        }
-        for (const bid of bodyNodes) completed.add(bid);
-        completed.add(nodeId);
-        progress = true;
-        continue;
-      }
-
-      // Backward-compatible: loop-count (no longer in palette, but kept for existing workflows)
-      if (node.type === 'loop-count') {
-        const loopData = node.data as import('../../types/sandbox').LoopNodeData;
-        const count = Math.min(loopData.count || 1, 20);
-        for (let i = 0; i < count; i++) {
-          if (ctx.signal.aborted) break;
-          const iterEnvelope = createEnvelope({
-            flowId: workflow.id, nodeId, forkIndex: null, iteration: i,
-          });
-          envelopes[nodeId] = iterEnvelope;
-          const children = successors[nodeId] || [];
-          for (const child of children) {
-            await executeNode(child);
-          }
-        }
-        completed.add(nodeId);
-        progress = true;
-        continue;
       }
 
       const result = await executeNode(nodeId);
@@ -558,7 +474,7 @@ register('agent', async (node, envelope, ctx) => {
   const config = agent?.config;
   const maxLoops = config?.maxToolCalls ?? 100;
   const workspace = data.workspacePath || config?.workspace || `data/agents/${data.agentId}/.workspace/`;
-  const resolvedRole = resolveTemplate(data.agentRole || '', envelope);
+  const resolvedRole = envelope.role ? resolveTemplate(envelope.role, envelope) : '';
 
   let toolDefs: ToolDef[] = [];
   if (config?.tools?.length) {
@@ -578,6 +494,13 @@ register('agent', async (node, envelope, ctx) => {
     }
   }
 
+  if (config?.skills?.length) {
+    const useSkill = toolDefs.find(t => t.name === 'use_skill');
+    if (useSkill) {
+      useSkill.description = `加载技能指令。当前可用技能: ${config.skills.join(', ')}`;
+    }
+  }
+
   try {
     if (toolDefs.length > 0) {
       // ===== 两层套壳：内层 ReAct + 外层信封包装 =====
@@ -586,7 +509,7 @@ register('agent', async (node, envelope, ctx) => {
     } else {
       // ===== 无工具：单次调用（原有行为） =====
       envelope.role = resolvedRole;
-      const systemPrompt = buildAgentSystemPrompt(data, envelope);
+      const systemPrompt = buildAgentSystemPrompt(data, envelope, ctx.workflowContext);
       const res = await request<{ choices: Array<{ message: { content: string } }> }>(
         '/chat/completions', opts, { model: extractModelId(model), messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: serializeEnvelope(envelope) }], temperature: data.outputSchema ? 0.3 : 0.7, max_tokens: 4096, stream: false },
       );
@@ -622,14 +545,12 @@ register('condition', async (node, envelope, ctx) => {
     if (match) {
       matchIndex = data.rules.indexOf(rule);
       envelope.input = `条件匹配: ${rule.field} ${rule.operator} ${rule.value}`;
-      (envelope as any).__conditionMatchIndex = matchIndex;
       if (ctx.conditionRoutes) ctx.conditionRoutes[node.id] = matchIndex;
       return envelope;
     }
   }
 
   envelope.input = '无匹配条件，走默认路由';
-  (envelope as any).__conditionMatchIndex = -1;
   if (ctx.conditionRoutes) ctx.conditionRoutes[node.id] = -1;
   return envelope;
 });
@@ -764,33 +685,54 @@ function buildExecutionReport(
   flowId: string,
   envelopes: Record<string, Envelope>,
   logs: ExecutionLog[],
+  topoOrder?: string[],
+  nodes?: Array<{ id: string; type: string; data: Record<string, unknown> }>,
 ): string {
   const nodeNames: Record<string, string> = {};
+  const nodeTypes: Record<string, string> = {};
   for (const log of logs) {
     if (log.nodeId && !nodeNames[log.nodeId]) {
       nodeNames[log.nodeId] = log.nodeName || log.nodeId;
+    }
+  }
+  if (nodes) {
+    for (const n of nodes) {
+      if (!nodeNames[n.id]) nodeNames[n.id] = (n.data as any)?.label || n.id;
+      nodeTypes[n.id] = n.type;
     }
   }
   for (const nodeId of Object.keys(envelopes)) {
     if (!nodeNames[nodeId]) nodeNames[nodeId] = nodeId;
   }
 
+  const orderedIds = topoOrder?.filter(id => envelopes[id]) || Object.keys(envelopes);
+
+  const typeLabels: Record<string, string> = {
+    entry: '入口', agent: 'Agent', condition: '条件', 'loop-while': '循环',
+    merge: '合并', fork: '分叉', variable: '变量', 'human-gate': '人工',
+    'error-handler': '错误处理', output: '输出',
+  };
+
   const lines: string[] = [];
   lines.push(`# 工作流执行报告`);
   lines.push('');
-  lines.push(`**工作流**: ${flowId}`);
-  lines.push(`**节点数**: ${Object.keys(envelopes).length}`);
+  lines.push(`> 工作流 ID: \`${flowId}\` | 节点数: **${orderedIds.length}**`);
+  lines.push('');
+  lines.push('---');
   lines.push('');
 
-  for (const [nodeId, env] of Object.entries(envelopes)) {
+  for (const nodeId of orderedIds) {
+    const env = envelopes[nodeId];
+    if (!env) continue;
     const name = nodeNames[nodeId] || nodeId;
+    const ntype = nodeTypes[nodeId] || '';
+    const typeLabel = typeLabels[ntype] || ntype;
 
-    lines.push(`---`);
-    lines.push('');
-    lines.push(`## [${name}]`);
+    lines.push(`## ${name}`);
+    lines.push(`*( ${typeLabel} 节点 )*`);
     lines.push('');
 
-    if (env.goal && env.goal !== env.input) {
+    if (env.goal && env.goal !== env.input && ntype !== 'entry') {
       lines.push(`**目标**: ${env.goal}`);
       lines.push('');
     }
@@ -800,17 +742,26 @@ function buildExecutionReport(
     }
 
     const outputContent = env.input || '(空)';
-    if (outputContent.length <= 2000) {
-      lines.push(`**输出**:`);
-      lines.push('```');
+    lines.push(`**产出**:`);
+    lines.push('');
+    if (outputContent.length <= 3000) {
       lines.push(outputContent);
-      lines.push('```');
     } else {
-      lines.push(`**输出**: (${outputContent.length} 字符，截取前 2000 字符)`);
-      lines.push('```');
-      lines.push(outputContent.slice(0, 2000) + '...');
-      lines.push('```');
+      const chunk = outputContent.slice(0, 3000);
+      const lastBreak = Math.max(
+        chunk.lastIndexOf('\n\n'),
+        chunk.lastIndexOf('\n'),
+        chunk.lastIndexOf('。'),
+        chunk.lastIndexOf('. '),
+        chunk.lastIndexOf('.'),
+        2500,
+      );
+      lines.push(outputContent.slice(0, lastBreak > 0 ? lastBreak + 1 : 3000));
+      lines.push('');
+      lines.push(`> *( 共 ${outputContent.length} 字符，以上截至于段落边界 )*`);
     }
+    lines.push('');
+    lines.push('---');
     lines.push('');
   }
 
@@ -822,25 +773,12 @@ register('output', async (node, envelope, ctx) => {
 
   const allEnvelopes = ctx.envelopes || {};
   const allLogs = ctx.executionLogs || [];
+  const finalOutput = envelope.input;
 
-  const line = '-'.repeat(60);
-  const reportParts: string[] = [];
-
-  reportParts.push(line);
-  reportParts.push('风暴沙盒 — 执行报告');
-  reportParts.push(line);
-
-  reportParts.push('');
-  reportParts.push(buildExecutionReport(ctx.flowId, allEnvelopes, allLogs));
-
-  reportParts.push('');
-  reportParts.push(line);
-  reportParts.push('最终输出');
-  reportParts.push(line);
-  reportParts.push('');
-  reportParts.push(envelope.input);
-
-  const fullReport = reportParts.join('\n');
+  const report = buildExecutionReport(
+    ctx.flowId, allEnvelopes, allLogs, ctx.topoOrder,
+    ctx._workflowNodes as Array<{ id: string; type: string; data: Record<string, unknown> }> | undefined,
+  );
 
   try {
     const flowLabel = (ctx.flowName || ctx.flowId).replace(/[\\/:*?"<>| ]/g, '_');
@@ -848,21 +786,30 @@ register('output', async (node, envelope, ctx) => {
       .replace(/\{timestamp\}/g, Date.now().toString())
       .replace(/\{flow\}/g, flowLabel);
     const path = `${data.filePath || 'workflow_output'}/${fileName}.${data.format}`;
+
+    const orderedIds = ctx.topoOrder?.filter(id => allEnvelopes[id]) || Object.keys(allEnvelopes);
+    const nodeInfo: Record<string, string> = {};
+    for (const log of allLogs) {
+      if (log.nodeId && log.nodeName) nodeInfo[log.nodeId] = log.nodeName;
+    }
+
     const content = data.format === 'json'
       ? JSON.stringify({
           flowId: ctx.flowId,
           timestamp: new Date().toISOString(),
-          finalOutput: envelope.input,
-          nodes: Object.entries(allEnvelopes).map(([id, env]) => ({
-            nodeId: id,
-            goal: env.goal || '',
-            role: env.role || '',
-            output: env.input || '',
-          })),
+          finalOutput: finalOutput || '',
+          report,
+          nodes: orderedIds
+            .filter(id => allEnvelopes[id])
+            .map(id => ({
+              nodeId: id,
+              name: nodeInfo[id] || id,
+              goal: allEnvelopes[id].goal || '',
+              role: allEnvelopes[id].role || '',
+              output: allEnvelopes[id].input || '',
+            })),
         }, null, 2)
-      : data.format === 'xml'
-        ? serializeEnvelope(envelope)
-        : fullReport;
+      : report;
 
     await fetch('/api/storage/write?path=' + encodeURIComponent(path), {
       method: 'PUT',
@@ -886,26 +833,7 @@ register('output', async (node, envelope, ctx) => {
     });
   }
 
-  envelope.input = fullReport;
-  return envelope;
-});
-
-register('subflow', async (node, envelope, ctx) => {
-  const data = node.data as import('../../types/sandbox').SubflowNodeData;
-
-  if (!data.subflowId) throw new Error('子流程未配置');
-
-  ctx.onLog({
-    timestamp: new Date().toISOString(),
-    nodeId: node.id,
-    nodeName: data.label || '子流程',
-    level: 'info',
-    message: `调用子流程: ${data.subflowName || data.subflowId}`,
-  });
-
-  // Subflow execution would recursively call executeWorkflow
-  // For now, mark it as passthrough
-  envelope.input = `[子流程 ${data.subflowName || data.subflowId} 输出]\n${envelope.input}`;
+  envelope.input = report;
   return envelope;
 });
 
@@ -930,10 +858,10 @@ async function buildRequestOptions(provider: ProviderEntry): Promise<RequestOpti
 
 function buildTaskPrompt(envelope: Envelope): string {
   const parts: string[] = [];
-  if (envelope.goal) parts.push(`## 目标\n${envelope.goal}`);
-  if (envelope.context) parts.push(`## 上下文\n${envelope.context}`);
-  if (envelope.input) parts.push(`## 当前输入\n${envelope.input}`);
-  if (envelope.requirement) parts.push(`## 要求\n${envelope.requirement}`);
+  if (envelope.goal) parts.push(`## 工作流总目标\n${envelope.goal}`);
+  if (envelope.input) parts.push(`## 上游交付内容\n${envelope.input}`);
+  if (envelope.context) parts.push(`## 上游工作摘要\n${envelope.context}`);
+  if (envelope.requirement) parts.push(`## 执行要求\n${envelope.requirement}`);
   return parts.join('\n\n') || envelope.input || '请开始执行任务。';
 }
 
@@ -986,6 +914,9 @@ async function runReActLoop(
   maxLoops: number,
 ): Promise<Envelope> {
   let systemPrompt = buildSystemPrompt(toolDefs, workspace);
+  if (ctx.workflowContext) {
+    systemPrompt += `\n\n${ctx.workflowContext}`;
+  }
   if (resolvedRole) {
     systemPrompt += `\n\n## 角色与任务指令\n${resolvedRole}`;
   }
@@ -1076,6 +1007,7 @@ async function runReActLoop(
   }
 
   envelope.input = finalAnswer;
+  envelope.role = resolvedRole;
   return envelope;
 }
 
@@ -1123,6 +1055,7 @@ async function wrapInEnvelope(
 function buildAgentSystemPrompt(
   data: AgentNodeData,
   envelope: Envelope,
+  workflowContext?: string,
 ): string {
   let prompt = '';
 
@@ -1131,6 +1064,11 @@ function buildAgentSystemPrompt(
     prompt += `## 角色\n${envelope.role}\n\n`;
   } else if (data.agentRole) {
     prompt += `## 角色\n${data.agentRole}\n\n`;
+  }
+
+  // workflow context
+  if (workflowContext) {
+    prompt += `${workflowContext}\n\n`;
   }
 
   // output schema

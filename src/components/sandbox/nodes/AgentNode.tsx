@@ -39,15 +39,15 @@ export default function AgentNode({ data, selected }: Props) {
         lineStyle={{ borderColor: 'var(--color-accent)' }}
         handleStyle={{ background: 'var(--color-accent)', border: '2px solid var(--color-bg)', width: 8, height: 8 }}
       />
-      <div className={`sandbox-node sandbox-node--agent${selected ? ' selected' : ''}`}>
+      <div className={`sandbox-node sandbox-node--agent${data.execStatus === 'running' ? ' sandbox-node--running' : ''}${data.execStatus === 'error' ? ' sandbox-node--error' : ''}${selected ? ' selected' : ''}`}>
         <div className="sandbox-node-header" style={{ borderLeft: `3px solid ${statusColor}` }}>
           <div className="sandbox-agent-avatar">
             {(data.agentName || 'A')[0]}
           </div>
           <div className="sandbox-node-info">
-            <span className="sandbox-node-label">{data.agentName || data.label || 'Agent'}</span>
+            <span className="sandbox-node-label">{data.label || data.agentName || 'Agent'}</span>
             <span className="sandbox-node-sub" style={{ fontSize: 10, color: 'var(--color-text-tertiary)' }}>
-              {data.agentRole || 'AI 节点'}
+              {data.agentName ? `↳ ${data.agentName}` : data.agentRole || 'AI 节点'}
             </span>
           </div>
           <div className="sandbox-node-status-dot" style={{ background: statusColor }} />

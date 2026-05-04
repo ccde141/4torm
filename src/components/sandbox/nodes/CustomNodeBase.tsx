@@ -27,8 +27,8 @@ export default function CustomNodeBase({ data, selected, color }: Props & { colo
         lineStyle={{ borderColor: 'var(--color-accent)' }}
         handleStyle={{ background: 'var(--color-accent)', border: '2px solid var(--color-bg)', width: 8, height: 8 }}
       />
-      <div className={`sandbox-node sandbox-node--custom${selected ? ' selected' : ''}`}
-        style={{ borderColor: c }}>
+      <div className={`sandbox-node sandbox-node--custom${data.execStatus === 'running' ? ' sandbox-node--running' : ''}${data.execStatus === 'error' ? ' sandbox-node--error' : ''}${selected ? ' selected' : ''}`}
+        style={data.execStatus === 'running' || data.execStatus === 'error' ? {} : { borderColor: c }}>
         <div className="sandbox-node-header">
           <span className="sandbox-node-icon">⚙</span>
           <span className="sandbox-node-label">{data.label || 'Custom'}</span>

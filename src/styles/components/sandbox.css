@@ -428,15 +428,13 @@
 .react-flow__node-entry,
 .react-flow__node-agent,
 .react-flow__node-condition,
-.react-flow__node-loop-count,
 .react-flow__node-loop-while,
 .react-flow__node-merge,
 .react-flow__node-fork,
 .react-flow__node-variable,
 .react-flow__node-human-gate,
 .react-flow__node-error-handler,
-.react-flow__node-output,
-.react-flow__node-subflow {
+.react-flow__node-output {
   z-index: 10;
 }
 
