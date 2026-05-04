@@ -999,7 +999,7 @@ async function runReActLoop(
 
     // Neither answer nor actions: inject hint
     chatMessages.push({ role: 'assistant', content });
-    chatMessages.push({ role: 'user', content: '你的回复缺少 <think> 或 <answer> 标签。每次回复必须同时包含 <think> 和 <answer>，如需调用工具再附加 <action>。请重新回复。' });
+    chatMessages.push({ role: 'user', content: '格式错误。请重新输出：\n- 如需调工具 → <think> + <action tool="...">...</action>\n- 如可直接回答 → <think> + <answer>...</answer>' });
   }
 
   if (!finalAnswer) {

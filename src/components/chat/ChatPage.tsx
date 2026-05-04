@@ -526,7 +526,7 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
             break;
           }
 
-          chatMessages.push({ role: 'user', content: '你的回复缺少 <action> 或 <answer> 标签。请按照输出模板格式重新回复。' });
+          chatMessages.push({ role: 'user', content: '格式错误。请重新输出：\n- 如需调工具 → <think> + <action tool="...">...</action>\n- 如可直接回答 → <think> + <answer>...</answer>' });
           continue;
         }
 
@@ -949,7 +949,7 @@ async function runStreamLoop(ctx: StreamCtx) {
     const updatedMsg = { ...thinkingMsg, content: streamContent ? `${streamContent}\n\n${retryNote}` : retryNote };
     allMessages = allMessages.map(m => m.id === thinkingMsgId ? updatedMsg : m);
     setMessages([...allMessages]);
-    chatMessages.push({ role: 'user', content: '你的回复缺少 <action> 或 <answer> 标签。请按照输出模板格式重新回复。' });
+    chatMessages.push({ role: 'user', content: '格式错误。请重新输出：\n- 如需调工具 → <think> + <action tool="...">...</action>\n- 如可直接回答 → <think> + <answer>...</answer>' });
   }
 
   if (loopCount >= maxLoops) {

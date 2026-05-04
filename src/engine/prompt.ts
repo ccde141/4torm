@@ -67,59 +67,68 @@ export function buildSystemPrompt(tools: ToolDef[], workspaceDir?: string): stri
 ${params}`;
   }).join('\n\n');
 
-  return `## 输出模板
+  return `## 输出协议（严格遵守）
 
-你的回复应该使用以下标签结构。标签外的自然语言会被忽略，请确保内容在标签内。
+每次回复必须严格包含以下标签。标签外的任何文字将被系统忽略。
 
-<think>在这里输出你的思考过程</think>
+---
 
-<plan>
-[ ] 第一步
-[ ] 第二步
-</plan>
+### 回复模式
 
-如需调用工具：
+你每次回复只能选择以下两种模式之一。
+
+### 模式 A — 需要调用工具
+
+输出结构：
+<think>分析当前情况和下一步计划</think>
+<plan>（可选）列出将要调用的工具和步骤</plan>
 <action tool="工具名">{"参数":"值"}</action>
-注意：所有标记为 [必填] 的参数都必须在 JSON 中提供，不能省略。
+
+规则：
+- 必须包含 <think> + 至少一个 <action>
+- <plan> 可选 —— 复杂任务建议先规划再行动
+- <action> 的参数必须严格 JSON，[必填] 参数不得省略
+- 禁止包含 <answer>（在收到工具结果前不要给出最终答案）
+- 可一次输出多个 <action>
+- 不要用 read_file 去读目录路径，查看目录请用 list_directory
+
+### 模式 B — 直接回答用户
+
+输出结构：
+<think>梳理思路和结论</think>
+<answer>完整的回答内容</answer>
+<note>（可选）补充提醒、注意事项或后续建议</note>
+
+规则：
+- 必须包含 <think> + <answer>
+- <answer> 写完后必须立即关闭标签：</answer>
+- </answer> 之后不得再输出任何文字
+- <note> 可选 —— 用于提醒用户注意事项或给出后续建议
+- 禁止包含 <action>
+
+---
 
 工具执行后你会收到包含 <result> 的回复，解读后继续行动或给出答案。
-
-最终回答：
-<answer>你的完整回答</answer>
-
-补充说明（可选）：
-<note>提醒或建议</note>
-
-## 规则
-- 每次回复必须先以 <think> 标签输出你的思考过程，分析用户意图并梳理思路，然后再输出其他内容
-- 每次回复必须同时包含 <think> 和 <answer>，如需调用工具则使用 <action>
-- 可在一条消息中包含多个 <action>
-- <result> 标签由系统注入，你不需要输出
-- 读取文件用 read_file，查看目录内容用 list_directory，不要用 read_file 去读目录路径
-- 调用工具前确认所有 [必填] 参数都已包含，否则会执行失败
 
 ## 示例
 
 用户: "读取 README.md"
-你的回复:
+模式 A:
 <think>用户想读 README.md，我直接读取</think>
 <action tool="read_file">{"filePath": "README.md"}</action>
 
 用户: "写一个 hello.txt 文件"
-你的回复:
+模式 A:
 <think>用户要创建文件，需要提供 filePath 和 content</think>
 <action tool="write_file">{"filePath": "hello.txt", "content": "hello world"}</action>
 
 系统回复 <result>写入成功</result>，你接着：
+模式 B:
+<think>文件已成功写入，确认路径和内容正确</think>
 <answer>已创建 hello.txt</answer>
 
 ## 可用工具
 
 ${toolList}
-${buildSelfManagementSection(workspaceDir)}
-
-## 规则提醒
-- 每次回复必须先以 <think> 输出思考过程，然后再输出其他内容
-- 每次回复必须同时包含 <think> 和 <answer>，缺少时系统会要求你重新回复
-`;
+${buildSelfManagementSection(workspaceDir)}`;
 }

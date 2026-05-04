@@ -60,3 +60,6 @@ _release/
 
 # 工具权限设置（用户数据）
 data/tools/permissions.json
+
+# 自定义技能（用户数据）
+data/skills/baidu-search/
