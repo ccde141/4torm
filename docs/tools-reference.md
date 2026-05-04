@@ -71,7 +71,7 @@ data/
 | `write_file` | io | ✅ | write_file.js | 创建或覆盖文件 |
 | `edit_file` | io | ✅ | edit_file.js | 精确替换文本 |
 | `list_directory` | io | ❌ | list_directory.js | 列出目录内容 |
-| `run_command` | system | ✅ | run_command.js | 执行 shell 命令 |
+| `run_command` | system | ✅ | run_command.js | 执行 shell 命令（cwd = 项目根，自动 `chcp 65001` UTF-8） |
 | `webfetch` | system | ❌ | webfetch.js | HTTP GET 获取文本 |
 | `use_skill` | system | ❌ | use_skill.js | 按需加载指定 Skill 的专业提示词 |
 
@@ -131,11 +131,19 @@ data/
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
+// 推荐模式：支持 data/ 前缀和相对路径两种写法
+function resolvePath(fp, workspaceDir, projectDir) {
+  if (fp.replace(/\\/g, '/').startsWith('data/')) {
+    return resolve(projectDir, fp)
+  }
+  return resolve(workspaceDir, fp)
+}
+
 export default async function (args, ctx) {
   // args: Record<string, string> — 工具调用时传入的参数字典
   // ctx:  { dataDir: string, workspaceDir: string, projectDir: string }
-  const param1 = args.param1 || 'default'
-  const resolved = resolve(ctx.workspaceDir, param1)
+  const fp = args.filePath || args.file_path
+  const resolved = resolvePath(fp, ctx.workspaceDir, ctx.projectDir)
   return readFileSync(resolved, 'utf-8')
 }
 ```
@@ -181,10 +189,22 @@ export default async function (args, ctx) {
 }
 ```
 
-**工作区解析**（`vite.config.ts:316-323`）：
+**路径解析规则（v2.1+）：**
+
+| 工具 | cwd / 基准路径 | 说明 |
+|------|--------------|------|
+| `read_file` | `workspaceDir`（默认）或 `projectDir`（路径以 `data/` 开头时） | 支持 `data/skills/xxx` 和 `../../../skills/xxx` 两种写法 |
+| `write_file` | 同上 | 同上 |
+| `edit_file` | 同上 | 同上 |
+| `list_directory` | 同上 | 同上 |
+| `run_command` | `projectDir`（项目根） | 可直接传 `python data/skills/xxx/scripts/xxx.py` |
+| `webfetch` | N/A | 不涉及文件系统 |
+| `use_skill` | `dataDir` | 仅接受纯字母数字的技能名 |
+
+**工作区解析**（`vite.config.ts`）：
 - 先查 `agents/registry.json` 中该 Agent 的 `config.workspace` 配置
 - 未配置则使用默认 `data/agents/{agentId}/.workspace`
-- 所有 `filePath` 参数应相对于 `workspaceDir`
+- `projectDir` 固定为项目根目录
 
 ---
 
@@ -276,7 +296,8 @@ Agent 执行
   ├── 4. 输出解析 ── parseStructuredOutput(content, toolDefs)
   │     ├── <answer> → 最终答案, 跳出循环
   │     ├── <action tool="x"> → 提取工具名和参数
-  │     └── 无 action 无 answer → 注入 hint
+  │     ├── 📋tool_name({...}) 旧格式兼容（历史会话泄漏兜底）
+  │     └── 无 action 无 answer → 注入 hint + formatFailures 计数（>=3 则 break）
   │
   ├── 5. 工具调用 ── executeTool(toolName, args, agentId)
   │     │

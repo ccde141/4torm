@@ -63,6 +63,12 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  useEffect(() => {
     getAgents().then(setAgents);
     getAllModels().then(list => {
       setModels(list);
@@ -109,12 +115,17 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
   const handleSelectSession = async (sessionId: string) => {
     setActiveSessionId(sessionId);
     const s = await getSession(sessionId);
-    setMessages(s ? s.messages : []);
-    if (s?.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
     if (s) {
+      setMessages(s.messages);
+      if (s?.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
       s.lastReadAt = new Date().toISOString();
       await saveSession({ ...s, lastReadAt: s.lastReadAt });
       setSessions(prev => prev.map(p => p.id === sessionId ? { ...p, lastReadAt: s.lastReadAt } : p));
+      const msgs = s.messages || [];
+      const lastMsg = msgs[msgs.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content) {
+        setStreaming(true);
+      }
     }
   };
 
@@ -181,7 +192,7 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
         {
           model: modelId,
           messages: [
-            { role: 'system', content: '你是一个对话摘要助手。请根据以下对话历史，生成一段简洁但信息完整的上下文摘要（200字以内），必须包含：用户的核心需求、已经完成的关键操作（如文件修改、代码变更）、当前未解决的问题。请使用中文。' },
+            { role: 'system', content: '你是一个对话摘要助手。请根据以下对话历史，生成一段简洁但信息完整的上下文摘要（400字以内），必须包含：用户的核心需求、已经完成的关键操作（如文件修改、代码变更）、当前未解决的问题。请使用中文。' },
             { role: 'user', content: dialogText },
           ],
           temperature: 0.1,
@@ -413,6 +424,9 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
         ...systemMsg,
         ...updatedMessages.map(m => {
           if (m.role === 'system') return { role: 'system' as const, content: m.content };
+          if (m.toolCall && !m.content.startsWith('<')) {
+            return { role: 'assistant', content: `<action tool="${m.toolCall.toolName}">${JSON.stringify(m.toolCall.params)}</action>` };
+          }
           return { role: m.role === 'user' ? 'user' : 'assistant', content: m.content };
         }),
       ];
@@ -485,9 +499,9 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
                 const result = await executeTool(act.tool, act.args, selectedAgent?.id);
                 const toolMsg: ChatMessage = {
                   id: generateMessageId(), role: 'assistant',
-                  content: `🔧 ${act.tool}(${JSON.stringify(act.args)})`,
-                  timestamp: new Date().toISOString(), agentId: agent.id,
-                  toolCall: { toolName: act.tool, params: act.args, result, durationMs: 0, status: 'success' },
+                  content: `� ${act.tool}`,
+            timestamp: new Date().toISOString(), agentId: agent.id,
+            toolCall: { toolName: act.tool, params: act.args, result, durationMs: 0, status: 'success' },
                 };
                 allMessages = [...allMessages, toolMsg];
                 setMessages(allMessages);
@@ -499,7 +513,7 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
                 chatMessages.push({ role: 'user', content: `<result>工具执行失败: ${errMsg}。请检查参数是否正确，特别是 [必填] 参数和路径格式。如果是文件操作请确认路径相对于工作区。</result>` });
               }
             }
-            await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel });
+            await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel }).catch(() => {});
             continue;
           }
 
@@ -507,7 +521,7 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
             const aiMsg: ChatMessage = { id: generateMessageId(), role: 'assistant', content, timestamp: new Date().toISOString(), agentId: agent.id };
             allMessages = [...allMessages, aiMsg];
             setMessages(allMessages);
-            await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel });
+            await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel }).catch(() => {});
             refreshSessions(agent);
             break;
           }
@@ -520,7 +534,7 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
           const errMsg: ChatMessage = { id: generateMessageId(), role: 'assistant', content: `已达到最大工具调用次数（${maxLoops}次），请尝试 /compact 压缩上下文后继续。`, timestamp: new Date().toISOString(), agentId: agent.id };
           allMessages = [...allMessages, errMsg];
           setMessages(allMessages);
-          await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel });
+          await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel }).catch(() => {});
           refreshSessions(agent);
         }
       }
@@ -699,7 +713,7 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
               <div className="chat__input-wrapper">
                 <textarea className="chat__input" value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder={streaming ? '等待回复中...' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} disabled={streaming} aria-label="输入消息" />
                 {streaming ? (
-                  <button className="chat__stop-btn" onClick={() => { userStoppedRef.current = true; abortRef.current?.(); }} title="停止生成">
+                  <button className="chat__stop-btn" onClick={() => { userStoppedRef.current = true; abortRef.current?.(); if (!abortRef.current) setStreaming(false); }} title="停止生成">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                   </button>
                 ) : (
@@ -815,6 +829,7 @@ async function runStreamLoop(ctx: StreamCtx) {
     saveSession, refreshSessions, autoTitle, generateMessageId, abortController } = ctx;
   let allMessages = ctx.allMessages;
   let loopCount = ctx.loopCount;
+  let formatFailures = 0;
 
   while (loopCount < maxLoops) {
     loopCount++;
@@ -828,6 +843,7 @@ async function runStreamLoop(ctx: StreamCtx) {
     allMessages = [...allMessages, thinkingMsg];
     setMessages([...allMessages]);
 
+    try {
     await new Promise<void>((resolve, reject) => {
       streamChatCompletion(
         providerInfo,
@@ -842,12 +858,22 @@ async function runStreamLoop(ctx: StreamCtx) {
         },
         ).then(() => resolve()).catch(reject);
     });
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') throw e;
+      const errContent = streamContent || `(流中断，未收到有效回复: ${(e as Error).message})`;
+      const errMsg: ChatMessage = { ...thinkingMsg, content: errContent };
+      allMessages = allMessages.map(m => m.id === thinkingMsgId ? errMsg : m);
+      setMessages([...allMessages]);
+      await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel }).catch(() => {});
+      break;
+    }
 
-    await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel });
+    await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel }).catch(() => {});
 
     const parsed = parseStructuredOutput(streamContent, toolDefs);
 
     if (parsed.actions.length > 0) {
+      formatFailures = 0;
       const thinkContent = streamContent.replace(/<action[^>]*>[\s\S]*?<\/action>/g, '').trim();
       const keptThinkMsg = { ...thinkingMsg, content: thinkContent };
       allMessages = allMessages.map(m => m.id === thinkingMsgId ? keptThinkMsg : m);
@@ -880,7 +906,7 @@ async function runStreamLoop(ctx: StreamCtx) {
           const argsStr = JSON.stringify(act.args);
           const toolMsg: ChatMessage = {
             id: generateMessageId(), role: 'assistant',
-            content: `🔧 ${act.tool}(${argsStr.slice(0, 100)}${argsStr.length > 100 ? '...' : ''})`,
+            content: `� ${act.tool}`,
             timestamp: new Date().toISOString(), agentId: agent.id,
             toolCall: { toolName: act.tool, params: act.args, result, durationMs: 0, status: 'success' },
           };
@@ -895,22 +921,33 @@ async function runStreamLoop(ctx: StreamCtx) {
         }
       }
 
-      await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel });
+      await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel }).catch(() => {});
       setMessages([...allMessages]);
       continue;
     }
 
     if (parsed.answer) {
+      formatFailures = 0;
       allMessages = allMessages.filter(m => m.id !== thinkingMsgId);
       const aiMsg: ChatMessage = { id: generateMessageId(), role: 'assistant', content: streamContent, timestamp: new Date().toISOString(), agentId: agent.id };
       allMessages = [...allMessages, aiMsg];
       setMessages([...allMessages]);
-      await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel });
+      await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel }).catch(() => {});
       refreshSessions(agent);
       break;
     }
 
-    allMessages = allMessages.filter(m => m.id !== thinkingMsgId);
+    formatFailures++;
+    if (formatFailures >= 3) {
+      const failMsg = { ...thinkingMsg, content: streamContent || '模型连续多次未按格式回复，已停止重试。' };
+      allMessages = allMessages.map(m => m.id === thinkingMsgId ? failMsg : m);
+      setMessages([...allMessages]);
+      await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel }).catch(() => {});
+      break;
+    }
+    const retryNote = `(格式异常，第${formatFailures}次重试...)`;
+    const updatedMsg = { ...thinkingMsg, content: streamContent ? `${streamContent}\n\n${retryNote}` : retryNote };
+    allMessages = allMessages.map(m => m.id === thinkingMsgId ? updatedMsg : m);
     setMessages([...allMessages]);
     chatMessages.push({ role: 'user', content: '你的回复缺少 <action> 或 <answer> 标签。请按照输出模板格式重新回复。' });
   }
@@ -919,7 +956,7 @@ async function runStreamLoop(ctx: StreamCtx) {
     const errMsg: ChatMessage = { id: generateMessageId(), role: 'assistant', content: `已达到最大工具调用次数（${maxLoops}次）`, timestamp: new Date().toISOString(), agentId: agent.id };
     allMessages = [...allMessages, errMsg];
     setMessages([...allMessages]);
-    await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel });
+    await saveSession({ ...session, messages: allMessages, title: autoTitle(allMessages), model: selectedModel }).catch(() => {});
     refreshSessions(agent);
   }
 }

@@ -41,22 +41,22 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
 };
 
 function PageContent({ page, preselectSession, onClearPreselect }: { page: string; preselectSession?: string | null; onClearPreselect?: () => void }) {
-  switch (page) {
-    case 'agent':
-      return <DashboardPage />;
-    case 'chat':
-      return <ChatPage preselectSession={preselectSession ?? undefined} onClearPreselect={onClearPreselect} />;
-    case 'tools':
-      return <ToolsPage />;
-    case 'skills':
-      return <SkillsPage />;
-    case 'sandbox':
-      return <SandboxPage />;
-    case 'model':
-      return <SettingsPage />;
-    default:
-      return <DashboardPage />;
-  }
+  const show = (p: string): React.CSSProperties => ({
+    display: page === p ? undefined : 'none',
+    height: '100%',
+  });
+  const scrollArea: React.CSSProperties = { height: '100%', overflowY: 'auto' };
+
+  return (
+    <>
+      <div style={show('agent')}><div style={scrollArea}><DashboardPage /></div></div>
+      <div style={show('chat')}><div style={scrollArea}><ChatPage preselectSession={preselectSession ?? undefined} onClearPreselect={onClearPreselect} /></div></div>
+      <div style={show('tools')}><div style={scrollArea}><ToolsPage /></div></div>
+      <div style={show('skills')}><div style={scrollArea}><SkillsPage /></div></div>
+      <div style={show('sandbox')}><div style={scrollArea}><SandboxPage /></div></div>
+      <div style={show('model')}><div style={scrollArea}><SettingsPage /></div></div>
+    </>
+  );
 }
 
 export default function App() {
@@ -75,7 +75,7 @@ export default function App() {
         <Sidebar activePage={activePage} onNavigate={setActivePage} />
         <div className="main-content" style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
           <Header title={pageInfo.title} subtitle={pageInfo.subtitle} onNavigate={handleNavigate} />
-          <div style={{ flex: 1, overflowY: 'auto' }}>
+          <div style={{ flex: 1, overflow: 'hidden' }}>
             <PageContent page={activePage} preselectSession={preselectSession} onClearPreselect={() => setPreselectSession(null)} />
           </div>
         </div>

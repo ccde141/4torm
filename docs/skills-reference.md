@@ -211,12 +211,16 @@ data/skills/{skillId}/executors/{executorFile}.js
 
 Skill 的提示词通过内置的 `use_skill` 工具按需加载。Agent 被分配 Skill 后不会自动注入 SKILL.md 到系统提示词，而是由 Agent **自行判断何时需要**并主动调用 `use_skill("技能名")`。
 
+**路径提示：** 文件工具（`write_file`/`read_file` 等）支持以 `data/` 开头的路径，Agent 可直接写 `data/skills/baidu-search/SKILL.md` 来创建/编辑公共技能。旧语法 `../../../skills/xxx/` 仍然兼容。
+
 **设计考量：**
 - **省 Token** — Skill 指令仅在 Agent 调用时以 `<result>` 形式出现在对话中，`/compact` 后可被压缩，不会永久占用上下文。
 - **按需触发** — 与任务无关的 Skill 不会被加载，Agent 自行判断时机。
 - **复用机制** — Chat 与 Sandbox 共用同一套 `use_skill` 执行器，Agent 配置中的技能列表同步生效。
 
 **执行器路径：** `data/tools/executors/use_skill.js` — 读取 `data/skills/{name}/SKILL.md` 并返回内容。
+
+**安全检查：** `use_skill` 执行器仅接受纯字母数字的 skillId（`/`、`\`、`..` 均被拦截），防止路径遍历攻击。
 
 **动态描述：** Agent 被分配技能后，`use_skill` 工具的 description 字段会自动更新为「加载技能指令。当前可用技能: code-review, web-search」，Agent 从工具列表中即可获知可加载哪些技能。
 

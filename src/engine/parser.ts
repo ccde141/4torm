@@ -14,7 +14,12 @@ export function parseStructuredOutput(content: string, toolDefs: ToolDef[]): Par
 
   const extract = (tag: string) => {
     const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i');
-    return (content.match(re)?.[1] || '').trim();
+    const closed = content.match(re);
+    if (closed) return closed[1].trim();
+    const reOpen = new RegExp(`<${tag}>([\\s\\S]*)`, 'i');
+    const open = content.match(reOpen);
+    if (open) return open[1].trim();
+    return '';
   };
 
   round.think = extract('think');
@@ -41,6 +46,19 @@ export function parseStructuredOutput(content: string, toolDefs: ToolDef[]): Par
       let args: Record<string, string> = {};
       try { args = JSON.parse(jsonStr); } catch { args = { _raw: jsonStr }; }
       round.actions.push({ tool, args });
+    }
+  }
+
+  if (round.actions.length === 0) {
+    const legacyRegex = /[🔧📋]\s*(\w[\w_-]*)\s*\(\s*(\{(?:[^{}]|\{[^{}]*\})*\})\s*\)/g;
+    while ((m = legacyRegex.exec(content)) !== null) {
+      const tool = m[1].trim();
+      const jsonStr = m[2].trim();
+      if (toolDefs.some(t => t.name.toLowerCase() === tool.toLowerCase())) {
+        let args: Record<string, string> = {};
+        try { args = JSON.parse(jsonStr); } catch { args = { _raw: jsonStr }; }
+        round.actions.push({ tool, args });
+      }
     }
   }
 
