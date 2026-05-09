@@ -7,10 +7,16 @@ interface ToolStep {
   status: 'pending' | 'running' | 'done' | 'error';
 }
 
+interface PlanItem {
+  done: boolean;
+  text: string;
+  status?: 'done' | 'inProgress' | 'pending';
+}
+
 interface Props {
   think: string;
   plan: string;
-  planItems: Array<{ done: boolean; text: string }>;
+  planItems: PlanItem[];
   tools: ToolStep[];
   answer: string;
   note: string;
@@ -22,7 +28,6 @@ interface Props {
 export default function StructuredMessage({ think, plan, planItems, tools, answer, note, msgId, onDelete, actions }: Props) {
   const [showThink, setShowThink] = useState(false);
   const [showTool, setShowTool] = useState<Record<number, boolean>>({});
-  const [showNote, setShowNote] = useState(false);
 
   const toggleTool = (idx: number) => {
     setShowTool(prev => ({ ...prev, [idx]: !prev[idx] }));
@@ -32,7 +37,7 @@ export default function StructuredMessage({ think, plan, planItems, tools, answe
     <div className="chat__message chat__message--assistant">
       <div className="chat__avatar">AI</div>
       <div className="chat__bubble stmsg-bubble">
-        {(think || plan) && (
+        {think && (
           <div className="stmsg-section stmsg-section--collapsible">
             <button className="stmsg-collapse-trigger" onClick={() => setShowThink(!showThink)} aria-expanded={showThink}>
               <span className="stmsg-collapse-arrow">{showThink ? '▼' : '▶'}</span>
@@ -40,19 +45,32 @@ export default function StructuredMessage({ think, plan, planItems, tools, answe
             </button>
             {showThink && (
               <div className="stmsg-collapse-body">
-                {think && <div className="stmsg-think">{think}</div>}
-                {planItems.length > 0 && (
-                  <div className="stmsg-plan">
-                    {planItems.map((p, i) => (
-                      <div key={i} className={`stmsg-plan-item stmsg-plan-item--${p.done ? 'done' : 'pending'}`}>
-                        <span className="stmsg-plan-mark">{p.done ? '✓' : '○'}</span>
-                        <span>{p.text}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <div className="stmsg-think">{think}</div>
               </div>
             )}
+          </div>
+        )}
+
+        {planItems.length > 0 && (
+          <div className="stmsg-section stmsg-section--plan">
+            <div className="stmsg-plan-header">📋 执行计划</div>
+            <div className="stmsg-plan">
+              {planItems.map((p, i) => {
+                const st = p.status;
+                const isDone = st === 'done';
+                const isRunning = st === 'inProgress';
+                return (
+                  <div key={i} className={`stmsg-plan-item stmsg-plan-item--${st || (p.done ? 'done' : 'pending')}`}>
+                    <span className="stmsg-plan-mark">
+                      {isDone ? '✅' : isRunning ? '🔄' : '⏳'}
+                    </span>
+                    <span className={isDone ? 'stmsg-plan-text-done' : isRunning ? 'stmsg-plan-text-active' : ''}>
+                      {p.text}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -89,10 +107,8 @@ export default function StructuredMessage({ think, plan, planItems, tools, answe
 
         {note && (
           <div className="stmsg-note-area">
-            <button className="stmsg-note-trigger" onClick={() => setShowNote(!showNote)} aria-expanded={showNote}>
-              ℹ {showNote ? '收起提示' : '查看提示'}
-            </button>
-            {showNote && <div className="stmsg-note-body">{note}</div>}
+            <div className="stmsg-note-header">💡 提醒</div>
+            <div className="stmsg-note-body">{note}</div>
           </div>
         )}
         {actions && <div className="chat__bubble-actions">{actions}</div>}

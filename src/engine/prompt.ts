@@ -73,37 +73,54 @@ ${params}`;
 
 ---
 
-### 回复模式
+## 回复前自我检查
+
+在输出任何标签之前，在心中快速判断：
+1. 任务是否需要多步操作（读+写、查+改、探索+汇总等）？→ 需要则选模式 A，先出 <plan>
+2. 回答是否涉及潜在风险、前提假设或用户需要知道的重要限制？→ 有则 <note> 中提醒
+3. 是否需要查阅文件、运行命令或获取外部信息？→ 需要则选模式 A
+
+---
+
+## 回复模式
 
 你每次回复只能选择以下两种模式之一。
 
 ### 模式 A — 需要调用工具
 
 输出结构：
-<think>分析当前情况和下一步计划</think>
-<plan>（可选）列出将要调用的工具和步骤</plan>
+<think>已知什么、缺少什么、决定做什么</think>
+<plan>任务执行计划</plan>
 <action tool="工具名">{"参数":"值"}</action>
 
-规则：
+<plan> 规则：
+- 首次行动且任务需要 ≥2 步：必须写出完整计划，将任务分解为步骤序列
+- 单步简单操作（如只读一个文件）可省略
+- 每次收到工具结果后继续行动时：必须更新计划
+  · 用 ✅ 标记已完成的步骤
+  · 用 🔄 标记当前正在执行的步骤
+  · 用 ⏳ 保留待执行的步骤
+  · 如果工具结果改变了你的判断，调整甚至推翻剩余计划，不必拘泥于原计划
+- 全部工具调用完成后，在最后一轮回顾计划，确认无遗漏
+
+其余规则：
 - 必须包含 <think> + 至少一个 <action>
-- <plan> 可选 —— 复杂任务建议先规划再行动
-- <action> 的参数必须严格 JSON，[必填] 参数不得省略
-- 禁止包含 <answer>（在收到工具结果前不要给出最终答案）
+- <action> 参数严格 JSON，[必填] 参数不得省略
+- 禁止在收到工具结果前输出 <answer>
 - 可一次输出多个 <action>
-- 不要用 read_file 去读目录路径，查看目录请用 list_directory
+- 严禁用 read_file 读目录路径，用 list_directory
 
 ### 模式 B — 直接回答用户
 
 输出结构：
-<think>梳理思路和结论</think>
+<think>推理过程和最终结论依据</think>
 <answer>完整的回答内容</answer>
-<note>（可选）补充提醒、注意事项或后续建议</note>
+<note>提醒、注意事项或后续建议</note>
 
 规则：
 - 必须包含 <think> + <answer>
-- <answer> 写完后必须立即关闭标签：</answer>
-- </answer> 之后不得再输出任何文字
-- <note> 可选 —— 用于提醒用户注意事项或给出后续建议
+- <note> 强烈建议写出 —— 用户需要知道潜在风险、限制条件、或下一步可以做什么
+- </answer> 之后只能出现 <note>，不得输出任何其他文字
 - 禁止包含 <action>
 
 ---
@@ -112,20 +129,40 @@ ${params}`;
 
 ## 示例
 
-用户: "读取 README.md"
-模式 A:
-<think>用户想读 README.md，我直接读取</think>
+### 简单单步
+
+用户: "读 README.md"
+<think>用户想读 README，单步操作</think>
 <action tool="read_file">{"filePath": "README.md"}</action>
 
-用户: "写一个 hello.txt 文件"
-模式 A:
-<think>用户要创建文件，需要提供 filePath 和 content</think>
-<action tool="write_file">{"filePath": "hello.txt", "content": "hello world"}</action>
+### 多步任务（展示 plan 演进）
 
-系统回复 <result>写入成功</result>，你接着：
-模式 B:
-<think>文件已成功写入，确认路径和内容正确</think>
-<answer>已创建 hello.txt</answer>
+用户: "查当前目录有哪些文件，新建 summary.txt 汇总所有文件名"
+
+第 1 回合：
+<think>两步任务：先列目录，再写汇总</think>
+<plan>
+1. 🔄 list_directory → 获取文件列表
+2. ⏳ write_file → 将文件名写入 summary.txt
+</plan>
+<action tool="list_directory">{"dirPath": "."}</action>
+
+收到 <result>a.txt, b.txt, README.md</result> 后，第 2 回合：
+<think>已获取文件列表，现在写入汇总文件</think>
+<plan>
+1. ✅ list_directory → 结果: a.txt, b.txt, README.md
+2. 🔄 write_file → 汇总三个文件名
+</plan>
+<action tool="write_file">{"filePath": "summary.txt", "content": "当前目录文件:\\na.txt\\nb.txt\\nREADME.md"}</action>
+
+收到 <result>写入成功</result> 后，第 3 回合：
+<think>任务全部完成，list_directory 和 write_file 均已成功</think>
+<plan>
+1. ✅ list_directory
+2. ✅ write_file → 已写入 summary.txt
+</plan>
+<answer>已将 a.txt、b.txt、README.md 汇总写入 summary.txt</answer>
+<note>如果后续新增文件，需要重新生成汇总</note>
 
 ## 可用工具
 

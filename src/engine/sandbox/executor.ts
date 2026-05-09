@@ -25,6 +25,7 @@ import {
 import { request } from '../../llm/client';
 import { buildSystemPrompt } from '../prompt';
 import { parseStructuredOutput } from '../parser';
+import { buildWorkspaceInfo } from '../chat/context';
 import type { ToolDef } from '../../store/tools';
 
 export interface ExecContext {
@@ -920,7 +921,7 @@ async function runReActLoop(
   if (resolvedRole) {
     systemPrompt += `\n\n## 角色与任务指令\n${resolvedRole}`;
   }
-  systemPrompt += `\n\n## 环境信息\n- 工作区路径: ${workspace}\n- read_file / write_file / edit_file / list_directory 默认基于工作区路径\n- 若要操作项目级文件（如 data/skills/、data/tools/），可直接传以 data/ 开头的路径\n- run_command 的当前目录为项目根，所有路径相对于项目根`;
+  systemPrompt += buildWorkspaceInfo(workspace);
 
   const taskPrompt = buildTaskPrompt(envelope);
   const chatMessages: Array<{ role: string; content: string }> = [

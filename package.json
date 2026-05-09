@@ -7,10 +7,12 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "postinstall": "npx playwright install chromium"
   },
   "dependencies": {
     "@xyflow/react": "^12.10.2",
+    "playwright": "^1.55.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },

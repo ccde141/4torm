@@ -3,7 +3,7 @@ import type { ToolDef } from '../store/tools';
 export interface ParsedRound {
   think: string;
   plan: string;
-  planItems: Array<{ done: boolean; text: string }>;
+  planItems: Array<{ done: boolean; text: string; status?: 'done' | 'inProgress' | 'pending' }>;
   actions: Array<{ tool: string; args: Record<string, string> }>;
   answer: string;
   note: string;
@@ -31,9 +31,16 @@ export function parseStructuredOutput(content: string, toolDefs: ToolDef[]): Par
     round.plan = planRaw;
     const items = planRaw.split('\n').filter(l => l.trim());
     for (const item of items) {
-      const done = /^\[[✓✅\*xX]\]/.test(item);
-      const text = item.replace(/^\[.\]/, '').trim();
-      if (text) round.planItems.push({ done, text });
+      let done = false;
+      let status: 'done' | 'inProgress' | 'pending' | undefined;
+      const cleaned = item
+        .replace(/^✅/, () => { done = true; status = 'done'; return ''; })
+        .replace(/^🔄/, () => { status = 'inProgress'; return ''; })
+        .replace(/^⏳/, () => { status = 'pending'; return ''; })
+        .replace(/^\[[✓✅\*xX]\]/, () => { done = true; return ''; })
+        .replace(/^\[.\]/, '')
+        .trim();
+      if (cleaned) round.planItems.push({ done, text: cleaned, status });
     }
   }
 
