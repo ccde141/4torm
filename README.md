@@ -171,9 +171,11 @@ DAG 编排 + 节点状态实时反馈 + 信封流转 + 会议室节点。
 ### 安装与运行
 
 ```bash
-git clone https://github.com/ccde141/4torm.git
-cd 4torm
+cd I:\A_Test_zone\test\4torm
 npm install
+cd server
+npm install
+cd ..
 npm run dev
 ```
 
