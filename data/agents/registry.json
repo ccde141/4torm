@@ -4,7 +4,7 @@
     "name": "代码助手",
     "role": "码农",
     "description": "",
-    "status": "convection",
+    "status": "idle",
     "model": "pvd_mop71zuk1ett:deepseek-v4-pro",
     "config": {
       "masterPrompt": "",
@@ -64,7 +64,7 @@
     "name": "公用会长",
     "role": "专门用于各类会议室功能会长型角色",
     "description": "严谨、细致的会议议题推进者",
-    "status": "convection",
+    "status": "idle",
     "model": "pvd_mop71zuk1ett:deepseek-v4-flash",
     "config": {
       "masterPrompt": "",

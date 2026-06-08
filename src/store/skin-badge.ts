@@ -16,7 +16,7 @@ export interface SkinBadgeConfig {
 }
 
 export const DEFAULT_BADGE: SkinBadgeConfig = {
-  enabled: false,
+  enabled: true,
   text: '4TORM',
   subtitle: 'AI AGENT SYSTEM',
 };

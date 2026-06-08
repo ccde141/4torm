@@ -55,7 +55,17 @@ export interface SkinBackgroundConfig {
 }
 
 export const DEFAULT_BACKGROUND: SkinBackgroundConfig = {
-  type: 'none',
+  type: 'wind',
   contour: { ...CONTOUR_DEFAULTS },
-  wind: { ...WIND_DEFAULTS },
+  wind: {
+    speed: 4,
+    totalLines: 20,
+    parallelCount: 9,
+    spread: 150,
+    amplitude: 75,
+    alpha: 30,
+    lineWidth: 12,
+    fadeIntensity: 100,
+    centerY: 94,
+  },
 };

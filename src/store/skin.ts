@@ -58,15 +58,18 @@ export interface SkinConfig {
 }
 
 const DEFAULT_TEXTURE: SkinTextureConfig = {
-  type: 'none',
-  opacity: 0,
+  type: 'custom',
+  opacity: 0.5,
   blur: 0,
   blend: 'normal',
+  size: 'cover',
+  customImage: '/api/storage/file?path=skin-textures%2Fcustom-1780312588120.png',
+  customPath: 'skin-textures/custom-1780312588120.png',
 };
 
 const DEFAULTS: SkinConfig = {
-  primaryColor: '#3B82F6',
-  secondaryColor: '#6BF5FF',
+  primaryColor: '#FFFFFF',
+  secondaryColor: '#A9F8FE',
   texture: DEFAULT_TEXTURE,
   background: DEFAULT_BACKGROUND,
   badge: DEFAULT_BADGE,

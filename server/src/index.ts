@@ -31,7 +31,7 @@ const app = Fastify({
 });
 
 // 自定义请求日志：静默高频轮询路径，其余请求打印精简一行
-const SILENT_PREFIXES = ['/api/storage/agents', '/api/tradewind/node-status', '/api/tide/'];
+const SILENT_PREFIXES = ['/api/storage/read', '/api/tradewind/node-status', '/api/tide/tasks', '/api/convection/list', '/api/skills/list', '/api/tradewind/status'];
 app.addHook('onResponse', (req, reply, done) => {
   const url = req.url;
   if (req.method === 'GET' && SILENT_PREFIXES.some(p => url.startsWith(p))) {
