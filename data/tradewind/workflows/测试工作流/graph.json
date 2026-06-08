@@ -1,0 +1,298 @@
+{
+  "nodes": [
+    {
+      "id": "entry-mpl7vp551",
+      "type": "entry",
+      "label": "入口",
+      "position": {
+        "x": 1950.808867981423,
+        "y": 1304.1224922776996
+      },
+      "config": {}
+    },
+    {
+      "id": "output-mpl7wmofb",
+      "type": "output",
+      "label": "出口",
+      "position": {
+        "x": 3533.0792782354492,
+        "y": 1273.9937217941774
+      },
+      "config": {}
+    },
+    {
+      "id": "agent-mpm8dl7d1",
+      "type": "agent",
+      "label": "代码以及问题开发手",
+      "position": {
+        "x": 2228.2094481578247,
+        "y": 1451.8814764902138
+      },
+      "config": {
+        "agentId": "agent-mop6zz2fdpjv"
+      }
+    },
+    {
+      "id": "note-mpme3bct1",
+      "type": "note",
+      "label": "Note",
+      "position": {
+        "x": 2242.1320987699964,
+        "y": 1244.4877591001625
+      },
+      "config": {
+        "content": "启动后，在信封内写入一个数学问题即可，你的下游会有会议室，我们会在会议室内讨论方案。"
+      }
+    },
+    {
+      "id": "agent-mpme3rej5",
+      "type": "agent",
+      "label": "事务初步分析者",
+      "position": {
+        "x": 2959.2725507639925,
+        "y": 1402.5366226509025
+      },
+      "config": {
+        "agentId": "agent-moquco791grt"
+      }
+    },
+    {
+      "id": "meeting-mq1p7a6x0",
+      "type": "meeting",
+      "label": "会议室A",
+      "position": {
+        "x": 2602.3665766290387,
+        "y": 1325.9749980703239
+      },
+      "config": {
+        "chairAgentId": "agent-mpg7od2t2pnd",
+        "participantNodeIds": [
+          "agent-mpm8dl7d1",
+          "agent-mpme3rej5"
+        ]
+      }
+    },
+    {
+      "id": "agent-mq1p85tu3",
+      "type": "agent",
+      "label": "猫娘1",
+      "position": {
+        "x": 2603.026554144416,
+        "y": 1479.658738915341
+      },
+      "config": {
+        "agentId": "agent-mppcuxq71p24"
+      }
+    },
+    {
+      "id": "note-mq1p8tyy6",
+      "type": "note",
+      "label": "Note2",
+      "position": {
+        "x": 2441.9679550732653,
+        "y": 1683.019816719407
+      },
+      "config": {
+        "content": "收到问题后，根据你自己的会话特点进行解答，流转给下游。下游目前会根据两个会议工作内容以及你的回复作为基础来工作"
+      }
+    },
+    {
+      "id": "entry-mq1rlm0o0",
+      "type": "entry",
+      "label": "入口",
+      "position": {
+        "x": 1947.8779166865843,
+        "y": 1195.8240327500007
+      },
+      "config": {
+        "initialEnvelope": "出个数学问题给到下游"
+      }
+    },
+    {
+      "id": "agent-mq1rlou11",
+      "type": "agent",
+      "label": "猫娘2",
+      "position": {
+        "x": 2186.619217860053,
+        "y": 938.3902502172739
+      },
+      "config": {
+        "agentId": "agent-mppcuxq71p24"
+      }
+    },
+    {
+      "id": "meeting-mq1rlv013",
+      "type": "meeting",
+      "label": "会议室B",
+      "position": {
+        "x": 2439.2060339210498,
+        "y": 852.0587705752304
+      },
+      "config": {
+        "chairAgentId": "agent-mpg7od2t2pnd",
+        "participantNodeIds": [
+          "agent-mpm8dl7d1",
+          "agent-mpme3rej5",
+          "agent-mq1p85tu3",
+          "agent-mq1rlou11"
+        ]
+      }
+    },
+    {
+      "id": "meeting-mq1rm5es6",
+      "type": "meeting",
+      "label": "会议室C",
+      "position": {
+        "x": 2646.25853022472,
+        "y": 1058.2885250287613
+      },
+      "config": {
+        "chairAgentId": "agent-mpg7od2t2pnd",
+        "participantNodeIds": [
+          "agent-mpm8dl7d1",
+          "agent-mpme3rej5",
+          "agent-mq1p85tu3",
+          "agent-mq1rlou11"
+        ]
+      }
+    },
+    {
+      "id": "agent-mq1rm8bl8",
+      "type": "agent",
+      "label": "会长型",
+      "position": {
+        "x": 2952.2331590152885,
+        "y": 1068.3450686834906
+      },
+      "config": {
+        "agentId": "agent-mpg7od2t2pnd"
+      }
+    },
+    {
+      "id": "agent-mq1s0079b",
+      "type": "agent",
+      "label": "会长",
+      "position": {
+        "x": 3186.5869339759547,
+        "y": 1201.7867977147694
+      },
+      "config": {
+        "agentId": "agent-mppcuxq71p24"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-mpme35bb0",
+      "source": "entry-mpl7vp551",
+      "sourcePort": 0,
+      "target": "agent-mpm8dl7d1",
+      "targetPort": 0,
+      "kind": "handoff"
+    },
+    {
+      "id": "e-mpme3cps2",
+      "source": "note-mpme3bct1",
+      "sourcePort": 0,
+      "target": "agent-mpm8dl7d1",
+      "targetPort": 0,
+      "kind": "note"
+    },
+    {
+      "id": "e-mq1p7c5t1",
+      "source": "agent-mpm8dl7d1",
+      "sourcePort": 0,
+      "target": "meeting-mq1p7a6x0",
+      "targetPort": 0,
+      "kind": "handoff"
+    },
+    {
+      "id": "e-mq1p7d9y2",
+      "source": "meeting-mq1p7a6x0",
+      "sourcePort": 0,
+      "target": "agent-mpme3rej5",
+      "targetPort": 0,
+      "kind": "handoff"
+    },
+    {
+      "id": "e-mq1p8aaz4",
+      "source": "agent-mq1p85tu3",
+      "sourcePort": 0,
+      "target": "agent-mpme3rej5",
+      "targetPort": 0,
+      "kind": "handoff"
+    },
+    {
+      "id": "e-mq1p8bx55",
+      "source": "agent-mpm8dl7d1",
+      "sourcePort": 0,
+      "target": "agent-mq1p85tu3",
+      "targetPort": 0,
+      "kind": "handoff"
+    },
+    {
+      "id": "e-mq1p8vsu7",
+      "source": "note-mq1p8tyy6",
+      "sourcePort": 0,
+      "target": "agent-mq1p85tu3",
+      "targetPort": 0,
+      "kind": "note"
+    },
+    {
+      "id": "e-mq1rlsjd2",
+      "source": "entry-mq1rlm0o0",
+      "sourcePort": 0,
+      "target": "agent-mq1rlou11",
+      "targetPort": 0,
+      "kind": "handoff"
+    },
+    {
+      "id": "e-mq1rlwh04",
+      "source": "agent-mq1rlou11",
+      "sourcePort": 0,
+      "target": "meeting-mq1rlv013",
+      "targetPort": 0,
+      "kind": "handoff"
+    },
+    {
+      "id": "e-mq1rm76p7",
+      "source": "meeting-mq1rlv013",
+      "sourcePort": 0,
+      "target": "meeting-mq1rm5es6",
+      "targetPort": 0,
+      "kind": "handoff"
+    },
+    {
+      "id": "e-mq1rm9kx9",
+      "source": "meeting-mq1rm5es6",
+      "sourcePort": 0,
+      "target": "agent-mq1rm8bl8",
+      "targetPort": 0,
+      "kind": "handoff"
+    },
+    {
+      "id": "e-mq1s05kec",
+      "source": "agent-mq1rm8bl8",
+      "sourcePort": 0,
+      "target": "agent-mq1s0079b",
+      "targetPort": 0,
+      "kind": "handoff"
+    },
+    {
+      "id": "e-mq1s082qd",
+      "source": "agent-mpme3rej5",
+      "sourcePort": 0,
+      "target": "agent-mq1s0079b",
+      "targetPort": 0,
+      "kind": "handoff"
+    },
+    {
+      "id": "e-mq1s0g5ae",
+      "source": "agent-mq1s0079b",
+      "sourcePort": 0,
+      "target": "output-mpl7wmofb",
+      "targetPort": 0,
+      "kind": "handoff"
+    }
+  ]
+}

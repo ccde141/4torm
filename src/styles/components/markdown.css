@@ -1,0 +1,188 @@
+/**
+ * markdown.css — 共用 Markdown 渲染样式（季风/对流/信风/潮汐/会议室通用）
+ */
+
+/* 气泡容器（季风/潮汐使用） */
+.md-bubble {
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.md-rendered {
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* 段落 */
+.md-rendered p {
+  margin: 0 0 var(--space-2, 8px) 0;
+  white-space: pre-wrap;
+}
+.md-rendered p:last-child {
+  margin-bottom: 0;
+}
+
+/* 标题 */
+.md-rendered h1, .md-rendered h2, .md-rendered h3,
+.md-rendered h4, .md-rendered h5, .md-rendered h6 {
+  margin: var(--space-3, 12px) 0 var(--space-2, 8px) 0;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.md-rendered h1 { font-size: 1.4em; }
+.md-rendered h2 { font-size: 1.25em; }
+.md-rendered h3 { font-size: 1.12em; }
+.md-rendered h4, .md-rendered h5, .md-rendered h6 { font-size: 1em; }
+.md-rendered h1:first-child, .md-rendered h2:first-child,
+.md-rendered h3:first-child, .md-rendered h4:first-child {
+  margin-top: 0;
+}
+
+/* 列表 */
+.md-rendered ul, .md-rendered ol {
+  margin: var(--space-2, 8px) 0;
+  padding-left: 1.6em;
+}
+.md-rendered li {
+  margin: 2px 0;
+}
+.md-rendered li > p {
+  margin: 0;
+}
+
+/* 引用块 */
+.md-rendered blockquote {
+  margin: var(--space-2, 8px) 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--color-accent, #f59e0b);
+  background: rgba(127, 127, 127, 0.06);
+  color: var(--text-secondary, rgba(255, 255, 255, 0.7));
+}
+
+/* 链接 */
+.md-rendered a {
+  color: var(--color-accent, #f59e0b);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.md-rendered a:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* 强调 */
+.md-rendered strong {
+  font-weight: 600;
+  color: var(--text-strong, inherit);
+}
+.md-rendered em {
+  font-style: italic;
+}
+.md-rendered del {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+/* 水平线 */
+.md-rendered hr {
+  margin: var(--space-3, 12px) 0;
+  border: none;
+  border-top: 1px solid var(--border-color, rgba(127, 127, 127, 0.2));
+}
+
+/* 表格（GFM） */
+.md-rendered table {
+  border-collapse: collapse;
+  margin: var(--space-2, 8px) 0;
+  width: auto;
+  max-width: 100%;
+}
+.md-rendered th, .md-rendered td {
+  padding: 4px 10px;
+  border: 1px solid var(--border-color, rgba(127, 127, 127, 0.25));
+  text-align: left;
+}
+.md-rendered th {
+  background: rgba(127, 127, 127, 0.08);
+  font-weight: 600;
+}
+
+/* 图片 */
+.md-rendered img {
+  max-width: 100%;
+  border-radius: var(--border-radius-sm, 6px);
+}
+
+/* 行内 code */
+.md-inline-code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--color-bg-elevated, rgba(127, 127, 127, 0.12));
+  color: var(--color-accent, #f59e0b);
+  border: 1px solid var(--border-color, rgba(127, 127, 127, 0.18));
+}
+
+/* 兼容旧 .md-text（已弃用，保留以防遗漏） */
+.md-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.md-code-block {
+  margin: var(--space-2, 8px) 0;
+  border-radius: var(--border-radius-sm, 6px);
+  overflow: hidden;
+  background: #0f1115;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-family: var(--font-mono);
+}
+
+.md-code-block__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 11px;
+}
+
+.md-code-block__lang {
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+}
+
+.md-code-block__copy {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 3px;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.md-code-block__copy:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.md-code-block__body {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #e6e6e6;
+  white-space: pre;
+}
+
+.md-code-block__body code {
+  font-family: inherit;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}

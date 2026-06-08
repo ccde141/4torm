@@ -19,7 +19,7 @@
  * ============================================================
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
 import ErrorBoundary from './components/layout/ErrorBoundary';
@@ -28,54 +28,96 @@ import ChatPage from './components/chat/ChatPage';
 import SettingsPage from './components/layout/SettingsPage';
 import ToolsPage from './components/tools/ToolsPage';
 import SkillsPage from './components/skills/SkillsPage';
-import SandboxPage from './components/sandbox/SandboxPage';
+import TradeWindPage from './tradewind/ui/pages/TradeWindPage';
+import TidePage from './tide/ui/TidePage';
+import ConvectionPage from './convection/ui/pages/ConvectionPage';
+import ContourBackground from './components/layout/ContourBackground';
+import WindBackground from './components/layout/WindBackground';
+import { getSkinConfig, loadSkinConfig, subscribeSkin, type SkinConfig } from './store/skin';
 import './styles/index.css';
 
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
-  agent:     { title: '智能体', subtitle: '智能体实例管理' },
-  chat:      { title: '对话', subtitle: '与 Agent 实时交互' },
+  agent:     { title: '控制台', subtitle: 'Agent实例管理' },
+  chat:      { title: '季风', subtitle: '与Agent信息交互' },
   tools:     { title: '工具', subtitle: '全局工具注册与管理' },
   skills:    { title: '技能', subtitle: '管理与安装 Agent 能力包' },
-  sandbox:   { title: '风暴沙盒', subtitle: '可视化多 Agent 协作工作流' },
+  convection: { title: '对流', subtitle: '多 Agent 持续协作会话' },
+  tradewind: { title: '信风', subtitle: '多 Agent 协作工作流' },
+  tide:      { title: '潮汐', subtitle: '定时自动化任务' },
   model:     { title: '模型', subtitle: '模型提供商与 API 配置' },
 };
 
 function PageContent({ page, preselectSession, onClearPreselect }: { page: string; preselectSession?: string | null; onClearPreselect?: () => void }) {
-  switch (page) {
-    case 'agent':
-      return <DashboardPage />;
-    case 'chat':
-      return <ChatPage preselectSession={preselectSession ?? undefined} onClearPreselect={onClearPreselect} />;
-    case 'tools':
-      return <ToolsPage />;
-    case 'skills':
-      return <SkillsPage />;
-    case 'sandbox':
-      return <SandboxPage />;
-    case 'model':
-      return <SettingsPage />;
-    default:
-      return <DashboardPage />;
-  }
+  const containerRef = useRef<HTMLDivElement>(null);
+  const prevPageRef = useRef(page);
+
+  // page 变化时，对新激活的面板重触发 animation
+  useEffect(() => {
+    if (page === prevPageRef.current) return;
+    prevPageRef.current = page;
+    const container = containerRef.current;
+    if (!container) return;
+    const active = container.querySelector(`.page-panel[data-page="${page}"]`) as HTMLElement | null;
+    if (!active) return;
+    active.classList.remove('page-panel--enter');
+    void active.offsetWidth; // force reflow
+    active.classList.add('page-panel--enter');
+  }, [page]);
+
+  const show = (p: string): React.CSSProperties => ({
+    display: page === p ? undefined : 'none',
+    height: '100%',
+  });
+  const scrollArea: React.CSSProperties = { height: '100%', overflowY: 'auto' };
+
+  return (
+    <div ref={containerRef} style={{ height: '100%' }}>
+      <div className="page-panel" data-page="agent" style={show('agent')}><div style={scrollArea}><DashboardPage /></div></div>
+      <div className="page-panel" data-page="chat" style={show('chat')}><div style={scrollArea}><ChatPage preselectSession={preselectSession ?? undefined} onClearPreselect={onClearPreselect} /></div></div>
+      <div className="page-panel" data-page="tools" style={show('tools')}><div style={scrollArea}><ToolsPage /></div></div>
+      <div className="page-panel" data-page="skills" style={show('skills')}><div style={scrollArea}><SkillsPage /></div></div>
+      <div className="page-panel" data-page="convection" style={show('convection')}><div style={scrollArea}><ConvectionPage /></div></div>
+      <div className="page-panel" data-page="tradewind" style={show('tradewind')}><div style={scrollArea}><TradeWindPage /></div></div>
+      <div className="page-panel" data-page="tide" style={show('tide')}><div style={scrollArea}><TidePage /></div></div>
+      <div className="page-panel" data-page="model" style={show('model')}><div style={scrollArea}><SettingsPage /></div></div>
+    </div>
+  );
 }
 
 export default function App() {
   const [activePage, setActivePage] = useState('agent');
   const [preselectSession, setPreselectSession] = useState<string | null>(null);
+  const [skin, setSkin] = useState<SkinConfig>(getSkinConfig());
   const pageInfo = PAGE_TITLES[activePage] ?? PAGE_TITLES.agent;
+
+  // 启动时加载皮肤配置 + 订阅变更
+  useEffect(() => {
+    loadSkinConfig().then(setSkin);
+    return subscribeSkin(setSkin);
+  }, []);
 
   const handleNavigate = (page: string, sessionId?: string) => {
     setActivePage(page);
     setPreselectSession(sessionId ?? null);
   };
 
+  const bgType = skin.background?.type ?? 'none';
+  const contourParams = skin.background?.contour;
+  const windParams = skin.background?.wind;
+
   return (
     <ErrorBoundary>
+      {bgType === 'contour' && contourParams && (
+        <ContourBackground params={contourParams} />
+      )}
+      {bgType === 'wind' && windParams && (
+        <WindBackground params={windParams} />
+      )}
       <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' }}>
         <Sidebar activePage={activePage} onNavigate={setActivePage} />
         <div className="main-content" style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
           <Header title={pageInfo.title} subtitle={pageInfo.subtitle} onNavigate={handleNavigate} />
-          <div style={{ flex: 1, overflowY: 'auto' }}>
+          <div style={{ flex: 1, overflow: 'hidden' }}>
             <PageContent page={activePage} preselectSession={preselectSession} onClearPreselect={() => setPreselectSession(null)} />
           </div>
         </div>

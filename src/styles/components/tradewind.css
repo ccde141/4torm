@@ -1,0 +1,1889 @@
+/**
+ * 信风画布样式 — 暗色系 + 毛玻璃质感
+ *
+ * 遵循项目 CSS Custom Properties 体系。
+ */
+
+/* ─── 页面布局 ──────────────────────────────────────── */
+
+.tw-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+.tw-page__body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.tw-canvas {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+}
+
+.tw-page__error {
+  position: fixed;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: var(--space-2) var(--space-4);
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--border-radius-md);
+  color: var(--color-error);
+  font-size: var(--text-sm);
+  backdrop-filter: blur(8px);
+  animation: fadeInUp 0.3s var(--ease-out-expo) both;
+  white-space: pre-wrap;
+  max-width: 80vw;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+/* ─── 工具栏 ────────────────────────────────────────── */
+
+.tw-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  background: var(--glass-bg);
+  border-bottom: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--glass-blur));
+}
+
+.tw-toolbar__left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tw-toolbar__title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+  letter-spacing: 0.02em;
+  cursor: default;
+}
+
+.tw-toolbar__name-input {
+  padding: var(--space-1) var(--space-2);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--border-radius-sm);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  outline: none;
+  width: 180px;
+}
+
+.tw-toolbar__name-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  cursor: default;
+}
+
+.tw-toolbar__id {
+  font-size: 10px;
+  color: var(--color-text-quaternary);
+  font-family: var(--font-mono);
+  opacity: 0.5;
+}
+
+.tw-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.tw-toolbar__btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-sm);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+  background: transparent;
+}
+
+.tw-toolbar__btn--run {
+  color: var(--color-success);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+.tw-toolbar__btn--run:hover {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.5);
+}
+
+.tw-toolbar__btn--stop {
+  color: var(--color-error);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+.tw-toolbar__btn--stop:hover {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.tw-toolbar__btn--save {
+  color: var(--color-accent);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+.tw-toolbar__btn--save:hover {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.tw-toolbar__saved-hint {
+  font-size: var(--text-xs);
+  color: var(--color-success);
+  opacity: 1;
+  animation: saved-fade 3s ease-out forwards;
+}
+
+.tw-toolbar__btn--ghost {
+  color: var(--color-text-tertiary);
+  border-color: transparent;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-base);
+}
+.tw-toolbar__btn--ghost:hover {
+  color: var(--color-text-primary);
+  background: var(--glass-bg-hover);
+}
+
+.tw-toolbar__btn-icon {
+  font-size: 10px;
+}
+
+.tw-toolbar__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+}
+
+.tw-toolbar__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-tertiary);
+  transition: background var(--duration-normal) var(--ease-out-expo);
+}
+
+.tw-toolbar__status--running .tw-toolbar__dot {
+  background: var(--color-success);
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+/* ─── 画布容器 ──────────────────────────────────────── */
+
+.tw-canvas {
+  flex: 1;
+  height: 100%;
+}
+
+.tw-canvas .react-flow__background {
+  background: transparent !important;
+}
+
+/* 覆盖 xyflow 默认节点样式（白色背景 + padding） */
+.tw-canvas .react-flow__node {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.tw-controls {
+  background: var(--glass-bg) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: var(--border-radius-md) !important;
+  backdrop-filter: blur(var(--glass-blur));
+}
+
+.tw-controls button {
+  background: transparent !important;
+  border: none !important;
+  color: var(--color-text-secondary) !important;
+  transition: color var(--duration-fast) var(--ease-out-expo);
+}
+.tw-controls button:hover {
+  color: var(--color-text-primary) !important;
+}
+
+.tw-minimap {
+  background: var(--glass-bg) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: var(--border-radius-md) !important;
+}
+
+/* ─── 节点通用 ──────────────────────────────────────── */
+
+.tw-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  min-width: 100px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-md);
+  backdrop-filter: blur(12px);
+  transition: all var(--duration-normal) var(--ease-out-expo);
+  cursor: grab;
+}
+
+.tw-node:hover {
+  background: var(--glass-bg-hover);
+  border-color: var(--glass-border-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.tw-node--selected {
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 0 0 2px var(--color-accent-subtle), var(--shadow-glow);
+}
+
+/* 节点运行时态：信封工作中（琥珀色静态光环） */
+.tw-node--envelope {
+  box-shadow:
+    0 0 0 3px rgba(245, 158, 11, 0.6),
+    0 0 28px 6px rgba(245, 158, 11, 0.45);
+}
+
+/* 节点运行时态：busy 工作中（蓝色脉冲闪烁） */
+@keyframes tw-node-busy-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 2px rgba(59, 130, 246, 0.8),
+      0 0 24px 4px rgba(59, 130, 246, 0.55);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px rgba(59, 130, 246, 0.5),
+      0 0 38px 10px rgba(59, 130, 246, 0.85);
+  }
+}
+.tw-node--busy {
+  animation: tw-node-busy-pulse 1.2s ease-in-out infinite;
+}
+
+/* 同时 busy + envelope：内圈蓝色闪烁 + 外圈琥珀色静态扩散
+   蓝色集中在贴近节点（0-24px），琥珀色推到外圈（24-56px），不再叠合发白 */
+@keyframes tw-node-busy-envelope-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 2px rgba(59, 130, 246, 0.85),
+      0 0 18px 2px rgba(59, 130, 246, 0.6),
+      0 0 0 8px rgba(245, 158, 11, 0.55),
+      0 0 48px 14px rgba(245, 158, 11, 0.45);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px rgba(59, 130, 246, 0.55),
+      0 0 28px 6px rgba(59, 130, 246, 0.85),
+      0 0 0 10px rgba(245, 158, 11, 0.5),
+      0 0 56px 18px rgba(245, 158, 11, 0.4);
+  }
+}
+.tw-node--busy.tw-node--envelope {
+  animation: tw-node-busy-envelope-pulse 1.4s ease-in-out infinite;
+}
+
+.tw-node__icon {
+  font-size: var(--text-lg);
+  line-height: 1;
+}
+
+.tw-node__label {
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+.tw-node__sub {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tw-node__memo {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  margin-top: var(--space-1);
+  padding: 3px 6px;
+  border-left: 2px solid rgba(99, 179, 237, 0.4);
+  background: rgba(99, 179, 237, 0.05);
+  border-radius: 2px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 80px;
+  overflow: hidden;
+  line-height: 1.4;
+}
+.tw-node__memo::before {
+  content: '备注：';
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+}
+
+.tw-node__chat-btn {
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  font-size: var(--text-xs);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+  color: var(--color-text-tertiary);
+  letter-spacing: 0.02em;
+}
+.tw-node__chat-btn--active {
+  color: var(--color-text-secondary);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+.tw-node__chat-btn--active:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: var(--color-accent-subtle);
+}
+.tw-node__chat-btn--idle {
+  color: var(--color-text-quaternary);
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: default;
+  font-style: italic;
+}
+
+/* 节点变体色 */
+.tw-node--entry { border-color: rgba(59, 130, 246, 0.3); }
+.tw-node--entry:hover { border-color: rgba(59, 130, 246, 0.5); }
+
+.tw-node--output { border-color: rgba(34, 197, 94, 0.3); }
+.tw-node--output:hover { border-color: rgba(34, 197, 94, 0.5); }
+
+.tw-node--agent { border-color: rgba(245, 158, 11, 0.3); }
+.tw-node--agent:hover { border-color: rgba(245, 158, 11, 0.5); }
+
+.tw-node--meeting { border-color: rgba(168, 85, 247, 0.3); }
+.tw-node--meeting:hover { border-color: rgba(168, 85, 247, 0.5); }
+
+.tw-node--note {
+  border-color: rgba(251, 191, 36, 0.25);
+  background: rgba(251, 191, 36, 0.05);
+}
+.tw-node--note:hover { border-color: rgba(251, 191, 36, 0.4); }
+
+/* Handle 样式 — 光边效果，颜色跟随节点主色调 */
+.tw-handle {
+  width: 10px !important;
+  height: 10px !important;
+  background: var(--color-bg-primary) !important;
+  border: 2px solid var(--color-accent) !important;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.4), 0 0 12px rgba(59, 130, 246, 0.15) !important;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.tw-handle:hover {
+  transform: scale(1.5);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.6), 0 0 20px rgba(59, 130, 246, 0.3) !important;
+}
+
+/* Handle 光边 — 按节点类型着色 */
+.tw-node--entry .tw-handle {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.5), 0 0 14px rgba(59, 130, 246, 0.2) !important;
+}
+.tw-node--entry .tw-handle:hover {
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.7), 0 0 22px rgba(59, 130, 246, 0.35) !important;
+}
+
+.tw-node--output .tw-handle {
+  border-color: #22c55e !important;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.5), 0 0 14px rgba(34, 197, 94, 0.2) !important;
+}
+.tw-node--output .tw-handle:hover {
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.7), 0 0 22px rgba(34, 197, 94, 0.35) !important;
+}
+
+.tw-node--agent .tw-handle {
+  border-color: #f59e0b !important;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.5), 0 0 14px rgba(245, 158, 11, 0.2) !important;
+}
+.tw-node--agent .tw-handle:hover {
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.7), 0 0 22px rgba(245, 158, 11, 0.35) !important;
+}
+
+.tw-node--meeting .tw-handle {
+  border-color: #a855f7 !important;
+  box-shadow: 0 0 6px rgba(168, 85, 247, 0.5), 0 0 14px rgba(168, 85, 247, 0.2) !important;
+}
+.tw-node--meeting .tw-handle:hover {
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.7), 0 0 22px rgba(168, 85, 247, 0.35) !important;
+}
+
+.tw-node--note .tw-handle {
+  border-color: #fbbf24 !important;
+  box-shadow: 0 0 6px rgba(251, 191, 36, 0.5), 0 0 14px rgba(251, 191, 36, 0.2) !important;
+}
+.tw-node--note .tw-handle:hover {
+  box-shadow: 0 0 10px rgba(251, 191, 36, 0.7), 0 0 22px rgba(251, 191, 36, 0.35) !important;
+}
+
+/* ─── 节点面板 ──────────────────────────────────────── */
+
+.tw-palette {
+  width: 160px;
+  padding: var(--space-4) var(--space-3);
+  background: var(--glass-bg);
+  border-right: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--glass-blur));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.tw-palette__title {
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.tw-palette__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tw-palette__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--border-radius-sm);
+  cursor: grab;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+  user-select: none;
+}
+
+.tw-palette__item:hover {
+  background: var(--glass-bg-hover);
+}
+
+.tw-palette__item:active {
+  cursor: grabbing;
+  transform: scale(0.96);
+}
+
+.tw-palette__icon {
+  font-size: var(--text-base);
+  line-height: 1;
+}
+
+.tw-palette__label {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+/* ─── 配置面板（画布内右侧同级） ───────────────────── */
+
+.tw-config {
+  width: 320px;
+  height: 100%;
+  background: var(--glass-bg);
+  border-left: 1px solid var(--glass-border);
+  backdrop-filter: blur(20px);
+  display: flex;
+  flex-direction: column;
+  animation: slideInRight 0.3s var(--ease-out-expo) both;
+  flex-shrink: 0;
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(40px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+
+.tw-config__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.tw-config__type {
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--color-accent);
+  background: var(--color-accent-subtle);
+  padding: 2px var(--space-2);
+  border-radius: var(--border-radius-sm);
+}
+
+.tw-config__title {
+  flex: 1;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  color: var(--color-text-primary);
+}
+
+.tw-config__close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-lg);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.tw-config__close:hover {
+  background: var(--glass-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.tw-config__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.tw-config__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.tw-config__label {
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tw-config__input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-sm);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  outline: none;
+  transition: border-color var(--duration-fast) var(--ease-out-expo);
+}
+.tw-config__input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-subtle);
+}
+.tw-config__input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.tw-config__textarea {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-sm);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  line-height: var(--leading-normal);
+  outline: none;
+  resize: vertical;
+  min-height: 80px;
+  transition: border-color var(--duration-fast) var(--ease-out-expo);
+}
+.tw-config__textarea:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-subtle);
+}
+.tw-config__textarea::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.tw-config__hint {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  font-style: italic;
+}
+
+.tw-config__select {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-sm);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  outline: none;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out-expo);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2371717a'%3E%3Cpath d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--space-3) center;
+  padding-right: var(--space-8);
+}
+.tw-config__select:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-subtle);
+}
+.tw-config__select option {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+.tw-config__checklist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 160px;
+  overflow-y: auto;
+  padding: var(--space-2);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-sm);
+}
+.tw-config__check-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  transition: background var(--duration-fast) var(--ease-out-expo);
+}
+.tw-config__check-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-primary);
+}
+.tw-config__check-item input[type="checkbox"] {
+  accent-color: var(--color-accent);
+  width: 14px;
+  height: 14px;
+}
+
+/* ─── 右键菜单 ──────────────────────────────────────── */
+
+.tw-ctxmenu {
+  position: absolute;
+  z-index: 200;
+  min-width: 160px;
+  padding: var(--space-1);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-md);
+  backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-lg);
+  animation: fadeInUp 0.15s var(--ease-out-expo) both;
+}
+
+.tw-ctxmenu__title {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.tw-ctxmenu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+  text-align: left;
+}
+
+.tw-ctxmenu__item:hover {
+  background: var(--glass-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.tw-ctxmenu__item--danger:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-error);
+}
+
+.tw-ctxmenu__icon {
+  font-size: var(--text-xs);
+  width: 16px;
+  text-align: center;
+}
+
+.tw-ctxmenu__divider {
+  height: 1px;
+  margin: var(--space-1) var(--space-2);
+  background: var(--glass-border);
+}
+
+/* ─── 工作流列表面板 ────────────────────────────────── */
+
+.tw-wflist {
+  width: 240px;
+  height: 100%;
+  background: var(--glass-bg);
+  border-right: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--glass-blur));
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  animation: slideInLeft 0.25s var(--ease-out-expo) both;
+}
+
+@keyframes slideInLeft {
+  from { transform: translateX(-20px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+
+.tw-wflist__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.tw-wflist__title {
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.tw-wflist__close {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-base);
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.tw-wflist__close:hover {
+  background: var(--glass-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.tw-wflist__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.tw-wflist__new {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--glass-border);
+  border-radius: var(--border-radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+  margin-bottom: var(--space-2);
+}
+.tw-wflist__new:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-subtle);
+}
+
+.tw-wflist__hint {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  text-align: center;
+  padding: var(--space-4) 0;
+}
+
+.tw-wflist__item {
+  display: flex;
+  align-items: center;
+  border-radius: var(--border-radius-sm);
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.tw-wflist__item:hover {
+  background: var(--glass-bg-hover);
+}
+
+.tw-wflist__item--active {
+  background: var(--color-accent-subtle);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.tw-wflist__item-main {
+  flex: 1;
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tw-wflist__item-name {
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tw-wflist__item-id {
+  font-size: 10px;
+  color: var(--color-text-quaternary);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.6;
+}
+
+.tw-wflist__item-meta {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+}
+
+.tw-wflist__item-del {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+  margin-right: var(--space-1);
+}
+.tw-wflist__item:hover .tw-wflist__item-del {
+  opacity: 1;
+}
+.tw-wflist__item-del:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-error);
+}
+
+/* ─── Agent 节点浮动对话窗口 ─────────────────────────── */
+
+.tw-chat-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  animation: tw-fade-in var(--duration-normal) var(--ease-out-expo);
+}
+
+.tw-chat-window {
+  width: min(720px, 92vw);
+  height: min(80vh, 860px);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--glass-border-hover);
+  border-radius: var(--border-radius-lg);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 40px var(--color-accent-glow);
+  overflow: hidden;
+  animation: tw-slide-up var(--duration-normal) var(--ease-out-expo);
+}
+
+.tw-chat-window__header {
+  display: flex;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+}
+.tw-chat-window__title {
+  flex: 1;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--color-accent);
+}
+.tw-chat-window__close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: 16px;
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.tw-chat-window__close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-primary);
+}
+
+.tw-chat-window__messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.tw-chat-msg {
+  max-width: 85%;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--border-radius-lg);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  word-break: break-word;
+  white-space: pre-wrap;
+  animation: messageIn var(--duration-normal) var(--ease-out-expo);
+}
+@keyframes messageIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.tw-chat-msg--user {
+  align-self: flex-end;
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-hover) 100%);
+  color: var(--color-text-inverse);
+  border-bottom-right-radius: var(--border-radius-sm);
+  box-shadow: 0 2px 8px var(--color-accent-glow);
+}
+.tw-chat-msg--assistant {
+  align-self: flex-start;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-bottom-left-radius: var(--border-radius-sm);
+  box-shadow: var(--glass-shadow);
+  color: var(--color-text-primary);
+}
+.tw-chat-msg--error {
+  align-self: center;
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--color-error);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  font-size: var(--text-xs);
+}
+
+.tw-chat-msg__content {
+  min-height: 1.2em;
+}
+.tw-chat-msg__tool {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.tw-chat-msg__tool-name {
+  color: var(--color-accent);
+}
+.tw-chat-msg__tool-status {
+  color: var(--color-success);
+}
+.tw-chat-msg__tool-status--err {
+  color: var(--color-error);
+}
+
+.tw-chat-msg__structured {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.tw-chat-msg__think {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+.tw-chat-msg__think summary {
+  cursor: pointer;
+  font-weight: var(--font-medium);
+  color: var(--color-text-tertiary);
+  user-select: none;
+}
+.tw-chat-msg__think-content {
+  margin-top: var(--space-1);
+  white-space: pre-wrap;
+  color: var(--color-text-tertiary);
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.tw-chat-window__input-area {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4);
+  border-top: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+}
+.tw-chat-window__input {
+  flex: 1;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  outline: none;
+  resize: none;
+  min-height: 44px;
+  max-height: 120px;
+  line-height: var(--leading-normal);
+  transition: border-color var(--duration-fast) var(--ease-out-expo),
+              box-shadow var(--duration-fast) var(--ease-out-expo);
+}
+.tw-chat-window__input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-subtle), 0 0 16px var(--color-accent-glow);
+}
+.tw-chat-window__input::placeholder {
+  color: var(--color-text-tertiary);
+}
+.tw-chat-window__send,
+.tw-chat-window__stop {
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: var(--border-radius-md);
+  display: grid;
+  place-items: center;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.tw-chat-window__send {
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+}
+.tw-chat-window__send:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  transform: scale(1.05);
+  box-shadow: 0 0 16px var(--color-accent-glow);
+}
+.tw-chat-window__send:active:not(:disabled) {
+  transform: scale(0.95);
+}
+.tw-chat-window__send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.tw-chat-window__stop {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--color-error);
+  animation: tw-pulse 1.5s infinite;
+}
+.tw-chat-window__stop:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+@keyframes tw-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.3); }
+  50% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+}
+
+@keyframes tw-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes saved-fade {
+  0% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes tw-slide-up {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ─── Meeting 节点浮动会议面板 ────────────────────────── */
+
+.tw-meeting-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  animation: tw-fade-in var(--duration-normal) var(--ease-out-expo);
+}
+
+.tw-meeting-panel {
+  width: min(920px, 94vw);
+  height: min(82vh, 860px);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--glass-border-hover);
+  border-radius: var(--border-radius-lg);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 40px rgba(168, 85, 247, 0.15);
+  overflow: hidden;
+  animation: tw-slide-up var(--duration-normal) var(--ease-out-expo);
+}
+
+.tw-meeting-panel__header {
+  display: flex;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+}
+.tw-meeting-panel__title {
+  flex: 1;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: #a855f7;
+}
+.tw-meeting-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.tw-meeting-panel__end-btn {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--color-error);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.tw-meeting-panel__end-btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.15);
+}
+.tw-meeting-panel__end-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.tw-meeting-panel__close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: 16px;
+  border-radius: var(--border-radius-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.tw-meeting-panel__close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-primary);
+}
+.tw-meeting-panel__error {
+  padding: var(--space-2) var(--space-4);
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--color-error);
+  font-size: var(--text-xs);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.15);
+}
+.tw-meeting-panel__opening-banner {
+  padding: var(--space-2) var(--space-4);
+  background: rgba(245, 158, 11, 0.10);
+  color: #f59e0b;
+  font-size: var(--text-xs);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.20);
+  letter-spacing: 0.02em;
+}
+.tw-meeting-panel__body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+.tw-meeting-panel__public,
+.tw-meeting-panel__chair {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tw-meeting-panel__public {
+  border-right: 1px solid var(--glass-border);
+}
+.tw-meeting-panel__section-title {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+}
+.tw-meeting-panel__messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.tw-meeting-panel__input-area {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+}
+.tw-meeting-panel__input {
+  flex: 1;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  outline: none;
+  resize: none;
+  min-height: 40px;
+  max-height: 80px;
+  line-height: var(--leading-normal);
+  transition: border-color var(--duration-fast) var(--ease-out-expo),
+              box-shadow var(--duration-fast) var(--ease-out-expo);
+}
+.tw-meeting-panel__input:focus {
+  border-color: #a855f7;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.12), 0 0 16px rgba(168, 85, 247, 0.15);
+}
+.tw-meeting-panel__input::placeholder {
+  color: var(--color-text-tertiary);
+}
+.tw-meeting-panel__send {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: var(--border-radius-md);
+  background: #a855f7;
+  color: var(--color-text-inverse);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.tw-meeting-panel__send:hover:not(:disabled) {
+  background: #9333ea;
+  transform: scale(1.05);
+  box-shadow: 0 0 16px rgba(168, 85, 247, 0.3);
+}
+.tw-meeting-panel__send:active:not(:disabled) {
+  transform: scale(0.95);
+}
+.tw-meeting-panel__send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tw-meeting-msg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--border-radius-lg);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-bottom-left-radius: var(--border-radius-sm);
+  box-shadow: var(--glass-shadow);
+  animation: messageIn var(--duration-normal) var(--ease-out-expo);
+  align-self: flex-start;
+  max-width: 80%;
+  color: var(--color-text-primary);
+}
+.tw-meeting-msg--user {
+  background: linear-gradient(135deg, #a855f7 0%, #7c3aed 100%);
+  color: var(--color-text-inverse);
+  border: none;
+  border-bottom-left-radius: var(--border-radius-lg);
+  border-bottom-right-radius: var(--border-radius-sm);
+  align-self: flex-end;
+  max-width: 80%;
+  box-shadow: 0 2px 8px rgba(168, 85, 247, 0.25);
+}
+.tw-meeting-msg--assistant {
+  align-self: flex-start;
+  max-width: 80%;
+  color: var(--color-text-primary);
+}
+.tw-meeting-msg__speaker {
+  display: block;
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: #a855f7;
+  margin-bottom: var(--space-1);
+}
+.tw-meeting-msg__content {
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ─── Meeting 参与者管理栏 ────────────────────────────── */
+
+.tw-meeting-panel__participants {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--glass-border);
+  background: rgba(168, 85, 247, 0.04);
+  overflow-x: auto;
+}
+.tw-meeting-panel__participant-list {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  overflow-x: auto;
+}
+.tw-meeting-panel__participant {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-1) var(--space-2);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-sm);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  animation: tw-fade-in var(--duration-fast) var(--ease-out-expo);
+}
+.tw-meeting-panel__participant-name {
+  color: var(--color-text-primary);
+  font-weight: var(--font-medium);
+  padding: 0 var(--space-1);
+}
+.tw-meeting-panel__participant-move {
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 2px;
+  display: grid;
+  place-items: center;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.tw-meeting-panel__participant-move:hover:not(:disabled) {
+  background: rgba(168, 85, 247, 0.12);
+  color: #a855f7;
+}
+.tw-meeting-panel__participant-move:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.tw-meeting-panel__participant-remove {
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 2px;
+  display: grid;
+  place-items: center;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.tw-meeting-panel__participant-remove:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-error);
+}
+.tw-meeting-panel__participant-add {
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-sm);
+  color: #a855f7;
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  outline: none;
+  flex-shrink: 0;
+  transition: border-color var(--duration-fast) var(--ease-out-expo);
+}
+.tw-meeting-panel__participant-add:focus {
+  border-color: #a855f7;
+}
+
+/* ─── Meeting 工具气泡（信风独立命名空间） ────────────────────────── */
+
+.tw-meeting-tool {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-md);
+  background: rgba(168, 85, 247, 0.04);
+  overflow: hidden;
+  font-size: var(--text-xs);
+}
+.tw-meeting-tool--running { border-color: #3b82f6; }
+.tw-meeting-tool--done { border-color: rgba(74, 222, 128, 0.4); }
+.tw-meeting-tool--error { border-color: var(--color-error); }
+
+.tw-meeting-tool__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: var(--color-text-primary);
+  transition: background var(--duration-fast) var(--ease-out-expo);
+}
+.tw-meeting-tool__header:hover { background: rgba(168, 85, 247, 0.08); }
+.tw-meeting-tool__header--static { cursor: default; }
+.tw-meeting-tool__header--static:hover { background: transparent; }
+
+.tw-meeting-tool__arrow {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  width: 10px;
+}
+.tw-meeting-tool__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}
+.tw-meeting-tool__icon--running { color: #3b82f6; }
+.tw-meeting-tool__icon--done { color: #4ade80; }
+.tw-meeting-tool__icon--error { color: var(--color-error); }
+
+.tw-meeting-tool__name {
+  font-family: var(--font-mono);
+  font-weight: var(--font-semibold);
+  color: #a855f7;
+}
+.tw-meeting-tool__path {
+  font-family: var(--font-mono);
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  margin-left: var(--space-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+.tw-meeting-tool__pending-size {
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.tw-meeting-tool__spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid rgba(59, 130, 246, 0.25);
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: tw-meeting-tool-spin 0.8s linear infinite;
+  margin-left: auto;
+}
+@keyframes tw-meeting-tool-spin {
+  to { transform: rotate(360deg); }
+}
+
+.tw-meeting-tool__detail {
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--glass-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: rgba(0, 0, 0, 0.18);
+}
+.tw-meeting-tool__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.tw-meeting-tool__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-tertiary);
+}
+.tw-meeting-tool__section pre {
+  margin: 0;
+  padding: var(--space-2);
+  background: var(--color-bg);
+  border-radius: var(--border-radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  color: var(--color-text-primary);
+}
+
+/* ─── Meeting 结构化分块（think 折叠 + note 区块） ────────────── */
+
+.tw-meeting-think {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-md);
+  background: rgba(168, 85, 247, 0.04);
+  overflow: hidden;
+  font-size: var(--text-xs);
+}
+.tw-meeting-think__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: var(--color-text-secondary);
+  transition: background var(--duration-fast) var(--ease-out-expo);
+}
+.tw-meeting-think__trigger:hover { background: rgba(168, 85, 247, 0.08); }
+.tw-meeting-think__arrow {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  width: 10px;
+}
+.tw-meeting-think__label {
+  font-weight: var(--font-medium);
+}
+.tw-meeting-think__body {
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--glass-border);
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tw-meeting-note {
+  display: flex;
+  flex-direction: column;
+  border-left: 3px solid #eab308;
+  background: rgba(234, 179, 8, 0.06);
+  border-radius: var(--border-radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+.tw-meeting-note__header {
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: #eab308;
+  margin-bottom: var(--space-1);
+}
+.tw-meeting-note__body {
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+ 
+ 
+/* ─── Human Gate 节点 ─── */
+/* 关键：去掉基础 .tw-node 的矩形背景/边框/padding，让菱形 ::before 接管视觉 */
+.tw-node--gate {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0;
+  min-width: 0;
+  width: 130px;
+  height: 130px;
+  backdrop-filter: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  cursor: pointer;
+}
+.tw-node--gate:hover {
+  background: transparent !important;
+  border: none !important;
+  transform: none;
+  box-shadow: none !important;
+}
+.tw-node--gate::before {
+  content: '';
+  position: absolute;
+  inset: 18px;
+  background: rgba(234, 179, 8, 0.14);
+  border: 2px solid #eab308;
+  transform: rotate(45deg);
+  border-radius: 10px;
+  transition: all 0.2s;
+  backdrop-filter: blur(12px);
+}
+.tw-node--gate:hover::before {
+  background: rgba(234, 179, 8, 0.24);
+  border-color: #facc15;
+}
+.tw-node--gate.tw-node--selected::before {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-subtle), var(--shadow-glow);
+}
+.tw-node__gate-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  text-align: center;
+  pointer-events: none;
+}
+.tw-node--gate .tw-node__icon {
+  font-size: 22px;
+  color: #eab308;
+  line-height: 1;
+}
+.tw-node--gate .tw-node__label {
+  font-size: var(--text-xs);
+  color: var(--color-text-primary);
+  font-weight: var(--font-medium);
+  white-space: nowrap;
+}
+.tw-node--gate .tw-node__sub {
+  font-size: 10px;
+  color: #ef4444;
+  font-weight: var(--font-medium);
+}
+
+/* waiting 时红光闪烁（光环作用在菱形 ::before 上，整个节点容器 filter） */
+@keyframes tw-gate-waiting-pulse {
+  0%, 100% {
+    filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.6)) drop-shadow(0 0 12px rgba(239, 68, 68, 0.4));
+  }
+  50% {
+    filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.95)) drop-shadow(0 0 22px rgba(239, 68, 68, 0.7));
+  }
+}
+.tw-node--gate-waiting::before {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: #ef4444;
+}
+.tw-node--gate-waiting {
+  animation: tw-gate-waiting-pulse 1.1s ease-in-out infinite;
+}
+
+/* Handle 定位：菱形左右尖角处（节点容器 130x130，菱形居中带 18 inset） */
+.tw-node--gate .tw-handle {
+  z-index: 2;
+}
+
+/* ─── Human Gate 弹窗 ─── */
+.tw-gate-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+}
+.tw-gate-panel {
+  width: min(680px, 92vw);
+  max-height: 85vh;
+  background: var(--color-bg-elevated, #1a1a1f);
+  border: 1px solid rgba(234, 179, 8, 0.4);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6), 0 0 30px rgba(234,179,8,0.18);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.tw-gate-panel__header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px;
+  background: rgba(234, 179, 8, 0.1);
+  border-bottom: 1px solid rgba(234, 179, 8, 0.3);
+}
+.tw-gate-panel__title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: #fbbf24;
+}
+.tw-gate-panel__close {
+  background: none; border: none;
+  color: var(--color-text-tertiary);
+  font-size: 22px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.tw-gate-panel__close:hover { color: var(--color-text-primary); }
+.tw-gate-panel__body {
+  padding: 16px 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+.tw-gate-panel__section-title {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  font-weight: var(--font-medium);
+  margin-bottom: 6px;
+  margin-top: 14px;
+}
+.tw-gate-panel__section-title:first-child { margin-top: 0; }
+.tw-gate-panel__envelope {
+  margin: 0;
+  padding: 12px 14px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow-y: auto;
+  color: var(--color-text-primary);
+}
+.tw-gate-panel__comment {
+  width: 100%;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+  resize: vertical;
+}
+.tw-gate-panel__comment:focus {
+  outline: none;
+  border-color: #ef4444;
+}
+.tw-gate-panel__error {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 6px;
+  color: #fca5a5;
+  font-size: var(--text-xs);
+}
+.tw-gate-panel__actions {
+  display: flex; gap: 10px; justify-content: flex-end;
+  padding: 12px 20px;
+  background: rgba(0,0,0,0.2);
+  border-top: 1px solid var(--border-color);
+}
+.tw-gate-panel__btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tw-gate-panel__btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.tw-gate-panel__btn--rework {
+  background: rgba(239,68,68,0.12);
+  border-color: rgba(239,68,68,0.5);
+  color: #fca5a5;
+}
+.tw-gate-panel__btn--rework:not(:disabled):hover {
+  background: rgba(239,68,68,0.22);
+  border-color: #ef4444;
+  color: #fff;
+}
+.tw-gate-panel__btn--approve {
+  background: rgba(34,197,94,0.15);
+  border-color: rgba(34,197,94,0.5);
+  color: #86efac;
+}
+.tw-gate-panel__btn--approve:not(:disabled):hover {
+  background: rgba(34,197,94,0.25);
+  border-color: #22c55e;
+  color: #fff;
+}

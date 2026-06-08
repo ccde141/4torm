@@ -67,9 +67,11 @@
 }
 
 .sidebar__brand-text {
+  font-family: 'Orbitron', var(--font-sans);
   font-size: var(--text-lg);
   font-weight: var(--font-bold);
   letter-spacing: -0.02em;
+  color: #ffffff;
 }
 
 .sidebar__nav {
@@ -259,4 +261,43 @@
   color: var(--color-text-tertiary);
   opacity: 0.4;
   letter-spacing: 0.05em;
+}
+
+/* ─── 徽标（Orbitron 自定义品牌文字）──────────────── */
+.sidebar__badge {
+  padding: var(--space-2) var(--space-3);
+  text-align: center;
+  user-select: none;
+}
+
+.sidebar__badge-title {
+  font-family: 'Orbitron', var(--font-sans);
+  font-weight: 750;
+  font-size: 32px;
+  line-height: 1.05;
+  letter-spacing: 0.06em;
+  /* 固定青蓝赛博渐变：区分度再减半，过渡更柔 */
+  background: linear-gradient(135deg, #20aae4 0%, #2b8de0 50%, #209ec2 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  /* 双层青色辉光（再减半） */
+  filter: drop-shadow(0 0 10px rgba(0, 212, 200, 0.19))
+          drop-shadow(0 0 22px rgba(43, 141, 224, 0.12));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar__badge-subtitle {
+  font-family: 'Orbitron', var(--font-sans);
+  font-weight: 300;
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  color: #62d4e8;
+  opacity: 0.85;
+  margin-top: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

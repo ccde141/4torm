@@ -18,6 +18,7 @@ function buildSelfManagementSection(workspaceDir?: string): string {
 ### 路径说明
 - 你的默认工作区: \`data/agents/{你的AgentID}/.workspace/\`
 - 项目根目录相对路径: \`${toRoot}\`（从工作区到项目根）
+- **文件工具支持 \`data/xxx\` 前缀路径**：read_file、write_file、edit_file、list_directory 可直接传 \`data/skills/...\`、\`data/tools/...\` 等，系统自动定位到项目根
 
 ### 创建新工具（Tool）
 详细参考 \`${toRoot}docs/tools-reference.md\`，简要步骤：
@@ -66,59 +67,83 @@ export function buildSystemPrompt(tools: ToolDef[], workspaceDir?: string): stri
 ${params}`;
   }).join('\n\n');
 
-  return `## 输出模板
+  return `## 输出协议（严格遵守）
 
-你的回复应该使用以下标签结构。标签外的自然语言会被忽略，请确保内容在标签内。
+每次回复必须严格包含以下标签。标签外的任何文字将被系统忽略。
 
-<think>在这里输出你的思考过程</think>
+---
 
-<plan>
-[ ] 第一步
-[ ] 第二步
-</plan>
+## 回复前自我检查
 
-如需调用工具：
+在输出任何标签之前，在心中快速判断：
+1. 任务是否需要查阅文件、运行命令或获取外部信息？→ 需要则选模式 A
+2. 回答是否涉及潜在风险、前提假设或用户需要知道的重要限制？→ 有则 <note> 中提醒
+
+---
+
+## 回复模式
+
+你每次回复只能选择以下两种模式之一。
+
+### 模式 A — 需要调用工具
+
+输出结构：
+<think>已知什么、缺少什么、决定做什么</think>
 <action tool="工具名">{"参数":"值"}</action>
-注意：所有标记为 [必填] 的参数都必须在 JSON 中提供，不能省略。
+
+规则：
+- 必须包含 <think> + 至少一个 <action>
+- <action> 参数严格 JSON，[必填] 参数不得省略
+- 禁止在收到工具结果前输出 <answer>
+- 可一次输出多个 <action>
+- 严禁用 read_file 读目录路径，用 list_directory
+
+### 模式 B — 直接回答用户
+
+输出结构：
+<think>推理过程和最终结论依据</think>
+<answer>完整的回答内容（包括具体建议、步骤、代码、分析等所有实质内容）</answer>
+<note>简短提醒（≤3句话）</note>
+
+规则：
+- 必须包含 <think> + <answer>
+- <answer> 必须包含回答的全部实质内容。具体建议、操作步骤、代码片段、详细分析等都属于 answer，不得外溢到 <note>
+- <note> 仅用于简短的风险提醒、前提假设或一句话后续方向，严禁超过 3 句话
+- 如果没有需要额外提醒的内容，可以省略 <note>
+- </answer> 之后只能出现 <note>，不得输出任何其他文字
+- 禁止包含 <action>
+
+---
 
 工具执行后你会收到包含 <result> 的回复，解读后继续行动或给出答案。
 
-最终回答：
-<answer>你的完整回答</answer>
-
-补充说明（可选）：
-<note>提醒或建议</note>
-
-## 规则
-- 每次回复必须先以 <think> 标签输出你的思考过程，分析用户意图并梳理思路，然后再输出其他内容
-- 每次回复必须同时包含 <think> 和 <answer>，如需调用工具则使用 <action>
-- 可在一条消息中包含多个 <action>
-- <result> 标签由系统注入，你不需要输出
-- 读取文件用 read_file，查看目录内容用 list_directory，不要用 read_file 去读目录路径
-- 调用工具前确认所有 [必填] 参数都已包含，否则会执行失败
-
 ## 示例
 
-用户: "读取 README.md"
-你的回复:
-<think>用户想读 README.md，我直接读取</think>
+### 简单单步
+
+用户: "读 README.md"
+<think>用户想读 README，单步操作</think>
 <action tool="read_file">{"filePath": "README.md"}</action>
 
-用户: "写一个 hello.txt 文件"
-你的回复:
-<think>用户要创建文件，需要提供 filePath 和 content</think>
-<action tool="write_file">{"filePath": "hello.txt", "content": "hello world"}</action>
+### 多步任务
 
-系统回复 <result>写入成功</result>，你接着：
-<answer>已创建 hello.txt</answer>
+用户: "查当前目录有哪些文件，新建 summary.txt 汇总所有文件名"
+
+第 1 回合：
+<think>两步任务：先列目录，再写汇总</think>
+<action tool="list_directory">{"dirPath": "."}</action>
+
+收到 <result>a.txt, b.txt, README.md</result> 后，第 2 回合：
+<think>已获取文件列表，现在写入汇总文件</think>
+<action tool="write_file">{"filePath": "summary.txt", "content": "当前目录文件:\\na.txt\\nb.txt\\nREADME.md"}</action>
+
+收到 <result>写入成功</result> 后，第 3 回合：
+<think>任务全部完成</think>
+<answer>已将 a.txt、b.txt、README.md 汇总写入 summary.txt</answer>
+<note>如果后续新增文件，需要重新生成汇总</note>
 
 ## 可用工具
 
 ${toolList}
-${buildSelfManagementSection(workspaceDir)}
-
-## 规则提醒
-- 每次回复必须先以 <think> 输出思考过程，然后再输出其他内容
-- 每次回复必须同时包含 <think> 和 <answer>，缺少时系统会要求你重新回复
-`;
+${buildSelfManagementSection(workspaceDir)}`;
 }

@@ -111,6 +111,21 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [headersJson, setHeadersJson] = useState(p.customHeaders ? JSON.stringify(p.customHeaders, null, 2) : '');
+  const [manualModel, setManualModel] = useState('');
+
+  const handleAddModel = async () => {
+    const name = manualModel.trim();
+    if (!name) return;
+    if (p.models.includes(name)) { setManualModel(''); return; }
+    await updateProvider(p.id, { models: [...p.models, name] });
+    setManualModel('');
+    onRefresh();
+  };
+
+  const handleRemoveModel = async (modelName: string) => {
+    await updateProvider(p.id, { models: p.models.filter(m => m !== modelName) });
+    onRefresh();
+  };
 
   const handleTest = async () => {
     if (!p.baseUrl) return;
@@ -214,14 +229,36 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
             })}
           </div>
         </div>
-      ) : p.models.length > 0 ? (
+      ) : null}
+
+      {p.models.length > 0 && (
         <div style={{ marginTop: 'var(--space-3)' }}>
           <div style={{ ...fieldLabel, marginBottom: 'var(--space-1)' }}>已启用模型（{p.models.length}）</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-            {p.models.map(m => (<span key={m} style={modelTagStyle}>{m}</span>))}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
+            {p.models.map(m => (
+              <span key={m} style={{ ...modelTagStyle, display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                {m}
+                <button onClick={() => handleRemoveModel(m)} title="移除" style={{ background: 'none', border: 'none', color: 'var(--color-text-tertiary)', cursor: 'pointer', fontSize: 'var(--text-xs)', padding: '0 2px', lineHeight: 1 }}>✕</button>
+              </span>
+            ))}
           </div>
         </div>
-      ) : null}
+      )}
+
+      <div style={{ marginTop: 'var(--space-3)' }}>
+        <div style={{ ...fieldLabel, marginBottom: 'var(--space-1)' }}>手动添加模型</div>
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <input
+            type="text"
+            value={manualModel}
+            onChange={e => setManualModel(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') handleAddModel(); }}
+            placeholder="输入模型名称，如 nvidia/llama-3.1-nemotron-70b-instruct"
+            style={{ ...inputStyle, flex: 1 }}
+          />
+          <button onClick={handleAddModel} style={{ ...smallBtnStyle, background: 'var(--color-accent)', color: 'var(--color-text-inverse)', border: 'none', whiteSpace: 'nowrap' }}>添加</button>
+        </div>
+      </div>
 
       <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
         <button onClick={handleTest} disabled={testing} style={{ ...smallBtnStyle, background: 'var(--color-surface)', border: '1px solid var(--border-color)', color: testing ? 'var(--color-text-tertiary)' : 'var(--color-text-secondary)' }}>

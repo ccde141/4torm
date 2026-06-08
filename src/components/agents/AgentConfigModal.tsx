@@ -4,11 +4,11 @@ import { getAllModels } from '../../llm';
 import { getTools, seedTools, buildToolsPrompt } from '../../store/tools';
 import { listSkills } from '../../store/skills';
 import { readSkillFile } from '../../store/skills';
-import { getStatuses, addStatus, getPresetColors } from '../../store/statuses';
+import { getLabels, addLabel, getPresetColors } from '../../store/statuses';
 import type { Agent, AgentConfig } from '../../types';
 import type { ToolDef } from '../../store/tools';
 import type { SkillMeta } from '../../types';
-import type { StatusDef } from '../../store/statuses';
+import type { UserLabel } from '../../store/statuses';
 import '../../styles/components/config-modal.css';
 
 interface CreateMode { mode: 'create'; onClose: () => void; onSave: () => void; }
@@ -33,10 +33,9 @@ export default function AgentConfigModal(props: Props) {
   const [rolePrompt, setRolePrompt] = useState(agent?.config?.rolePrompt ?? (isCreate ? EXAMPLE_ROLE : ''));
   const [temperature, setTemperature] = useState(agent?.config?.temperature ?? 0.7);
   const [workspace, setWorkspace] = useState(agent?.config?.workspace ?? (isCreate ? '' : `data/agents/${(agent as Agent).id}/.workspace/`));
-  const [maxToolCalls, setMaxToolCalls] = useState(agent?.config?.maxToolCalls ?? 100);
-  const [maxContext, setMaxContext] = useState(agent?.config?.maxContextTokens ?? 256000);
+  const [sandboxLevel, setSandboxLevel] = useState<'strict' | 'relaxed' | 'unrestricted'>(agent?.config?.sandboxLevel ?? 'relaxed');
   const [model, setModel] = useState(agent?.model ?? '');
-  const [status, setStatus] = useState(agent?.status ?? 'idle');
+  const [label, setLabel] = useState(agent?.label ?? '');
   const [saved, setSaved] = useState(false);
   const [allModels, setAllModels] = useState<{ key: string; label: string }[]>([]);
   const [allTools, setAllTools] = useState<ToolDef[]>([]);
@@ -44,16 +43,16 @@ export default function AgentConfigModal(props: Props) {
   const [allSkills, setAllSkills] = useState<SkillMeta[]>([]);
   const [checkedSkills, setCheckedSkills] = useState<Set<string>>(new Set(agent?.config?.skills ?? []));
   const [skillPreviews, setSkillPreviews] = useState<Record<string, string>>({});
-  const [allStatuses, setAllStatuses] = useState<StatusDef[]>([]);
-  const [newStatusLabel, setNewStatusLabel] = useState('');
-  const [newStatusColor, setNewStatusColor] = useState('#a78bfa');
-  const [showAddStatus, setShowAddStatus] = useState(false);
+  const [allLabels, setAllLabels] = useState<UserLabel[]>([]);
+  const [newLabelName, setNewLabelName] = useState('');
+  const [newLabelColor, setNewLabelColor] = useState('#a78bfa');
+  const [showAddLabel, setShowAddLabel] = useState(false);
 
   useEffect(() => {
     getAllModels().then(setAllModels);
     seedTools().then(() => getTools().then(setAllTools));
     listSkills().then(setAllSkills);
-    getStatuses().then(setAllStatuses);
+    getLabels().then(setAllLabels);
   }, []);
 
   useEffect(() => {
@@ -69,13 +68,13 @@ export default function AgentConfigModal(props: Props) {
     });
   }, [tab, allSkills, checkedSkills]);
 
-  const handleAddStatus = async () => {
-    if (!newStatusLabel.trim()) return;
-    const def = await addStatus(newStatusLabel.trim(), newStatusColor);
-    setAllStatuses(prev => [...prev, def]);
-    setStatus(def.id);
-    setNewStatusLabel('');
-    setShowAddStatus(false);
+  const handleAddLabel = async () => {
+    if (!newLabelName.trim()) return;
+    const def = await addLabel(newLabelName.trim(), newLabelColor);
+    setAllLabels(prev => [...prev, def]);
+    setLabel(def.id);
+    setNewLabelName('');
+    setShowAddLabel(false);
   };
 
   const close = () => props.onClose();
@@ -87,14 +86,14 @@ export default function AgentConfigModal(props: Props) {
   }, []);
 
   const handleSave = async () => {
-    const config: AgentConfig = { masterPrompt: '', rolePrompt, temperature: temperature || undefined, tools: [...checkedTools], skills: [...checkedSkills], maxToolCalls, maxContextTokens: maxContext, workspace: workspace || undefined };
+    const config: AgentConfig = { masterPrompt: '', rolePrompt, temperature: temperature || undefined, tools: [...checkedTools], skills: [...checkedSkills], workspace: workspace || undefined, sandboxLevel };
     if (isCreate) {
-      await createAgent({ name: name || '新 Agent', role, description, model, config, status });
+      await createAgent({ name: name || '新 Agent', role, description, model, config, label: label || undefined });
     } else {
       const a = agent as Agent;
       await updateAgentConfig(a.id, config, model);
       const { updateAgent } = await import('../../store/agent');
-      await updateAgent(a.id, { name, role, description, status });
+      await updateAgent(a.id, { name, role, description, label: label || undefined });
     }
     setSaved(true);
     props.onSave();
@@ -144,21 +143,22 @@ export default function AgentConfigModal(props: Props) {
                   <input type="text" className="config-input config-input-full" value={description} onChange={e => setDescription(e.target.value)} placeholder="可配置的自定义智能体" />
                 </div>
                 <div className="config-field" style={{ flex: 1 }}>
-                  <label className="config-label">状态</label>
+                  <label className="config-label">分类标签</label>
                   <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
-                    <select className="config-input config-input-full" value={status} onChange={e => setStatus(e.target.value)}>
-                      {allStatuses.map(s => (<option key={s.id} value={s.id}>{s.label}</option>))}
+                    <select className="config-input config-input-full" value={label} onChange={e => setLabel(e.target.value)}>
+                      <option value="">无标签</option>
+                      {allLabels.map(l => (<option key={l.id} value={l.id}>{l.label}</option>))}
                     </select>
-                    <button onClick={() => setShowAddStatus(!showAddStatus)} title="自定义状态" style={miniBtn}>+</button>
+                    <button onClick={() => setShowAddLabel(!showAddLabel)} title="新建标签" style={miniBtn}>+</button>
                   </div>
-                  {showAddStatus && (
+                  {showAddLabel && (
                     <div style={{ marginTop: 'var(--space-2)', padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-                      <input value={newStatusLabel} onChange={e => setNewStatusLabel(e.target.value)} placeholder="状态名" style={{ ...inputStyle, flex: 1, fontSize: 'var(--text-xs)' }} />
+                      <input value={newLabelName} onChange={e => setNewLabelName(e.target.value)} placeholder="标签名" style={{ ...inputStyle, flex: 1, fontSize: 'var(--text-xs)' }} />
                       <div style={{ display: 'flex', gap: '2px' }}>{getPresetColors().slice(0, 5).map(c => (
-                        <button key={c} onClick={() => setNewStatusColor(c)} style={{ width: 16, height: 16, borderRadius: '50%', background: c, border: newStatusColor === c ? '2px solid #fff' : '1px solid transparent' }} />
+                        <button key={c} onClick={() => setNewLabelColor(c)} style={{ width: 16, height: 16, borderRadius: '50%', background: c, border: newLabelColor === c ? '2px solid #fff' : '1px solid transparent' }} />
                       ))}</div>
-                      <input value={newStatusColor} onChange={e => setNewStatusColor(e.target.value)} style={{ ...inputStyle, width: '65px', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' }} />
-                      <button onClick={handleAddStatus} style={{ ...miniBtn, background: 'var(--color-accent)', color: 'var(--color-text-inverse)', border: 'none' }}>添加</button>
+                      <input value={newLabelColor} onChange={e => setNewLabelColor(e.target.value)} style={{ ...inputStyle, width: '65px', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' }} />
+                      <button onClick={handleAddLabel} style={{ ...miniBtn, background: 'var(--color-accent)', color: 'var(--color-text-inverse)', border: 'none' }}>添加</button>
                     </div>
                   )}
                 </div>
@@ -176,20 +176,43 @@ export default function AgentConfigModal(props: Props) {
                   style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}
                   placeholder={`data/agents/${agent?.id || '{id}'}/.workspace/`} />
               </div>
+              <div className="config-field" style={{ marginBottom: 'var(--space-4)' }}>
+                <label className="config-label">
+                  沙箱级别
+                  <span className="config-hint">
+                    {sandboxLevel === 'strict' && '严格 — 文件工具只能在工作区内读写（use_skill 等系统工具不受限）'}
+                    {sandboxLevel === 'relaxed' && '弱限制 — 可在工作区或软件项目根目录内读写'}
+                    {sandboxLevel === 'unrestricted' && '无限制 — 可在文件系统任意位置读写（高风险）'}
+                  </span>
+                </label>
+                <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
+                  {([
+                    { v: 'strict', label: '严格' },
+                    { v: 'relaxed', label: '弱限制（默认）' },
+                    { v: 'unrestricted', label: '无限制' },
+                  ] as const).map(opt => (
+                    <button
+                      key={opt.v}
+                      type="button"
+                      onClick={() => setSandboxLevel(opt.v)}
+                      style={{
+                        padding: 'var(--space-2) var(--space-3)',
+                        background: sandboxLevel === opt.v ? 'var(--color-accent)' : 'transparent',
+                        color: sandboxLevel === opt.v ? 'var(--color-text-inverse)' : 'var(--color-text)',
+                        border: '1px solid ' + (sandboxLevel === opt.v ? 'var(--color-accent)' : 'var(--border-color)'),
+                        borderRadius: 'var(--border-radius-sm)',
+                        fontSize: 'var(--text-sm)',
+                        cursor: 'pointer',
+                        flex: 1,
+                      }}
+                    >{opt.label}</button>
+                  ))}
+                </div>
+              </div>
               <div className="config-field">
                 <label className="config-label">Temperature<span className="config-value-display">{temperature}</span></label>
                 <input type="range" className="config-slider" min={0} max={2} step={0.1} value={temperature} onChange={e => setTemperature(Number(e.target.value))} />
                 <div className="config-slider-labels"><span>0（精准）</span><span>2（创意）</span></div>
-              </div>
-              <div className="config-field" style={{ marginBottom: 'var(--space-4)' }}>
-                <label className="config-label">最大工具调用次数<span className="config-value-display">{maxToolCalls}</span></label>
-                <input type="range" className="config-slider" min={1} max={200} step={1} value={maxToolCalls} onChange={e => setMaxToolCalls(Number(e.target.value))} />
-                <div className="config-slider-labels"><span>1</span><span>200</span></div>
-              </div>
-              <div className="config-field" style={{ marginBottom: 'var(--space-4)' }}>
-                <label className="config-label">上下文最大长度 (K tokens)<span className="config-value-display">{Math.round(maxContext / 1000)}K</span></label>
-                <input type="range" className="config-slider" min={8000} max={1048576} step={8000} value={maxContext} onChange={e => setMaxContext(Number(e.target.value))} />
-                <div className="config-slider-labels"><span>8K</span><span>1M</span></div>
               </div>
             </>
           )}

@@ -2,7 +2,7 @@ export { createChatCompletion } from './chat-completions';
 export { listModels } from './models';
 export { createTextCompletion } from './text-completions';
 export { LLMError, streamChatCompletion } from './client';
-export type { RequestOptions } from './client';
+export type { RequestOptions, StreamResult } from './client';
 export {
   getProviders,
   addProvider,

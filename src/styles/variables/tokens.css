@@ -37,11 +37,6 @@
   --color-error:         #ef4444;
   --color-info:          #3b82f6;
 
-  /* 沙盒色 */
-  --color-sandbox:        #7c3aed;
-  --color-sandbox-light:  #a78bfa;
-  --color-sandbox-orange: #f97316;
-
   /* 状态色（Agent status） */
   --status-online:       #4ade80;
   --status-idle:         #a1a1aa;
@@ -119,6 +114,8 @@
   --texture-opacity: 0;
   --texture-blur: 0px;
   --texture-blend: normal;
+  --texture-size: auto;
+  --texture-repeat: repeat;
 
   /* ─── 布局 ──────────────────────────────────────────── */
   --sidebar-width:    260px;
@@ -144,7 +141,6 @@
 
   /* ─── 环境光（皮肤氛围色） ────────────────────────── */
   --ambient-glow-1:           rgba(59, 130, 246, 0.35);
-  --ambient-glow-2:           rgba(59, 130, 246, 0.10);
 
   /* ─── 玻璃别名 ────────────────────────────────────── */
   --glass:                    var(--glass-bg);

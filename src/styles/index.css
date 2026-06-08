@@ -6,6 +6,18 @@
 
 @import './variables/tokens.css';
 @import './skin.css';
+@import './components/tradewind.css';
+@import './components/markdown.css';
+
+/* ─── Fonts ─────────────────────────────────────────────── */
+/* Orbitron — 本地字体，仅用于徽标。变量字体单文件覆盖 700-900 字重 */
+@font-face {
+  font-family: 'Orbitron';
+  font-style: normal;
+  font-weight: 400 900;
+  font-display: swap;
+  src: url('/fonts/orbitron.woff2') format('woff2');
+}
 
 /* ─── Reset ─────────────────────────────────────────────── */
 *, *::before, *::after {
@@ -32,7 +44,9 @@ body {
   position: relative;
 }
 
-/* 环境光晕 — 顶部主光（随皮肤氛围色变化）+ 右下点缀 */
+/* 环境光晕 — 仅顶部主光（随皮肤氛围色变化）。
+ * 右下点缀与底中辅光已删除：背景留白，便于上层 UI / 自定义底纹
+ * 主导氛围。 */
 body::after {
   content: '';
   position: fixed;
@@ -40,9 +54,7 @@ body::after {
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(ellipse 140% 80% at 10% 15%, var(--ambient-glow-1) 0%, transparent 60%),
-    radial-gradient(ellipse 100% 60% at 85% 85%, rgba(245, 158, 11, 0.15) 0%, transparent 50%),
-    radial-gradient(ellipse 80% 50% at 50% 100%, var(--ambient-glow-2) 0%, transparent 50%);
+    radial-gradient(ellipse 140% 80% at 10% 15%, var(--ambient-glow-1) 0%, transparent 60%);
 }
 
 /* 底纹层 — 支持模糊和混合模式 */
@@ -54,8 +66,12 @@ body::before {
   pointer-events: none;
   opacity: var(--texture-opacity);
   background-image: var(--texture);
+  background-repeat: var(--texture-repeat, repeat);
+  background-size: var(--texture-size, auto);
+  background-position: center;
   filter: blur(var(--texture-blur));
   mix-blend-mode: var(--texture-blend);
+  transition: opacity var(--duration-slow) var(--ease-out-expo);
 }
 
 #root {
@@ -115,6 +131,15 @@ body::before {
 
 .animate-in--fast {
   animation: fadeIn 0.15s var(--ease-out-expo) both;
+}
+
+/* 页面切换过渡 — 通过 JS 在 page 变化时重新挂上 .page-panel--enter 触发 */
+@keyframes pageEnter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.page-panel--enter {
+  animation: pageEnter var(--duration-normal) var(--ease-out-expo) both;
 }
 
 /* stagger 辅助 — 每项延时 40ms */

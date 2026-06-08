@@ -45,7 +45,7 @@ export default function ThinkingCard({ thinking, tools, finalAnswer, isStreaming
               </span>
               <span className="thinking-card__tool-name">{t.toolName}</span>
               {t.status === 'running' && <span className="thinking-card__tool-spinner" />}
-            </div>
+            </button>
             {expanded.has(`t${i}`) && t.status !== 'pending' && (
               <div className="thinking-card__tool-detail">
                 <div className="thinking-card__tool-section">
@@ -56,7 +56,7 @@ export default function ThinkingCard({ thinking, tools, finalAnswer, isStreaming
                   <div className="thinking-card__tool-section">
                     <span className="thinking-card__tool-label">结果</span>
                     <pre>{t.result || '(无输出)'}</pre>
-            </button>
+                  </div>
                 )}
               </div>
             )}

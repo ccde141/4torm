@@ -43,13 +43,6 @@ export function buildToolsPrompt(tools: ToolDef[]): string {
   return lines.join('\n');
 }
 
-export function toolsToOpenAI(tools: ToolDef[]) {
-  return tools.map(t => ({
-    type: 'function' as const,
-    function: { name: t.name, description: t.description, parameters: t.parameters },
-  }));
-}
-
 export async function getTools(): Promise<ToolDef[]> {
   const data = await readJson<ToolDef[]>(REGISTRY_FILE);
   return data || [];
@@ -115,5 +108,23 @@ export const BUILTIN_TOOLS: ToolDef[] = [
     description: '获取网页或 API 的文本内容',
     category: 'system', dangerous: false, executorType: 'builtin', executorFile: 'webfetch',
     parameters: { type: 'object', properties: { url: { type: 'string', description: '完整 URL 地址' } }, required: ['url'] },
+  },
+  {
+    name: 'use_skill',
+    description: '加载指定技能的提示词指令，获取该领域的专业指导',
+    category: 'system', dangerous: false, executorType: 'builtin', executorFile: 'use_skill',
+    parameters: { type: 'object', properties: { skill: { type: 'string', description: '技能名称' } }, required: ['skill'] },
+  },
+  {
+    name: 'delete_file',
+    description: '删除文件或目录（目录默认递归删除）',
+    category: 'io', dangerous: true, executorType: 'builtin', executorFile: 'delete_file',
+    parameters: { type: 'object', properties: { filePath: { type: 'string', description: '要删除的文件或目录路径' } }, required: ['filePath'] },
+  },
+  {
+    name: 'search_content',
+    description: '在目录中递归搜索文本（支持正则），返回匹配行及文件:行号。默认跳过 node_modules、点文件和二进制文件',
+    category: 'io', dangerous: false, executorType: 'builtin', executorFile: 'search_content',
+    parameters: { type: 'object', properties: { pattern: { type: 'string', description: '搜索的文本或正则表达式' }, dirPath: { type: 'string', description: '搜索起始目录，默认为工作区根目录' }, filePattern: { type: 'string', description: '可选的文件名过滤正则（如 \\.ts$）' } }, required: ['pattern'] },
   },
 ];

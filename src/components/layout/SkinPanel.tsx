@@ -1,5 +1,13 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { getSkinConfig, loadSkinConfig, saveSkinConfig, type SkinConfig } from '../../store/skin';
+import {
+  getSkinConfig,
+  loadSkinConfig,
+  saveSkinConfig,
+  type SkinConfig,
+} from '../../store/skin';
+import SkinTextureSection from './SkinTextureSection';
+import BackgroundSection from './BackgroundSection';
+import BadgeSection from './BadgeSection';
 import '../../styles/components/skin-panel.css';
 
 interface SkinPanelProps {
@@ -9,7 +17,6 @@ interface SkinPanelProps {
 
 const SkinPanel: React.FC<SkinPanelProps> = ({ onClose, triggerRef }) => {
   const [config, setConfig] = useState<SkinConfig>(getSkinConfig());
-  const [loading, setLoading] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,20 +44,14 @@ const SkinPanel: React.FC<SkinPanelProps> = ({ onClose, triggerRef }) => {
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  const handleChange = async (patch: Partial<SkinConfig>) => {
-    setLoading(true);
-    try {
-      const next = await saveSkinConfig(patch);
-      setConfig(next);
-    } finally {
-      setLoading(false);
-    }
+  const handleChange = (patch: Partial<SkinConfig>) => {
+    setConfig(saveSkinConfig(patch));
   };
 
   return (
     <div className="skin-panel" ref={panelRef}>
       <div className="skin-panel__header">
-        <span className="skin-panel__title">主题色</span>
+        <span className="skin-panel__title">主题</span>
       </div>
       <div className="skin-panel__body">
         <div className="skin-panel__group">
@@ -62,7 +63,6 @@ const SkinPanel: React.FC<SkinPanelProps> = ({ onClose, triggerRef }) => {
                 className="skin-panel__color-input"
                 value={config.primaryColor}
                 onChange={e => handleChange({ primaryColor: e.target.value })}
-                disabled={loading}
               />
               <span className="skin-panel__color-value">{config.primaryColor}</span>
             </div>
@@ -77,12 +77,15 @@ const SkinPanel: React.FC<SkinPanelProps> = ({ onClose, triggerRef }) => {
                 className="skin-panel__color-input"
                 value={config.secondaryColor}
                 onChange={e => handleChange({ secondaryColor: e.target.value })}
-                disabled={loading}
               />
               <span className="skin-panel__color-value">{config.secondaryColor}</span>
             </div>
           </label>
         </div>
+
+        <SkinTextureSection config={config} onApply={setConfig} />
+        <BackgroundSection config={config} onApply={setConfig} />
+        <BadgeSection config={config} onApply={setConfig} />
       </div>
     </div>
   );

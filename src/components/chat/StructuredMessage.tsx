@@ -1,4 +1,6 @@
 import { useState, type ReactNode } from 'react';
+import { renderTextWithCode } from '../../engine/markdown';
+import { formatTimestamp } from '../../utils/time';
 
 interface ToolStep {
   tool: string;
@@ -9,20 +11,20 @@ interface ToolStep {
 
 interface Props {
   think: string;
-  plan: string;
-  planItems: Array<{ done: boolean; text: string }>;
   tools: ToolStep[];
   answer: string;
   note: string;
   msgId: string;
+  timestamp?: string;
+  /** answer 来源（recovered/from-think 时显示对应 badge） */
+  answerSource?: 'closed' | 'open' | 'from-think' | 'recovered';
   onDelete?: () => void;
   actions?: ReactNode;
 }
 
-export default function StructuredMessage({ think, plan, planItems, tools, answer, note, msgId, onDelete, actions }: Props) {
+export default function StructuredMessage({ think, tools, answer, note, msgId, timestamp, answerSource, onDelete, actions }: Props) {
   const [showThink, setShowThink] = useState(false);
   const [showTool, setShowTool] = useState<Record<number, boolean>>({});
-  const [showNote, setShowNote] = useState(false);
 
   const toggleTool = (idx: number) => {
     setShowTool(prev => ({ ...prev, [idx]: !prev[idx] }));
@@ -32,7 +34,7 @@ export default function StructuredMessage({ think, plan, planItems, tools, answe
     <div className="chat__message chat__message--assistant">
       <div className="chat__avatar">AI</div>
       <div className="chat__bubble stmsg-bubble">
-        {(think || plan) && (
+        {think && answerSource !== 'from-think' && (
           <div className="stmsg-section stmsg-section--collapsible">
             <button className="stmsg-collapse-trigger" onClick={() => setShowThink(!showThink)} aria-expanded={showThink}>
               <span className="stmsg-collapse-arrow">{showThink ? '▼' : '▶'}</span>
@@ -40,17 +42,7 @@ export default function StructuredMessage({ think, plan, planItems, tools, answe
             </button>
             {showThink && (
               <div className="stmsg-collapse-body">
-                {think && <div className="stmsg-think">{think}</div>}
-                {planItems.length > 0 && (
-                  <div className="stmsg-plan">
-                    {planItems.map((p, i) => (
-                      <div key={i} className={`stmsg-plan-item stmsg-plan-item--${p.done ? 'done' : 'pending'}`}>
-                        <span className="stmsg-plan-mark">{p.done ? '✓' : '○'}</span>
-                        <span>{p.text}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <div className="stmsg-think">{think}</div>
               </div>
             )}
           </div>
@@ -84,17 +76,26 @@ export default function StructuredMessage({ think, plan, planItems, tools, answe
         ))}
 
         {answer && (
-          <div className="stmsg-answer">{answer}</div>
+          <>
+            {answerSource === 'from-think' && (
+              <div
+                className="stmsg-recovered-badge stmsg-recovered-badge--from-think"
+                title="模型把答案直接写在了 <think> 标签里，系统已把内容提取出来正常显示。"
+              >
+                💭 答案原写在思考过程里，已自动取出
+              </div>
+            )}
+            <div className="stmsg-answer">{renderTextWithCode(answer, msgId)}</div>
+          </>
         )}
 
         {note && (
           <div className="stmsg-note-area">
-            <button className="stmsg-note-trigger" onClick={() => setShowNote(!showNote)} aria-expanded={showNote}>
-              ℹ {showNote ? '收起提示' : '查看提示'}
-            </button>
-            {showNote && <div className="stmsg-note-body">{note}</div>}
+            <div className="stmsg-note-header">💡 提醒</div>
+            <div className="stmsg-note-body">{note}</div>
           </div>
         )}
+        {timestamp && <div className="chat__timestamp" title={formatTimestamp(timestamp, true)}>{formatTimestamp(timestamp)}</div>}
         {actions && <div className="chat__bubble-actions">{actions}</div>}
       </div>
     </div>

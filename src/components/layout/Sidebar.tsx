@@ -6,14 +6,17 @@
  * ============================================================
  */
 
-import { memo } from 'react';
+import { memo, useState, useEffect } from 'react';
 import type { NavItem } from '../../types';
+import { getSkinConfig, subscribeSkin, type SkinConfig } from '../../store/skin';
 import '../../styles/components/sidebar.css';
 
 const NAV_ITEMS: NavItem[] = [
-  { id: 'agent', label: 'Agent', icon: 'agents' },
-  { id: 'chat', label: '对话', icon: 'chat' },
-  { id: 'sandbox', label: '风暴沙盒', icon: 'sandbox' },
+  { id: 'agent', label: '控制台', icon: 'agents' },
+  { id: 'chat', label: '季风  对话', icon: 'chat' },
+  { id: 'convection', label: '对流  会议室', icon: 'convection' },
+  { id: 'tradewind', label: '信风  工作流', icon: 'tradewind' },
+  { id: 'tide', label: '潮汐  自动化', icon: 'tide' },
 ];
 
 const CAPABILITY_ITEMS: NavItem[] = [
@@ -47,11 +50,28 @@ const ICONS: Record<string, React.FC<{ className?: string }>> = {
       <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
     </svg>
   ),
-  sandbox: ({ className }) => (
+  // 对流：上升与下沉的循环气流，呼应"多方持续交换"
+  convection: ({ className }) => (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
-      <line x1="12" y1="22" x2="12" y2="15.5" />
-      <polyline points="22 8.5 12 15.5 2 8.5" />
+      <path d="M7 17V7m0 0L4 10m3-3l3 3" />
+      <path d="M17 7v10m0 0l3-3m-3 3l-3-3" />
+      <path d="M4 12h16" />
+    </svg>
+  ),
+  // 信风：三道平行流动弧线，呼应"风带 + 信件传递"的隐喻
+  tradewind: ({ className }) => (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 8 Q 9 5, 14 8 T 21 8" />
+      <path d="M3 13 Q 10 10, 16 13 T 21 13" />
+      <path d="M3 18 Q 8 15, 13 18 T 19 18" />
+    </svg>
+  ),
+  // 潮汐：波浪线 + 时钟指针，呼应"定时 + 海潮涨落"
+  tide: ({ className }) => (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 18 Q 5 14, 8 18 T 14 18 T 20 18" />
+      <circle cx="17" cy="9" r="5" />
+      <path d="M17 7v2l1.5 1" />
     </svg>
   ),
   skills: ({ className }) => (
@@ -79,6 +99,11 @@ interface SidebarProps {
 }
 
 const Sidebar = memo(function Sidebar({ activePage, onNavigate }: SidebarProps) {
+  const [skin, setSkin] = useState<SkinConfig>(getSkinConfig());
+  useEffect(() => subscribeSkin(setSkin), []);
+  const badge = skin.badge;
+  const showBadge = badge?.enabled && (badge.text.trim() || badge.subtitle.trim());
+
   return (
     <aside className="sidebar">
       {/* Brand */}
@@ -86,7 +111,7 @@ const Sidebar = memo(function Sidebar({ activePage, onNavigate }: SidebarProps) 
         <div className="sidebar__brand-icon">
           <img className="sidebar__brand-logo" src="/4TORM.png" alt="4torm" />
         </div>
-        <span className="sidebar__brand-text">4torm</span>
+        <span className="sidebar__brand-text">4TORM</span>
       </div>
 
       {/* Navigation */}
@@ -171,9 +196,21 @@ const Sidebar = memo(function Sidebar({ activePage, onNavigate }: SidebarProps) 
             <span>[B站空间]</span>
           </a>
         </div>
+
         <div className="sidebar__footer-logo-box">
           <span className="sidebar__footer-logo-placeholder">By Ccde141</span>
         </div>
+
+        {showBadge && (
+          <div className="sidebar__badge">
+            {badge!.text.trim() && (
+              <div className="sidebar__badge-title">{badge!.text}</div>
+            )}
+            {badge!.subtitle.trim() && (
+              <div className="sidebar__badge-subtitle">{badge!.subtitle}</div>
+            )}
+          </div>
+        )}
       </div>
     </aside>
   );

@@ -18,16 +18,20 @@
   border-radius: var(--border-radius-md);
   cursor: pointer;
   transition: all var(--duration-fast) var(--ease-out-expo);
-  border: 1px solid transparent;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
 }
 
 .session-item:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--glass-bg-hover);
+  border-color: var(--glass-border-hover);
 }
 
 .session-item--active {
   background: var(--color-accent-subtle);
-  border-color: rgba(245, 158, 11, 0.2);
+  border-color: var(--color-accent);
 }
 
 .session-item__title {
@@ -41,6 +45,12 @@
 
 .session-item--active .session-item__title {
   color: var(--color-accent);
+}
+
+.session-item--active .session-item__meta,
+.session-item--active .session-item__tokens,
+.session-item--active .session-item__preview {
+  color: var(--color-text-secondary);
 }
 
 .session-item__preview {

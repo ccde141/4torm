@@ -15,7 +15,7 @@
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  animation: fadeIn 150ms ease;
+  animation: fadeIn var(--duration-fast) var(--ease-out-expo);
 }
 
 @keyframes fadeIn {
@@ -33,7 +33,7 @@
   max-height: 90vh;
   display: flex;
   flex-direction: column;
-  animation: slideUp 200ms ease;
+  animation: slideUp var(--duration-normal) var(--ease-out-back);
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
 }
 
@@ -81,7 +81,7 @@
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
   line-height: 1;
-  transition: all 150ms ease;
+  transition: all var(--duration-fast) var(--ease-out-expo);
 }
 
 .config-modal-close:hover {
@@ -149,7 +149,7 @@
   color: var(--color-text-primary);
   resize: vertical;
   min-height: 200px;
-  transition: border-color 150ms ease;
+  transition: border-color var(--duration-fast) var(--ease-out-expo);
   box-sizing: border-box;
 }
 
@@ -174,7 +174,7 @@
   font-family: var(--font-mono);
   font-size: var(--font-sm);
   color: var(--color-text-primary);
-  transition: border-color 150ms ease;
+  transition: border-color var(--duration-fast) var(--ease-out-expo);
 }
 
 .config-input:focus {
@@ -228,7 +228,7 @@
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
   cursor: pointer;
-  transition: all 150ms ease;
+  transition: all var(--duration-fast) var(--ease-out-expo);
 }
 
 .config-btn-cancel {

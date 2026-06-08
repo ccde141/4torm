@@ -12,15 +12,15 @@
     "isSystem": true
   },
   {
-    "id": "sandbox",
-    "label": "沙箱中",
-    "color": "#f97316",
-    "isSystem": true
-  },
-  {
     "id": "offline",
     "label": "离线",
     "color": "#ef4444",
+    "isSystem": true
+  },
+  {
+    "id": "tradewind",
+    "label": "信风中",
+    "color": "#3b82f6",
     "isSystem": true
   }
 ]

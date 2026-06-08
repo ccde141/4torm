@@ -1,20 +1,25 @@
 import { useEffect, useState, useCallback } from 'react';
 import { getAgents, deleteAgent, checkModelAvailable } from '../../store/agent';
 import { getAllSessions } from '../../store/chat';
-import { getStatuses } from '../../store/statuses';
+import { SYSTEM_STATUSES, getLabels, type UserLabel } from '../../store/statuses';
 import type { Agent, DashboardStats } from '../../types';
 import AgentCard from './AgentCard';
 import AgentConfigModal from './AgentConfigModal';
-import ToolPermModal from './ToolPermModal';
 import '../../styles/components/dashboard.css';
+
+interface FilterOption {
+  id: string;
+  label: string;
+  color: string;
+  kind: 'system' | 'label';
+}
 
 export default function DashboardPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [statuses, setStatuses] = useState<Array<{ id: string; label: string; color: string }>>([]);
+  const [filterOptions, setFilterOptions] = useState<FilterOption[]>([]);
   const [configAgent, setConfigAgent] = useState<Agent | null>(null);
   const [creating, setCreating] = useState(false);
-  const [toolPermAgent, setToolPermAgent] = useState<Agent | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
   const [offlineIds, setOfflineIds] = useState<Set<string>>(new Set());
@@ -23,16 +28,7 @@ export default function DashboardPage() {
     const [list, sessions] = await Promise.all([getAgents(), getAllSessions()]);
     setAgents(list);
 
-    const offline = new Set<string>();
-    await Promise.all(list.map(async a => {
-      if (a.status === 'idle' || !a.status) {
-        const available = a.model ? await checkModelAvailable(a.model) : false;
-        if (!available) offline.add(a.id);
-      }
-    }));
-    setOfflineIds(offline);
-
-    const idle = list.filter(a => a.status === 'idle' && !offline.has(a.id)).length;
+    const idle = list.filter(a => a.status === 'idle' && !offlineIds.has(a.id)).length;
     setStats({
       totalAgents: list.length,
       onlineAgents: idle,
@@ -41,11 +37,43 @@ export default function DashboardPage() {
       avgResponseTime: 0,
       totalToolCalls: 0,
     });
+  }, [offlineIds]);
+
+  // 首次加载时做重量级 model 可用性检查
+  const checkOffline = useCallback(async () => {
+    const list = await getAgents();
+    const offline = new Set<string>();
+    await Promise.all(list.map(async a => {
+      if (a.status === 'idle' || !a.status) {
+        const available = a.model ? await checkModelAvailable(a.model) : false;
+        if (!available) offline.add(a.id);
+      }
+    }));
+    setOfflineIds(offline);
   }, []);
 
   useEffect(() => {
-    getStatuses().then(setStatuses);
+    const systemOpts: FilterOption[] = SYSTEM_STATUSES.map(s => ({
+      ...s,
+      kind: 'system' as const,
+    }));
+    getLabels().then(labels => {
+      const labelOpts: FilterOption[] = labels.map((l: UserLabel) => ({
+        id: l.id,
+        label: l.label,
+        color: l.color,
+        kind: 'label' as const,
+      }));
+      setFilterOptions([...systemOpts, ...labelOpts]);
+    });
+    checkOffline();
     refresh().finally(() => setLoading(false));
+  }, [refresh, checkOffline]);
+
+  // 2s 轮询 agent 状态（轻量级，不重复检查 model 可用性）
+  useEffect(() => {
+    const id = setInterval(refresh, 2000);
+    return () => clearInterval(id);
   }, [refresh]);
 
   const handleDelete = async (id: string) => {
@@ -65,7 +93,8 @@ export default function DashboardPage() {
       return agent.status === 'idle' && !offlineIds.has(agent.id);
     }
     if (agent.status === filter) return true;
-    return filter === 'offline' && (agent.status === 'idle' || !agent.status) && offlineIds.has(agent.id);
+    if (agent.label === filter) return true;
+    return false;
   }
 
   if (loading) {
@@ -108,15 +137,15 @@ export default function DashboardPage() {
           >
             全部
           </button>
-          {statuses.map(s => (
+          {filterOptions.map(opt => (
             <button
-              key={s.id}
-              className={`dashboard__filter-btn${filter === s.id ? ' dashboard__filter-btn--active' : ''}`}
-              onClick={() => setFilter(s.id)}
-              style={filter === s.id ? { borderColor: s.color, color: s.color, background: `${s.color}18` } : undefined}
+              key={opt.id}
+              className={`dashboard__filter-btn${filter === opt.id ? ' dashboard__filter-btn--active' : ''}`}
+              onClick={() => setFilter(opt.id)}
+              style={filter === opt.id ? { borderColor: opt.color, color: opt.color, background: `${opt.color}18` } : undefined}
             >
-              <span className="dashboard__filter-dot" style={{ background: s.color }} />
-              {s.label}
+              <span className="dashboard__filter-dot" style={{ background: opt.color }} />
+              {opt.label}
             </button>
           ))}
         </div>
@@ -134,7 +163,6 @@ export default function DashboardPage() {
               agent={agent}
               onConfig={a => setConfigAgent(a)}
               onDelete={handleDelete}
-              onToolPerm={a => setToolPermAgent(a)}
             />
           ))}
       </div>
@@ -144,9 +172,6 @@ export default function DashboardPage() {
       )}
       {creating && (
         <AgentConfigModal mode="create" onClose={() => setCreating(false)} onSave={handleSaveConfig} />
-      )}
-      {toolPermAgent && (
-        <ToolPermModal agentId={toolPermAgent.id} agentName={toolPermAgent.name} onClose={() => setToolPermAgent(null)} />
       )}
     </div>
   );

@@ -6,12 +6,15 @@ export interface ChatSession {
   agentId: string;
   agentName: string;
   title: string;
+  titleManual?: boolean;
   messages: ChatMessage[];
   model: string;
   systemPrompt: string;
   masterPrompt?: string;
   rolePrompt?: string;
   lastReadAt?: string;
+  /** 累计 token 用量（真实 API 返回值） */
+  tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   createdAt: string;
   updatedAt: string;
 }
