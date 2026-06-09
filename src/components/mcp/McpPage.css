@@ -47,19 +47,20 @@
 }
 
 .mcp-btn--primary {
-  background: var(--color-accent);
+  background: rgba(0, 0, 0, 0.75);
   color: #fff;
-  border-color: transparent;
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
-.mcp-btn--primary:hover { opacity: 0.85; }
+.mcp-btn--primary:hover { background: rgba(0, 0, 0, 0.9); }
 
 .mcp-btn--secondary {
-  background: var(--glass-bg);
-  color: var(--color-text);
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
-.mcp-btn--secondary:hover { background: var(--glass-bg-hover, rgba(255,255,255,0.08)); }
+.mcp-btn--secondary:hover { background: rgba(0, 0, 0, 0.65); }
 
 .mcp-btn--danger {
   background: transparent;
