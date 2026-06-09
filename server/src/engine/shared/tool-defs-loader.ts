@@ -7,6 +7,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { resolveMcpTools } from './mcp-manager';
 
 /** 与 src/store/tools.ts 的 ToolDef 同构 */
 export interface ToolDef {
@@ -63,8 +64,11 @@ export async function loadAgentToolDefs(
   const result: ToolDef[] = [];
   const seenNames = new Set<string>();
 
-  // 1) 从 registry 加载 toolNames
-  const registryTools = await loadRegistryTools(dataDir, toolNames);
+  // 1) 从 registry 加载 toolNames（排除 mcp: 前缀的）
+  const localNames = toolNames.filter(n => !n.startsWith('mcp:'));
+  const mcpNames = toolNames.filter(n => n.startsWith('mcp:'));
+
+  const registryTools = await loadRegistryTools(dataDir, localNames);
   for (const t of registryTools) {
     if (!seenNames.has(t.name)) {
       result.push(t);
@@ -83,7 +87,16 @@ export async function loadAgentToolDefs(
     }
   }
 
-  // 3) use_skill 描述动态注入
+  // 3) MCP 工具（按名称或通配解析）
+  const mcpTools = resolveMcpTools(mcpNames);
+  for (const t of mcpTools) {
+    if (!seenNames.has(t.name)) {
+      result.push(t);
+      seenNames.add(t.name);
+    }
+  }
+
+  // 4) use_skill 描述动态注入
   if (skillIds.length > 0) {
     const useSkill = result.find(t => t.name === 'use_skill');
     if (useSkill) {

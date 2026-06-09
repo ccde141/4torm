@@ -11,6 +11,9 @@ import type { SkillMeta } from '../../types';
 import type { UserLabel } from '../../store/statuses';
 import '../../styles/components/config-modal.css';
 
+interface McpToolItem { name: string; fullName: string; description: string; }
+interface McpToolGroups { groups: Record<string, McpToolItem[]>; }
+
 interface CreateMode { mode: 'create'; onClose: () => void; onSave: () => void; }
 interface EditMode { mode: 'edit'; agent: Agent; onClose: () => void; onSave: () => void; }
 type Props = CreateMode | EditMode;
@@ -47,12 +50,15 @@ export default function AgentConfigModal(props: Props) {
   const [newLabelName, setNewLabelName] = useState('');
   const [newLabelColor, setNewLabelColor] = useState('#a78bfa');
   const [showAddLabel, setShowAddLabel] = useState(false);
+  const [mcpGroups, setMcpGroups] = useState<Record<string, McpToolItem[]>>({});
+  const [mcpExpanded, setMcpExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     getAllModels().then(setAllModels);
     seedTools().then(() => getTools().then(setAllTools));
     listSkills().then(setAllSkills);
     getLabels().then(setAllLabels);
+    fetch('/api/mcp/tools').then(r => r.json()).then((d: McpToolGroups) => setMcpGroups(d.groups || {})).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -262,18 +268,57 @@ export default function AgentConfigModal(props: Props) {
 
               <div className="config-field" style={{ marginTop: 'var(--space-4)' }}>
                 <label className="config-label">工具<span className="config-hint">勾选后运行时自动注入到提示词末尾</span></label>
+
+                {/* 本地工具 */}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: 'var(--space-3)' }}>
-                  {allTools.length === 0 && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>暂无工具 — 去「工具」页注册</span>}
+                  {allTools.length === 0 && Object.keys(mcpGroups).length === 0 && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>暂无工具 — 去「工具」页注册或在 MCP 页连接外部服务</span>}
                   {allTools.map(t => {
                     const on = checkedTools.has(t.name);
                     return (
                       <button key={t.name} onClick={() => { const next = new Set(checkedTools); on ? next.delete(t.name) : next.add(t.name); setCheckedTools(next); }}
+                        title={t.description || t.name}
                         style={{ ...toolTagStyle, background: on ? 'var(--color-accent)' : 'var(--color-bg)', color: on ? 'var(--color-text-inverse)' : 'var(--color-text)', border: `1px solid ${on ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
                         {on ? '✓ ' : ''}{t.name}{t.dangerous && <span style={{ fontSize: '10px', marginLeft: '2px' }}>⚠</span>}
                       </button>
                     );
                   })}
                 </div>
+
+                {/* MCP 工具（按 server 分组折叠） */}
+                {Object.entries(mcpGroups).map(([serverName, tools]) => {
+                  const expanded = mcpExpanded.has(serverName);
+                  const allSelected = tools.every(t => checkedTools.has(t.fullName));
+                  const someSelected = tools.some(t => checkedTools.has(t.fullName));
+                  return (
+                    <div key={serverName} style={{ marginBottom: '8px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', background: 'var(--color-bg)', cursor: 'pointer', userSelect: 'none' }}
+                        onClick={() => { const next = new Set(mcpExpanded); expanded ? next.delete(serverName) : next.add(serverName); setMcpExpanded(next); }}>
+                        <span style={{ fontSize: '11px', width: '14px' }}>{expanded ? '▼' : '▶'}</span>
+                        <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600 }}>MCP: {serverName}</span>
+                        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>{tools.length} 工具</span>
+                        <button onClick={(e) => { e.stopPropagation(); const next = new Set(checkedTools); if (allSelected) { tools.forEach(t => next.delete(t.fullName)); } else { tools.forEach(t => next.add(t.fullName)); } setCheckedTools(next); }}
+                          style={{ ...toolTagStyle, background: allSelected ? 'var(--color-accent)' : 'var(--color-bg)', color: allSelected ? '#fff' : 'var(--color-text-tertiary)', border: `1px solid ${someSelected ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer', fontSize: '10px' }}>
+                          {allSelected ? '✓ 全选' : '全选'}
+                        </button>
+                      </div>
+                      {expanded && (
+                        <div style={{ padding: '4px 10px 8px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          {tools.map(t => {
+                            const on = checkedTools.has(t.fullName);
+                            return (
+                              <label key={t.fullName} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', cursor: 'pointer', padding: '3px 0', fontSize: 'var(--text-xs)' }}>
+                                <input type="checkbox" checked={on} onChange={() => { const next = new Set(checkedTools); on ? next.delete(t.fullName) : next.add(t.fullName); setCheckedTools(next); }}
+                                  style={{ marginTop: '2px', accentColor: 'var(--color-accent)' }} />
+                                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 500, flexShrink: 0 }}>{t.name}</span>
+                                <span style={{ color: 'var(--color-text-tertiary)', lineHeight: 1.3 }}>{t.description}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
 
                 {checkedTools.size > 0 && (
                   <div style={{ padding: 'var(--space-3)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', opacity: 0.65, userSelect: 'none', marginBottom: 'var(--space-3)' }}>

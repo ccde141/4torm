@@ -97,9 +97,15 @@ await app.register(chatRoutes, { prefix: '/api/chat' });
 await app.register(delegateRoutes, { prefix: '/api/delegate' });
 await app.register(conversationRoutes, { prefix: '/api/conversation' });
 await app.register(tideRoutes, { prefix: '/api/tide' });
+import { mcpRoutes } from './routes/mcp';
+await app.register(mcpRoutes, { prefix: '/api/mcp' });
 
 // 启动潮汐调度器（必须在路由注册后，确保 unlock hook 注册前没有 unlock 触发）
 startScheduler(DATA_DIR);
+
+// 初始化 MCP Manager（连接外部 MCP server）
+import { initMcpManager } from './engine/shared/mcp-manager';
+initMcpManager(DATA_DIR).catch(e => console.error('[MCP] init failed:', e.message));
 
 // 健康检查
 app.get('/api/health', async () => ({ status: 'ok', ts: Date.now() }));
