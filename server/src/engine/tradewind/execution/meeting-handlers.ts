@@ -137,14 +137,11 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<void> {
       };
       const toolCaller: ToolCaller | undefined = toolDefs.length > 0 ? {
         async call(tool, args) {
-          onEvent?.({ type: 'tool-call', label, tool, args });
           try {
             const result = await execTool(tool, args, participant.agentId, workspace, signal);
-            onEvent?.({ type: 'tool-result', label, tool, result });
             return result;
           } catch (e) {
             const err = `错误：${(e as Error).message}`;
-            onEvent?.({ type: 'tool-result', label, tool, result: err });
             return err;
           }
         },
