@@ -217,7 +217,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
             updateLast(last => ({
               ...last,
               content: ev.content,
-              rawContent: ev.rawContent || streamContent || ev.content,
+              rawContent: streamContent || ev.rawContent || ev.content,
               toolCalls: ev.toolCalls && ev.toolCalls.length > 0 ? ev.toolCalls : (pendingTools.length > 0 ? pendingTools : undefined),
               streaming: false,
             }));
