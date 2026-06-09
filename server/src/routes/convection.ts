@@ -15,6 +15,9 @@ import type { ConvectionStreamEvent } from '../engine/convection/handlers';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
 import { lockAgent, unlockAgent, setPresence, clearPresence } from '../engine/shared/agent-lock';
 
+/** 活跃的轮次 AbortController：sessionId → AbortController */
+const activeAborts = new Map<string, AbortController>();
+
 export async function convectionRoutes(app: FastifyInstance): Promise<void> {
   const dataDir = (app as any).dataDir as string;
 
@@ -59,13 +62,16 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
       reply.hijack();
       initSSE(reply);
       const stopHB = startHeartbeat(reply);
+      const abort = new AbortController();
+      activeAborts.set(sessionId, abort);
       const onEvent = (ev: ConvectionStreamEvent) => { pushSSE(reply, ev); };
       try {
-        await handleSpeak(dataDir, s, body.message.trim(), onEvent);
+        await handleSpeak(dataDir, s, body.message.trim(), onEvent, abort.signal);
         pushSSE(reply, { type: 'done' });
       } catch (e) {
         pushSSE(reply, { type: 'error', message: (e as Error).message });
       } finally {
+        activeAborts.delete(sessionId);
         release();
         stopHB();
         endSSE(reply);
@@ -82,18 +88,29 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
       reply.hijack();
       initSSE(reply);
       const stopHB = startHeartbeat(reply);
+      const abort = new AbortController();
+      activeAborts.set(`${sessionId}:chair`, abort);
       const onEvent = (ev: ConvectionStreamEvent) => { pushSSE(reply, ev); };
       try {
-        await handleChair(dataDir, s, body.message.trim(), onEvent);
+        await handleChair(dataDir, s, body.message.trim(), onEvent, abort.signal);
         pushSSE(reply, { type: 'done' });
       } catch (e) {
         pushSSE(reply, { type: 'error', message: (e as Error).message });
       } finally {
+        activeAborts.delete(`${sessionId}:chair`);
         release();
         stopHB();
         endSSE(reply);
       }
       return;
+    }
+
+    if (action === 'abort') {
+      // 中断 speak 或 chair（speak 优先）
+      const ctrl = activeAborts.get(sessionId) || activeAborts.get(`${sessionId}:chair`);
+      if (!ctrl) return reply.status(409).send({ error: 'No active round' });
+      ctrl.abort();
+      return reply.send({ ok: true });
     }
 
     if (action === 'rename') {

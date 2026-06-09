@@ -514,7 +514,10 @@ export default memo(function ConvectionPage() {
               <div className="chat__input-wrapper">
                 <textarea className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder="发言...（Shift+Enter 换行）" disabled={busy} rows={1} />
                 {busy ? (
-                  <button className="chat__stop-btn" onClick={() => abortRef.current?.abort()} title="停止生成">
+                  <button className="chat__stop-btn" onClick={() => {
+                    abortRef.current?.abort();
+                    if (activeId) fetch(`/api/convection/session/${activeId}/abort`, { method: 'POST' }).catch(() => {});
+                  }} title="停止生成">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                   </button>
                 ) : (
@@ -560,7 +563,10 @@ export default memo(function ConvectionPage() {
           <div className="chat__input-wrapper">
             <textarea className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={activeId ? '私聊会长...（Shift+Enter 换行）' : ''} disabled={cBusy || !activeId} rows={1} />
             {cBusy ? (
-              <button className="chat__stop-btn" onClick={() => cAbortRef.current?.abort()} title="停止生成">
+              <button className="chat__stop-btn" onClick={() => {
+                cAbortRef.current?.abort();
+                if (activeId) fetch(`/api/convection/session/${activeId}/abort`, { method: 'POST' }).catch(() => {});
+              }} title="停止生成">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
               </button>
             ) : (

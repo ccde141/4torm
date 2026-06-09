@@ -150,6 +150,8 @@ export interface RunReActParams {
   label: string;
   messages: ContextMessage[];
   onEvent?: (ev: ConvectionReActEvent) => void;
+  /** 外部中断信号 */
+  signal?: AbortSignal;
 }
 
 /**
@@ -157,7 +159,7 @@ export interface RunReActParams {
  * 直接调 callLLM + callTool，不通过接口注入。
  */
 export async function runConvectionReAct(params: RunReActParams): Promise<AgentReActResult> {
-  const { dataDir, model, temperature, agentId, sessionId, label, messages: msgs, onEvent } = params;
+  const { dataDir, model, temperature, agentId, sessionId, label, messages: msgs, onEvent, signal } = params;
   const allToolCalls: ToolCallRecord[] = [];
   let nudgeCount = 0; // A: 无 action 无 answer 强制再问计数
   // token 用量：只保留最后一次 LLM 调用的 usage（代表当前上下文体积）
@@ -169,9 +171,15 @@ export async function runConvectionReAct(params: RunReActParams): Promise<AgentR
   };
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
+    if (signal?.aborted) {
+      return { cleanContent: '[中止]', rawContent: '', toolCalls: allToolCalls, usage: latestUsage };
+    }
+
     const llmStart = Date.now();
     const abortCtrl = new AbortController();
     const llmTimer = setTimeout(() => abortCtrl.abort(), LLM_TIMEOUT_MS);
+    const onAbort = () => abortCtrl.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
     let tokenReceived = false;
 
     const hbInterval = onEvent
@@ -210,6 +218,7 @@ export async function runConvectionReAct(params: RunReActParams): Promise<AgentR
     } catch (e) {
       if (hbInterval) clearInterval(hbInterval);
       clearTimeout(llmTimer);
+      signal?.removeEventListener('abort', onAbort);
       const msg = abortCtrl.signal.aborted
         ? `LLM 响应超时（${LLM_TIMEOUT_MS / 1000}s），已中止`
         : (e as Error).message;
@@ -218,6 +227,7 @@ export async function runConvectionReAct(params: RunReActParams): Promise<AgentR
     } finally {
       if (hbInterval) clearInterval(hbInterval);
       clearTimeout(llmTimer);
+      signal?.removeEventListener('abort', onAbort);
     }
 
     msgs.push({ role: 'assistant', content: reply });

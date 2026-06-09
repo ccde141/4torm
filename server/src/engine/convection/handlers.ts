@@ -119,10 +119,13 @@ export async function handleSpeak(
   session: ConvectionSessionData,
   humanMessage: string,
   onEvent?: (ev: ConvectionStreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   session.publicMessages.push({ speaker: '人类', content: humanMessage, timestamp: Date.now() });
 
   for (const agentId of session.participantAgentIds) {
+    if (signal?.aborted) break;
+
     const agent = await getAgent(dataDir, agentId);
     onEvent?.({ type: 'agent-start', label: agent.name });
 
@@ -143,20 +146,28 @@ export async function handleSpeak(
         else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
         else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
       } : undefined,
+      signal,
     });
 
-    session.publicMessages.push({
-      speaker: agent.name,
-      content: result.cleanContent,
-      timestamp: Date.now(),
-      rawContent: result.rawContent || undefined,
-      toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
-    });
-    updateSessionUsage(session, result.usage);
-    onEvent?.({
-      type: 'agent-done', label: agent.name,
-      content: result.cleanContent, rawContent: result.rawContent, toolCalls: result.toolCalls,
-    });
+    // abort 时保留已流式产出的有效内容
+    const aborted = signal?.aborted;
+    const content = result.cleanContent;
+    if (content && !content.startsWith('[中止]') && !content.startsWith('[错误]')) {
+      session.publicMessages.push({
+        speaker: agent.name,
+        content,
+        timestamp: Date.now(),
+        rawContent: result.rawContent || undefined,
+        toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
+      });
+      updateSessionUsage(session, result.usage);
+      onEvent?.({
+        type: 'agent-done', label: agent.name,
+        content, rawContent: result.rawContent, toolCalls: result.toolCalls,
+      });
+    }
+
+    if (aborted) break;
   }
 
   await saveSession(dataDir, session);
@@ -170,6 +181,7 @@ export async function handleChair(
   session: ConvectionSessionData,
   humanMessage: string,
   onEvent?: (ev: ConvectionStreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   session.chairMessages.push({ role: 'user', content: humanMessage });
 
@@ -190,6 +202,9 @@ export async function handleChair(
   const chairStart = Date.now();
   const abortCtrl = new AbortController();
   const chairTimer = setTimeout(() => abortCtrl.abort(), LLM_TIMEOUT_MS);
+  // 外部 signal 级联到内部 abortCtrl
+  const onAbort = () => abortCtrl.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
   let tokenReceived = false;
 
   const hbInterval = onEvent
@@ -212,6 +227,7 @@ export async function handleChair(
   } catch (e) {
     if (hbInterval) clearInterval(hbInterval);
     clearTimeout(chairTimer);
+    signal?.removeEventListener('abort', onAbort);
     const msg = abortCtrl.signal.aborted
       ? `会长 LLM 响应超时（${LLM_TIMEOUT_MS / 1000}s），已中止`
       : (e as Error).message;
@@ -220,6 +236,7 @@ export async function handleChair(
   } finally {
     if (hbInterval) clearInterval(hbInterval);
     clearTimeout(chairTimer);
+    signal?.removeEventListener('abort', onAbort);
   }
 
   session.chairMessages.push({ role: 'assistant', content: reply });
