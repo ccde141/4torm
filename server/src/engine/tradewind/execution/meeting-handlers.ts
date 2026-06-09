@@ -68,20 +68,8 @@ async function execTool(
   workspace: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const url = (process.env.TOOL_BRIDGE_URL || 'http://localhost:3001').replace(/\/+$/, '') + '/api/tools/exec';
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tool, args, agentId, workspaceDirOverride: workspace }),
-    signal,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
-  }
-  const data = await res.json() as { result?: string; error?: string };
-  if (data.error) throw new Error(data.error);
-  return data.result ?? '';
+  const { execToolUnified } = await import('../../shared/exec-tool');
+  return execToolUnified({ tool, args, agentId, workspaceDir: workspace, signal });
 }
 
 // ── handleSpeak ───────────────────────────────────────────────────
