@@ -31,6 +31,7 @@ import SkillsPage from './components/skills/SkillsPage';
 import TradeWindPage from './tradewind/ui/pages/TradeWindPage';
 import TidePage from './tide/ui/TidePage';
 import ConvectionPage from './convection/ui/pages/ConvectionPage';
+import { McpPage } from './components/mcp/McpPage';
 import ContourBackground from './components/layout/ContourBackground';
 import WindBackground from './components/layout/WindBackground';
 import { getSkinConfig, loadSkinConfig, subscribeSkin, type SkinConfig } from './store/skin';
@@ -45,6 +46,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   tradewind: { title: '信风', subtitle: '多 Agent 协作工作流' },
   tide:      { title: '潮汐', subtitle: '定时自动化任务' },
   model:     { title: '模型', subtitle: '模型提供商与 API 配置' },
+  mcp:       { title: 'MCP', subtitle: '外部工具服务管理' },
 };
 
 function PageContent({ page, preselectSession, onClearPreselect }: { page: string; preselectSession?: string | null; onClearPreselect?: () => void }) {
@@ -80,6 +82,7 @@ function PageContent({ page, preselectSession, onClearPreselect }: { page: strin
       <div className="page-panel" data-page="tradewind" style={show('tradewind')}><div style={scrollArea}><TradeWindPage /></div></div>
       <div className="page-panel" data-page="tide" style={show('tide')}><div style={scrollArea}><TidePage /></div></div>
       <div className="page-panel" data-page="model" style={show('model')}><div style={scrollArea}><SettingsPage /></div></div>
+      <div className="page-panel" data-page="mcp" style={show('mcp')}><div style={scrollArea}><McpPage /></div></div>
     </div>
   );
 }

@@ -97,6 +97,8 @@ await app.register(chatRoutes, { prefix: '/api/chat' });
 await app.register(delegateRoutes, { prefix: '/api/delegate' });
 await app.register(conversationRoutes, { prefix: '/api/conversation' });
 await app.register(tideRoutes, { prefix: '/api/tide' });
+import { mcpRoutes } from './routes/mcp';
+await app.register(mcpRoutes, { prefix: '/api/mcp' });
 
 // 启动潮汐调度器（必须在路由注册后，确保 unlock hook 注册前没有 unlock 触发）
 startScheduler(DATA_DIR);

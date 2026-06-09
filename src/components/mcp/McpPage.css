@@ -1,0 +1,240 @@
+/* MCP 管理页样式 — 毛玻璃体系 */
+
+.mcp-page {
+  padding: 24px 32px;
+  max-width: 860px;
+}
+
+.mcp-page__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.mcp-page__title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  margin: 0;
+}
+
+.mcp-page__subtitle {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin: 4px 0 0;
+}
+
+.mcp-page__subtitle code {
+  background: var(--glass-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: var(--text-xs);
+}
+
+.mcp-page__actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* 按钮 */
+.mcp-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.mcp-btn--primary {
+  background: var(--color-accent);
+  color: #fff;
+  border-color: transparent;
+}
+
+.mcp-btn--primary:hover { opacity: 0.85; }
+
+.mcp-btn--secondary {
+  background: var(--glass-bg);
+  color: var(--color-text);
+}
+
+.mcp-btn--secondary:hover { background: var(--glass-bg-hover, rgba(255,255,255,0.08)); }
+
+.mcp-btn--danger {
+  background: transparent;
+  color: var(--color-error);
+  border-color: var(--color-error);
+  font-size: var(--text-xs);
+  padding: 4px 10px;
+}
+
+.mcp-btn--danger:hover { background: rgba(239,68,68,0.1); }
+
+/* 添加表单 */
+.mcp-add-form {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.mcp-add-form__row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mcp-add-form__input {
+  flex: 1;
+  min-width: 120px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  background: rgba(0,0,0,0.15);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-family: inherit;
+}
+
+.mcp-add-form__input--wide { flex: 2; }
+
+.mcp-add-form__input::placeholder { color: var(--color-text-muted); }
+
+.mcp-add-form__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+.mcp-add-form__error {
+  color: var(--color-error);
+  font-size: var(--text-xs);
+  margin-right: auto;
+}
+
+/* 列表 */
+.mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mcp-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  transition: opacity 0.2s;
+}
+
+.mcp-card--disabled { opacity: 0.5; }
+
+.mcp-card__status {
+  flex-shrink: 0;
+}
+
+.mcp-card__dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+}
+
+.mcp-card__dot--on {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34,197,94,0.5);
+}
+
+.mcp-card__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-card__name {
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+
+.mcp-card__meta {
+  margin-top: 2px;
+}
+
+.mcp-card__meta code {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  word-break: break-all;
+}
+
+.mcp-card__stats {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  margin-top: 3px;
+}
+
+.mcp-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* Toggle 开关 */
+.mcp-toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+}
+
+.mcp-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.mcp-toggle__slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--glass-border);
+  border-radius: 20px;
+  transition: 0.2s;
+}
+
+.mcp-toggle__slider::before {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 3px;
+  bottom: 3px;
+  background: var(--color-text);
+  border-radius: 50%;
+  transition: 0.2s;
+}
+
+.mcp-toggle input:checked + .mcp-toggle__slider {
+  background: var(--color-accent);
+}
+
+.mcp-toggle input:checked + .mcp-toggle__slider::before {
+  transform: translateX(16px);
+}
+
+/* 空态 */
+.mcp-empty {
+  text-align: center;
+  padding: 48px 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
