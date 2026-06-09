@@ -13,7 +13,7 @@ import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { McpServerConfig } from '../engine/shared/mcp-client';
-import { getMcpStatus, initMcpManager, shutdownMcpManager } from '../engine/shared/mcp-manager';
+import { getMcpStatus, getMcpToolDefs, initMcpManager, shutdownMcpManager } from '../engine/shared/mcp-manager';
 
 export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   const dataDir = (app as any).dataDir as string;
@@ -106,6 +106,27 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   app.post('/reconnect', async (req, reply) => {
     await reloadMcp(dataDir);
     return reply.send({ ok: true });
+  });
+
+  // GET /api/mcp/tools — 返回所有 MCP 工具（按 server 分组）
+  app.get('/tools', async (_req, reply) => {
+    const statuses = getMcpStatus();
+    const allTools = getMcpToolDefs();
+    // 按 server 分组
+    const groups: Record<string, Array<{ name: string; fullName: string; description: string }>> = {};
+    for (const tool of allTools) {
+      // fullName: mcp:serverName:toolName
+      const parts = tool.name.split(':');
+      const serverName = parts[1] || 'unknown';
+      const toolName = parts.slice(2).join(':');
+      if (!groups[serverName]) groups[serverName] = [];
+      groups[serverName].push({
+        name: toolName,
+        fullName: tool.name,
+        description: tool.description.replace(/^\[MCP:[^\]]*\]\s*/, ''),
+      });
+    }
+    return reply.send({ groups, servers: statuses });
   });
 }
 
