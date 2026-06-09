@@ -36,6 +36,8 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
   const [waitingElapsed, setWaitingElapsed] = useState(0);
   const publicEndRef = useRef<HTMLDivElement>(null);
   const chairEndRef = useRef<HTMLDivElement>(null);
+  const publicContainerRef = useRef<HTMLDivElement>(null);
+  const chairContainerRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   // 等待计时器
@@ -130,12 +132,18 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
     setStatus(prev => prev ? { ...prev, participants: result.participants } : prev);
   }, [nodeId, status]);
 
-  // 自动滚动
+  // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
   useEffect(() => {
-    publicEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = publicContainerRef.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [publicMsgs]);
   useEffect(() => {
-    chairEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = chairContainerRef.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [chairMsgs]);
 
   // 公共发言（SSE 流式 + 工具气泡）
@@ -354,7 +362,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
           {/* 左侧：公共会议 */}
           <div className="tw-meeting-panel__public">
             <div className="tw-meeting-panel__section-title">公共会议</div>
-            <div className="tw-meeting-panel__messages">
+            <div className="tw-meeting-panel__messages" ref={publicContainerRef}>
               {publicMsgs.map((m, i) => (
                 <MeetingMessageItem key={i} msg={m} />
               ))}
@@ -392,7 +400,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
           {/* 右侧：会长私聊 */}
           <div className="tw-meeting-panel__chair">
             <div className="tw-meeting-panel__section-title">会长私聊</div>
-            <div className="tw-meeting-panel__messages">
+            <div className="tw-meeting-panel__messages" ref={chairContainerRef}>
               {chairMsgs.filter(m => m.role !== 'system').map((m, i) => (
                 <div key={i} className={`tw-meeting-msg tw-meeting-msg--${m.role}`}>
                   <span className="tw-meeting-msg__content">{renderTextWithCode(m.content, `chair-${i}`)}</span>

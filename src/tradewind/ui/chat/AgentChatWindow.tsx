@@ -31,6 +31,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const msgIdRef = useRef(0);
 
@@ -49,9 +50,12 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
       .catch(() => {});
   }, [nodeId]);
 
-  // 自动滚动到底部
+  // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = messagesContainerRef.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [messages]);
 
   const send = useCallback(async () => {
@@ -218,7 +222,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
           <span className="tw-chat-window__title">{nodeLabel}</span>
           <button className="tw-chat-window__close" onClick={onClose}>×</button>
         </div>
-        <div className="tw-chat-window__messages">
+        <div className="tw-chat-window__messages" ref={messagesContainerRef}>
           {messages.map((msg) => {
             // toolCall 消息：delegate 或普通工具
             if (msg.toolCall) {
