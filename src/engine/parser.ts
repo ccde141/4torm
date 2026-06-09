@@ -80,7 +80,7 @@ export function parseStructuredOutput(content: string, toolDefs: ToolDef[]): Par
     return '';
   };
 
-  round.think = extract('think', outside);
+  round.think = extract('think', outside) || extract('thinking', outside);
   // 仅在 answer 内没有找到 note 时，从 outside 提取
   if (!round.note) round.note = extract('note', outside);
 
