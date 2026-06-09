@@ -49,6 +49,8 @@ export interface ActiveMeeting {
   /** 工作流共享 workspace 相对路径 */
   workspace: string;
   signal: AbortSignal;
+  /** 当前轮次的 AbortController——中断当前 speak 用 */
+  roundAbort: AbortController | null;
 }
 
 export const activeMeetings = new Map<string, ActiveMeeting>();
@@ -178,6 +180,7 @@ export class MeetingExecutor implements NodeExecutor {
         runDir: ctx.runDir,
         workspace: `data/tradewind/workflows/${ctx.workflowId}/workspace`,
         signal: ctx.signal,
+        roundAbort: null,
       });
     });
 

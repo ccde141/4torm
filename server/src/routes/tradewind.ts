@@ -30,7 +30,6 @@ import { HumanGateExecutor, activeHumanGates } from '../engine/tradewind/nodes/h
 import { handleSpeak, handleChair, handleEnd } from '../engine/tradewind/execution/meeting-handlers';
 import { getEnvelopePending } from '../engine/tradewind/foundation/node-status-store';
 import { getMeetingsDir, getMeetingFileName } from '../engine/tradewind/foundation/archive-paths';
-import fs from 'node:fs/promises';
 import { validateWorkflow } from '../engine/tradewind/foundation/workflow-validator';
 
 /** 当前活跃的 orchestrator 实例（单执行，后续改为 Map） */
@@ -399,16 +398,25 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     // SSE 心跳保活（15s 间隔）
     const hb = setInterval(() => { try { raw.write(': heartbeat\n\n'); } catch {} }, 15_000);
 
+    // 创建本轮次的 AbortController
+    const roundAbort = new AbortController();
+    meeting.roundAbort = roundAbort;
+    // 组合信号：orchestrator 全局 abort 或本轮 abort 均可中断
+    const onGlobalAbort = () => roundAbort.abort();
+    meeting.signal.addEventListener('abort', onGlobalAbort, { once: true });
+
     handleSpeak({
       dataDir: meeting.dataDir,
       workspace: meeting.workspace,
       session: meeting.session,
       humanMessage: message,
-      signal: meeting.signal,
+      signal: roundAbort.signal,
       onEvent: (ev) => {
         try { raw.write(`data: ${JSON.stringify(ev)}\n\n`); } catch {}
       },
     }).then(() => {
+      meeting.roundAbort = null;
+      meeting.signal.removeEventListener('abort', onGlobalAbort);
       clearInterval(hb);
       // 归档会议记录
       if (meeting.runDir) {
@@ -426,12 +434,26 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
         raw.end();
       } catch {}
     }).catch((e) => {
+      meeting.roundAbort = null;
+      meeting.signal.removeEventListener('abort', onGlobalAbort);
       clearInterval(hb);
       try {
         raw.write(`data: ${JSON.stringify({ type: 'error', message: (e as Error).message })}\n\n`);
         raw.end();
       } catch {}
     });
+  });
+
+  /** POST /meeting/:nodeId/abort-round — 人类中断当前轮次 */
+  app.post('/meeting/:nodeId/abort-round', async (req, reply) => {
+    const { nodeId } = req.params as { nodeId: string };
+    const meeting = activeMeetings.get(nodeId);
+    if (!meeting) return reply.status(404).send({ error: 'No active meeting' });
+    if (!meeting.session.busy) return reply.status(409).send({ error: 'No round in progress' });
+    if (meeting.roundAbort) {
+      meeting.roundAbort.abort();
+    }
+    return reply.send({ ok: true });
   });
 
   /** POST /meeting/:nodeId/chair — 人类给会长发消息（SSE 流式） */

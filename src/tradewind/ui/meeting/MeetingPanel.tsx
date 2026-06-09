@@ -371,7 +371,10 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
                 rows={1}
               />
               {busy ? (
-                <button className="tw-meeting-panel__send" onClick={() => abortRef.current?.abort()} style={{ background: 'rgba(239,68,68,0.15)', color: 'var(--color-error)' }}>
+                <button className="tw-meeting-panel__send" onClick={() => {
+                  abortRef.current?.abort();
+                  fetch(`/api/tradewind/meeting/${nodeId}/abort-round`, { method: 'POST' }).catch(() => {});
+                }} style={{ background: 'rgba(239,68,68,0.15)', color: 'var(--color-error)' }}>
                   ■
                 </button>
               ) : (

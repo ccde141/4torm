@@ -108,6 +108,8 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<void> {
 
   try {
     for (const participant of session.participants) {
+      if (signal?.aborted) break;
+
       const agent = await loadAgent(dataDir, participant.agentId);
       if (!agent) continue;
 
@@ -166,18 +168,28 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<void> {
         signal,
       });
 
-      session.publicMessages.push({
-        speaker: label,
-        content: result.content,
-        timestamp: Date.now(),
-        rawContent: result.rawContent || undefined,
-        toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
-      });
+      // abort 后 result.content 可能是 '[中止]' 或 '[错误]...'——用已流式积累的内容替代
+      const aborted = signal?.aborted;
+      const streamedContent = session.streamingCurrent?.content?.trim() || '';
+      const finalContent = aborted ? streamedContent : result.content;
+
+      if (finalContent && !finalContent.startsWith('[中止]') && !finalContent.startsWith('[错误]')) {
+        session.publicMessages.push({
+          speaker: label,
+          content: finalContent,
+          timestamp: Date.now(),
+          rawContent: result.rawContent || undefined,
+          toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
+        });
+      }
       session.streamingCurrent = undefined;
-      onEvent?.({ type: 'agent-done', label, content: result.content, rawContent: result.rawContent, toolCalls: result.toolCalls });
+      onEvent?.({ type: 'agent-done', label, content: finalContent, rawContent: result.rawContent, toolCalls: result.toolCalls });
+
+      if (aborted) break;
     }
   } finally {
     session.busy = false;
+    session.streamingCurrent = undefined;
   }
 }
 
