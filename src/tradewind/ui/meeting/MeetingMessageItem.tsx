@@ -28,6 +28,7 @@ interface StreamView {
   note: string;
   noteStreaming: boolean;
   answer: string;
+  answerStreaming: boolean;
   pending: PendingActionInfo | null;
 }
 
@@ -36,6 +37,7 @@ interface StreamView {
  * - think/note/answer 闭合优先，未闭合时取开标签后的内容流式显示
  * - thinkStreaming/noteStreaming 标志闭合状态（用于 UI 展开/折叠默认值）
  * - 未闭合 <action 探测进度
+ * - 无 <answer> 时，剥离 think/action/note 后的剩余文本作为可见内容
  */
 function buildStreamView(content: string): StreamView {
   const extractStreaming = (tags: string[]): { value: string; streaming: boolean } => {
@@ -67,12 +69,31 @@ function buildStreamView(content: string): StreamView {
     pending = { tool: toolMatch?.[1] || '...', filePath: pathMatch?.[1], bodyLen };
   }
 
+  // 如果没有 <answer> 标签，用剥离所有结构标签后的剩余文本作为可见内容
+  let answerValue = a.value;
+  let answerStreaming = a.streaming;
+  if (!answerValue && !answerStreaming) {
+    const remainder = content
+      .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
+      .replace(/<think(?:ing)?>[\s\S]*/i, '')  // 未闭合 think 也剥离
+      .replace(/<note>[\s\S]*?<\/note>/gi, '')
+      .replace(/<note>[\s\S]*/i, '')
+      .replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '')
+      .replace(/<action\s[\s\S]*/i, '')  // 未闭合 action 也剥离
+      .trim();
+    if (remainder) {
+      answerValue = remainder;
+      answerStreaming = true; // 视为仍在输出
+    }
+  }
+
   return {
     think: t.value,
     thinkStreaming: t.streaming,
     note: n.value,
     noteStreaming: n.streaming,
-    answer: a.value,
+    answer: answerValue,
+    answerStreaming,
     pending,
   };
 }
@@ -141,14 +162,34 @@ export const MeetingMessageItem = memo(function MeetingMessageItem({ msg }: Prop
   if (msg.streaming) {
     const view = buildStreamView(msg.content);
     const tools = msg.toolCalls || [];
-    const empty = !view.think && !view.note && !view.answer && tools.length === 0 && !view.pending;
+    // 兜底：content 中有已闭合 action 但 toolCalls 事件尚未到达时，解析显示
+    let closedActionFallback: Array<{ tool: string }> = [];
+    if (tools.length === 0) {
+      const closedRe = /<action\s+[^>]*?\btool\s*=\s*["']([^"']+)["'][^>]*>[\s\S]*?<\/action>/gi;
+      let cm: RegExpExecArray | null;
+      while ((cm = closedRe.exec(msg.content)) !== null) {
+        closedActionFallback.push({ tool: cm[1].trim() });
+      }
+    }
+    const empty = !view.think && !view.note && !view.answer && tools.length === 0 && closedActionFallback.length === 0 && !view.pending;
     return (
       <div className="tw-meeting-msg">
         <span className="tw-meeting-msg__speaker">{msg.speaker}</span>
         {view.think && <ThinkBlock content={view.think} streaming={view.thinkStreaming} />}
-        {tools.map((t, i) => <ToolBubble key={i} step={t} />)}
+        {tools.length > 0
+          ? tools.map((t, i) => <ToolBubble key={i} step={t} />)
+          : closedActionFallback.map((t, i) => (
+              <div key={i} className="tw-meeting-tool tw-meeting-tool--running">
+                <div className="tw-meeting-tool__header tw-meeting-tool__header--static">
+                  <span className="tw-meeting-tool__icon tw-meeting-tool__icon--running">⏳</span>
+                  <span className="tw-meeting-tool__name">{t.tool}</span>
+                  <span className="tw-meeting-tool__spinner" />
+                </div>
+              </div>
+            ))
+        }
         {view.pending && <PendingBubble info={view.pending} />}
-        {view.answer && <span className="tw-meeting-msg__content">{renderTextWithCode(view.answer, `mtg-s-${msg.timestamp}`)}▍</span>}
+        {view.answer && <span className="tw-meeting-msg__content">{renderTextWithCode(view.answer, `mtg-s-${msg.timestamp}`)}{ view.answerStreaming && '▍'}</span>}
         {view.note && (
           <div className="tw-meeting-note">
             <div className="tw-meeting-note__header">💡 提醒</div>

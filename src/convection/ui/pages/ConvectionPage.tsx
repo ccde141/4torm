@@ -244,7 +244,7 @@ export default memo(function ConvectionPage() {
           setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === currentLabel ? { ...m, toolCalls: tools } : m));
         } else if (ev.type === 'agent-done') {
           const finalTools: ToolStep[] = (ev.toolCalls || []).map((tc: any) => ({ tool: tc.tool, args: tc.args, result: tc.result, status: 'done' as const }));
-          setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === ev.label ? { ...m, content: ev.content, rawContent: ev.rawContent || ev.content, toolCalls: finalTools, streaming: false } : m));
+          setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === ev.label ? { ...m, content: ev.content, rawContent: streamContent || ev.rawContent || ev.content, toolCalls: finalTools, streaming: false } : m));
           currentLabel = '';
           streamContent = '';
           pendingTools = [];
@@ -388,8 +388,8 @@ export default memo(function ConvectionPage() {
                 // 流式中：显示剥离标签后的可读文本 + 工具调用卡片
                 if (m.streaming) {
                   // 提取 think（闭合优先，未闭合兜底取 <think> 后所有内容）
-                  const thinkClosed = /<think>([\s\S]*?)<\/think>/i.exec(m.content);
-                  const thinkOpen = !thinkClosed ? /<think>([\s\S]*)$/i.exec(m.content) : null;
+                  const thinkClosed = /<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/i.exec(m.content);
+                  const thinkOpen = !thinkClosed ? /<think(?:ing)?>([\s\S]*)$/i.exec(m.content) : null;
                   const thinkText = (thinkClosed?.[1] || thinkOpen?.[1] || '').trim();
                   const thinkStreaming = !!thinkOpen;
                   // 提取 note（闭合优先，未闭合兜底）
@@ -398,8 +398,8 @@ export default memo(function ConvectionPage() {
                   const noteText = (noteClosed?.[1] || noteOpen?.[1] || '').trim();
                   // 剥掉 think / note / action（已闭合 + 未闭合残尾），剩下的给 answer/纯文本流式
                   let raw = m.content;
-                  raw = raw.replace(/<think>[\s\S]*?<\/think>/gi, '');
-                  raw = raw.replace(/<think>[\s\S]*$/i, '');
+                  raw = raw.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');
+                  raw = raw.replace(/<think(?:ing)?>[\s\S]*$/i, '');
                   raw = raw.replace(/<note>[\s\S]*?<\/note>/gi, '');
                   raw = raw.replace(/<note>[\s\S]*$/i, '');
                   raw = raw.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '');
@@ -514,7 +514,10 @@ export default memo(function ConvectionPage() {
               <div className="chat__input-wrapper">
                 <textarea className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder="发言...（Shift+Enter 换行）" disabled={busy} rows={1} />
                 {busy ? (
-                  <button className="chat__stop-btn" onClick={() => abortRef.current?.abort()} title="停止生成">
+                  <button className="chat__stop-btn" onClick={() => {
+                    abortRef.current?.abort();
+                    if (activeId) fetch(`/api/convection/session/${activeId}/abort`, { method: 'POST' }).catch(() => {});
+                  }} title="停止生成">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                   </button>
                 ) : (
@@ -560,7 +563,10 @@ export default memo(function ConvectionPage() {
           <div className="chat__input-wrapper">
             <textarea className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={activeId ? '私聊会长...（Shift+Enter 换行）' : ''} disabled={cBusy || !activeId} rows={1} />
             {cBusy ? (
-              <button className="chat__stop-btn" onClick={() => cAbortRef.current?.abort()} title="停止生成">
+              <button className="chat__stop-btn" onClick={() => {
+                cAbortRef.current?.abort();
+                if (activeId) fetch(`/api/convection/session/${activeId}/abort`, { method: 'POST' }).catch(() => {});
+              }} title="停止生成">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
               </button>
             ) : (
