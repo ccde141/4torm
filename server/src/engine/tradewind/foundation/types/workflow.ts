@@ -1,0 +1,90 @@
+/**
+ * 工作流图结构 —— 画布序列化契约
+ *
+ * 连线类型：handoff / note / rework（三种）
+ * 已移除：consult（由人类对话 + 会议室机制替代）
+ */
+
+/**
+ * 入口类型（接收方角色）。
+ *
+ * - 'work'  工作入口，参与"入口齐"判定，激活节点
+ * - 'note'  Note 行为约束入口，仅 Agent 类节点声明；不参与激活判定，
+ *           激活时主动读取并拼入 systemPrompt 末尾
+ * - 'none'  无入口（如 Entry / Note 自身）
+ */
+export type InputKind = 'work' | 'note' | 'none';
+
+/**
+ * 出口类型（发送方角色）。
+ *
+ * - 'handoff' 交接出线
+ * - 'note'    Note 节点的出线
+ * - 'none'    无出口（如 Output）
+ */
+export type OutputKind = 'handoff' | 'note' | 'none';
+
+/** 连线类型 */
+export type EdgeKind = 'handoff' | 'note';
+
+/** 单个节点的画布序列化 */
+export interface WorkflowNode {
+  /** 节点实例 ID（画布唯一） */
+  id: string;
+
+  /** 节点类型名（'entry' / 'agent' / 'human-gate' / ...，向 NodeExecutorRegistry 查询） */
+  type: string;
+
+  /** 节点显示名（画布唯一，引擎校验不允许同名） */
+  label: string;
+
+  /** 画布坐标 */
+  position: { x: number; y: number };
+
+  /** 节点尺寸（可选，用户调整后持久化） */
+  width?: number;
+  height?: number;
+
+  /** 人类备注（纯展示，系统层不做任何注入处理） */
+  memo?: string;
+
+  /** 节点配置，结构由 Executor.configSchema 决定，类型层不约束 */
+  config: Record<string, unknown>;
+}
+
+/** 单条连线的画布序列化 */
+export interface WorkflowEdge {
+  /** 连线 ID（画布唯一） */
+  id: string;
+
+  /** 源节点 ID */
+  source: string;
+
+  /** 源节点的出口编号 */
+  sourcePort: number;
+
+  /** 目标节点 ID */
+  target: string;
+
+  /** 目标节点的入口编号（写入 Envelope.portIndex） */
+  targetPort: number;
+
+  /** 连线语义类型 */
+  kind: EdgeKind;
+
+  /**
+   * 是否为打回边（rework）
+   *
+   * - 仅 handoff 边可标记 rework
+   * - 视觉：红色（区别于普通 handoff 的白色）
+   * - 语义：从 Human Gate 出发指向上游某节点，target 节点接收后等同收到普通信封
+   * - 校验：rework 边的 target 节点必须只有一条 handoff 入线（防死锁）
+   */
+  rework?: boolean;
+}
+
+/** 完整工作流图 */
+export interface WorkflowGraph {
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+}

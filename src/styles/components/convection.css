@@ -1,0 +1,400 @@
+/**
+ * ============================================================
+ *  Convection Page Styles
+ * ============================================================
+ */
+
+.conv {
+  display: flex;
+  height: 100%;
+}
+
+/* ─── Left: Session List ──────────────────────────────── */
+
+.conv__sidebar {
+  width: 220px;
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+}
+
+.conv__sidebar-header {
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.conv__sidebar-title {
+  font-weight: var(--font-semibold);
+  font-size: var(--text-base);
+  color: var(--color-text-primary);
+}
+
+.conv__new-btn {
+  width: 28px;
+  height: 28px;
+  background: var(--color-accent);
+  border: none;
+  border-radius: var(--border-radius-sm);
+  color: var(--color-text-inverse);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: var(--text-lg);
+  font-weight: var(--font-bold);
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+
+.conv__new-btn:hover {
+  background: var(--color-accent-hover);
+  transform: scale(1.08);
+}
+
+.conv__sessions {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.conv__session-card {
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color);
+  transition: background var(--duration-fast) var(--ease-out-expo);
+}
+
+.conv__session-card:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.conv__session-card--active {
+  background: var(--color-accent-subtle);
+}
+
+.conv__session-card-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.conv__session-card-title {
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.conv__session-card-del {
+  background: none;
+  border: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font-size: var(--text-base);
+  padding: 0 var(--space-1);
+  transition: color var(--duration-fast);
+}
+
+.conv__session-card-del:hover {
+  color: var(--color-error);
+}
+
+.conv__session-card-del--confirm {
+  color: #fff;
+  background: var(--color-error);
+  border-radius: var(--border-radius-sm);
+  font-size: var(--text-xs);
+  padding: 1px var(--space-2);
+}
+
+.conv__session-card-meta {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.conv__session-card-id {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+
+.conv__session-card-tokens {
+  color: var(--color-text-secondary);
+}
+
+/* ─── Middle: Chat Area ───────────────────────────────── */
+
+.conv__main {
+  flex: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: 300px;
+}
+
+/* ─── Resizer Handle ─────────────────────────────────── */
+
+.conv__resizer {
+  width: 5px;
+  cursor: col-resize;
+  background: var(--border-color);
+  transition: background var(--duration-fast) var(--ease-out-expo);
+  flex-shrink: 0;
+}
+
+.conv__resizer:hover {
+  background: var(--color-accent);
+}
+
+.conv__header {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--glass-border);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.conv__header-title {
+  font-weight: var(--font-semibold);
+  font-size: var(--text-base);
+  color: var(--color-text-primary);
+  cursor: default;
+}
+
+.conv__header-id {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.conv__header-tokens {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  margin-left: auto;
+}
+
+.conv__header-input {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+  width: 200px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--border-radius-sm);
+  color: var(--color-text-primary);
+  outline: none;
+}
+
+/* ─── Config Bar ──────────────────────────────────────── */
+
+.conv__config {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--glass-border);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.conv__config-label {
+  color: var(--color-text-secondary);
+}
+
+.conv__config-select {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-sm);
+  padding: 2px 6px;
+  font-size: var(--text-xs);
+  color: var(--color-text-primary);
+  outline: none;
+}
+
+.conv__config-select:focus {
+  border-color: var(--color-accent);
+}
+
+.conv__config-divider {
+  color: var(--color-text-tertiary);
+}
+
+.conv__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--color-accent-subtle);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: var(--border-radius-full);
+  padding: 2px 10px;
+  font-size: var(--text-xs);
+  color: var(--color-accent);
+}
+
+.conv__tag-remove {
+  background: none;
+  border: none;
+  color: var(--color-error);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  line-height: 1;
+  padding: 0;
+}
+
+.conv__tag-move {
+  background: none;
+  border: none;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 2px;
+  transition: color var(--duration-fast) var(--ease-out-expo);
+}
+.conv__tag-move:hover:not(:disabled) {
+  color: var(--color-accent);
+}
+.conv__tag-move:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* ─── Right: Chair Private ────────────────────────────── */
+
+.conv__chair {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+}
+
+.conv__chair-header {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--glass-border);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.conv__chair-name {
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+}
+
+.conv__chair-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+}
+
+.conv__chair-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.conv__chair-msg {
+  margin-bottom: var(--space-3);
+}
+
+.conv__chair-msg--user {
+  text-align: right;
+}
+
+.conv__chair-msg--assistant {
+  text-align: left;
+}
+
+.conv__chair-bubble {
+  display: inline-block;
+  max-width: 85%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--border-radius-sm);
+  white-space: pre-wrap;
+  line-height: var(--leading-normal);
+  font-size: var(--text-sm);
+}
+
+.conv__chair-bubble--user {
+  background: var(--color-accent-subtle);
+  color: var(--color-text-primary);
+}
+
+.conv__chair-bubble--assistant {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+/* ─── Empty State ─────────────────────────────────────── */
+
+.conv__empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+}
+
+/* ─── Speaker Label ───────────────────────────────────── */
+
+.conv__speaker-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+
+.conv__speaker-label--offset {
+  margin-left: 44px;
+}
+
+/* ─── Messages Container ──────────────────────────────── */
+
+.conv__messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+/* ─── Bubble Content ──────────────────────────────────── */
+
+.chat__content {
+  white-space: pre-wrap;
+  line-height: var(--leading-normal);
+}
+
+/* ─── Waiting Hint (heartbeat) ────────────────────────── */
+
+.conv__waiting-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  padding: 4px 0;
+}
+
+.conv__waiting-elapsed {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+/* ─── Pending Action (streaming tool call) ────────────── */
+
+.conv__pending-path {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  margin-left: 4px;
+}
+
+.conv__pending-size {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  padding: 2px 0 0 20px;
+  font-variant-numeric: tabular-nums;
+}

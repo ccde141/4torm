@@ -1,0 +1,15 @@
+{
+  "temperature": 1,
+  "tools": [
+    "read_file",
+    "webfetch_advanced",
+    "use_skill",
+    "write_file",
+    "edit_file",
+    "list_directory",
+    "run_command",
+    "webfetch"
+  ],
+  "skills": [],
+  "model": "pvd_mop71zuk1ett:deepseek-v4-flash"
+}

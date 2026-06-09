@@ -1,0 +1,108 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Vite cache
+.vite/
+.vite-err.txt
+.vite-out.txt
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ==============================
+# 用户运行时数据（不上传）
+# ==============================
+
+# API Key 敏感数据
+data/providers.json
+
+# Agent 数据（用户 agent 全部忽略，仅白名单示例 agent 入库）
+data/agents/*
+!data/agents/registry.json
+!data/agents/agent-mop6zz2fdpjv/
+!data/agents/agent-moquco791grt/
+!data/agents/agent-mpg7od2t2pnd/
+!data/agents/agent-mppcuxq71p24/
+
+# Agent 会话历史（对话内容不入仓库）
+data/agents/*/sessions/
+data/agents/*/sessions-tide/
+
+# Agent 工作区产出文件（时间戳文件等运行时产物）
+data/agents/*/.workspace/*.txt
+data/agents/*/.workspace/*.py
+data/agents/*/.workspace/.workspace/
+data/agents/*/.workspace/test/
+
+# 工作流运行时数据（workflow 定义 + 执行状态 + 运行历史）
+data/workflows/
+
+# 自定义节点索引（用户添加的节点记录，git-logger 模板示例例外）
+data/sandbox/_index.json
+
+# 用户界面主题偏好
+data/skin-config.json
+
+# 工作流输出目录（output 节点默认输出地址）
+data/workflow_output/
+
+# 发布副本暂存（SS1 / users 镜像）
+_release/
+
+# 工具权限设置（用户数据）
+data/tools/permissions.json
+
+# 自定义技能（用户数据）
+data/skills/baidu-search/
+
+# 信风模块运行时数据（执行归档不入仓库；工作流定义放开白名单）
+data/tradewind/runs/
+!data/tradewind/runs/.gitkeep
+
+# 工作流 workspace 产出（运行时生成，不入仓库。示例产出留在首次 commit 快照）
+data/tradewind/workflows/*/workspace/
+
+# 潮汐运行记录（测试期间持续产生，不入库）
+data/tide/runs/
+
+# 潮汐任务配置（用户 prompt 内容不入库，保留模板）
+data/tide/tasks.json
+
+# 潮汐任务配置（用户 prompt 内容不入库，保留模板）
+
+# �����Ự���ݣ��û��Ի���ʷ������ֿ⣩
+data/convection/sessions/
+
+# SQLite ���ݿ⣨�û�����ʱ���ݣ�
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# ���˲ݸ�
+docs/old/
+
+.commit-msg.tmp

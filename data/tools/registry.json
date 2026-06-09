@@ -1,0 +1,231 @@
+[
+  {
+    "name": "read_file",
+    "description": "读取文件内容，返回全文",
+    "category": "io",
+    "dangerous": false,
+    "executorType": "builtin",
+    "executorFile": "read_file",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filePath": {
+          "type": "string",
+          "description": "相对于工作区根目录的文件路径"
+        }
+      },
+      "required": [
+        "filePath"
+      ]
+    }
+  },
+  {
+    "name": "write_file",
+    "description": "创建或覆盖文件",
+    "category": "io",
+    "dangerous": true,
+    "executorType": "builtin",
+    "executorFile": "write_file",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filePath": {
+          "type": "string",
+          "description": "相对于工作区根目录的文件路径"
+        },
+        "content": {
+          "type": "string",
+          "description": "要写入的完整内容"
+        }
+      },
+      "required": [
+        "filePath",
+        "content"
+      ]
+    }
+  },
+  {
+    "name": "edit_file",
+    "description": "精确替换文件中的一段文本",
+    "category": "io",
+    "dangerous": true,
+    "executorType": "builtin",
+    "executorFile": "edit_file",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filePath": {
+          "type": "string",
+          "description": "文件路径"
+        },
+        "oldString": {
+          "type": "string",
+          "description": "要被替换的原文本（必须精确匹配）"
+        },
+        "newString": {
+          "type": "string",
+          "description": "替换后的新文本"
+        }
+      },
+      "required": [
+        "filePath",
+        "oldString",
+        "newString"
+      ]
+    }
+  },
+  {
+    "name": "list_directory",
+    "description": "列出目录中的所有文件和子目录",
+    "category": "io",
+    "dangerous": false,
+    "executorType": "builtin",
+    "executorFile": "list_directory",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "dirPath": {
+          "type": "string",
+          "description": "目录路径，留空则为工作区根目录"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "run_command",
+    "description": "在终端执行一条系统命令",
+    "category": "system",
+    "dangerous": true,
+    "executorType": "builtin",
+    "executorFile": "run_command",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "要执行的 shell 命令"
+        }
+      },
+      "required": [
+        "command"
+      ]
+    }
+  },
+  {
+    "name": "webfetch",
+    "description": "基础网页抓取（纯 HTTP）：获取静态 HTML 或 API JSON 文本。动态渲染网站请用 webfetch_advanced",
+    "category": "system",
+    "dangerous": false,
+    "executorType": "builtin",
+    "executorFile": "webfetch",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "完整 URL 地址"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "webfetch_advanced",
+    "description": "高级网页抓取（基于 Playwright）：启动真实浏览器渲染 JS 动态内容，支持 CSS 选择器提取、自动等待网络请求完成",
+    "category": "system",
+    "dangerous": false,
+    "executorType": "builtin",
+    "executorFile": "webfetch_advanced",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "完整 URL 地址"
+        },
+        "selector": {
+          "type": "string",
+          "description": "（可选）CSS 选择器，只提取匹配元素内的文本。留空则提取页面主体全部可见文本"
+        },
+        "timeout": {
+          "type": "number",
+          "description": "（可选）页面加载超时毫秒数，默认 15000"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "use_skill",
+    "description": "加载指定技能的提示词指令，获取该领域的专业指导",
+    "category": "system",
+    "dangerous": false,
+    "executorType": "builtin",
+    "executorFile": "use_skill",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "skill": {
+          "type": "string",
+          "description": "技能名称"
+        }
+      },
+      "required": [
+        "skill"
+      ]
+    }
+  },
+  {
+    "name": "delete_file",
+    "description": "删除文件或目录（目录默认递归删除）",
+    "category": "io",
+    "dangerous": true,
+    "executorType": "builtin",
+    "executorFile": "delete_file",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filePath": {
+          "type": "string",
+          "description": "要删除的文件或目录路径"
+        }
+      },
+      "required": [
+        "filePath"
+      ]
+    }
+  },
+  {
+    "name": "search_content",
+    "description": "在目录中递归搜索文本（支持正则），返回匹配行及文件:行号。默认跳过 node_modules、点文件和二进制文件",
+    "category": "io",
+    "dangerous": false,
+    "executorType": "builtin",
+    "executorFile": "search_content",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "搜索的文本或正则表达式"
+        },
+        "dirPath": {
+          "type": "string",
+          "description": "搜索起始目录，默认为工作区根目录"
+        },
+        "filePattern": {
+          "type": "string",
+          "description": "可选的文件名过滤正则（如 \\.ts$）"
+        }
+      },
+      "required": [
+        "pattern"
+      ]
+    }
+  }
+]
