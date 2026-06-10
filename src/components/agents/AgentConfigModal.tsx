@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { updateAgentConfig, createAgent } from '../../store/agent';
 import { getAllModels } from '../../llm';
-import { getTools, seedTools } from '../../store/tools';
+import { getTools, seedTools, buildToolsPrompt } from '../../store/tools';
 import { listSkills } from '../../store/skills';
 import { readSkillFile } from '../../store/skills';
 import { getLabels, addLabel, getPresetColors } from '../../store/statuses';
@@ -321,8 +321,9 @@ export default function AgentConfigModal(props: Props) {
                 })}
 
                 {checkedTools.size > 0 && (
-                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginTop: '4px' }}>
-                    已选 {checkedTools.size} 个工具，运行时自动注入
+                  <div style={{ position: 'relative', maxHeight: '120px', overflow: 'hidden', padding: 'var(--space-3)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', opacity: 0.65, userSelect: 'none', marginBottom: 'var(--space-3)' }}>
+                    {buildToolsPrompt(allTools.filter(t => checkedTools.has(t.name)))}
+                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '28px', background: 'linear-gradient(transparent, var(--color-bg))', pointerEvents: 'none' }} />
                   </div>
                 )}
               </div>
