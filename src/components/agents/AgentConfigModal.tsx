@@ -321,9 +321,8 @@ export default function AgentConfigModal(props: Props) {
                 })}
 
                 {checkedTools.size > 0 && (
-                  <div style={{ position: 'relative', maxHeight: '120px', overflow: 'hidden', padding: 'var(--space-3)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', opacity: 0.65, userSelect: 'none', marginBottom: 'var(--space-3)' }}>
+                  <div style={{ maxHeight: '120px', overflowY: 'auto', padding: 'var(--space-3)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', opacity: 0.65, userSelect: 'none', marginBottom: 'var(--space-3)' }}>
                     {buildToolsPrompt(allTools.filter(t => checkedTools.has(t.name)))}
-                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '28px', background: 'linear-gradient(transparent, var(--color-bg))', pointerEvents: 'none' }} />
                   </div>
                 )}
               </div>
