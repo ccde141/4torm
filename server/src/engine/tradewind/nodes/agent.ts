@@ -72,17 +72,34 @@ export class AgentExecutor implements NodeExecutor {
     const projectDir = path.resolve(ctx.dataDir, '..');
     const workspaceAbs = path.resolve(projectDir, nodeWorkspace);
 
+    // 组装团队名册（仅 agent 类型节点）
+    const teamRoster: Array<{ label: string; role: string; isSelf: boolean }> = [];
+    for (const [nid, role] of Object.entries(ctx.nodeRoleMap)) {
+      teamRoster.push({
+        label: ctx.nodeLabelMap[nid] || nid,
+        role,
+        isSelf: nid === ctx.nodeId,
+      });
+    }
+
     // 启动期 system prompt（信封内容稍后通过 user message 注入）
     const systemPrompt = buildTradewindSystemPrompt({
       rolePrompt: agent.rolePrompt || '你是一个工作流中的 Agent。',
       toolDefs,
       notes,
       nodeLabel: (ctx.nodeConfig as any)._nodeLabel || ctx.nodeId,
+      teamRoster,
       workspace: nodeWorkspace,
       workspaceAbs,
       projectDir,
       sandboxLevel: agent.sandboxLevel,
       allowDelegate: true,
+      executionId: ctx.executionId,
+      nodeId: ctx.nodeId,
+      workflowId: ctx.workflowId,
+      platform: process.platform,
+      today: new Date().toLocaleDateString('zh-CN'),
+      modelId: agent.model || 'unknown',
     });
 
     // 持久化路径（归档用，写 messages.json）
@@ -95,6 +112,7 @@ export class AgentExecutor implements NodeExecutor {
     // 创建 NodeRunner（持续循环引擎）
     const runner = new NodeRunner({
       dataDir: ctx.dataDir,
+      nodeId: ctx.nodeId,
       agentId,
       model: agent.model,
       temperature: agent.temperature,

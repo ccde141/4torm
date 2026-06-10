@@ -143,4 +143,37 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     runner.abort();
     return reply.send({ ok: true });
   });
+
+  // ── POST /api/conversation/reply（恢复 ask 挂起） ──
+  app.post('/reply', async (req, reply) => {
+    const body = req.body as { sessionId?: string; answer?: string };
+
+    if (!body.sessionId || typeof body.answer !== 'string') {
+      return reply.status(400).send({ error: '缺少 sessionId / answer' });
+    }
+
+    const runner = activeRunners.get(body.sessionId);
+    if (!runner) {
+      return reply.status(404).send({ error: '会话不存在或已结束' });
+    }
+    if (!runner.isSuspended()) {
+      return reply.status(409).send({ error: '会话未处于挂起状态' });
+    }
+
+    // SSE 流式响应（resume 后 agent 继续执行）
+    reply.hijack();
+    const raw = reply.raw;
+    initSSE(raw);
+
+    runner.resume(body.answer, (ev) => {
+      try { pushSSE(raw, ev); } catch { runner.abort(); }
+    }).then(() => {
+      try { raw.end(); } catch {}
+    }).catch((e) => {
+      try {
+        pushSSE(raw, { type: 'error', message: (e as Error).message });
+        raw.end();
+      } catch {}
+    });
+  });
 }

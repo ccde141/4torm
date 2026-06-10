@@ -269,6 +269,21 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
       ctx.setMessages([...ctx.allMessages]);
       break;
     }
+    case 'ask': {
+      // agent 提出问题，等待人类回复
+      const askMsg: ChatMessage = {
+        id: ctx.generateMessageIdFn(), role: 'assistant',
+        content: ev.question,
+        timestamp: new Date().toISOString(), agentId: ctx.agent.id,
+        ask: { question: ev.question, options: ev.options, answered: false },
+      };
+      // 移除空的 assistant 占位消息，插入 askMsg
+      const msgs = ctx.allMessages.filter(m => m.id !== ctx.assistantMsgId);
+      msgs.push(askMsg);
+      ctx.setAllMessages(msgs);
+      ctx.setMessages([...msgs]);
+      break;
+    }
     case 'error': {
       const errMsg = ctx.streamContent || `(错误: ${ev.message})`;
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? { ...m, content: errMsg } : m));

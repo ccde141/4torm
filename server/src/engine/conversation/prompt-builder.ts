@@ -114,7 +114,10 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   // 3. delegate 说明（沙箱说明跟着母 agent 级别）
   parts.push(buildDelegateSection(opts.sandboxLevel));
 
-  // 4. 「基地 + 沙箱」段
+  // 4. ask 说明（向人类提问）
+  parts.push(buildAskSection());
+
+  // 5. 「基地 + 沙箱」段
   parts.push(buildSandboxSection({
     workspaceAbs: opts.workspaceAbs,
     projectDir: opts.projectDir,
@@ -122,7 +125,7 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
     workspaceLabel: '你的工作区（专属）',
   }));
 
-  // 5. 记忆注入
+  // 6. 记忆注入
   if (opts.userMessage && MEMORY_TRIGGERS.test(opts.userMessage)) {
     const memPath = path.join(opts.dataDir, 'agents', opts.agentId, '.workspace', 'MEMORY.md');
     try {
@@ -188,4 +191,21 @@ function buildOutputProtocol(tools: ToolDef[]): string {
 ## 可用工具
 
 ${toolList}`;
+}
+
+/** ask 虚拟工具说明（向人类提问） */
+function buildAskSection(): string {
+  return `
+
+### ask
+  描述: 向用户提出问题，等待回复后继续。适用于需要用户确认方向、选择方案、或补充关键信息时。
+  参数:
+    question: string [必填] — 你要问的问题（简明扼要）
+    options: string [可选] — JSON 数组，预设选项供用户快速选择，如 '["方案A","方案B"]'
+
+  注意：
+  - 仅在信息不足、存在歧义、或需要用户决策时使用。不要用来确认你已经能推断的事。
+  - 用户可能选择预设选项，也可能自由输入完全不同的答案。
+  - 每次只问一个问题，不要在一轮中多次调用 ask。
+  - 提供 options 时，确保选项互斥且覆盖合理范围。`;
 }

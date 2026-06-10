@@ -18,7 +18,7 @@ const MAX_TURNS = 200;
 /** 单次 LLM 输出被截断时最多续写次数 */
 const MAX_CONTINUATIONS = 5;
 /** 无 action 无 answer 时强制再问的最大次数 */
-const MAX_NUDGES = 2;
+const MAX_NUDGES = 10;
 /** 连续工具调用轮次达到此值时触发 delegate 提醒 */
 const DELEGATE_NUDGE_THRESHOLD = 7;
 /** LLM 调用硬超时（毫秒） */
@@ -96,6 +96,28 @@ export interface ReActLoopResult {
   turns: number;
   /** 累计 token 用量（所有 LLM 调用之和） */
   usage?: TokenUsage;
+  /** 是否因 ask 挂起（需要人类回复后 resume） */
+  suspended?: {
+    question: string;
+    options?: string[];
+  };
+}
+
+// ── 挂起信号 ──────────────────────────────────────────────────────
+
+/**
+ * ToolCaller 抛出此异常时，react-loop 中断循环并返回 suspended 状态。
+ * 调用方在 ToolCaller.call() 内部 throw new SuspendSignal(question, options)。
+ */
+export class SuspendSignal extends Error {
+  readonly question: string;
+  readonly options?: string[];
+  constructor(question: string, options?: string[]) {
+    super('__suspend__');
+    this.name = 'SuspendSignal';
+    this.question = question;
+    this.options = options;
+  }
 }
 
 // ── 解析工具 ──────────────────────────────────────────────────────
@@ -175,24 +197,6 @@ export function isLikelyTruncated(text: string): boolean {
  *   2. 已裁切，需要完整内容时如何精化查询
  */
 function trimToolResult(result: string): string {
-  const lines = result.split('\n');
-  const totalChars = result.length;
-  const totalLines = lines.length;
-
-  // 行数过多 → 按行裁
-  if (totalLines > TOOL_RESULT_LINE_THRESHOLD) {
-    const head = lines.slice(0, TOOL_RESULT_HEAD_LINES).join('\n');
-    const tail = lines.slice(-TOOL_RESULT_TAIL_LINES).join('\n');
-    const omittedLines = totalLines - TOOL_RESULT_HEAD_LINES - TOOL_RESULT_TAIL_LINES;
-    return `${head}\n\n[... 省略 ${omittedLines} 行 / 共 ${totalLines} 行、${totalChars} 字符。如需完整内容，请缩小查询范围（如指定子目录、用 grep 过滤、或分段 read_file）。下面是末尾片段：]\n\n${tail}`;
-  }
-
-  // 字符数过多 → 按字符裁
-  if (totalChars > TOOL_RESULT_TRIM_THRESHOLD) {
-    const omittedChars = totalChars - TOOL_RESULT_HEAD - TOOL_RESULT_TAIL;
-    return `${result.slice(0, TOOL_RESULT_HEAD)}\n\n[... 省略中间 ${omittedChars} 字符 / 共 ${totalChars} 字符。如需完整内容，请精化查询：read_file 可分段读、run_command 可加 head/tail/grep 过滤。下面是末尾片段：]\n\n${result.slice(-TOOL_RESULT_TAIL)}`;
-  }
-
   return result;
 }
 
@@ -363,6 +367,17 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
       try {
         result = await tools.call(action.tool, action.args);
       } catch (e) {
+        if (e instanceof SuspendSignal) {
+          // ask 工具触发挂起：返回 suspended 状态，messages 保留当前快照
+          return {
+            content: '',
+            rawContent: reply,
+            toolCalls: allToolCalls,
+            turns: turn + 1,
+            usage: latestUsage,
+            suspended: { question: e.question, options: e.options },
+          };
+        }
         result = `错误：${(e as Error).message}`;
       } finally {
         if (toolHB) clearInterval(toolHB);
