@@ -169,29 +169,21 @@ export class McpStdioClient extends EventEmitter {
   private send(msg: object): void {
     if (!this.proc?.stdin?.writable) throw new Error('MCP stdin not writable');
     const json = JSON.stringify(msg);
-    this.proc.stdin.write(`Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`);
+    this.proc.stdin.write(json + '\n');
   }
 
   private onData(chunk: Buffer): void {
     this.buffer += chunk.toString();
     while (true) {
-      const headerEnd = this.buffer.indexOf('\r\n\r\n');
-      if (headerEnd === -1) break;
-      const header = this.buffer.slice(0, headerEnd);
-      const match = /Content-Length:\s*(\d+)/i.exec(header);
-      if (!match) {
-        this.buffer = this.buffer.slice(headerEnd + 4);
-        continue;
-      }
-      const len = parseInt(match[1], 10);
-      const bodyStart = headerEnd + 4;
-      if (this.buffer.length < bodyStart + len) break; // 等更多数据
-      const body = this.buffer.slice(bodyStart, bodyStart + len);
-      this.buffer = this.buffer.slice(bodyStart + len);
+      const newlineIdx = this.buffer.indexOf('\n');
+      if (newlineIdx === -1) break;
+      const line = this.buffer.slice(0, newlineIdx).replace(/\r$/, '').trim();
+      this.buffer = this.buffer.slice(newlineIdx + 1);
+      if (!line) continue;
       try {
-        const msg = JSON.parse(body) as JsonRpcResponse;
+        const msg = JSON.parse(line);
         this.handleMessage(msg);
-      } catch { /* 跳过无法解析的消息 */ }
+      } catch { /* skip non-JSON lines */ }
     }
   }
 
