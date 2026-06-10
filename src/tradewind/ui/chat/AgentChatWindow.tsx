@@ -18,6 +18,7 @@ import { parseStructuredContent } from './parser';
 import StructuredMessage from './StructuredMessage';
 import ToolCallMessage from './ToolCallMessage';
 import DelegateCard from './DelegateCard';
+import ContactCard from './ContactCard';
 import type { ChatMessage } from '../../../types';
 
 interface AgentChatWindowProps {
@@ -38,6 +39,8 @@ type StreamEvent =
   | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
   | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
+  | { type: 'contact-start'; target: string }
+  | { type: 'contact-done'; target: string; result: string; ok: boolean }
   | { type: 'answer'; content: string; rawContent: string }
   | { type: 'error'; message: string }
   | { type: 'done' };
@@ -52,7 +55,6 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
   const [ready, setReady] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
   const msgIdRef = useRef(0);
   const streamRef = useRef<{ id: string; content: string } | null>(null);
 
@@ -63,6 +65,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
     return fetch(`/api/tradewind/chat/${nodeId}/messages`)
       .then(r => r.json())
       .then((d: { messages: Array<{ role: string; content: string }> }) => {
+        console.log(`[AgentChat] loadMessages: ${d.messages.length} msgs, roles=${d.messages.map(m => m.role).join(',')}`);
         let skippedFirst = false;
         const loaded = d.messages
           .filter(m => {
@@ -85,11 +88,13 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
   // 持久 SSE 连接（仅在消息加载完成后建立）
   useEffect(() => {
     if (!ready) return;
-    let aborted = false;
+    const abortCtrl = new AbortController();
 
     const connect = async () => {
-      const res = await fetch(`/api/tradewind/chat/${nodeId}/events`).catch(() => null);
-      if (!res || !res.ok || !res.body || aborted) return;
+      const res = await fetch(`/api/tradewind/chat/${nodeId}/events`, {
+        signal: abortCtrl.signal,
+      }).catch(() => null);
+      if (!res || !res.ok || !res.body) return;
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -98,14 +103,14 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
       const handleEvent = (ev: StreamEvent) => {
         switch (ev.type) {
           case 'connected':
+            console.log(`[AgentChat] SSE connected: busy=${(ev as any).busy}`);
             if (ev.busy) {
               const id = nextId();
               streamRef.current = { id, content: '' };
               setMessages(prev => [...prev, { id, role: 'assistant', content: '' }]);
               setStreaming(true);
-            } else {
-              loadMessages();
             }
+            // busy=false 时不额外 reload——初始化时已加载过，避免覆盖
             break;
 
           case 'token': {
@@ -237,6 +242,38 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
             });
             break;
 
+          case 'contact-start':
+            setMessages(prev => {
+              const contactMsg: ChatMessage = {
+                id: nextId(), role: 'assistant', content: '',
+                timestamp: new Date().toISOString(),
+                toolCall: { toolName: 'contact', params: { target: ev.target }, status: 'pending' },
+              };
+              const msgs = [...prev];
+              const placeholderId = streamRef.current?.id;
+              if (placeholderId) {
+                const idx = msgs.findIndex(m => m.id === placeholderId);
+                msgs.splice(idx, 0, contactMsg);
+              } else {
+                msgs.push(contactMsg);
+              }
+              return msgs;
+            });
+            break;
+
+          case 'contact-done':
+            setMessages(prev => {
+              const msgs = [...prev];
+              for (let i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i].toolCall?.toolName === 'contact' && msgs[i].toolCall?.status === 'pending') {
+                  msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, result: ev.result, status: ev.ok ? 'success' : 'error' } };
+                  break;
+                }
+              }
+              return msgs;
+            });
+            break;
+
           case 'answer':
             setMessages(prev => prev.map(m =>
               streamRef.current && m.id === streamRef.current.id
@@ -250,9 +287,9 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
             break;
 
           case 'done':
+            console.log('[AgentChat] SSE done');
             streamRef.current = null;
             setStreaming(false);
-            loadMessages();
             break;
         }
       };
@@ -281,7 +318,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
 
     connect();
 
-    return () => { aborted = true; };
+    return () => { abortCtrl.abort(); };
   }, [ready, nodeId, loadMessages]);
 
   // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
@@ -301,14 +338,10 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
     const userMsg: ChatMessage = { id: nextId(), role: 'user', content: text };
     setMessages(prev => [...prev, userMsg]);
 
-    const abort = new AbortController();
-    abortRef.current = abort;
-
     fetch(`/api/tradewind/chat/${nodeId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text }),
-      signal: abort.signal,
     })
       .then(r => {
         if (!r.ok) {
@@ -317,8 +350,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
           });
         }
       })
-      .catch(() => {})
-      .finally(() => { abortRef.current = null; });
+      .catch(() => {});
   }, [input, streaming, nodeId]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -328,7 +360,9 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
     }
   };
 
-  const stop = () => abortRef.current?.abort();
+  const stop = () => {
+    fetch(`/api/tradewind/chat/${nodeId}/abort`, { method: 'POST' }).catch(() => {});
+  };
 
   // Portal 渲染到 body
   return createPortal(
@@ -343,6 +377,9 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
             if (msg.toolCall) {
               if (msg.toolCall.toolName === 'delegate') {
                 return <DelegateCard key={msg.id} toolCall={msg.toolCall as any} content={msg.content} />;
+              }
+              if (msg.toolCall.toolName === 'contact') {
+                return <ContactCard key={msg.id} toolCall={msg.toolCall} />;
               }
               return <ToolCallMessage key={msg.id} toolCall={msg.toolCall} />;
             }

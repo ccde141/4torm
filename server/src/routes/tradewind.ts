@@ -307,7 +307,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
 
   // ── Agent 节点对话（SSE） ───────────────────────────────────────
 
-  /** POST /chat/:nodeId — 人类向 Agent 节点发消息（SSE 流式返回） */
+  /** POST /chat/:nodeId — 人类向 Agent 节点发消息 */
   app.post('/chat/:nodeId', async (req, reply) => {
     const { nodeId } = req.params as { nodeId: string };
     const { message } = req.body as { message: string };
@@ -324,27 +324,8 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(409).send({ error: '节点正在处理上一条消息，请稍后再试' });
     }
 
-    // SSE 流式响应
-    reply.hijack();
-    const raw = reply.raw;
-    raw.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-    raw.write('\n');
-
     runner.push({ source: 'human', content: message });
-
-    const listener = (ev: any) => {
-      try { raw.write(`data: ${JSON.stringify(ev)}\n\n`); } catch {}
-      if (ev.type === 'done' || ev.type === 'error') {
-        runner.removeEventListener(listener);
-        try { raw.end(); } catch {}
-      }
-    };
-    runner.addEventListener(listener);
+    return reply.send({ ok: true });
   });
 
   /** GET /chat/:nodeId/events — Agent 节点持久 SSE 事件流（信封/人类消息处理均推送） */
@@ -386,10 +367,11 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     if (runner) {
       return reply.send({ messages: runner.getMessages() });
     }
-    // fallback：从磁盘读取持久化的 messages
+    // fallback：从磁盘读取持久化的 messages（runDir = runs/{workflowId}/{executionId}）
     const execId = activeOrchestrator?.getExecutionId?.();
-    if (execId) {
-      const msgPath = path.join(dataDir, 'tradewind', 'runs', execId, 'nodes', nodeId, 'messages.json');
+    const wfId = activeOrchestrator?.getWorkflowId?.();
+    if (execId && wfId) {
+      const msgPath = path.join(dataDir, 'tradewind', 'runs', wfId, execId, 'nodes', nodeId, 'messages.json');
       try {
         const raw = await fs.readFile(msgPath, 'utf-8');
         return reply.send({ messages: JSON.parse(raw) });
@@ -406,6 +388,20 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: '节点尚未激活' });
     }
     return reply.send({ busy: runner.isBusy() });
+  });
+
+  /** POST /chat/:nodeId/abort — 中止 Agent 节点当前轮次 */
+  app.post('/chat/:nodeId/abort', async (req, reply) => {
+    const { nodeId } = req.params as { nodeId: string };
+    const runner = activeNodeRunners.get(nodeId);
+    if (!runner) {
+      return reply.status(404).send({ error: '节点尚未激活' });
+    }
+    if (!runner.isBusy()) {
+      return reply.status(409).send({ error: '节点当前没有在处理消息' });
+    }
+    runner.abortRound();
+    return reply.send({ aborted: true });
   });
 
   // ── Meeting 端点 ──────────────────────────────────────────────

@@ -92,6 +92,7 @@ export class NodeRunner {
   private processing = false;
   private readonly eventListeners = new Set<(ev: NodeRunnerEvent) => void>();
   private readonly compactState: CompactState = { disabled: false, archiveSeq: 0 };
+  private roundAbort: AbortController | null = null;
 
   /** 当前轮累积事件 buffer（不管有没有 listener 都攒，窗口重开时 replay） */
   private currentRoundBuffer: NodeRunnerEvent[] = [];
@@ -103,6 +104,11 @@ export class NodeRunner {
 
   isBusy(): boolean { return this.busy; }
   getMessages(): readonly ContextMessage[] { return this.messages; }
+
+  /** 中止当前轮次（人类点停止按钮） */
+  abortRound(): void {
+    this.roundAbort?.abort();
+  }
 
   /** 强制落盘当前 messages（供 orchestrator stop 时主动调用） */
   async flush(): Promise<void> { await this.persist(); }
@@ -156,6 +162,7 @@ export class NodeRunner {
   private async handle(msg: QueuedMessage): Promise<void> {
     this.busy = true;
     this.currentRoundBuffer = [];
+    this.roundAbort = new AbortController();
     const emit = (ev: NodeRunnerEvent) => {
       this.currentRoundBuffer.push(ev);
       for (const fn of this.eventListeners) fn(ev);
@@ -247,6 +254,18 @@ export class NodeRunner {
     const { dataDir, model, temperature, signal } = this.opts;
     const toolDefs = await loadAgentToolDefs(dataDir, this.opts.toolNames, this.opts.skillIds);
 
+    // 组合信号：orchestrator 全局 abort 或本轮 abort 均可中断
+    const roundSignal = this.roundAbort!.signal;
+    const combinedAbort = new AbortController();
+    const onGlobal = () => combinedAbort.abort();
+    const onRound = () => combinedAbort.abort();
+    signal.addEventListener('abort', onGlobal, { once: true });
+    roundSignal.addEventListener('abort', onRound, { once: true });
+    const cleanup = () => {
+      signal.removeEventListener('abort', onGlobal);
+      roundSignal.removeEventListener('abort', onRound);
+    };
+
     const llm: LLMCaller = {
       async call(msgs, _options, onChunk, sig) {
         return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig });
@@ -274,15 +293,19 @@ export class NodeRunner {
       },
     };
 
-    return runReActLoop({
-      messages: [...this.messages],
-      llm,
-      tools: toolDefs.length > 0 ? toolCaller : undefined,
-      onEvent: (ev) => {
-        if (ev.type === 'token') emit({ type: 'token', content: ev.chunk });
-      },
-      signal,
-    });
+    try {
+      return await runReActLoop({
+        messages: [...this.messages],
+        llm,
+        tools: toolDefs.length > 0 ? toolCaller : undefined,
+        onEvent: (ev) => {
+          if (ev.type === 'token') emit({ type: 'token', content: ev.chunk });
+        },
+        signal: combinedAbort.signal,
+      });
+    } finally {
+      cleanup();
+    }
   }
 
   /** 执行普通工具 */
