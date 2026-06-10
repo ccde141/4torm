@@ -1670,96 +1670,43 @@
 }
  
  
-/* ─── Human Gate 节点 ─── */
-/* 关键：去掉基础 .tw-node 的矩形背景/边框/padding，让菱形 ::before 接管视觉 */
-.tw-node--gate {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  padding: 0;
-  min-width: 0;
-  width: 130px;
-  height: 130px;
-  backdrop-filter: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  cursor: pointer;
-}
-.tw-node--gate:hover {
-  background: transparent !important;
-  border: none !important;
-  transform: none;
-  box-shadow: none !important;
-}
-.tw-node--gate::before {
-  content: '';
-  position: absolute;
-  inset: 18px;
-  background: rgba(234, 179, 8, 0.14);
-  border: 2px solid #eab308;
-  transform: rotate(45deg);
-  border-radius: 10px;
-  transition: all 0.2s;
-  backdrop-filter: blur(12px);
-}
-.tw-node--gate:hover::before {
-  background: rgba(234, 179, 8, 0.24);
-  border-color: #facc15;
-}
-.tw-node--gate.tw-node--selected::before {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px var(--color-accent-subtle), var(--shadow-glow);
-}
-.tw-node__gate-inner {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 0 8px;
-  text-align: center;
-  pointer-events: none;
-}
+/* ─── Human Gate 节点（暂停点） ─── */
+/* 普通矩形节点，金黄色边框，跟其他节点同构 */
+.tw-node--gate { border-color: rgba(234, 179, 8, 0.3); }
+.tw-node--gate:hover { border-color: rgba(234, 179, 8, 0.5); }
+
 .tw-node--gate .tw-node__icon {
   font-size: 22px;
   color: #eab308;
-  line-height: 1;
-}
-.tw-node--gate .tw-node__label {
-  font-size: var(--text-xs);
-  color: var(--color-text-primary);
-  font-weight: var(--font-medium);
-  white-space: nowrap;
 }
 .tw-node--gate .tw-node__sub {
-  font-size: 10px;
-  color: #ef4444;
+  color: #eab308;
   font-weight: var(--font-medium);
 }
 
-/* waiting 时红光闪烁（光环作用在菱形 ::before 上，整个节点容器 filter） */
+/* waiting 时琥珀色脉冲闪烁（信封暂停，等待人类介入） */
 @keyframes tw-gate-waiting-pulse {
   0%, 100% {
-    filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.6)) drop-shadow(0 0 12px rgba(239, 68, 68, 0.4));
+    box-shadow:
+      0 0 0 2px rgba(245, 158, 11, 0.8),
+      0 0 20px 4px rgba(245, 158, 11, 0.5);
   }
   50% {
-    filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.95)) drop-shadow(0 0 22px rgba(239, 68, 68, 0.7));
+    box-shadow:
+      0 0 0 4px rgba(245, 158, 11, 0.5),
+      0 0 36px 8px rgba(245, 158, 11, 0.8);
   }
 }
-.tw-node--gate-waiting::before {
-  background: rgba(239, 68, 68, 0.22);
-  border-color: #ef4444;
-}
 .tw-node--gate-waiting {
-  animation: tw-gate-waiting-pulse 1.1s ease-in-out infinite;
+  animation: tw-gate-waiting-pulse 1.2s ease-in-out infinite;
 }
 
-/* Handle 定位：菱形左右尖角处（节点容器 130x130，菱形居中带 18 inset） */
 .tw-node--gate .tw-handle {
-  z-index: 2;
+  border-color: #eab308 !important;
+  box-shadow: 0 0 6px rgba(234, 179, 8, 0.5), 0 0 14px rgba(234, 179, 8, 0.2) !important;
+}
+.tw-node--gate .tw-handle:hover {
+  box-shadow: 0 0 10px rgba(234, 179, 8, 0.7), 0 0 22px rgba(234, 179, 8, 0.35) !important;
 }
 
 /* ─── Human Gate 弹窗 ─── */
@@ -1809,38 +1756,24 @@
   color: var(--color-text-secondary);
   font-weight: var(--font-medium);
   margin-bottom: 6px;
-  margin-top: 14px;
 }
-.tw-gate-panel__section-title:first-child { margin-top: 0; }
-.tw-gate-panel__envelope {
-  margin: 0;
-  padding: 12px 14px;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 280px;
-  overflow-y: auto;
-  color: var(--color-text-primary);
-}
-.tw-gate-panel__comment {
+.tw-gate-panel__editor {
   width: 100%;
   background: rgba(255,255,255,0.04);
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  padding: 10px 12px;
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
   color: var(--color-text-primary);
   resize: vertical;
+  min-height: 200px;
 }
-.tw-gate-panel__comment:focus {
+.tw-gate-panel__editor:focus {
   outline: none;
-  border-color: #ef4444;
+  border-color: #eab308;
+  box-shadow: 0 0 0 2px rgba(234, 179, 8, 0.15);
 }
 .tw-gate-panel__error {
   margin-top: 10px;
@@ -1867,23 +1800,13 @@
   transition: all 0.15s;
 }
 .tw-gate-panel__btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.tw-gate-panel__btn--rework {
-  background: rgba(239,68,68,0.12);
-  border-color: rgba(239,68,68,0.5);
-  color: #fca5a5;
+.tw-gate-panel__btn--continue {
+  background: rgba(234, 179, 8, 0.15);
+  border-color: rgba(234, 179, 8, 0.5);
+  color: #fbbf24;
 }
-.tw-gate-panel__btn--rework:not(:disabled):hover {
-  background: rgba(239,68,68,0.22);
-  border-color: #ef4444;
-  color: #fff;
-}
-.tw-gate-panel__btn--approve {
-  background: rgba(34,197,94,0.15);
-  border-color: rgba(34,197,94,0.5);
-  color: #86efac;
-}
-.tw-gate-panel__btn--approve:not(:disabled):hover {
-  background: rgba(34,197,94,0.25);
-  border-color: #22c55e;
+.tw-gate-panel__btn--continue:not(:disabled):hover {
+  background: rgba(234, 179, 8, 0.25);
+  border-color: #eab308;
   color: #fff;
 }

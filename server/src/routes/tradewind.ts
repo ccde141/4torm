@@ -29,6 +29,7 @@ import { NoteExecutor } from '../engine/tradewind/nodes/note';
 import { HumanGateExecutor, activeHumanGates } from '../engine/tradewind/nodes/human-gate';
 import { handleSpeak, handleChair, handleEnd } from '../engine/tradewind/execution/meeting-handlers';
 import { compactMeetingIfNeeded, MEETING_COMPACT_THRESHOLD } from '../engine/tradewind/execution/context-compactor';
+import { addClient, removeClient, broadcastToMeeting, clearClients } from '../engine/tradewind/execution/meeting-broadcast';
 import { getEnvelopePending } from '../engine/tradewind/foundation/node-status-store';
 import { getMeetingsDir, getMeetingFileName } from '../engine/tradewind/foundation/archive-paths';
 import { validateWorkflow } from '../engine/tradewind/foundation/workflow-validator';
@@ -306,7 +307,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
 
   // ── Agent 节点对话（SSE） ───────────────────────────────────────
 
-  /** POST /chat/:nodeId — 人类向 Agent 节点发消息（SSE 流式返回） */
+  /** POST /chat/:nodeId — 人类向 Agent 节点发消息 */
   app.post('/chat/:nodeId', async (req, reply) => {
     const { nodeId } = req.params as { nodeId: string };
     const { message } = req.body as { message: string };
@@ -323,7 +324,18 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(409).send({ error: '节点正在处理上一条消息，请稍后再试' });
     }
 
-    // SSE 流式响应
+    runner.push({ source: 'human', content: message });
+    return reply.send({ ok: true });
+  });
+
+  /** GET /chat/:nodeId/events — Agent 节点持久 SSE 事件流（信封/人类消息处理均推送） */
+  app.get('/chat/:nodeId/events', async (req, reply) => {
+    const { nodeId } = req.params as { nodeId: string };
+    const runner = activeNodeRunners.get(nodeId);
+    if (!runner) {
+      return reply.status(404).send({ error: '节点尚未激活' });
+    }
+
     reply.hijack();
     const raw = reply.raw;
     raw.writeHead(200, {
@@ -332,17 +344,20 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
-    raw.write('\n');
 
-    runner.setEventListener((ev) => {
+    // 发送连接确认 + 当前状态
+    const connected = { type: 'connected', busy: runner.isBusy() };
+    raw.write(`data: ${JSON.stringify(connected)}\n\n`);
+
+    const listener = (ev: any) => {
       try { raw.write(`data: ${JSON.stringify(ev)}\n\n`); } catch {}
-      if (ev.type === 'done' || ev.type === 'error') {
-        runner.setEventListener(null);
-        try { raw.end(); } catch {}
-      }
-    });
+    };
+    runner.addEventListener(listener);
 
-    runner.push({ source: 'human', content: message });
+    // 客户端断开时清理
+    req.raw.on('close', () => {
+      runner.removeEventListener(listener);
+    });
   });
 
   /** GET /chat/:nodeId/messages — 获取节点对话历史 */
@@ -352,10 +367,11 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     if (runner) {
       return reply.send({ messages: runner.getMessages() });
     }
-    // fallback：从磁盘读取持久化的 messages
+    // fallback：从磁盘读取持久化的 messages（runDir = runs/{workflowId}/{executionId}）
     const execId = activeOrchestrator?.getExecutionId?.();
-    if (execId) {
-      const msgPath = path.join(dataDir, 'tradewind', 'runs', execId, 'nodes', nodeId, 'messages.json');
+    const wfId = activeOrchestrator?.getWorkflowId?.();
+    if (execId && wfId) {
+      const msgPath = path.join(dataDir, 'tradewind', 'runs', wfId, execId, 'nodes', nodeId, 'messages.json');
       try {
         const raw = await fs.readFile(msgPath, 'utf-8');
         return reply.send({ messages: JSON.parse(raw) });
@@ -374,7 +390,62 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ busy: runner.isBusy() });
   });
 
+  /** POST /chat/:nodeId/abort — 中止 Agent 节点当前轮次 */
+  app.post('/chat/:nodeId/abort', async (req, reply) => {
+    const { nodeId } = req.params as { nodeId: string };
+    const runner = activeNodeRunners.get(nodeId);
+    if (!runner) {
+      return reply.status(404).send({ error: '节点尚未激活' });
+    }
+    if (!runner.isBusy()) {
+      return reply.status(409).send({ error: '节点当前没有在处理消息' });
+    }
+    runner.abortRound();
+    return reply.send({ aborted: true });
+  });
+
   // ── Meeting 端点 ──────────────────────────────────────────────
+
+  /** GET /meeting/:nodeId/events — 会议室统一 SSE 事件流（持久连接） */
+  app.get('/meeting/:nodeId/events', async (req, reply) => {
+    const { nodeId } = req.params as { nodeId: string };
+    const meeting = activeMeetings.get(nodeId);
+    if (!meeting) return reply.status(404).send({ error: 'No active meeting' });
+
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    raw.write('\n');
+
+    addClient(nodeId, raw);
+
+    // 发送当前快照事件——仅发给刚连上的 client，不广播给其他已连接的标签页
+    const snapshot = {
+      type: 'connected' as const,
+      phase: meeting.session.phase,
+      round: meeting.session.round,
+      messages: meeting.session.publicMessages,
+      chairMessages: meeting.session.chairMessages,
+      participants: meeting.session.participants,
+      configuredParticipants: meeting.configuredParticipants,
+    };
+    try { raw.write(`data: ${JSON.stringify(snapshot)}\n\n`); } catch {}
+
+    // SSE 心跳保活（15s 间隔）
+    const hb = setInterval(() => {
+      try { raw.write(': heartbeat\n\n'); } catch { clearInterval(hb); }
+    }, 15_000);
+
+    req.raw.on('close', () => {
+      clearInterval(hb);
+      removeClient(nodeId, raw);
+    });
+  });
 
   /** POST /meeting/:nodeId/speak — 人类发言（SSE 流式） */
   app.post('/meeting/:nodeId/speak', async (req, reply) => {
@@ -414,6 +485,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       signal: roundAbort.signal,
       onEvent: (ev) => {
         try { raw.write(`data: ${JSON.stringify(ev)}\n\n`); } catch {}
+        broadcastToMeeting(nodeId, ev);
       },
     }).then(async (speakPromptTokens) => {
       meeting.roundAbort = null;
@@ -444,22 +516,29 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
           threshold: MEETING_COMPACT_THRESHOLD,
           onEvent: (ev) => {
             try { raw.write(`data: ${JSON.stringify(ev)}\n\n`); } catch {}
+            broadcastToMeeting(nodeId, ev);
           },
         },
+        meeting.session.participants.map(p => p.label),
+        meeting.teamRoster,
       );
       meeting.session.busy = false;
+      const roundDoneEvent = { type: 'round-done' as const, messages: meeting.session.publicMessages, compacted };
       try {
-        raw.write(`data: ${JSON.stringify({ type: 'round-done', messages: meeting.session.publicMessages, compacted })}\n\n`);
+        raw.write(`data: ${JSON.stringify(roundDoneEvent)}\n\n`);
         raw.end();
       } catch {}
+      broadcastToMeeting(nodeId, roundDoneEvent);
     }).catch((e) => {
       meeting.roundAbort = null;
       meeting.signal.removeEventListener('abort', onGlobalAbort);
       clearInterval(hb);
+      const errEvent = { type: 'error' as const, message: (e as Error).message };
       try {
-        raw.write(`data: ${JSON.stringify({ type: 'error', message: (e as Error).message })}\n\n`);
+        raw.write(`data: ${JSON.stringify(errEvent)}\n\n`);
         raw.end();
       } catch {}
+      broadcastToMeeting(nodeId, errEvent);
     });
   });
 
@@ -481,7 +560,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     const { message } = req.body as { message: string };
     const meeting = activeMeetings.get(nodeId);
     if (!meeting) return reply.status(404).send({ error: 'No active meeting' });
-    if (meeting.session.phase !== 'discussion') return reply.status(409).send({ error: '会议尚未进入讨论阶段' });
+    if (meeting.session.phase === 'opening') return reply.status(409).send({ error: '会议尚未进入讨论阶段' });
 
     reply.hijack();
     const raw = reply.raw;
@@ -503,19 +582,24 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       signal: meeting.signal,
       onEvent: (ev) => {
         try { raw.write(`data: ${JSON.stringify(ev)}\n\n`); } catch {}
+        broadcastToMeeting(nodeId, ev);
       },
     }).then(() => {
       clearInterval(hb);
+      const chairDoneEvent = { type: 'done', messages: meeting.session.chairMessages };
       try {
-        raw.write(`data: ${JSON.stringify({ type: 'done', messages: meeting.session.chairMessages })}\n\n`);
+        raw.write(`data: ${JSON.stringify(chairDoneEvent)}\n\n`);
         raw.end();
       } catch {}
+      broadcastToMeeting(nodeId, { type: 'chair-done', content: '' });
     }).catch((e) => {
       clearInterval(hb);
+      const errEvent = { type: 'error' as const, message: (e as Error).message };
       try {
-        raw.write(`data: ${JSON.stringify({ type: 'error', message: (e as Error).message })}\n\n`);
+        raw.write(`data: ${JSON.stringify(errEvent)}\n\n`);
         raw.end();
       } catch {}
+      broadcastToMeeting(nodeId, errEvent);
     });
   });
 
@@ -527,11 +611,35 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     if (meeting.session.phase !== 'discussion') return reply.status(409).send({ error: '会议尚未进入讨论阶段' });
     if (meeting.session.busy) return reply.status(409).send({ error: 'Round in progress' });
 
+    broadcastToMeeting(nodeId, { type: 'phase-change', phase: 'ending' });
+
     const result = await handleEnd({
       dataDir: meeting.dataDir,
       session: meeting.session,
+      teamRoster: meeting.teamRoster,
       signal: meeting.signal,
+      onEvent: (ev) => {
+        if (ev.type === 'chair-token') {
+          broadcastToMeeting(nodeId, { type: 'summary-chunk', chunk: ev.chunk });
+        } else if (ev.type === 'minutes-done') {
+          broadcastToMeeting(nodeId, { type: 'summary-done', minutes: ev.content });
+        }
+      },
     });
+
+    // 纪要写入 publicMessages（面板可见历史）
+    meeting.session.publicMessages.push({
+      speaker: '[会长总结]',
+      content: result.minutes,
+      timestamp: Date.now(),
+    });
+
+    // 切为 ended：公共发言锁死，会长私聊继续可用，面板可重开查看历史
+    meeting.session.phase = 'ended';
+    broadcastToMeeting(nodeId, { type: 'phase-change', phase: 'ended' });
+
+    // resolve → executor 继续执行纪要广播 + sendHandoff
+    // 不 clearClients、不删 activeMeetings——直到 orchestrator 清理
     meeting.resolve(result);
     return reply.send({ minutes: result.minutes });
   });

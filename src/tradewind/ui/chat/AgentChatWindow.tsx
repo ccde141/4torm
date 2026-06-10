@@ -5,16 +5,20 @@
  * 精简版：无会话列表、无 Agent 切换、无工具确认弹窗。
  * 通过 React Portal 渲染到 body 层级（避免 xyflow z-index 冲突）。
  *
+ * v2 变更：持久 SSE 连接替代单次 POST SSE。
+ * 打开面板即建立 GET /chat/:nodeId/events 连接，
+ * 信封/人类消息触发的 ReAct 均实时流式推送。
+ *
  * 信风独立副本，可自主演进。
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { streamChat, type ChatStreamEvent } from './stream-client';
-import { parseStructuredContent, stripTags } from './parser';
+import { parseStructuredContent } from './parser';
 import StructuredMessage from './StructuredMessage';
 import ToolCallMessage from './ToolCallMessage';
 import DelegateCard from './DelegateCard';
+import ContactCard from './ContactCard';
 import type { ChatMessage } from '../../../types';
 
 interface AgentChatWindowProps {
@@ -23,6 +27,24 @@ interface AgentChatWindowProps {
   onClose: () => void;
 }
 
+// ── SSE 连接事件类型 ───────────────────────────────────────────────
+
+type StreamEvent =
+  | { type: 'connected'; busy: boolean }
+  | { type: 'token'; content: string }
+  | { type: 'tool-call'; tool: string; args: Record<string, string> }
+  | { type: 'tool-result'; tool: string; result: string; ok: boolean }
+  | { type: 'delegate-start'; task: string; delegateId: string }
+  | { type: 'delegate-token'; delegateId: string; content: string }
+  | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
+  | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
+  | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
+  | { type: 'contact-start'; target: string }
+  | { type: 'contact-done'; target: string; result: string; ok: boolean }
+  | { type: 'answer'; content: string; rawContent: string }
+  | { type: 'error'; message: string }
+  | { type: 'done' };
+
 // ── 组件 ──────────────────────────────────────────────────────────
 
 export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowProps) {
@@ -30,79 +52,102 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
   const msgIdRef = useRef(0);
+  const streamRef = useRef<{ id: string; content: string } | null>(null);
 
   const nextId = () => `msg-${Date.now().toString(36)}-${(msgIdRef.current++).toString(36)}`;
 
-  // 加载历史消息
-  useEffect(() => {
-    fetch(`/api/tradewind/chat/${nodeId}/messages`)
+  // 加载历史消息（返回 Promise 供初始化序列化）
+  const loadMessages = useCallback((): Promise<void> => {
+    return fetch(`/api/tradewind/chat/${nodeId}/messages`)
       .then(r => r.json())
       .then((d: { messages: Array<{ role: string; content: string }> }) => {
+        console.log(`[AgentChat] loadMessages: ${d.messages.length} msgs, roles=${d.messages.map(m => m.role).join(',')}`);
+        let skippedFirst = false;
         const loaded = d.messages
-          .filter(m => m.role !== 'system')
-          .map(m => ({ id: nextId(), role: m.role as 'user' | 'assistant', content: m.content }));
+          .filter(m => {
+            if (m.role === 'system' && !skippedFirst) { skippedFirst = true; return false; }
+            return true;
+          })
+          .map(m => ({ id: nextId(), role: m.role as 'user' | 'assistant' | 'system', content: m.content }));
         setMessages(loaded);
       })
       .catch(() => {});
   }, [nodeId]);
 
-  // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
+  // 先加载消息，再建立 SSE 连接（避免竞态覆盖）
   useEffect(() => {
-    const el = messagesContainerRef.current;
-    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [messages]);
+    setReady(false);
+    streamRef.current = null;
+    loadMessages().then(() => setReady(true));
+  }, [loadMessages]);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
-    if (!text || streaming) return;
-    setInput('');
-    setError(null);
+  // 持久 SSE 连接（仅在消息加载完成后建立）
+  useEffect(() => {
+    if (!ready) return;
+    const abortCtrl = new AbortController();
 
-    // 追加 user 消息
-    const userMsg: ChatMessage = { id: nextId(), role: 'user', content: text };
-    setMessages(prev => [...prev, userMsg]);
+    const connect = async () => {
+      const res = await fetch(`/api/tradewind/chat/${nodeId}/events`, {
+        signal: abortCtrl.signal,
+      }).catch(() => null);
+      if (!res || !res.ok || !res.body) return;
 
-    // 创建 assistant 占位
-    const assistantId = nextId();
-    let streamContent = '';
-    setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '' }]);
-    setStreaming(true);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
 
-    const abort = new AbortController();
-    abortRef.current = abort;
-
-    await streamChat({
-      nodeId,
-      message: text,
-      signal: abort.signal,
-      onEvent: (ev) => {
+      const handleEvent = (ev: StreamEvent) => {
         switch (ev.type) {
-          case 'token':
-            streamContent += ev.content;
-            setMessages(prev => prev.map(m =>
-              m.id === assistantId ? { ...m, content: streamContent } : m
-            ));
+          case 'connected':
+            console.log(`[AgentChat] SSE connected: busy=${(ev as any).busy}`);
+            if (ev.busy) {
+              const id = nextId();
+              streamRef.current = { id, content: '' };
+              setMessages(prev => [...prev, { id, role: 'assistant', content: '' }]);
+              setStreaming(true);
+            }
+            // busy=false 时不额外 reload——初始化时已加载过，避免覆盖
             break;
+
+          case 'token': {
+            const cur = streamRef.current;
+            if (!cur) {
+              const id = nextId();
+              streamRef.current = { id, content: ev.content };
+              setMessages(prev => [...prev, { id, role: 'assistant', content: ev.content }]);
+              setStreaming(true);
+            } else {
+              cur.content += ev.content;
+              setMessages(prev => prev.map(m =>
+                m.id === cur.id ? { ...m, content: cur!.content } : m,
+              ));
+            }
+            break;
+          }
+
           case 'tool-call':
             setMessages(prev => {
-              // 插入 toolCall 消息到 assistant 占位之前
               const toolMsg: ChatMessage = {
                 id: nextId(), role: 'assistant', content: '',
                 timestamp: new Date().toISOString(),
                 toolCall: { toolName: ev.tool, params: ev.args, status: 'pending' },
               };
               const msgs = [...prev];
-              const aIdx = msgs.findIndex(m => m.id === assistantId);
-              msgs.splice(aIdx, 0, toolMsg);
+              const placeholderId = streamRef.current?.id;
+              if (placeholderId) {
+                const idx = msgs.findIndex(m => m.id === placeholderId);
+                msgs.splice(idx, 0, toolMsg);
+              } else {
+                msgs.push(toolMsg);
+              }
               return msgs;
             });
             break;
+
           case 'tool-result':
             setMessages(prev => {
               const msgs = [...prev];
@@ -115,6 +160,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
               return msgs;
             });
             break;
+
           case 'delegate-start':
             setMessages(prev => {
               const delMsg: ChatMessage = {
@@ -124,11 +170,17 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
               };
               (delMsg as any)._delegateId = ev.delegateId;
               const msgs = [...prev];
-              const aIdx = msgs.findIndex(m => m.id === assistantId);
-              msgs.splice(aIdx, 0, delMsg);
+              const placeholderId = streamRef.current?.id;
+              if (placeholderId) {
+                const idx = msgs.findIndex(m => m.id === placeholderId);
+                msgs.splice(idx, 0, delMsg);
+              } else {
+                msgs.push(delMsg);
+              }
               return msgs;
             });
             break;
+
           case 'delegate-token':
             setMessages(prev => {
               const msgs = [...prev];
@@ -141,6 +193,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
               return msgs;
             });
             break;
+
           case 'delegate-tool-call':
             setMessages(prev => {
               const msgs = [...prev];
@@ -155,13 +208,13 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
               return msgs;
             });
             break;
+
           case 'delegate-tool-result':
             setMessages(prev => {
               const msgs = [...prev];
               for (let i = msgs.length - 1; i >= 0; i--) {
                 if ((msgs[i] as any)._delegateId === ev.delegateId && msgs[i].toolCall) {
                   const steps = [...((msgs[i].toolCall as any).steps || [])];
-                  // 找最后一个匹配 tool 且 result 未填的 step
                   for (let j = steps.length - 1; j >= 0; j--) {
                     if (steps[j].tool === ev.tool && steps[j].result == null) {
                       steps[j] = { ...steps[j], result: ev.result, ok: ev.ok };
@@ -175,6 +228,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
               return msgs;
             });
             break;
+
           case 'delegate-done':
             setMessages(prev => {
               const msgs = [...prev];
@@ -187,22 +241,116 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
               return msgs;
             });
             break;
+
+          case 'contact-start':
+            setMessages(prev => {
+              const contactMsg: ChatMessage = {
+                id: nextId(), role: 'assistant', content: '',
+                timestamp: new Date().toISOString(),
+                toolCall: { toolName: 'contact', params: { target: ev.target }, status: 'pending' },
+              };
+              const msgs = [...prev];
+              const placeholderId = streamRef.current?.id;
+              if (placeholderId) {
+                const idx = msgs.findIndex(m => m.id === placeholderId);
+                msgs.splice(idx, 0, contactMsg);
+              } else {
+                msgs.push(contactMsg);
+              }
+              return msgs;
+            });
+            break;
+
+          case 'contact-done':
+            setMessages(prev => {
+              const msgs = [...prev];
+              for (let i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i].toolCall?.toolName === 'contact' && msgs[i].toolCall?.status === 'pending') {
+                  msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, result: ev.result, status: ev.ok ? 'success' : 'error' } };
+                  break;
+                }
+              }
+              return msgs;
+            });
+            break;
+
           case 'answer':
             setMessages(prev => prev.map(m =>
-              m.id === assistantId ? { ...m, content: ev.rawContent || ev.content } : m
+              streamRef.current && m.id === streamRef.current.id
+                ? { ...m, content: ev.rawContent || ev.content }
+                : m,
             ));
             break;
+
           case 'error':
             setError(ev.message);
             break;
+
           case 'done':
+            console.log('[AgentChat] SSE done');
+            streamRef.current = null;
+            setStreaming(false);
             break;
         }
-      },
-    }).catch(() => {});
+      };
 
-    setStreaming(false);
-    abortRef.current = null;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const json = line.slice(6).trim();
+            if (!json) continue;
+            try {
+              const ev = JSON.parse(json) as StreamEvent;
+              handleEvent(ev);
+            } catch { /* skip malformed */ }
+          }
+        }
+      } catch {
+        // 连接断开（工作流停止、网络问题等）
+      }
+    };
+
+    connect();
+
+    return () => { abortCtrl.abort(); };
+  }, [ready, nodeId, loadMessages]);
+
+  // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages]);
+
+  const send = useCallback(() => {
+    const text = input.trim();
+    if (!text || streaming) return;
+    setInput('');
+    setError(null);
+
+    const userMsg: ChatMessage = { id: nextId(), role: 'user', content: text };
+    setMessages(prev => [...prev, userMsg]);
+
+    fetch(`/api/tradewind/chat/${nodeId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    })
+      .then(r => {
+        if (!r.ok) {
+          r.text().then(t => {
+            try { setError(JSON.parse(t).error); } catch { setError(`HTTP ${r.status}`); }
+          });
+        }
+      })
+      .catch(() => {});
   }, [input, streaming, nodeId]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -212,7 +360,9 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
     }
   };
 
-  const stop = () => abortRef.current?.abort();
+  const stop = () => {
+    fetch(`/api/tradewind/chat/${nodeId}/abort`, { method: 'POST' }).catch(() => {});
+  };
 
   // Portal 渲染到 body
   return createPortal(
@@ -224,14 +374,31 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
         </div>
         <div className="tw-chat-window__messages" ref={messagesContainerRef}>
           {messages.map((msg) => {
-            // toolCall 消息：delegate 或普通工具
             if (msg.toolCall) {
               if (msg.toolCall.toolName === 'delegate') {
                 return <DelegateCard key={msg.id} toolCall={msg.toolCall as any} content={msg.content} />;
               }
+              if (msg.toolCall.toolName === 'contact') {
+                return <ContactCard key={msg.id} toolCall={msg.toolCall} />;
+              }
               return <ToolCallMessage key={msg.id} toolCall={msg.toolCall} />;
             }
-            // user 消息
+            if (msg.role === 'system') {
+              return (
+                <div key={msg.id} className="chat__message chat__message--system">
+                  <div className="chat__bubble" style={{
+                    background: 'var(--color-bg-tertiary, rgba(100,100,100,0.08))',
+                    borderLeft: '3px solid var(--color-border-accent, #6366f1)',
+                    fontSize: 'var(--text-sm)',
+                    whiteSpace: 'pre-wrap',
+                    lineHeight: 1.5,
+                    opacity: 0.85,
+                  }}>
+                    {msg.content}
+                  </div>
+                </div>
+              );
+            }
             if (msg.role === 'user') {
               return (
                 <div key={msg.id} className="chat__message chat__message--user">
@@ -240,7 +407,6 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
                 </div>
               );
             }
-            // assistant 流式中
             const isStreamingMsg = streaming && msg === messages[messages.length - 1];
             if (isStreamingMsg) {
               let raw = msg.content;
@@ -260,7 +426,6 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
                 </div>
               );
             }
-            // assistant 完成：结构化解析
             const parsed = parseStructuredContent(msg.content);
             const hasStructure = parsed.think || parsed.actions.length > 0 || parsed.answer;
             if (hasStructure) {
@@ -280,7 +445,6 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
                 />
               );
             }
-            // 普通 assistant 文本
             return (
               <div key={msg.id} className="chat__message chat__message--assistant">
                 <div className="chat__avatar">AI</div>
