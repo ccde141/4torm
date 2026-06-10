@@ -18,7 +18,7 @@ const MAX_TURNS = 200;
 /** 单次 LLM 输出被截断时最多续写次数 */
 const MAX_CONTINUATIONS = 5;
 /** 无 action 无 answer 时强制再问的最大次数 */
-const MAX_NUDGES = 2;
+const MAX_NUDGES = 10;
 /** 连续工具调用轮次达到此值时触发 delegate 提醒 */
 const DELEGATE_NUDGE_THRESHOLD = 7;
 /** LLM 调用硬超时（毫秒） */
@@ -156,22 +156,6 @@ export function isLikelyTruncated(text: string): boolean {
 
 /** 工具结果裁切（双策略：行数优先，字符兜底） */
 function trimToolResult(result: string): string {
-  const lines = result.split('\n');
-  const totalChars = result.length;
-  const totalLines = lines.length;
-
-  if (totalLines > TOOL_RESULT_LINE_THRESHOLD) {
-    const head = lines.slice(0, TOOL_RESULT_HEAD_LINES).join('\n');
-    const tail = lines.slice(-TOOL_RESULT_TAIL_LINES).join('\n');
-    const omittedLines = totalLines - TOOL_RESULT_HEAD_LINES - TOOL_RESULT_TAIL_LINES;
-    return `${head}\n\n[... 省略 ${omittedLines} 行 / 共 ${totalLines} 行、${totalChars} 字符。如需完整内容，请缩小查询范围（如指定子目录、用 grep 过滤、或分段 read_file）。下面是末尾片段：]\n\n${tail}`;
-  }
-
-  if (totalChars > TOOL_RESULT_TRIM_THRESHOLD) {
-    const omittedChars = totalChars - TOOL_RESULT_HEAD - TOOL_RESULT_TAIL;
-    return `${result.slice(0, TOOL_RESULT_HEAD)}\n\n[... 省略中间 ${omittedChars} 字符 / 共 ${totalChars} 字符。如需完整内容，请精化查询：read_file 可分段读、run_command 可加 head/tail/grep 过滤。下面是末尾片段：]\n\n${result.slice(-TOOL_RESULT_TAIL)}`;
-  }
-
   return result;
 }
 

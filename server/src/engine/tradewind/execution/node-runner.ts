@@ -21,19 +21,19 @@ import {
   type LLMCaller,
   type ToolCaller,
 } from './react-loop';
-import { runSubAgent, type SubAgentEvent } from './sub-agent-runner';
 import {
   compactIfNeeded,
   AGENT_COMPACT_THRESHOLD,
   type CompactState,
   type CompactorOpts,
 } from './context-compactor';
+import { execDelegate, execContact } from './node-runner-tools';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
-export type MessageSource = 'human' | 'envelope';
+export type MessageSource = 'human' | 'envelope' | 'contact';
 
 export interface QueuedMessage {
   source: MessageSource;
@@ -52,6 +52,8 @@ export type NodeRunnerEvent =
   | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
   | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
+  | { type: 'contact-start'; target: string }
+  | { type: 'contact-done'; target: string; result: string; ok: boolean }
   | { type: 'answer'; content: string; rawContent: string }
   | { type: 'compact-start' }
   | { type: 'compact-done'; archivedRounds: number; summaryLength: number }
@@ -61,6 +63,8 @@ export type NodeRunnerEvent =
 
 export interface NodeRunnerOpts {
   dataDir: string;
+  /** 本节点 ID（contact 防死锁用） */
+  nodeId: string;
   agentId: string;
   model: string;
   /** LLM 采样温度（来自 agent 配置） */
@@ -86,7 +90,7 @@ export class NodeRunner {
   private readonly messages: ContextMessage[] = [];
   private busy = false;
   private processing = false;
-  private eventListener: ((ev: NodeRunnerEvent) => void) | null = null;
+  private readonly eventListeners = new Set<(ev: NodeRunnerEvent) => void>();
   private readonly compactState: CompactState = { disabled: false, archiveSeq: 0 };
 
   /** 当前轮累积事件 buffer（不管有没有 listener 都攒，窗口重开时 replay） */
@@ -113,13 +117,18 @@ export class NodeRunner {
     void this.persist();
   }
 
-  /** 注册事件监听器（SSE 推送用，同时只能一个）。注册时自动 replay 当前轮已产生事件。 */
-  setEventListener(fn: ((ev: NodeRunnerEvent) => void) | null): void {
-    this.eventListener = fn;
+  /** 注册事件监听器（SSE 推送用，支持多个）。注册时自动 replay 当前轮已产生事件。 */
+  addEventListener(fn: (ev: NodeRunnerEvent) => void): void {
+    this.eventListeners.add(fn);
     // 窗口重新打开：补发当前轮已产生的事件（token + tool-call 等）
-    if (fn && this.currentRoundBuffer.length > 0) {
+    if (this.currentRoundBuffer.length > 0) {
       for (const ev of this.currentRoundBuffer) fn(ev);
     }
+  }
+
+  /** 移除事件监听器 */
+  removeEventListener(fn: (ev: NodeRunnerEvent) => void): void {
+    this.eventListeners.delete(fn);
   }
 
   /** 投入消息（人类或信封），自动触发处理 */
@@ -149,7 +158,7 @@ export class NodeRunner {
     this.currentRoundBuffer = [];
     const emit = (ev: NodeRunnerEvent) => {
       this.currentRoundBuffer.push(ev);
-      this.eventListener?.(ev);
+      for (const fn of this.eventListeners) fn(ev);
     };
 
     // 追加 user message 到上下文
@@ -165,8 +174,8 @@ export class NodeRunner {
       // 轮次完成，清空 replay buffer（历史已持久化到 messages）
       this.currentRoundBuffer = [];
 
-      // 信封来源：回调通知系统拿走输出
-      if (msg.source === 'envelope' && msg.onComplete) {
+      // 信封/contact 来源：回调通知系统拿走输出
+      if ((msg.source === 'envelope' || msg.source === 'contact') && msg.onComplete) {
         msg.onComplete(result.content);
       }
 
@@ -176,8 +185,18 @@ export class NodeRunner {
       // 压缩检查（轮次完整结束后）
       await this.checkAndCompact(result.lastPromptTokens, emit);
     } catch (e) {
-      if ((e as Error).name === 'AbortError') return;
-      emit({ type: 'error', message: (e as Error).message });
+      const isAbort = (e as Error).name === 'AbortError';
+      if (!isAbort) {
+        emit({ type: 'error', message: (e as Error).message });
+      }
+      // 信封/contact 来源：必须调 onComplete，否则下游永久卡死
+      if ((msg.source === 'envelope' || msg.source === 'contact') && msg.onComplete) {
+        const fallback = isAbort
+          ? '[工作流已停止]'
+          : `[错误] ${(e as Error).message}`;
+        msg.onComplete(fallback);
+      }
+      emit({ type: 'done' });
     } finally {
       this.busy = false;
     }
@@ -237,7 +256,10 @@ export class NodeRunner {
     const toolCaller: ToolCaller = {
       call: async (tool, args) => {
         if (tool === 'delegate') {
-          return this.execDelegate(args, emit);
+          return execDelegate(this.opts, args, emit);
+        }
+        if (tool === 'contact') {
+          return execContact(this.opts, args, emit);
         }
         emit({ type: 'tool-call', tool, args });
         try {
@@ -284,59 +306,5 @@ export class NodeRunner {
     const data = await res.json() as { result?: string; error?: string };
     if (data.error) throw new Error(data.error);
     return data.result ?? '';
-  }
-
-  /** 执行 delegate */
-  private async execDelegate(
-    args: Record<string, string>,
-    emit: (ev: NodeRunnerEvent) => void,
-  ): Promise<string> {
-    const task = args.task || '';
-    const context = args.context || '';
-    const subSystemPrompt = args.systemPrompt || '';
-    const delegateId = `del-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-
-    emit({ type: 'delegate-start', task, delegateId });
-
-    const result = await runSubAgent({
-      task, context, systemPrompt: subSystemPrompt,
-      agentId: this.opts.agentId,
-      dataDir: this.opts.dataDir,
-      signal: this.opts.signal,
-      maxRounds: 100,
-      parentSandboxLevel: this.opts.sandboxLevel,
-      emit: (ev: SubAgentEvent) => {
-        switch (ev.type) {
-          case 'token':
-            emit({ type: 'delegate-token', delegateId, content: ev.data.t });
-            break;
-          case 'tool_call':
-            emit({ type: 'delegate-tool-call', delegateId, tool: ev.data.tool, args: ev.data.args });
-            break;
-          case 'tool_result':
-            emit({ type: 'delegate-tool-result', delegateId, tool: ev.data.tool, result: ev.data.result, ok: ev.data.ok });
-            break;
-        }
-      },
-    });
-
-    // 归档 sub-agent meta + context
-    if (this.opts.persistDir) {
-      const subDir = path.join(this.opts.persistDir, 'sub-agents', delegateId);
-      try {
-        await fs.mkdir(subDir, { recursive: true });
-        await fs.writeFile(path.join(subDir, 'meta.json'), JSON.stringify({
-          delegateId,
-          task,
-          status: result.status,
-          rounds: result.rounds,
-          timestamp: new Date().toISOString(),
-        }, null, 2));
-        await fs.writeFile(path.join(subDir, 'summary.txt'), result.summary);
-      } catch { /* 归档失败不阻塞 */ }
-    }
-
-    emit({ type: 'delegate-done', delegateId, summary: result.summary, status: result.status });
-    return `[${result.status}] ${result.summary}`;
   }
 }
