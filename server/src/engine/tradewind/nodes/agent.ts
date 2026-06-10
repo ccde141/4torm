@@ -88,6 +88,10 @@ export class AgentExecutor implements NodeExecutor {
     // 持久化路径（归档用，写 messages.json）
     const persistDir = path.join(ctx.runDir, 'nodes', ctx.nodeId);
 
+    // 压缩归档路径：workspace/transcripts/bak/agent_{nodeLabel}/
+    const nodeLabel = (ctx.nodeConfig as any)._nodeLabel || ctx.nodeId;
+    const compactArchiveDir = path.join(workspaceAbs, 'transcripts', 'bak', `agent_${nodeLabel}`);
+
     // 创建 NodeRunner（持续循环引擎）
     const runner = new NodeRunner({
       dataDir: ctx.dataDir,
@@ -101,6 +105,7 @@ export class AgentExecutor implements NodeExecutor {
       systemPrompt,
       signal: ctx.signal,
       persistDir,
+      compactArchiveDir,
     });
 
     // 立刻注册到全局表（路由层通过此表向节点发人类消息）

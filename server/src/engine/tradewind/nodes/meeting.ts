@@ -35,6 +35,7 @@ import { handleMeetingOpen } from '../execution/meeting-handlers';
 import { appendNodeContext } from '../foundation/node-context-store';
 import { markEnvelopePending, markEnvelopeDone } from '../foundation/node-status-store';
 import { activeNodeRunners } from './agent';
+import path from 'node:path';
 
 /** 活跃会议注册表：nodeId → { session, resolve } */
 export interface ActiveMeeting {
@@ -51,6 +52,10 @@ export interface ActiveMeeting {
   signal: AbortSignal;
   /** 当前轮次的 AbortController——中断当前 speak 用 */
   roundAbort: AbortController | null;
+  /** 压缩状态 */
+  compactState: { disabled: boolean; archiveSeq: number };
+  /** 压缩归档目录 */
+  compactArchiveDir: string;
 }
 
 export const activeMeetings = new Map<string, ActiveMeeting>();
@@ -170,6 +175,11 @@ export class MeetingExecutor implements NodeExecutor {
     if (ctx.signal.aborted) return;
 
     // 挂起等待人类 end（Promise 由路由层 resolve）
+    const workspaceRel = `data/tradewind/workflows/${ctx.workflowId}/workspace`;
+    const projectDir = path.resolve(ctx.dataDir, '..');
+    const workspaceAbs = path.resolve(projectDir, workspaceRel);
+    const compactArchiveDir = path.join(workspaceAbs, 'transcripts', 'bak', `meeting_${meetingLabel}`);
+
     const endResult = await new Promise<MeetingEndResult>((resolve) => {
       activeMeetings.set(ctx.nodeId, {
         session,
@@ -178,9 +188,11 @@ export class MeetingExecutor implements NodeExecutor {
         executionId: ctx.executionId,
         dataDir: ctx.dataDir,
         runDir: ctx.runDir,
-        workspace: `data/tradewind/workflows/${ctx.workflowId}/workspace`,
+        workspace: workspaceRel,
         signal: ctx.signal,
         roundAbort: null,
+        compactState: { disabled: false, archiveSeq: 0 },
+        compactArchiveDir,
       });
     });
 
