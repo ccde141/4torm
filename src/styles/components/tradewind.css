@@ -1684,17 +1684,17 @@
   font-weight: var(--font-medium);
 }
 
-/* waiting 时金黄色脉冲闪烁 */
+/* waiting 时琥珀色脉冲闪烁（信封暂停，等待人类介入） */
 @keyframes tw-gate-waiting-pulse {
   0%, 100% {
     box-shadow:
-      0 0 0 2px rgba(234, 179, 8, 0.8),
-      0 0 20px 4px rgba(234, 179, 8, 0.5);
+      0 0 0 2px rgba(245, 158, 11, 0.8),
+      0 0 20px 4px rgba(245, 158, 11, 0.5);
   }
   50% {
     box-shadow:
-      0 0 0 4px rgba(234, 179, 8, 0.5),
-      0 0 36px 8px rgba(234, 179, 8, 0.8);
+      0 0 0 4px rgba(245, 158, 11, 0.5),
+      0 0 36px 8px rgba(245, 158, 11, 0.8);
   }
 }
 .tw-node--gate-waiting {
