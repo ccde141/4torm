@@ -1,15 +1,12 @@
 /**
  * 节点拖拽面板 — 从这里拖出节点到画布
- *
- * 注意：human-gate 节点已封存（封存原因见 TODO-human-gate-restart.md），
- * 暂不在 UI 中暴露。后端 executor + validator 仍保留，待重新启封时直接放开此选项。
  */
 
 const NODE_ITEMS = [
   { type: 'entry', label: '入口', icon: '▶', color: 'var(--color-accent)' },
   { type: 'agent', label: 'Agent', icon: '⚡', color: 'var(--color-accent-secondary)' },
   { type: 'meeting', label: '会议室', icon: '◎', color: '#a855f7' },
-  // { type: 'human-gate', label: '人类审查', icon: '◇', color: '#eab308' }, // 封存
+  { type: 'human-gate', label: '暂停点', icon: '◇', color: '#eab308' },
   { type: 'note', label: 'Note', icon: '📝', color: '#fbbf24' },
   { type: 'output', label: '出口', icon: '◼', color: 'var(--color-success)' },
 ] as const;

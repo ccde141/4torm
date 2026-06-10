@@ -28,9 +28,17 @@ import { MeetingExecutor, activeMeetings } from '../engine/tradewind/nodes/meeti
 import { NoteExecutor } from '../engine/tradewind/nodes/note';
 import { HumanGateExecutor, activeHumanGates } from '../engine/tradewind/nodes/human-gate';
 import { handleSpeak, handleChair, handleEnd } from '../engine/tradewind/execution/meeting-handlers';
+import { compactMeetingIfNeeded, MEETING_COMPACT_THRESHOLD } from '../engine/tradewind/execution/context-compactor';
 import { getEnvelopePending } from '../engine/tradewind/foundation/node-status-store';
 import { getMeetingsDir, getMeetingFileName } from '../engine/tradewind/foundation/archive-paths';
 import { validateWorkflow } from '../engine/tradewind/foundation/workflow-validator';
+import { loadAgent } from '../engine/shared/agent-loader';
+
+/** 获取会长的 model key（用于压缩摘要 LLM 调用） */
+async function getChairModel(dataDir: string, chairAgentId: string): Promise<string> {
+  const agent = await loadAgent(dataDir, chairAgentId);
+  return agent?.model || '';
+}
 
 /** 当前活跃的 orchestrator 实例（单执行，后续改为 Map） */
 let activeOrchestrator: Orchestrator | null = null;
@@ -156,25 +164,18 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ running: true, nodes });
   });
 
-  /** POST /human-gate/:nodeId/submit — 人类提交审查决策 */
+  /** POST /human-gate/:nodeId/submit — 人类编辑后继续 */
   app.post('/human-gate/:nodeId/submit', async (req, reply) => {
     const { nodeId } = req.params as { nodeId: string };
-    const body = req.body as { action: 'approve' | 'rework'; comment?: string };
+    const body = req.body as { content?: string };
 
     const gate = activeHumanGates.get(nodeId);
     if (!gate) return reply.status(404).send({ error: '该节点没有等待中的审查' });
 
-    if (body.action === 'approve') {
-      gate.resolve({ action: 'approve' });
-      return reply.send({ ok: true });
-    }
-    if (body.action === 'rework') {
-      const comment = (body.comment || '').trim();
-      if (!comment) return reply.status(400).send({ error: '打回必须填写反馈意见' });
-      gate.resolve({ action: 'rework', comment });
-      return reply.send({ ok: true });
-    }
-    return reply.status(400).send({ error: '未知 action' });
+    // content 为空或未传 → 使用原始信封内容（不编辑直接放行）
+    const content = (body.content ?? gate.envelopeContent).trim() || gate.envelopeContent;
+    gate.resolve({ content });
+    return reply.send({ ok: true });
   });
 
   /** GET /events — SSE 事件流 */
@@ -414,7 +415,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       onEvent: (ev) => {
         try { raw.write(`data: ${JSON.stringify(ev)}\n\n`); } catch {}
       },
-    }).then(() => {
+    }).then(async (speakPromptTokens) => {
       meeting.roundAbort = null;
       meeting.signal.removeEventListener('abort', onGlobalAbort);
       clearInterval(hb);
@@ -429,8 +430,26 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
           ))
           .catch(() => {});
       }
+      // 会议室压缩检查（speak 周期完整结束后）
+      // 压缩期间重置 busy 防止并发 speak
+      meeting.session.busy = true;
+      const compacted = await compactMeetingIfNeeded(
+        meeting.session.publicMessages,
+        speakPromptTokens,
+        meeting.compactState,
+        {
+          dataDir: meeting.dataDir,
+          model: await getChairModel(meeting.dataDir, meeting.session.chairAgentId),
+          archiveDir: meeting.compactArchiveDir,
+          threshold: MEETING_COMPACT_THRESHOLD,
+          onEvent: (ev) => {
+            try { raw.write(`data: ${JSON.stringify(ev)}\n\n`); } catch {}
+          },
+        },
+      );
+      meeting.session.busy = false;
       try {
-        raw.write(`data: ${JSON.stringify({ type: 'round-done', messages: meeting.session.publicMessages })}\n\n`);
+        raw.write(`data: ${JSON.stringify({ type: 'round-done', messages: meeting.session.publicMessages, compacted })}\n\n`);
         raw.end();
       } catch {}
     }).catch((e) => {

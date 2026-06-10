@@ -130,7 +130,7 @@ function ConfigFields({ nodeId, nodeType, config, label, onUpdate, nodes, edges,
     case 'note':
       return <NoteFields config={config} onChange={update} />;
     case 'human-gate':
-      return <HumanGateFields config={config} onChange={update} nodes={nodes} edges={edges} currentNodeId={currentNodeId} onSyncReworkEdge={onSyncReworkEdge} />;
+      return <HumanGateFields />;
     case 'output':
       return <OutputFields config={config} onChange={update} />;
     case 'entry':
@@ -268,63 +268,13 @@ function NoteFields({ config, onChange }: { config: Record<string, unknown>; onC
   );
 }
 
-// ── Human Gate 配置 ───────────────────────────────────────────────
+// ── Human Gate 配置（暂停点无需额外配置） ─────────────────────────
 
-interface HumanGateFieldsProps {
-  config: Record<string, unknown>;
-  onChange: (k: string, v: unknown) => void;
-  nodes: Node[];
-  edges: import('@xyflow/react').Edge[];
-  currentNodeId: string;
-  onSyncReworkEdge: (gateNodeId: string, targetNodeId: string | null) => void;
-}
-
-function HumanGateFields({ config, onChange, nodes, edges, currentNodeId, onSyncReworkEdge }: HumanGateFieldsProps) {
-  const reworkTargetNodeId = (config.reworkTargetNodeId as string) ?? '';
-
-  /**
-   * 合法 rework target：
-   * - 不是当前 gate 自己
-   * - 不是 entry / output / note / human-gate（这些类型语义不通）
-   * - 排除该节点已有 handoff 入线 ≥ 1 的（除非那条入线就是当前 gate 的 rework）
-   */
-  const validTargets = nodes.filter(n => {
-    if (n.id === currentNodeId) return false;
-    const t = n.type ?? '';
-    if (['entry', 'output', 'note', 'human-gate'].includes(t)) return false;
-    const handoffInputs = edges.filter(e => {
-      if (e.target !== n.id) return false;
-      const data = (e.data ?? {}) as { kind?: string; rework?: boolean };
-      if (data.kind && data.kind !== 'handoff') return false;
-      // 当前 gate 的 rework 边自身不计数
-      if (e.source === currentNodeId && data.rework) return false;
-      return true;
-    });
-    return handoffInputs.length === 0;
-  });
-
-  const handleChange = (targetId: string) => {
-    onChange('reworkTargetNodeId', targetId);
-    onSyncReworkEdge(currentNodeId, targetId || null);
-  };
-
+function HumanGateFields() {
   return (
     <div className="tw-config__field">
-      <label className="tw-config__label">打回目标节点</label>
-      <select
-        className="tw-config__select"
-        value={reworkTargetNodeId}
-        onChange={(e) => handleChange(e.target.value)}
-      >
-        <option value="">-- 不打回（仅批准模式） --</option>
-        {validTargets.map(n => {
-          const nl = ((n.data ?? {}) as any).label || n.id;
-          return <option key={n.id} value={n.id}>{nl}</option>;
-        })}
-      </select>
       <div className="tw-config__hint">
-        仅显示「当前 0 条 handoff 入线」的节点可作为打回目标。
-        <br />打回时系统会沿红色 rework 边逆流送出反馈信封。
+        暂停点无需配置。信封到达后流程暂停，人类可编辑内容后继续。
       </div>
     </div>
   );
@@ -383,7 +333,7 @@ function OutputFields({ config, onChange }: { config: Record<string, unknown>; o
 function getTypeLabel(type: string): string {
   const map: Record<string, string> = {
     entry: '入口', output: '出口', agent: 'Agent',
-    meeting: '会议室', note: 'Note', 'human-gate': '人类审查',
+    meeting: '会议室', note: 'Note', 'human-gate': '暂停点',
   };
   return map[type] ?? type;
 }

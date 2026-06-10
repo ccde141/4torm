@@ -381,30 +381,11 @@ function checkNoteEdges(ctx: ValidationContext): ValidationError[] {
   return errors;
 }
 
-// ── R13 Rework 边规则（Human Gate 封存中，启封时启用）────────────
+// ── R13 Rework 边规则（已废弃——Human Gate 不再使用打回机制）────────
 
-function checkReworkEdges(ctx: ValidationContext): ValidationError[] {
-  const errors: ValidationError[] = [];
-  for (const edge of ctx.graph.edges) {
-    if (!edge.rework) continue;
-    const sourceType = ctx.nodeById.get(edge.source)?.type;
-    if (sourceType && sourceType !== 'human-gate') {
-      errors.push({
-        code: 'rework-edge-bad-source',
-        message: `连线 ${edge.id} 标记为 rework，source 必须是 Human Gate 节点（实际：${sourceType}）`,
-        edgeId: edge.id,
-      });
-    }
-    const targetHandoffInputs = ctx.handoffInEdges.get(edge.target) ?? [];
-    if (targetHandoffInputs.length > 1) {
-      errors.push({
-        code: 'rework-target-multi-input',
-        message: `rework 边 ${edge.id} 的 target 节点 ${edge.target} 有 ${targetHandoffInputs.length} 条 handoff 入线，必须 ≤ 1（防死锁：打回后其他入线信封已过期）`,
-        edgeId: edge.id,
-      });
-    }
-  }
-  return errors;
+function checkReworkEdges(_ctx: ValidationContext): ValidationError[] {
+  // rework 概念已移除，此规则保留为空操作（向前兼容旧工作流文件中残留的 rework 标记）
+  return [];
 }
 
 // ── R14 handoff 子图无环 ──────────────────────────────────────────
@@ -501,7 +482,7 @@ function checkNoteNodeIO(ctx: ValidationContext): ValidationError[] {
 function getTypeName(type: string): string {
   const map: Record<string, string> = {
     entry: '入口', output: '出口', agent: 'Agent',
-    meeting: '会议室', note: 'Note', 'human-gate': '人类审查',
+    meeting: '会议室', note: 'Note', 'human-gate': '暂停点',
   };
   return map[type] ?? type;
 }

@@ -86,13 +86,15 @@ export interface HandleSpeakOpts {
 /**
  * 人类发言 → 参与 Agent 串行响应。
  * 每个 Agent 跑信风的 react-loop（带工具能力）。
+ * 返回最后一个 Agent 的 promptTokens（用于压缩阈值判断）。
  */
-export async function handleSpeak(opts: HandleSpeakOpts): Promise<void> {
+export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undefined> {
   const { dataDir, workspace, session, humanMessage, signal, onEvent } = opts;
 
   session.publicMessages.push({ speaker: '人类', content: humanMessage, timestamp: Date.now() });
   session.round++;
   session.busy = true;
+  let lastPromptTokens: number | undefined;
 
   try {
     for (const participant of session.participants) {
@@ -153,6 +155,9 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<void> {
         signal,
       });
 
+      // 记录最后一个 participant 的 promptTokens
+      if (result.lastPromptTokens) lastPromptTokens = result.lastPromptTokens;
+
       // abort 后 result.content 可能是 '[中止]' 或 '[错误]...'——用已流式积累的内容替代
       const aborted = signal?.aborted;
       const streamedContent = session.streamingCurrent?.content?.trim() || '';
@@ -176,6 +181,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<void> {
     session.busy = false;
     session.streamingCurrent = undefined;
   }
+  return lastPromptTokens;
 }
 
 // ── handleChair ───────────────────────────────────────────────────

@@ -22,6 +22,12 @@ import {
   type ToolCaller,
 } from './react-loop';
 import { runSubAgent, type SubAgentEvent } from './sub-agent-runner';
+import {
+  compactIfNeeded,
+  AGENT_COMPACT_THRESHOLD,
+  type CompactState,
+  type CompactorOpts,
+} from './context-compactor';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -47,6 +53,9 @@ export type NodeRunnerEvent =
   | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
   | { type: 'answer'; content: string; rawContent: string }
+  | { type: 'compact-start' }
+  | { type: 'compact-done'; archivedRounds: number; summaryLength: number }
+  | { type: 'compact-warn'; message: string }
   | { type: 'error'; message: string }
   | { type: 'done' };
 
@@ -65,6 +74,8 @@ export interface NodeRunnerOpts {
   signal: AbortSignal;
   /** 持久化路径（每轮对话后写入 messages.json） */
   persistDir?: string;
+  /** 压缩归档目录（output/bak/agent_{nodeName}/） */
+  compactArchiveDir?: string;
 }
 
 // ── NodeRunner ───────────────────────────────────────────────────
@@ -76,6 +87,7 @@ export class NodeRunner {
   private busy = false;
   private processing = false;
   private eventListener: ((ev: NodeRunnerEvent) => void) | null = null;
+  private readonly compactState: CompactState = { disabled: false, archiveSeq: 0 };
 
   /** 当前轮累积事件 buffer（不管有没有 listener 都攒，窗口重开时 replay） */
   private currentRoundBuffer: NodeRunnerEvent[] = [];
@@ -160,6 +172,9 @@ export class NodeRunner {
 
       // 实时持久化
       await this.persist();
+
+      // 压缩检查（轮次完整结束后）
+      await this.checkAndCompact(result.lastPromptTokens, emit);
     } catch (e) {
       if ((e as Error).name === 'AbortError') return;
       emit({ type: 'error', message: (e as Error).message });
@@ -178,6 +193,34 @@ export class NodeRunner {
       await fs.writeFile(tmp, JSON.stringify(this.messages, null, 2));
       await fs.rename(tmp, target);
     } catch { /* 持久化失败不阻塞 */ }
+  }
+
+  /** 压缩检查 + 执行 */
+  private async checkAndCompact(
+    lastPromptTokens: number | undefined,
+    emit: (ev: NodeRunnerEvent) => void,
+  ): Promise<void> {
+    if (!this.opts.compactArchiveDir) return;
+
+    const compacted = await compactIfNeeded(
+      this.messages,
+      lastPromptTokens,
+      this.compactState,
+      {
+        dataDir: this.opts.dataDir,
+        model: this.opts.model,
+        archiveDir: this.opts.compactArchiveDir,
+        threshold: AGENT_COMPACT_THRESHOLD,
+        onEvent: (ev) => {
+          if (ev.type === 'compact-start') emit({ type: 'compact-start' });
+          if (ev.type === 'compact-done') emit({ type: 'compact-done', archivedRounds: ev.archivedRounds, summaryLength: ev.summaryLength });
+          if (ev.type === 'compact-warn') emit({ type: 'compact-warn', message: ev.message });
+        },
+      },
+    );
+
+    // 压缩后重新持久化
+    if (compacted) await this.persist();
   }
 
   /** 跑 ReAct 循环 */
