@@ -94,6 +94,7 @@ export class AgentExecutor implements NodeExecutor {
       projectDir,
       sandboxLevel: agent.sandboxLevel,
       allowDelegate: true,
+      agentName: agent.name,
       executionId: ctx.executionId,
       nodeId: ctx.nodeId,
       workflowId: ctx.workflowId,

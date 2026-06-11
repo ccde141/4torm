@@ -2,7 +2,7 @@
  * 信风主页 — 画布编辑器 + 节点面板 + 工具栏 + 配置面板 + 工作流列表
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { TradeWindCanvas } from '../canvas/TradeWindCanvas';
 import { NodePalette } from '../panels/NodePalette';
@@ -23,6 +23,10 @@ export default function TradeWindPage() {
   const [chatTarget, setChatTarget] = useState<{ nodeId: string; label: string } | null>(null);
   const [meetingTarget, setMeetingTarget] = useState<{ nodeId: string; label: string } | null>(null);
   const [gateTarget, setGateTarget] = useState<{ nodeId: string; label: string; envelopeContent: string } | null>(null);
+  // 持久化挂载：曾打开过的面板不卸载，只隐藏
+  const openedChatsRef = useRef<Map<string, { nodeId: string; label: string }>>(new Map());
+  const openedMeetingsRef = useRef<Map<string, { nodeId: string; label: string }>>(new Map());
+  const [, forceUpdate] = useState(0); // 触发重渲染
   const [saveTime, setSaveTime] = useState<number | null>(null);
 
   // 页面加载时恢复上次打开的工作流，失败则自动新建
@@ -56,7 +60,9 @@ export default function TradeWindPage() {
   useEffect(() => {
     const handler = (e: Event) => {
       const { nodeId, label } = (e as CustomEvent).detail;
+      openedChatsRef.current.set(nodeId, { nodeId, label });
       setChatTarget({ nodeId, label });
+      forceUpdate(n => n + 1);
     };
     window.addEventListener('tw-open-chat', handler);
     return () => window.removeEventListener('tw-open-chat', handler);
@@ -66,7 +72,9 @@ export default function TradeWindPage() {
   useEffect(() => {
     const handler = (e: Event) => {
       const { nodeId, label } = (e as CustomEvent).detail;
+      openedMeetingsRef.current.set(nodeId, { nodeId, label });
       setMeetingTarget({ nodeId, label });
+      forceUpdate(n => n + 1);
     };
     window.addEventListener('tw-open-meeting', handler);
     return () => window.removeEventListener('tw-open-meeting', handler);
@@ -168,20 +176,28 @@ export default function TradeWindPage() {
       {execution.error && (
         <div className="tw-page__error">{execution.error}</div>
       )}
-      {chatTarget && (
-        <AgentChatWindow
-          nodeId={chatTarget.nodeId}
-          nodeLabel={chatTarget.label}
-          onClose={() => setChatTarget(null)}
-        />
-      )}
-      {meetingTarget && (
-        <MeetingPanel
-          nodeId={meetingTarget.nodeId}
-          nodeLabel={meetingTarget.label}
-          onClose={() => setMeetingTarget(null)}
-        />
-      )}
+      {/* Agent 聊天面板：曾打开过的持久挂载，只隐藏不卸载 */}
+      {[...openedChatsRef.current.values()].map(({ nodeId, label }) => (
+        <div key={nodeId} style={{ display: chatTarget?.nodeId === nodeId ? 'contents' : 'none' }}>
+          <AgentChatWindow
+            nodeId={nodeId}
+            nodeLabel={label}
+            onClose={() => setChatTarget(null)}
+            visible={chatTarget?.nodeId === nodeId}
+          />
+        </div>
+      ))}
+      {/* 会议室面板：同上 */}
+      {[...openedMeetingsRef.current.values()].map(({ nodeId, label }) => (
+        <div key={nodeId} style={{ display: meetingTarget?.nodeId === nodeId ? 'contents' : 'none' }}>
+          <MeetingPanel
+            nodeId={nodeId}
+            nodeLabel={label}
+            onClose={() => setMeetingTarget(null)}
+            visible={meetingTarget?.nodeId === nodeId}
+          />
+        </div>
+      ))}
       {gateTarget && (
         <HumanGatePanel
           nodeId={gateTarget.nodeId}

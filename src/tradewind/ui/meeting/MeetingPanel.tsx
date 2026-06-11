@@ -11,8 +11,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  speakStream, chairStream, endMeeting, getStatus, joinMeeting, leaveMeeting, reorderMeeting,
-  type MeetingMessage, type MeetingStatus, type ToolStep,
+  connectEventStream, sendSpeak, sendChair, endMeeting, joinMeeting, leaveMeeting, reorderMeeting,
+  type MeetingMessage, type MeetingStatus, type ToolStep, type MeetingBroadcastEvent,
 } from './meeting-client';
 import { MeetingMessageItem } from './MeetingMessageItem';
 import { renderTextWithCode } from '../../../engine/markdown';
@@ -21,9 +21,11 @@ interface MeetingPanelProps {
   nodeId: string;
   nodeLabel: string;
   onClose: () => void;
+  /** 面板是否可见 */
+  visible?: boolean;
 }
 
-export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) {
+export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: MeetingPanelProps) {
   const [publicMsgs, setPublicMsgs] = useState<MeetingMessage[]>([]);
   const [chairMsgs, setChairMsgs] = useState<Array<{ role: string; content: string }>>([]);
   const [status, setStatus] = useState<MeetingStatus | null>(null);
@@ -39,6 +41,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
   const publicContainerRef = useRef<HTMLDivElement>(null);
   const chairContainerRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const handleEventRef = useRef<(ev: MeetingBroadcastEvent) => void>(() => {});
 
   // 等待计时器
   useEffect(() => {
@@ -47,63 +50,255 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
     return () => clearInterval(timer);
   }, [waitingSince]);
 
-  // 加载初始状态
+  // 统一 SSE 事件流（持久连接），替代所有轮询
+  // 打开面板时建立，关闭时自动断开
   useEffect(() => {
-    getStatus(nodeId).then((s) => {
-      setStatus(s);
-      // 恢复消息历史
-      if (s.publicMessages?.length) {
-        const msgs = [...s.publicMessages];
-        // 如果有正在流式产出的消息，追加为 streaming 状态
-        if (s.busy && s.streamingCurrent?.content) {
-          msgs.push({ speaker: s.streamingCurrent.speaker, content: s.streamingCurrent.content, timestamp: Date.now(), streaming: true });
-        }
-        setPublicMsgs(msgs);
-      }
-      if (s.chairMessages?.length) setChairMsgs(s.chairMessages);
-      // 如果正在忙，恢复 busy 状态
-      if (s.busy) setBusy(true);
-    }).catch(() => {});
+    const abort = new AbortController();
+    let connectTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const tryConnect = () => {
+      connectEventStream(nodeId, (ev) => handleEventRef.current(ev), abort.signal).catch(() => {
+        connectTimeout = setTimeout(tryConnect, 500);
+      });
+    };
+    tryConnect();
+
+    return () => {
+      abort.abort();
+      if (connectTimeout) clearTimeout(connectTimeout);
+    };
   }, [nodeId]);
 
-  // opening 阶段轮询 status，实时显示入会摘要进度
-  // 默认按 opening 处理（status 未到达时也禁用交互），避免抖动
-  const phase = status?.phase ?? 'opening';
-  useEffect(() => {
-    if (phase !== 'opening') return;
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled) return;
-      getStatus(nodeId).then((s) => {
-        if (cancelled) return;
-        setStatus(s);
-        if (s.publicMessages) setPublicMsgs(s.publicMessages);
-      }).catch(() => {});
-    };
-    tick(); // 立即拉一次，不等 interval
-    const timer = setInterval(tick, 400);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [nodeId, phase]);
-
-  // discussion 阶段 busy 时轮询——面板后打开也能看到正在产出的流
-  useEffect(() => {
-    if (phase !== 'discussion' || !busy) return;
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled) return;
-      getStatus(nodeId).then((s) => {
-        if (cancelled) return;
-        const msgs = [...(s.publicMessages || [])];
-        if (s.busy && s.streamingCurrent?.content) {
-          msgs.push({ speaker: s.streamingCurrent.speaker, content: s.streamingCurrent.content, timestamp: Date.now(), streaming: true });
+  // 事件处理中枢：所有会议室事件通过此函数路由
+  const handleEvent = useCallback((ev: MeetingBroadcastEvent) => {
+    switch (ev.type) {
+      case 'connected': {
+        setStatus({
+          nodeId,
+          round: ev.round,
+          busy: false,
+          phase: ev.phase as MeetingStatus['phase'],
+          messageCount: ev.messages.length,
+          participants: ev.participants as MeetingStatus['participants'],
+          configuredParticipants: ev.configuredParticipants as MeetingStatus['configuredParticipants'],
+          chairAgentId: '',
+          publicMessages: ev.messages as MeetingMessage[],
+          chairMessages: ev.chairMessages as MeetingStatus['chairMessages'],
+        });
+        setPublicMsgs(ev.messages as MeetingMessage[]);
+        setChairMsgs((ev.chairMessages as MeetingStatus['chairMessages']) || []);
+        // 恢复 streamRef：快照里若有 streaming 消息（前端连接前 agent-start 已发出）
+        const streamingMsg = (ev.messages as MeetingMessage[]).find(m => m.streaming);
+        if (streamingMsg) {
+          streamRef.current.currentLabel = streamingMsg.speaker;
+          streamRef.current.streamContent = streamingMsg.content || '';
+          streamRef.current.pendingTools = streamingMsg.toolCalls || [];
+          setBusy(true);
+          setWaitingLabel(streamingMsg.speaker);
         }
-        setPublicMsgs(msgs);
-        if (!s.busy) setBusy(false);
-      }).catch(() => {});
-    };
-    const timer = setInterval(tick, 500);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [nodeId, phase, busy]);
+        break;
+      }
+      case 'phase-change':
+        setStatus(prev => prev ? { ...prev, phase: ev.phase as MeetingStatus['phase'] } : prev);
+        // opening → discussion：清理 opening 期间残留的 busy 状态
+        if (ev.phase === 'discussion') {
+          setBusy(false);
+          setWaitingSince(null);
+          setWaitingLabel('');
+          streamRef.current.currentLabel = '';
+          streamRef.current.streamContent = '';
+          streamRef.current.pendingTools = [];
+        }
+        break;
+      case 'agent-start':
+      case 'token':
+      case 'tool-call':
+      case 'tool-result':
+      case 'agent-done':
+      case 'round-done':
+      case 'chair-token':
+      case 'chair-done':
+      case 'summary-chunk':
+      case 'summary-done':
+      case 'compact-start':
+      case 'compact-done':
+      case 'compact-warn':
+      case 'heartbeat':
+      case 'error':
+      case 'done':
+      case 'minutes-done':
+        handleStreamEvent(ev);
+        break;
+    }
+  }, [nodeId]);
+  handleEventRef.current = handleEvent;
+
+  const streamRef = useRef<{
+    currentLabel: string;
+    streamContent: string;
+    pendingTools: ToolStep[];
+  }>({ currentLabel: '', streamContent: '', pendingTools: [] });
+
+  const updateLastPublic = useCallback((mutate: (last: MeetingMessage) => MeetingMessage) => {
+    setPublicMsgs(prev => {
+      const stream = streamRef.current;
+      if (prev.length === 0 || !stream.currentLabel) return prev;
+      // 找到当前正在 streaming 的消息（按 speaker + streaming 标志匹配）
+      const idx = prev.findLastIndex
+        ? prev.findLastIndex(m => m.speaker === stream.currentLabel && m.streaming)
+        : (() => { for (let i = prev.length - 1; i >= 0; i--) { if (prev[i].speaker === stream.currentLabel && prev[i].streaming) return i; } return -1; })();
+      if (idx < 0) return prev;
+      const next = [...prev];
+      next[idx] = mutate(prev[idx]);
+      return next;
+    });
+  }, []);
+
+  const handleStreamEvent = useCallback((ev: MeetingBroadcastEvent) => {
+    const stream = streamRef.current;
+    switch (ev.type) {
+      case 'agent-start':
+        stream.currentLabel = ev.label;
+        stream.streamContent = '';
+        stream.pendingTools = [];
+        setWaitingSince(Date.now());
+        setWaitingLabel(ev.label);
+        setBusy(true);
+        // 只在不存在同名 streaming 消息时创建新占位（防重复：connected 快照已含占位）
+        setPublicMsgs(prev => {
+          const existing = prev.find(m => m.speaker === ev.label && m.streaming);
+          if (existing) return prev;
+          return [...prev, {
+            speaker: ev.label, content: '', timestamp: Date.now(),
+            streaming: true, toolCalls: [],
+          }];
+        });
+        break;
+      case 'token':
+        setWaitingSince(null);
+        stream.streamContent += ev.chunk;
+        { const snap = stream.streamContent;
+          updateLastPublic(last => ({ ...last, content: snap })); }
+        break;
+      case 'tool-call':
+        stream.pendingTools = [...stream.pendingTools, { tool: ev.tool, args: ev.args, status: 'running' }];
+        { const snap = stream.pendingTools;
+          updateLastPublic(last => ({ ...last, toolCalls: snap })); }
+        break;
+      case 'tool-result': {
+        let matched = false;
+        stream.pendingTools = stream.pendingTools.map(t => {
+          if (!matched && t.tool === ev.tool && t.status === 'running') {
+            matched = true;
+            return { ...t, result: ev.result, status: 'done' };
+          }
+          return t;
+        });
+        const snap2 = stream.pendingTools;
+        updateLastPublic(last => ({ ...last, toolCalls: snap2 }));
+        break;
+      }
+      case 'agent-done':
+        setWaitingSince(null);
+        {
+          const doneLabel = stream.currentLabel;
+          const finalTools = stream.pendingTools.length > 0
+            ? stream.pendingTools.map(t => t.status === 'running' ? { ...t, status: 'done' as const } : t)
+            : (ev.toolCalls && ev.toolCalls.length > 0 ? ev.toolCalls.map(t => ({ ...t, status: 'done' as const })) : undefined);
+          const doneContent = ev.content;
+          const doneRaw = stream.streamContent || ev.rawContent || ev.content;
+          // 直接定位目标消息（不依赖 streamRef，避免 React batch 时序问题）
+          setPublicMsgs(prev => {
+            const idx = (() => { for (let i = prev.length - 1; i >= 0; i--) { if (prev[i].speaker === doneLabel && prev[i].streaming) return i; } return -1; })();
+            if (idx < 0) return prev;
+            const next = [...prev];
+            next[idx] = {
+              ...prev[idx],
+              content: doneContent,
+              rawContent: doneRaw,
+              toolCalls: finalTools,
+              streaming: false,
+            };
+            return next;
+          });
+        }
+        stream.currentLabel = '';
+        stream.streamContent = '';
+        stream.pendingTools = [];
+        break;
+      case 'round-done':
+        // 后端权威快照——直接替换（不保留前端 streaming 残留，避免重复）
+        setPublicMsgs((ev as any).messages as MeetingMessage[]);
+        setBusy(false);
+        setWaitingSince(null);
+        streamRef.current.currentLabel = '';
+        streamRef.current.streamContent = '';
+        streamRef.current.pendingTools = [];
+        break;
+      case 'chair-token':
+        stream.streamContent += ev.chunk;
+        setChairMsgs(prev => {
+          const msgs = [...prev];
+          if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {
+            msgs[msgs.length - 1] = { role: 'assistant', content: stream.streamContent };
+          }
+          return msgs;
+        });
+        break;
+      case 'chair-done':
+        stream.streamContent = '';
+        break;
+      case 'summary-chunk':
+        setPublicMsgs(prev => {
+          const last = prev[prev.length - 1];
+          if (last && last.speaker === '[会长总结]' && last.streaming) {
+            const next = [...prev];
+            next[next.length - 1] = { ...last, content: last.content + ev.chunk };
+            return next;
+          }
+          // 会长总结不存在则创建
+          return [...prev, {
+            speaker: '[会长总结]', content: ev.chunk, timestamp: Date.now(),
+            streaming: true,
+          }];
+        });
+        break;
+      case 'summary-done':
+        setBusy(false);
+        setWaitingSince(null);
+        // 定稿会长总结
+        setPublicMsgs(prev => {
+          const last = prev[prev.length - 1];
+          if (last && last.speaker === '[会长总结]') {
+            const next = [...prev];
+            next[next.length - 1] = { ...last, content: ev.minutes, streaming: false };
+            return next;
+          }
+          return [...prev, {
+            speaker: '[会长总结]', content: ev.minutes, timestamp: Date.now(),
+          }];
+        });
+        break;
+      case 'compact-start':
+      case 'compact-done':
+      case 'compact-warn':
+        // 压缩事件暂时只透传 UI（后续可加压缩进度条）
+        break;
+      case 'heartbeat':
+        setWaitingLabel(ev.label);
+        break;
+      case 'error':
+        setError(ev.message);
+        setBusy(false);
+        setWaitingSince(null);
+        break;
+      case 'done':
+      case 'minutes-done':
+        break;
+    }
+  }, [updateLastPublic]);
+
+  const phase = status?.phase ?? 'opening';
 
   // 参与者管理（从 configuredParticipants 范围内加入/移除，按节点 ID）
   const handleJoin = useCallback(async (participantNodeId: string) => {
@@ -146,162 +341,78 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
     }
   }, [chairMsgs]);
 
-  // 公共发言（SSE 流式 + 工具气泡）
+  // 面板从隐藏恢复可见时强制滚到底
+  useEffect(() => {
+    if (!visible) return;
+    const pub = publicContainerRef.current;
+    const chair = chairContainerRef.current;
+    if (pub) pub.scrollTop = pub.scrollHeight;
+    if (chair) chair.scrollTop = chair.scrollHeight;
+  }, [visible]);
+
+  // 公共发言（fire-and-forget，事件通过 /events 流返回）
   const handleSpeak = useCallback(async () => {
     const text = publicInput.trim();
     if (!text || busy) return;
     setPublicInput('');
-    setBusy(true);
     setError(null);
     setWaitingSince(Date.now());
     setWaitingLabel('');
 
+    setPublicMsgs(prev => [...prev, { speaker: '人类', content: text, timestamp: Date.now() }]);
+
     const abort = new AbortController();
     abortRef.current = abort;
 
-    setPublicMsgs(prev => [...prev, { speaker: '人类', content: text, timestamp: Date.now() }]);
-
-    // 当前 Agent 流式状态（不入 React state，避免每 token 重渲所有消息）
-    let currentLabel = '';
-    let streamContent = '';
-    let pendingTools: ToolStep[] = [];
-
-    const updateLast = (mutate: (last: MeetingMessage) => MeetingMessage) => {
-      setPublicMsgs(prev => {
-        if (prev.length === 0) return prev;
-        const lastIdx = prev.length - 1;
-        const last = prev[lastIdx];
-        if (last.speaker !== currentLabel) return prev;
-        const next = [...prev];
-        next[lastIdx] = mutate(last);
-        return next;
-      });
-    };
-
+    let result: { ok: boolean; error?: string };
     try {
-      await speakStream(nodeId, text, (ev) => {
-        switch (ev.type) {
-          case 'agent-start':
-            currentLabel = ev.label;
-            streamContent = '';
-            pendingTools = [];
-            setWaitingSince(Date.now());
-            setWaitingLabel(ev.label);
-            setPublicMsgs(prev => [...prev, {
-              speaker: ev.label, content: '', timestamp: Date.now(),
-              streaming: true, toolCalls: [],
-            }]);
-            break;
-          case 'token':
-            setWaitingSince(null); // 收到 token 就不再显示等待
-            streamContent += ev.chunk;
-            { const snap = streamContent;
-              updateLast(last => ({ ...last, content: snap })); }
-            break;
-          case 'tool-call':
-            pendingTools = [...pendingTools, { tool: ev.tool, args: ev.args, status: 'running' }];
-            { const snap = pendingTools;
-              updateLast(last => ({ ...last, toolCalls: snap })); }
-            break;
-          case 'tool-result':
-            pendingTools = pendingTools.map(t =>
-              t.tool === ev.tool && t.status === 'running'
-                ? { ...t, result: ev.result, status: 'done' }
-                : t,
-            );
-            { const snap = pendingTools;
-              updateLast(last => ({ ...last, toolCalls: snap })); }
-            break;
-          case 'agent-done':
-            setWaitingSince(null);
-            updateLast(last => ({
-              ...last,
-              content: ev.content,
-              rawContent: streamContent || ev.rawContent || ev.content,
-              toolCalls: ev.toolCalls && ev.toolCalls.length > 0 ? ev.toolCalls : (pendingTools.length > 0 ? pendingTools : undefined),
-              streaming: false,
-            }));
-            currentLabel = '';
-            streamContent = '';
-            pendingTools = [];
-            break;
-          case 'heartbeat':
-            // 心跳：刷新等待计时（证明连接未断）
-            setWaitingLabel(ev.label);
-            break;
-          case 'round-done':
-            // 后端权威快照：覆盖（保留 streaming=false 默认）
-            setPublicMsgs(ev.messages);
-            break;
-          case 'error':
-            setError(ev.message);
-            break;
-        }
-      }, abort.signal);
+      result = await sendSpeak(nodeId, text, abort.signal);
     } catch (e) {
-      if ((e as Error).name !== 'AbortError') setError((e as Error).message);
-    } finally {
+      if ((e as Error).name === 'AbortError') {
+        result = { ok: false };
+      } else {
+        result = { ok: false, error: (e as Error).message };
+      }
+    }
+    abortRef.current = null;
+    if (!result.ok) {
+      setError(result.error || '发言发送失败');
       setBusy(false);
       setWaitingSince(null);
-      abortRef.current = null;
     }
+    // 成功时不设 busy=false——等 round-done 事件
   }, [publicInput, busy, nodeId]);
 
-  // 会长私聊（SSE 流式）
+  // 会长私聊（fire-and-forget，事件通过 /events 流返回）
   const handleChair = useCallback(async () => {
     const text = chairInput.trim();
     if (!text) return;
     setChairInput('');
     setError(null);
 
-    const abort = new AbortController();
-    abortRef.current = abort;
-
-    // 追加人类消息到本地
     setChairMsgs(prev => [...prev, { role: 'user', content: text }]);
-    // 追加 assistant 占位
-    let streamContent = '';
     setChairMsgs(prev => [...prev, { role: 'assistant', content: '' }]);
 
-    try {
-      await chairStream(nodeId, text, (ev) => {
-        switch (ev.type) {
-          case 'chair-token':
-            streamContent += ev.chunk;
-            setChairMsgs(prev => {
-              const msgs = [...prev];
-              msgs[msgs.length - 1] = { role: 'assistant', content: streamContent };
-              return msgs;
-            });
-            break;
-          case 'done':
-            setChairMsgs(ev.messages);
-            break;
-          case 'error':
-            setError(ev.message);
-            break;
-        }
-      }, abort.signal);
-    } catch (e) {
-      if ((e as Error).name !== 'AbortError') setError((e as Error).message);
-    } finally {
-      abortRef.current = null;
+    const result = await sendChair(nodeId, text);
+    if (!result.ok) {
+      setError(result.error || '私聊发送失败');
+      setChairMsgs(prev => prev.filter(m => m.role !== 'assistant' || m.content));
     }
   }, [chairInput, nodeId]);
 
-  // 结束会议
+  // 结束会议（不关面板，切为 ended 状态）
   const handleEnd = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
       await endMeeting(nodeId);
-      onClose();
+      // 不 onClose——保持面板打开，phase-change 'ended' 事件会自动切换 UI
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
-  }, [nodeId, onClose]);
+  }, [nodeId]);
 
   const publicKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); }
@@ -311,16 +422,19 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
   };
 
   const isOpening = phase === 'opening';
+  const isEnded = phase === 'ended';
 
   return createPortal(
     <div className="tw-meeting-overlay">
       <div className="tw-meeting-panel">
         <div className="tw-meeting-panel__header">
-          <span className="tw-meeting-panel__title">{nodeLabel}</span>
+          <span className="tw-meeting-panel__title">{nodeLabel}{isEnded && '（已结束）'}</span>
           <div className="tw-meeting-panel__actions">
-            <button className="tw-meeting-panel__end-btn" onClick={handleEnd} disabled={busy || isOpening}>
-              结束会议
-            </button>
+            {!isEnded && (
+              <button className="tw-meeting-panel__end-btn" onClick={handleEnd} disabled={busy || isOpening}>
+                结束会议
+              </button>
+            )}
             <button className="tw-meeting-panel__close" onClick={onClose}>×</button>
           </div>
         </div>
@@ -328,6 +442,11 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
         {isOpening && (
           <div className="tw-meeting-panel__opening-banner">
             成员入会发言中…（信封已注入，参与者正在生成入会摘要）
+          </div>
+        )}
+        {isEnded && (
+          <div className="tw-meeting-panel__opening-banner">
+            会议已结束，公共发言锁定。会长私聊仍可用，可继续提问。
           </div>
         )}
         {/* 参与者管理栏 */}
@@ -374,8 +493,8 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
                 value={publicInput}
                 onChange={(e) => setPublicInput(e.target.value)}
                 onKeyDown={publicKeyDown}
-                placeholder={isOpening ? '入会摘要中，请稍候…' : '发言...'}
-                disabled={busy || isOpening}
+                placeholder={isEnded ? '会议已结束' : isOpening ? '入会摘要中，请稍候…' : '发言...'}
+                disabled={busy || isOpening || isEnded}
                 rows={1}
               />
               {busy ? (
@@ -386,7 +505,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose }: MeetingPanelProps) 
                   ■
                 </button>
               ) : (
-                <button className="tw-meeting-panel__send" onClick={handleSpeak} disabled={isOpening || !publicInput.trim()}>
+                <button className="tw-meeting-panel__send" onClick={handleSpeak} disabled={isOpening || isEnded || !publicInput.trim()}>
                   发送
                 </button>
               )}

@@ -178,6 +178,28 @@
   margin-left: auto;
 }
 
+.conv__header-cmd {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  padding: 1px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.conv__header-cmd:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.conv__header-cmd:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .conv__header-input {
   padding: var(--space-1) var(--space-2);
   font-size: var(--text-base);
