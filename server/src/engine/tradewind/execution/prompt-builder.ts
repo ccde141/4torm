@@ -36,11 +36,40 @@ export interface TradewindPromptParams {
   sandboxLevel: SandboxLevel;
   /** 是否允许 delegate（sub-agent 委托） */
   allowDelegate: boolean;
+  // ── 环境信息（引擎自动注入） ──
+  /** 执行批次 ID */
+  executionId: string;
+  /** 节点 ID */
+  nodeId: string;
+  /** 工作流 ID */
+  workflowId: string;
+  /** 运行平台 */
+  platform: string;
+  /** 今日日期 */
+  today: string;
+  /** 模型标识（如 claude-sonnet-4-20250514） */
+  modelId: string;
+  /** 模型族（预留扩展） */
+  modelFamily?: 'claude' | 'gpt' | 'gemini' | 'other';
 }
 
 /** 构建信风 Agent 的完整 system prompt */
 export function buildTradewindSystemPrompt(params: TradewindPromptParams): string {
   const sections: string[] = [];
+
+  // §0 环境信息（引擎自动注入，agent 无需理解但工具调用时可参考）
+  sections.push([
+    `<env>`,
+    `  模型: ${params.modelId}`,
+    `  平台: ${params.platform}`,
+    `  日期: ${params.today}`,
+    `  工作流: ${params.workflowId}`,
+    `  执行批次: ${params.executionId}`,
+    `  节点: ${params.nodeId}`,
+    `  工作区: ${params.workspaceAbs}`,
+    `  项目根: ${params.projectDir}`,
+    `</env>`,
+  ].join('\n'));
 
   // §1 角色定义
   sections.push(`# 角色\n\n${params.rolePrompt}`);
@@ -216,12 +245,6 @@ function buildToolProtocol(
 
 工具执行后你会收到 <result> 回复，解读后继续行动或输出 <answer>。
 
-## 协议自检（每次输出前默念）
-
-❌ 不要在 <action> 后输出未包标签的自然语言
-❌ 不要在等待 <result> 时就输出 <answer>
-❌ 不要忘记把最终结论包在 <answer>...</answer> 里
-
 ## 系统行为告知（了解即可，无需操作）
 
 - 如果你的输出因长度限制被截断（标签未闭合），系统会自动要求你继续输出剩余内容。
@@ -231,7 +254,13 @@ function buildToolProtocol(
 
 ## 可用工具
 
-${toolList}${allowDelegate ? buildDelegateSection(sandboxLevel) : ''}${teamRoster.length > 1 ? buildContactSection(teamRoster) : ''}`;
+${toolList}${allowDelegate ? buildDelegateSection(sandboxLevel) : ''}${teamRoster.length > 1 ? buildContactSection(teamRoster) : ''}
+
+## 协议自检（每次输出前默念）
+
+❌ 不要在 <action> 后输出未包标签的自然语言
+❌ 不要在等待 <result> 时就输出 <answer>
+❌ 不要忘记把最终结论包在 <answer>...</answer> 里`;
 }
 
 /** contact 工具说明段落 */

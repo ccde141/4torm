@@ -248,6 +248,12 @@ export default memo(function ConvectionPage() {
           currentLabel = '';
           streamContent = '';
           pendingTools = [];
+        } else if (ev.type === 'compact-start') {
+          setMsgs(p => [...p, { speaker: '系统', content: '会长正在整理对话记录...', streaming: true, toolCalls: [], timestamp: new Date().toISOString() }]);
+        } else if (ev.type === 'compact-done') {
+          setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === '系统' && m.streaming
+            ? { ...m, content: `对话记录已压缩（归档 ${(ev as any).archivedCycles} 个周期，摘要 ${Math.round(((ev as any).summaryLength || 0) / 1000)}K 字符）`, streaming: false }
+            : m));
         }
       }, ctrl.signal);
     } catch (e: any) {
@@ -511,6 +517,35 @@ export default memo(function ConvectionPage() {
             </div>
             {/* Input */}
             <div className="chat__input-area">
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '4px', padding: '2px 8px 0' }}>
+                <button
+                  onClick={async () => {
+                    if (!activeId || busy) return;
+                    if (!confirm('归档并清空对话历史？（工作区文件保留）')) return;
+                    const mode = confirm('生成极简摘要？\n确定 = 摘要模式\n取消 = 完全清零') ? 'summary' : 'clean';
+                    try {
+                      await fetch(`/api/convection/session/${activeId}/reset-context`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ mode }),
+                      });
+                      setMsgs(mode === 'clean' ? [] : [{ speaker: '系统', content: '对话记录已归档，等待摘要...', streaming: false, toolCalls: [], timestamp: new Date().toISOString() }]);
+                      refreshSessions();
+                      // 重新加载 session 获取最新状态
+                      const r = await fetch(`/api/convection/session/${activeId}/status`);
+                      if (r.ok) {
+                        const fresh = await r.json();
+                        setMsgs(fresh.publicMessages?.map((m: any) => ({ speaker: m.speaker, content: m.content, streaming: false, toolCalls: [], timestamp: m.timestamp ? new Date(m.timestamp).toISOString() : new Date().toISOString() })) || []);
+                      }
+                    } catch {}
+                  }}
+                  disabled={busy}
+                  style={{ fontSize: 'var(--text-xs)', padding: '2px 8px', borderRadius: '4px', border: '1px solid var(--color-border)', background: 'transparent', color: 'var(--color-text-tertiary)', cursor: busy ? 'default' : 'pointer' }}
+                  title="归档对话记录并清空（工作区保留）"
+                >
+                  归档清空
+                </button>
+              </div>
               <div className="chat__input-wrapper">
                 <textarea className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder="发言...（Shift+Enter 换行）" disabled={busy} rows={1} />
                 {busy ? (

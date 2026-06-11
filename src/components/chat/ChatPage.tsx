@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { getAgents, setAgentStatus, getAgent, forceUnlock } from '../../store/agent';
+import { getAgents, setAgentStatus, getAgent, forceUnlock, getOfflineAgentIds } from '../../store/agent';
 import { LOCKED_STATUSES, LOCKED_STATUS_LABELS, SYSTEM_STATUSES, type LockedStatus } from '../../store/statuses';
 
 const STATUS_COLOR_MAP: Record<string, string> = {};
@@ -8,6 +8,7 @@ import { getAllModels } from '../../llm';
 import StructuredMessage from './StructuredMessage';
 import ToolCallMessage from './ToolCallMessage';
 import DelegateCard from './DelegateCard';
+import AskCard from './AskCard';
 import { useSessionList } from './useSessionList';
 import { useMessageEditor } from './useMessageEditor';
 import { parseStructuredOutput } from '../../engine/parser';
@@ -42,6 +43,7 @@ const MEMORY_TRIGGERS = /回忆|之前|记得|记忆|回想|回顾|上次|过去
 
 export default function ChatPage({ preselectSession, onClearPreselect }: { preselectSession?: string; onClearPreselect?: () => void }) {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [offlineIds, setOfflineIds] = useState<Set<string>>(new Set());
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [messages, setMessagesRaw] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -85,7 +87,10 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
   }, [messages]);
 
   useEffect(() => {
-    getAgents().then(setAgents);
+    getAgents().then(async list => {
+      setAgents(list);
+      setOfflineIds(await getOfflineAgentIds(list));
+    });
     getAllModels().then(list => {
       setModels(list);
       setSelectedModel(prev => { if (list.length && !list.some(m => m.key === prev)) return list[0].key; return prev; });
@@ -96,7 +101,11 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
 
   // 2s 轮询 agent 状态
   useEffect(() => {
-    const id = setInterval(() => getAgents().then(setAgents), 2000);
+    const id = setInterval(async () => {
+      const list = await getAgents();
+      setAgents(list);
+      setOfflineIds(await getOfflineAgentIds(list));
+    }, 2000);
     return () => clearInterval(id);
   }, []);
 
@@ -113,6 +122,110 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
       onClearPreselect?.();
     })();
   }, [preselectSession]);
+
+  /** 处理 agent ask 的回复 */
+  const handleAskReply = async (msgId: string, answer: string) => {
+    if (!selectedAgent || !activeSessionId || streaming) return;
+
+    // 标记 ask 为已回复
+    const updatedMessages = messagesRef.current.map(m =>
+      m.id === msgId && m.ask ? { ...m, ask: { ...m.ask, answered: true, reply: answer } } : m,
+    );
+    setMessages(updatedMessages);
+
+    const session = await getSession(activeSessionId);
+    if (!session) return;
+
+    setStreaming(true);
+    setAgentStatus(selectedAgent.id, 'busy');
+
+    const abortController = new AbortController();
+    abortRef.current = () => abortController.abort();
+
+    try {
+      // 调 /reply 端点恢复循环（SSE 流式）
+      const res = await fetch('/api/conversation/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: activeSessionId, answer }),
+        signal: abortController.signal,
+      });
+
+      if (!res.ok) {
+        const err = await res.text().catch(() => '未知错误');
+        throw new Error(err);
+      }
+
+      // 创建 assistant 占位消息
+      const assistantMsgId = generateMessageId();
+      let streamContent = '';
+      const assistantMsg: ChatMessage = {
+        id: assistantMsgId, role: 'assistant', content: '',
+        timestamp: new Date().toISOString(), agentId: selectedAgent.id,
+      };
+      let allMessages = [...updatedMessages, assistantMsg];
+      setMessages([...allMessages]);
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const json = line.slice(6).trim();
+          if (!json) continue;
+
+          let ev: any;
+          try { ev = JSON.parse(json); } catch { continue; }
+
+          // 简化事件处理（token + answer + ask + done）
+          if (ev.type === 'token') {
+            streamContent += ev.content;
+            allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: streamContent } : m);
+            setMessages([...allMessages]);
+          } else if (ev.type === 'answer') {
+            const finalMsg: ChatMessage = {
+              id: assistantMsgId, role: 'assistant',
+              content: ev.rawContent || ev.content,
+              timestamp: new Date().toISOString(), agentId: selectedAgent.id,
+            };
+            allMessages = allMessages.map(m => m.id === assistantMsgId ? finalMsg : m);
+            setMessages([...allMessages]);
+          } else if (ev.type === 'ask') {
+            // 嵌套 ask（agent 继续提问）
+            const askMsg: ChatMessage = {
+              id: generateMessageId(), role: 'assistant',
+              content: ev.question,
+              timestamp: new Date().toISOString(), agentId: selectedAgent.id,
+              ask: { question: ev.question, options: ev.options, answered: false },
+            };
+            allMessages = allMessages.filter(m => m.id !== assistantMsgId);
+            allMessages.push(askMsg);
+            setMessages([...allMessages]);
+          }
+        }
+      }
+
+      await saveSession({ ...session, messages: allMessages, title: session.titleManual ? session.title : autoTitle(allMessages), model: selectedModel }).catch(() => {});
+      refreshSessions(selectedAgent);
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') {
+        const errMsg: ChatMessage = { id: generateMessageId(), role: 'assistant', content: `错误: ${(e as Error).message}`, timestamp: new Date().toISOString(), agentId: selectedAgent.id };
+        setMessages([...messagesRef.current, errMsg]);
+      }
+    } finally {
+      setStreaming(false);
+      setAgentStatus(selectedAgent.id, 'idle');
+    }
+  };
 
   const handleSend = async () => {
     const cmd = input.trim();
@@ -236,7 +349,7 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {agents.map(agent => (
               <button key={agent.id} onClick={() => selectAgent(agent)} style={{ ...agentBtnStyle, background: selectedAgent?.id === agent.id ? 'var(--color-accent-subtle)' : 'transparent', color: selectedAgent?.id === agent.id ? 'var(--color-accent)' : 'var(--color-text-secondary)', fontWeight: selectedAgent?.id === agent.id ? 'var(--font-semibold)' : 'var(--font-normal)', border: selectedAgent?.id === agent.id ? '1px solid var(--color-accent)' : '1px solid var(--color-border)' }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: agent.busy ? STATUS_COLOR_MAP.busy : (STATUS_COLOR_MAP[agent.status] ?? STATUS_COLOR_MAP.idle), flexShrink: 0 }} title={agent.busy ? '工作中' : agent.status} />
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: offlineIds.has(agent.id) ? '#ef4444' : agent.busy ? STATUS_COLOR_MAP.busy : (STATUS_COLOR_MAP[agent.status] ?? STATUS_COLOR_MAP.idle), flexShrink: 0 }} title={offlineIds.has(agent.id) ? '离线（模型不可用）' : agent.busy ? '工作中' : agent.status} />
                 <span className="text-truncate">{agent.name}</span>
               </button>
             ))}
@@ -352,6 +465,14 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
                         }
                       />
                     )
+                  ) : msg.ask ? (
+                    <AskCard
+                      question={msg.ask.question}
+                      options={msg.ask.options}
+                      answered={msg.ask.answered}
+                      reply={msg.ask.reply}
+                      onReply={(answer) => handleAskReply(msg.id, answer)}
+                    />
                   ) : msg.role === 'assistant' ? (() => {
                     // 流式中的最后一条消息：识别 <answer> 段（含未闭合）+ 剥离 think/action 标签
                     const isStreamingMsg = streaming && msg === messages[messages.length - 1];

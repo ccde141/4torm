@@ -14,11 +14,14 @@
 import type { ContextMessage } from '../shared/types';
 import {
   runReActLoop,
+  SuspendSignal,
   type LLMCaller,
   type ToolCaller,
 } from './react-loop';
 import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 // ── SSE 事件类型（推送给前端） ────────────────────────────────────
 
@@ -31,6 +34,7 @@ export type ConversationEvent =
   | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
   | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
+  | { type: 'ask'; question: string; options?: string[] }
   | { type: 'answer'; content: string; rawContent: string }
   | { type: 'usage'; usage: TokenUsage }
   | { type: 'error'; message: string }
@@ -62,16 +66,51 @@ export class SessionRunner {
   private readonly opts: SessionRunnerOpts;
   private busy = false;
   private abortController: AbortController | null = null;
+  private suspended = false;
+  /** 挂起时保存的上下文（messages + systemPrompt），用于 resume */
+  private suspendedState: { messages: ContextMessage[]; systemPrompt: string } | null = null;
 
   constructor(opts: SessionRunnerOpts) {
     this.opts = opts;
   }
 
   isBusy(): boolean { return this.busy; }
+  isSuspended(): boolean { return this.suspended; }
 
   /** 中止当前执行 */
   abort(): void {
     this.abortController?.abort();
+  }
+
+  /**
+   * 恢复挂起的会话：人类回复了 ask 问题。
+   * 把回复作为 <result tool="ask"> 追加到 messages，重新进入 ReAct 循环。
+   */
+  async resume(
+    answer: string,
+    onEvent: (ev: ConversationEvent) => void,
+  ): Promise<{ content: string; rawContent: string }> {
+    if (!this.suspended || !this.suspendedState) {
+      throw new Error('会话未处于挂起状态');
+    }
+    if (this.busy) throw new Error('会话正在执行中');
+
+    this.busy = true;
+    this.suspended = false;
+    this.abortController = new AbortController();
+
+    const { messages, systemPrompt } = this.suspendedState;
+    this.suspendedState = null;
+
+    // 把人类回复作为工具结果追加
+    messages.push({ role: 'user', content: `<result tool="ask">${answer}</result>` });
+
+    try {
+      return await this.runLoop(systemPrompt, messages, onEvent);
+    } finally {
+      this.busy = false;
+      this.abortController = null;
+    }
   }
 
   /**
@@ -122,6 +161,15 @@ export class SessionRunner {
             return intercepted;
           }
         }
+        // ask 虚拟工具：抛 SuspendSignal 中断循环
+        if (tool === 'ask') {
+          const question = args.question || '需要你的确认';
+          let options: string[] | undefined;
+          if (args.options) {
+            try { options = JSON.parse(args.options); } catch {}
+          }
+          throw new SuspendSignal(question, options);
+        }
         if (tool === 'delegate') {
           return await this.execDelegate(args, onEvent);
         }
@@ -149,6 +197,15 @@ export class SessionRunner {
       },
       signal,
     });
+
+    // ask 挂起：保存状态，通知前端
+    if (result.suspended) {
+      this.suspended = true;
+      this.suspendedState = { messages: chatMessages, systemPrompt };
+      onEvent({ type: 'ask', question: result.suspended.question, options: result.suspended.options });
+      onEvent({ type: 'done' });
+      return { content: '', rawContent: '' };
+    }
 
     onEvent({ type: 'answer', content: result.content, rawContent: result.rawContent });
     if (result.usage) onEvent({ type: 'usage', usage: result.usage });

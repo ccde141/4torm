@@ -114,7 +114,10 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   // 3. delegate 说明（沙箱说明跟着母 agent 级别）
   parts.push(buildDelegateSection(opts.sandboxLevel));
 
-  // 4. 「基地 + 沙箱」段
+  // 4. ask 说明（向人类提问）
+  parts.push(buildAskSection());
+
+  // 5. 「基地 + 沙箱」段
   parts.push(buildSandboxSection({
     workspaceAbs: opts.workspaceAbs,
     projectDir: opts.projectDir,
@@ -122,7 +125,7 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
     workspaceLabel: '你的工作区（专属）',
   }));
 
-  // 5. 记忆注入
+  // 6. 记忆注入
   if (opts.userMessage && MEMORY_TRIGGERS.test(opts.userMessage)) {
     const memPath = path.join(opts.dataDir, 'agents', opts.agentId, '.workspace', 'MEMORY.md');
     try {
@@ -188,4 +191,46 @@ function buildOutputProtocol(tools: ToolDef[]): string {
 ## 可用工具
 
 ${toolList}`;
+}
+
+/** ask 虚拟工具说明（向人类提问） */
+function buildAskSection(): string {
+  return `
+
+### ask
+  描述: 向用户提出问题，等待回复后继续。适用于需要用户确认方向、选择方案、或补充关键信息时。
+  参数:
+    question: string [必填] — 简短一句问句（≤30 字），不要写成解释段落
+    options: string [可选] — JSON 数组，2-4 个互斥短语（每项 ≤10 字），如 '["方案A","方案B","方案C"]'
+
+  规则：
+  - 仅在信息不足、存在歧义、或需要用户决策时使用。已能推断的事不要问。
+  - 每次只问一个问题，不要在一轮中多次调用 ask。
+  - options 要互斥、覆盖合理范围、文字精炼。用户也可自由输入选项外的答案。
+
+  正确示例：
+  <action tool="ask">{"question":"遇到了什么类型的问题？","options":"[\\"代码报错\\",\\"界面异常\\",\\"功能不符预期\\"]"}</action>
+
+  错误示例（question 写成段落、options 过多且重叠）：
+  <action tool="ask">{"question":"能具体说说发生了什么吗？比如出现了什么错误提示、哪个功能异常、或者在哪一步卡住了？尽量描述一下你看到的现象，我好帮你排查。","options":"[\\"代码报错或运行异常\\",\\"文件/数据丢失或损坏\\",\\"界面显示不正常\\",\\"操作没有达到预期效果\\",\\"系统或环境出现问题\\",\\"其他问题\\"]"}</action>
+
+  对比要点：
+  - question 是一句问句，不是一段引导语
+  - options 互斥、≤4 项、每项简短，"其他"由前端自由输入框承载，不必显式列出
+
+## 何时应主动使用 ask
+
+你不是被动的执行者——当发现推进方向不明确时，应该主动向用户提问而非凭假设行动。
+
+以下场景应优先使用 ask：
+- **bug 分析有多个可能根因**：列出 2-4 个假设让用户确认现象，而非逐个猜测验证
+- **技术选型存在权衡**：先了解用户的约束（性能/团队熟悉度/生态/工期），再推荐方案
+- **需求描述模糊**：确认范围和边界，而非按最大化理解去实现
+- **方案有不可逆后果**：如数据库迁移、架构重构、依赖更换，先确认用户接受的风险等级
+- **多步推演需要中间确认**：如选型推演，每一步收窄方向后确认再继续
+
+不应使用 ask 的场景：
+- 你已经有足够信息做出判断
+- 问题答案可以通过工具调用获得（先查再问）
+- 问题过于琐碎（如文件命名风格），直接按最佳实践做`;
 }

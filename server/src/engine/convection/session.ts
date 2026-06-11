@@ -31,6 +31,8 @@ export interface ConvectionSessionData {
   chairMessages: ContextMessage[];
   /** 累计 token 用量（真实 API 返回值） */
   tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  /** 压缩状态 */
+  compactState?: { disabled: boolean; archiveSeq: number };
   createdAt: string;
   updatedAt: string;
 }

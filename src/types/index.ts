@@ -43,6 +43,14 @@ export interface ChatMessage {
   toolCall?: ToolCall;
   /** 运行时类型标记（如 'compact-marker'） */
   type?: string;
+  /** agent 反问（ask 工具触发） */
+  ask?: {
+    question: string;
+    options?: string[];
+    answered: boolean;
+    /** 人类的回复内容（answered=true 后填充） */
+    reply?: string;
+  };
 }
 
 /** 工具调用记录 */
@@ -51,7 +59,9 @@ export interface ToolCall {
   params: Record<string, unknown>;
   result?: string;
   durationMs?: number;
-  status: 'pending' | 'success' | 'error';
+  status: 'pending' | 'success' | 'error' | 'running';
+  /** delegate 子步骤 */
+  steps?: Array<{ type: string; tool: string; args?: Record<string, string>; result?: string; ok?: boolean }>;
 }
 
 /** Agent 会话 */
