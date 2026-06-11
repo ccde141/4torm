@@ -502,6 +502,14 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
           ))
           .catch(() => {});
       }
+      // abort 后跳过压缩（用户想停就停，不做额外工作）
+      if (roundAbort.signal.aborted) {
+        meeting.session.busy = false;
+        const roundDoneEvent = { type: 'round-done' as const, messages: meeting.session.publicMessages, compacted: false };
+        try { raw.write(`data: ${JSON.stringify(roundDoneEvent)}\n\n`); raw.end(); } catch {}
+        broadcastToMeeting(nodeId, roundDoneEvent);
+        return;
+      }
       // 会议室压缩检查（speak 周期完整结束后）
       // 压缩期间重置 busy 防止并发 speak
       meeting.session.busy = true;
@@ -609,7 +617,16 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     const meeting = activeMeetings.get(nodeId);
     if (!meeting) return reply.status(404).send({ error: 'No active meeting' });
     if (meeting.session.phase !== 'discussion') return reply.status(409).send({ error: '会议尚未进入讨论阶段' });
-    if (meeting.session.busy) return reply.status(409).send({ error: 'Round in progress' });
+
+    // busy 等待：如果当前轮次刚被 abort，handleSpeak 还在收尾（清 listener、归档），
+    // 等最多 3s 让其完成，避免直接 409
+    if (meeting.session.busy) {
+      const startWait = Date.now();
+      while (meeting.session.busy && Date.now() - startWait < 3000) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      if (meeting.session.busy) return reply.status(409).send({ error: 'Round in progress' });
+    }
 
     broadcastToMeeting(nodeId, { type: 'phase-change', phase: 'ending' });
 

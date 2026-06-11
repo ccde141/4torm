@@ -37,6 +37,8 @@ export interface TradewindPromptParams {
   /** 是否允许 delegate（sub-agent 委托） */
   allowDelegate: boolean;
   // ── 环境信息（引擎自动注入） ──
+  /** Agent 实体名称（如"牛顿"、"费曼"） */
+  agentName: string;
   /** 执行批次 ID */
   executionId: string;
   /** 节点 ID */
@@ -87,6 +89,7 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
     `人类作为负责人，可以随时与你对话、补充指令或调整方向。`,
     ``,
     `你当前的身份：${params.nodeLabel}`,
+    `你的名字：${params.agentName}`,
     ``,
     `补充说明：`,
     `- 你的对话上下文会持续累积，期间你可能交替收到：`,

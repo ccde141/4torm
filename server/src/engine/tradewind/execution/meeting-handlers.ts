@@ -142,7 +142,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         messages,
         llm,
         tools: toolCaller,
-        maxTurns: 10,
+        maxTurns: 100,
         onEvent: (ev) => {
           if (ev.type === 'token') {
             if (session.streamingCurrent) session.streamingCurrent.content += ev.chunk;
@@ -161,7 +161,9 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       // abort 后 result.content 可能是 '[中止]' 或 '[错误]...'——用已流式积累的内容替代
       const aborted = signal?.aborted;
       const streamedContent = session.streamingCurrent?.content?.trim() || '';
-      const finalContent = aborted ? streamedContent : result.content;
+      const finalContent = aborted
+        ? (extractAnswer(streamedContent) ?? stripInternalTags(streamedContent).trim())
+        : result.content;
 
       if (finalContent && !finalContent.startsWith('[中止]') && !finalContent.startsWith('[错误]')) {
         session.publicMessages.push({
@@ -428,6 +430,8 @@ function buildOpeningPromptNoHistory(
 export interface HandleEndOpts {
   dataDir: string;
   session: MeetingSessionData;
+  /** 团队名册（label + role），用于纪要中注入团队结构 */
+  teamRoster?: Array<{ label: string; role: string }>;
   signal?: AbortSignal;
   onEvent?: (ev: MeetingStreamEvent) => void;
 }
@@ -441,13 +445,23 @@ export interface MeetingEndResult {
 
 /** 人类结束会议 → 会长生成纪要 → 返回纪要 + 完整对话快照 */
 export async function handleEnd(opts: HandleEndOpts): Promise<MeetingEndResult> {
-  const { dataDir, session, signal, onEvent } = opts;
+  const { dataDir, session, teamRoster, signal, onEvent } = opts;
 
   const agent = await loadAgent(dataDir, session.chairAgentId);
   if (!agent) throw new Error('会长 Agent 不存在');
 
   const transcript = formatPublicContext(session);
   const participantLabels = session.participants.map(p => p.label).join('、');
+
+  // 团队名册段（如果传入了 roster）
+  const rosterSection = teamRoster && teamRoster.length > 0
+    ? [
+        ``,
+        `## 团队名册（完整工作流协作者）`,
+        ...teamRoster.map(m => `- ${m.label}：${m.role}`),
+        ``,
+      ].join('\n')
+    : '';
 
   const system: ContextMessage = {
     role: 'system',
@@ -462,6 +476,7 @@ export async function handleEnd(opts: HandleEndOpts): Promise<MeetingEndResult> 
       `- 参与者：${participantLabels}`,
       `- 总轮次：${session.round}`,
       `- 总发言数：${session.publicMessages.length}`,
+      rosterSection,
       ``,
       `## 完整对话记录`,
       `---`,
@@ -500,9 +515,18 @@ export async function handleEnd(opts: HandleEndOpts): Promise<MeetingEndResult> 
     ? (chunk: string) => { onEvent({ type: 'chair-token', chunk }); }
     : undefined;
 
-  const r = await callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal });
-  onEvent?.({ type: 'minutes-done', content: r.content });
-  return { minutes: r.content, transcript };
+  try {
+    const r = await callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal });
+    onEvent?.({ type: 'minutes-done', content: r.content });
+    return { minutes: r.content, transcript };
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') {
+      return { minutes: '[会议纪要生成被中止]', transcript };
+    }
+    const errMsg = `[纪要生成失败] ${(e as Error).message}`;
+    onEvent?.({ type: 'minutes-done', content: errMsg });
+    return { minutes: errMsg, transcript };
+  }
 }
 
 // ── 辅助：构建会议中 Agent 的 system prompt ──────────────────────
