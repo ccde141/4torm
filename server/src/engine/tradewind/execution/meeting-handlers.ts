@@ -72,6 +72,64 @@ async function execTool(
   return execToolUnified({ tool, args, agentId, workspaceDir: workspace, signal });
 }
 
+/**
+ * 会议室内 contact：联络 agent 节点。
+ * 标头格式：[系统信息：来自会议室「xxx」- 协作者「yyy」的联络]
+ */
+async function execMeetingContact(
+  args: Record<string, string>,
+  senderLabel: string,
+  meetingLabel: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { findRunnerByLabel, tryRegisterWait, clearWait } = await import('./contact-registry');
+
+  const target = args.target || '';
+  const message = args.message || '';
+
+  const found = findRunnerByLabel(target);
+  if (!found) {
+    return `联络失败：找不到名为「${target}」的协作者。请检查可联络的节点名称。`;
+  }
+
+  // 死锁检测（用会议室 nodeId 占位——这里无 nodeId，用 meetingLabel 做 key）
+  const sourceKey = `meeting:${meetingLabel}:${senderLabel}`;
+  const canWait = tryRegisterWait(sourceKey, found.nodeId);
+  if (!canWait) {
+    return `联络被系统拒绝：「${target}」当前正在等待你的回复，反向联络会造成死锁。`;
+  }
+
+  try {
+    const contactContent = `[系统信息：来自会议室「${meetingLabel}」- 协作者「${senderLabel}」的联络]\n\n${message}`;
+
+    const answer = await new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('contact 超时（5 分钟未响应）'));
+      }, 5 * 60 * 1000);
+
+      found.runner.push({
+        source: 'contact',
+        content: contactContent,
+        onComplete: (output) => {
+          clearTimeout(timeout);
+          resolve(output);
+        },
+      });
+
+      signal?.addEventListener('abort', () => {
+        clearTimeout(timeout);
+        reject(new Error('会议已中止'));
+      }, { once: true });
+    });
+
+    return `[来自「${target}」的回复]\n\n${answer}`;
+  } catch (e) {
+    return `联络「${target}」失败：${(e as Error).message}`;
+  } finally {
+    clearWait(sourceKey);
+  }
+}
+
 // ── handleSpeak ───────────────────────────────────────────────────
 
 export interface HandleSpeakOpts {
@@ -127,6 +185,10 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       };
       const toolCaller: ToolCaller | undefined = toolDefs.length > 0 ? {
         async call(tool, args) {
+          // contact 假工具：联络 agent 节点
+          if (tool === 'contact') {
+            return execMeetingContact(args, label, session.meetingLabel, signal);
+          }
           try {
             const result = await execTool(tool, args, participant.agentId, workspace, signal);
             return result;
@@ -596,6 +658,21 @@ function buildMeetingAgentPrompt(
     `- 如果要回应某人的观点，明确指出是谁的观点`,
     `- 工具调用过程不会展示给其他参与者，只有最终 <answer> 内容会被公开`,
     `- 用 <answer>你的发言</answer> 包裹最终回复`,
+    ``,
+    `## 联络 Agent 节点`,
+    ``,
+    `你可以联络工作流中其他正在运行的 Agent 节点，让它们协助你或获取它们的工作成果。`,
+    ``,
+    `### contact`,
+    `  描述: 联络工作流中的 Agent 节点。对方会处理你的消息并返回回复。`,
+    `  参数:`,
+    `    target: string [必填] — 目标节点名称`,
+    `    message: string [必填] — 你要传达的内容（问题、请求、同步信息等）`,
+    ``,
+    `  注意：`,
+    `  - 对方是工作流中实际执行任务的 Agent 节点，不是会议室内的参与者`,
+    `  - 用于将会议讨论结论同步给执行者，或向执行者索取最新进展`,
+    `  - 对方处理可能需要时间（涉及工具调用），请耐心等待`,
     ``,
     `## 会议结束后`,
     `会议结束时，会长会生成完整纪要。`,
