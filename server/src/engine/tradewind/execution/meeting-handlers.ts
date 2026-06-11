@@ -141,6 +141,8 @@ export interface HandleSpeakOpts {
   humanMessage: string;
   signal?: AbortSignal;
   onEvent?: (ev: MeetingStreamEvent) => void;
+  /** 工作流团队名册（用于 contact 工具说明） */
+  teamRoster?: Array<{ label: string; role: string }>;
 }
 
 /**
@@ -149,7 +151,7 @@ export interface HandleSpeakOpts {
  * 返回最后一个 Agent 的 promptTokens（用于压缩阈值判断）。
  */
 export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undefined> {
-  const { dataDir, workspace, session, humanMessage, signal, onEvent } = opts;
+  const { dataDir, workspace, session, humanMessage, signal, onEvent, teamRoster } = opts;
 
   session.publicMessages.push({ speaker: '人类', content: humanMessage, timestamp: Date.now() });
   session.round++;
@@ -172,7 +174,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       // 构造 system prompt（参与者列表用 label）
       const participantLabels = session.participants.map(p => p.label);
 
-      const systemText = buildMeetingAgentPrompt(agent, participantLabels, session, toolDefs, workspace, label, session.meetingLabel, dataDir);
+      const systemText = buildMeetingAgentPrompt(agent, participantLabels, session, toolDefs, workspace, label, session.meetingLabel, dataDir, teamRoster);
       const history = formatPublicContext(session);
       const messages: ContextMessage[] = [
         { role: 'system', content: systemText },
@@ -626,6 +628,7 @@ function buildMeetingAgentPrompt(
   selfLabel: string,
   meetingLabel: string,
   dataDir: string,
+  contactTargets?: Array<{ label: string; role: string }>,
 ): string {
   const sections: string[] = [];
 
@@ -670,10 +673,15 @@ function buildMeetingAgentPrompt(
     ``,
     `你可以联络工作流中其他正在运行的 Agent 节点，让它们协助你或获取它们的工作成果。`,
     ``,
+    ...(contactTargets && contactTargets.length > 0 ? [
+      `可联络的节点：`,
+      ...contactTargets.map(t => `  - ${t.label}：${t.role}`),
+      ``,
+    ] : []),
     `### contact`,
     `  描述: 联络工作流中的 Agent 节点。对方会处理你的消息并返回回复。`,
     `  参数:`,
-    `    target: string [必填] — 目标节点名称`,
+    `    target: string [必填] — 目标节点名称（可选值：${contactTargets && contactTargets.length > 0 ? contactTargets.map(t => t.label).join('、') : '（无可联络节点）'}）`,
     `    message: string [必填] — 你要传达的内容（问题、请求、同步信息等）`,
     ``,
     `  注意：`,

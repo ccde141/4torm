@@ -7,6 +7,7 @@
  */
 
 import type { ServerResponse } from 'node:http';
+import { pushUnified } from './unified-stream';
 
 export type MeetingBroadcastEvent =
   | { type: 'connected'; phase: string; round: number; messages: unknown[]; chairMessages: unknown[]; participants: unknown[]; configuredParticipants: unknown[] }
@@ -51,6 +52,9 @@ export function clearClients(nodeId: string): void {
 }
 
 export function broadcastToMeeting(nodeId: string, event: MeetingBroadcastEvent): void {
+  // 推送到统一 SSE 流
+  pushUnified('meeting', nodeId, event as unknown as Record<string, unknown>);
+  // 推送到 per-node 客户端（兼容旧端点）
   const set = clients.get(nodeId);
   if (!set || set.size === 0) return;
   const data = `data: ${JSON.stringify(event)}\n\n`;

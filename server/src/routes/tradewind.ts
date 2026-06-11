@@ -30,6 +30,7 @@ import { HumanGateExecutor, activeHumanGates } from '../engine/tradewind/nodes/h
 import { handleSpeak, handleChair, handleEnd } from '../engine/tradewind/execution/meeting-handlers';
 import { compactMeetingIfNeeded, MEETING_COMPACT_THRESHOLD } from '../engine/tradewind/execution/context-compactor';
 import { addClient, removeClient, broadcastToMeeting, clearClients } from '../engine/tradewind/execution/meeting-broadcast';
+import { addUnifiedClient, removeUnifiedClient } from '../engine/tradewind/execution/unified-stream';
 import { getEnvelopePending } from '../engine/tradewind/foundation/node-status-store';
 import { getMeetingsDir, getMeetingFileName } from '../engine/tradewind/foundation/archive-paths';
 import { validateWorkflow } from '../engine/tradewind/foundation/workflow-validator';
@@ -328,6 +329,52 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ ok: true });
   });
 
+  // ── 统一 SSE 端点（解决浏览器 6 连接上限） ─────────────────────
+
+  /** GET /stream — 所有活跃节点的事件统一推送（单连接复用） */
+  app.get('/stream', (req, reply) => {
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    raw.write('\n');
+
+    addUnifiedClient(raw);
+
+    // 发送所有活跃 agent 节点的 connected 快照
+    for (const [nodeId, runner] of activeNodeRunners) {
+      const snap = { scope: 'agent', nodeId, type: 'connected', busy: runner.isBusy() };
+      try { raw.write(`data: ${JSON.stringify(snap)}\n\n`); } catch {}
+    }
+    // 发送所有活跃会议室的 connected 快照
+    for (const [nodeId, meeting] of activeMeetings) {
+      const snap = {
+        scope: 'meeting', nodeId, type: 'connected',
+        phase: meeting.session.phase,
+        round: meeting.session.round,
+        messages: meeting.session.publicMessages,
+        chairMessages: meeting.session.chairMessages,
+        participants: meeting.session.participants,
+        configuredParticipants: meeting.configuredParticipants,
+      };
+      try { raw.write(`data: ${JSON.stringify(snap)}\n\n`); } catch {}
+    }
+
+    // 心跳保活
+    const hb = setInterval(() => {
+      try { raw.write(': heartbeat\n\n'); } catch { clearInterval(hb); }
+    }, 15_000);
+
+    req.raw.on('close', () => {
+      clearInterval(hb);
+      removeUnifiedClient(raw);
+    });
+  });
+
   /** GET /chat/:nodeId/events — Agent 节点持久 SSE 事件流（信封/人类消息处理均推送） */
   app.get('/chat/:nodeId/events', async (req, reply) => {
     const { nodeId } = req.params as { nodeId: string };
@@ -483,6 +530,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       session: meeting.session,
       humanMessage: message,
       signal: roundAbort.signal,
+      teamRoster: meeting.teamRoster,
       onEvent: (ev) => {
         try { raw.write(`data: ${JSON.stringify(ev)}\n\n`); } catch {}
         broadcastToMeeting(nodeId, ev);

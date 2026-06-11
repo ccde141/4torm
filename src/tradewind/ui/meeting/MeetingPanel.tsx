@@ -10,8 +10,9 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { subscribe, unsubscribe } from '../stream/unified-client';
 import {
-  connectEventStream, sendSpeak, sendChair, endMeeting, joinMeeting, leaveMeeting, reorderMeeting,
+  sendSpeak, sendChair, endMeeting, joinMeeting, leaveMeeting, reorderMeeting,
   type MeetingMessage, type MeetingStatus, type ToolStep, type MeetingBroadcastEvent,
 } from './meeting-client';
 import { MeetingMessageItem } from './MeetingMessageItem';
@@ -50,23 +51,11 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     return () => clearInterval(timer);
   }, [waitingSince]);
 
-  // 统一 SSE 事件流（持久连接），替代所有轮询
-  // 打开面板时建立，关闭时自动断开
+  // 统一 SSE 事件流（通过 unified-client 复用单连接）
   useEffect(() => {
-    const abort = new AbortController();
-    let connectTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    const tryConnect = () => {
-      connectEventStream(nodeId, (ev) => handleEventRef.current(ev), abort.signal).catch(() => {
-        connectTimeout = setTimeout(tryConnect, 500);
-      });
-    };
-    tryConnect();
-
-    return () => {
-      abort.abort();
-      if (connectTimeout) clearTimeout(connectTimeout);
-    };
+    const handler = (ev: any) => handleEventRef.current(ev);
+    subscribe(nodeId, handler);
+    return () => { unsubscribe(nodeId, handler); };
   }, [nodeId]);
 
   // 事件处理中枢：所有会议室事件通过此函数路由

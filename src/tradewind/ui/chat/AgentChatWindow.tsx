@@ -14,6 +14,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { subscribe, unsubscribe } from '../stream/unified-client';
 import { parseStructuredContent } from './parser';
 import StructuredMessage from './StructuredMessage';
 import ToolCallMessage from './ToolCallMessage';
@@ -87,240 +88,208 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
     loadMessages().then(() => setReady(true));
   }, [loadMessages]);
 
-  // 持久 SSE 连接（仅在消息加载完成后建立）
+  // 持久 SSE 连接 → 改用统一 stream
   useEffect(() => {
     if (!ready) return;
-    const abortCtrl = new AbortController();
 
-    const connect = async () => {
-      const res = await fetch(`/api/tradewind/chat/${nodeId}/events`, {
-        signal: abortCtrl.signal,
-      }).catch(() => null);
-      if (!res || !res.ok || !res.body) return;
+    const handleEvent = (ev: StreamEvent & { scope?: string; nodeId?: string }) => {
+      // unified stream 事件带 scope/nodeId，过滤掉不属于本组件的
+      if (ev.scope && ev.nodeId && ev.nodeId !== nodeId) return;
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      const handleEvent = (ev: StreamEvent) => {
-        switch (ev.type) {
-          case 'connected':
-            console.log(`[AgentChat] SSE connected: busy=${(ev as any).busy}`);
-            if (ev.busy) {
-              const id = nextId();
-              streamRef.current = { id, content: '' };
-              setMessages(prev => [...prev, { id, role: 'assistant', content: '' }]);
-              setStreaming(true);
-            }
-            // busy=false 时不额外 reload——初始化时已加载过，避免覆盖
-            break;
-
-          case 'token': {
-            const cur = streamRef.current;
-            if (!cur) {
-              const id = nextId();
-              streamRef.current = { id, content: ev.content };
-              setMessages(prev => [...prev, { id, role: 'assistant', content: ev.content }]);
-              setStreaming(true);
-            } else {
-              cur.content += ev.content;
-              setMessages(prev => prev.map(m =>
-                m.id === cur.id ? { ...m, content: cur!.content } : m,
-              ));
-            }
-            break;
+      switch (ev.type) {
+        case 'connected':
+          console.log(`[AgentChat] SSE connected: busy=${(ev as any).busy}`);
+          if ((ev as any).busy) {
+            const id = nextId();
+            streamRef.current = { id, content: '' };
+            setMessages(prev => [...prev, { id, role: 'assistant', content: '' }]);
+            setStreaming(true);
           }
+          break;
 
-          case 'tool-call':
-            setMessages(prev => {
-              const toolMsg: ChatMessage = {
-                id: nextId(), role: 'assistant', content: '',
-                timestamp: new Date().toISOString(),
-                toolCall: { toolName: ev.tool, params: ev.args, status: 'pending' },
-              };
-              const msgs = [...prev];
-              const placeholderId = streamRef.current?.id;
-              if (placeholderId) {
-                const idx = msgs.findIndex(m => m.id === placeholderId);
-                msgs.splice(idx, 0, toolMsg);
-              } else {
-                msgs.push(toolMsg);
-              }
-              return msgs;
-            });
-            break;
-
-          case 'tool-result':
-            setMessages(prev => {
-              const msgs = [...prev];
-              for (let i = msgs.length - 1; i >= 0; i--) {
-                if (msgs[i].toolCall && msgs[i].toolCall!.status === 'pending') {
-                  msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, result: ev.result, status: ev.ok ? 'success' : 'error' } };
-                  break;
-                }
-              }
-              return msgs;
-            });
-            break;
-
-          case 'delegate-start':
-            setMessages(prev => {
-              const delMsg: ChatMessage = {
-                id: nextId(), role: 'assistant', content: '',
-                timestamp: new Date().toISOString(),
-                toolCall: { toolName: 'delegate', params: { task: ev.task }, status: 'pending', steps: [] } as any,
-              };
-              (delMsg as any)._delegateId = ev.delegateId;
-              const msgs = [...prev];
-              const placeholderId = streamRef.current?.id;
-              if (placeholderId) {
-                const idx = msgs.findIndex(m => m.id === placeholderId);
-                msgs.splice(idx, 0, delMsg);
-              } else {
-                msgs.push(delMsg);
-              }
-              return msgs;
-            });
-            break;
-
-          case 'delegate-token':
-            setMessages(prev => {
-              const msgs = [...prev];
-              for (let i = msgs.length - 1; i >= 0; i--) {
-                if ((msgs[i] as any)._delegateId === ev.delegateId) {
-                  msgs[i] = { ...msgs[i], content: (msgs[i].content || '') + ev.content };
-                  break;
-                }
-              }
-              return msgs;
-            });
-            break;
-
-          case 'delegate-tool-call':
-            setMessages(prev => {
-              const msgs = [...prev];
-              for (let i = msgs.length - 1; i >= 0; i--) {
-                if ((msgs[i] as any)._delegateId === ev.delegateId && msgs[i].toolCall) {
-                  const steps = [...((msgs[i].toolCall as any).steps || [])];
-                  steps.push({ type: 'tool', tool: ev.tool, args: ev.args });
-                  msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, steps } as any };
-                  break;
-                }
-              }
-              return msgs;
-            });
-            break;
-
-          case 'delegate-tool-result':
-            setMessages(prev => {
-              const msgs = [...prev];
-              for (let i = msgs.length - 1; i >= 0; i--) {
-                if ((msgs[i] as any)._delegateId === ev.delegateId && msgs[i].toolCall) {
-                  const steps = [...((msgs[i].toolCall as any).steps || [])];
-                  for (let j = steps.length - 1; j >= 0; j--) {
-                    if (steps[j].tool === ev.tool && steps[j].result == null) {
-                      steps[j] = { ...steps[j], result: ev.result, ok: ev.ok };
-                      break;
-                    }
-                  }
-                  msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, steps } as any };
-                  break;
-                }
-              }
-              return msgs;
-            });
-            break;
-
-          case 'delegate-done':
-            setMessages(prev => {
-              const msgs = [...prev];
-              for (let i = msgs.length - 1; i >= 0; i--) {
-                if ((msgs[i] as any)._delegateId === ev.delegateId && msgs[i].toolCall) {
-                  msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, result: ev.summary, status: ev.status === 'success' ? 'success' : 'error' } };
-                  break;
-                }
-              }
-              return msgs;
-            });
-            break;
-
-          case 'contact-start':
-            setMessages(prev => {
-              const contactMsg: ChatMessage = {
-                id: nextId(), role: 'assistant', content: '',
-                timestamp: new Date().toISOString(),
-                toolCall: { toolName: 'contact', params: { target: ev.target }, status: 'pending' },
-              };
-              const msgs = [...prev];
-              const placeholderId = streamRef.current?.id;
-              if (placeholderId) {
-                const idx = msgs.findIndex(m => m.id === placeholderId);
-                msgs.splice(idx, 0, contactMsg);
-              } else {
-                msgs.push(contactMsg);
-              }
-              return msgs;
-            });
-            break;
-
-          case 'contact-done':
-            setMessages(prev => {
-              const msgs = [...prev];
-              for (let i = msgs.length - 1; i >= 0; i--) {
-                if (msgs[i].toolCall?.toolName === 'contact' && msgs[i].toolCall?.status === 'pending') {
-                  msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, result: ev.result, status: ev.ok ? 'success' : 'error' } };
-                  break;
-                }
-              }
-              return msgs;
-            });
-            break;
-
-          case 'answer':
+        case 'token': {
+          const cur = streamRef.current;
+          if (!cur) {
+            const id = nextId();
+            streamRef.current = { id, content: ev.content };
+            setMessages(prev => [...prev, { id, role: 'assistant', content: ev.content }]);
+            setStreaming(true);
+          } else {
+            cur.content += ev.content;
             setMessages(prev => prev.map(m =>
-              streamRef.current && m.id === streamRef.current.id
-                ? { ...m, content: ev.rawContent || ev.content }
-                : m,
+              m.id === cur.id ? { ...m, content: cur!.content } : m,
             ));
-            break;
-
-          case 'error':
-            setError(ev.message);
-            break;
-
-          case 'done':
-            console.log('[AgentChat] SSE done');
-            streamRef.current = null;
-            setStreaming(false);
-            break;
-        }
-      };
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const json = line.slice(6).trim();
-            if (!json) continue;
-            try {
-              const ev = JSON.parse(json) as StreamEvent;
-              handleEvent(ev);
-            } catch { /* skip malformed */ }
           }
+          break;
         }
-      } catch {
-        // 连接断开（工作流停止、网络问题等）
+
+        case 'tool-call':
+          setMessages(prev => {
+            const toolMsg: ChatMessage = {
+              id: nextId(), role: 'assistant', content: '',
+              timestamp: new Date().toISOString(),
+              toolCall: { toolName: ev.tool, params: ev.args, status: 'pending' },
+            };
+            const msgs = [...prev];
+            const placeholderId = streamRef.current?.id;
+            if (placeholderId) {
+              const idx = msgs.findIndex(m => m.id === placeholderId);
+              msgs.splice(idx, 0, toolMsg);
+            } else {
+              msgs.push(toolMsg);
+            }
+            return msgs;
+          });
+          break;
+
+        case 'tool-result':
+          setMessages(prev => {
+            const msgs = [...prev];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].toolCall && msgs[i].toolCall!.status === 'pending') {
+                msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, result: ev.result, status: ev.ok ? 'success' : 'error' } };
+                break;
+              }
+            }
+            return msgs;
+          });
+          break;
+
+        case 'delegate-start':
+          setMessages(prev => {
+            const delMsg: ChatMessage = {
+              id: nextId(), role: 'assistant', content: '',
+              timestamp: new Date().toISOString(),
+              toolCall: { toolName: 'delegate', params: { task: ev.task }, status: 'pending', steps: [] } as any,
+            };
+            (delMsg as any)._delegateId = ev.delegateId;
+            const msgs = [...prev];
+            const placeholderId = streamRef.current?.id;
+            if (placeholderId) {
+              const idx = msgs.findIndex(m => m.id === placeholderId);
+              msgs.splice(idx, 0, delMsg);
+            } else {
+              msgs.push(delMsg);
+            }
+            return msgs;
+          });
+          break;
+
+        case 'delegate-token':
+          setMessages(prev => {
+            const msgs = [...prev];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if ((msgs[i] as any)._delegateId === ev.delegateId) {
+                msgs[i] = { ...msgs[i], content: (msgs[i].content || '') + ev.content };
+                break;
+              }
+            }
+            return msgs;
+          });
+          break;
+
+        case 'delegate-tool-call':
+          setMessages(prev => {
+            const msgs = [...prev];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if ((msgs[i] as any)._delegateId === ev.delegateId && msgs[i].toolCall) {
+                const steps = [...((msgs[i].toolCall as any).steps || [])];
+                steps.push({ type: 'tool', tool: ev.tool, args: ev.args });
+                msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, steps } as any };
+                break;
+              }
+            }
+            return msgs;
+          });
+          break;
+
+        case 'delegate-tool-result':
+          setMessages(prev => {
+            const msgs = [...prev];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if ((msgs[i] as any)._delegateId === ev.delegateId && msgs[i].toolCall) {
+                const steps = [...((msgs[i].toolCall as any).steps || [])];
+                for (let j = steps.length - 1; j >= 0; j--) {
+                  if (steps[j].tool === ev.tool && steps[j].result == null) {
+                    steps[j] = { ...steps[j], result: ev.result, ok: ev.ok };
+                    break;
+                  }
+                }
+                msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, steps } as any };
+                break;
+              }
+            }
+            return msgs;
+          });
+          break;
+
+        case 'delegate-done':
+          setMessages(prev => {
+            const msgs = [...prev];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if ((msgs[i] as any)._delegateId === ev.delegateId && msgs[i].toolCall) {
+                msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, result: ev.summary, status: ev.status === 'success' ? 'success' : 'error' } };
+                break;
+              }
+            }
+            return msgs;
+          });
+          break;
+
+        case 'contact-start':
+          setMessages(prev => {
+            const contactMsg: ChatMessage = {
+              id: nextId(), role: 'assistant', content: '',
+              timestamp: new Date().toISOString(),
+              toolCall: { toolName: 'contact', params: { target: ev.target }, status: 'pending' },
+            };
+            const msgs = [...prev];
+            const placeholderId = streamRef.current?.id;
+            if (placeholderId) {
+              const idx = msgs.findIndex(m => m.id === placeholderId);
+              msgs.splice(idx, 0, contactMsg);
+            } else {
+              msgs.push(contactMsg);
+            }
+            return msgs;
+          });
+          break;
+
+        case 'contact-done':
+          setMessages(prev => {
+            const msgs = [...prev];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].toolCall?.toolName === 'contact' && msgs[i].toolCall?.status === 'pending') {
+                msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, result: ev.result, status: ev.ok ? 'success' : 'error' } };
+                break;
+              }
+            }
+            return msgs;
+          });
+          break;
+
+        case 'answer':
+          setMessages(prev => prev.map(m =>
+            streamRef.current && m.id === streamRef.current.id
+              ? { ...m, content: ev.rawContent || ev.content }
+              : m,
+          ));
+          break;
+
+        case 'error':
+          setError(ev.message);
+          break;
+
+        case 'done':
+          console.log('[AgentChat] SSE done');
+          streamRef.current = null;
+          setStreaming(false);
+          break;
       }
     };
 
-    connect();
-
-    return () => { abortCtrl.abort(); };
+    subscribe(nodeId, handleEvent);
+    return () => { unsubscribe(nodeId, handleEvent); };
   }, [ready, nodeId, loadMessages]);
 
   // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
