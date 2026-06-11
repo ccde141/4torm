@@ -376,7 +376,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
 
   // Portal 渲染到 body
   return createPortal(
-    <div className="tw-chat-overlay">
+    <div className="tw-chat-overlay" style={{ display: visible ? undefined : 'none' }}>
       <div className="tw-chat-window">
         <div className="tw-chat-window__header">
           <span className="tw-chat-window__title">{nodeLabel}</span>

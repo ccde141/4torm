@@ -425,7 +425,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
   const isEnded = phase === 'ended';
 
   return createPortal(
-    <div className="tw-meeting-overlay">
+    <div className="tw-meeting-overlay" style={{ display: visible ? undefined : 'none' }}>
       <div className="tw-meeting-panel">
         <div className="tw-meeting-panel__header">
           <span className="tw-meeting-panel__title">{nodeLabel}{isEnded && '（已结束）'}</span>
