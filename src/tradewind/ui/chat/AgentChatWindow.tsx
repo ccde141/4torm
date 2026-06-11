@@ -25,6 +25,8 @@ interface AgentChatWindowProps {
   nodeId: string;
   nodeLabel: string;
   onClose: () => void;
+  /** 面板是否可见（display:none 隐藏时为 false） */
+  visible?: boolean;
 }
 
 // ── SSE 连接事件类型 ───────────────────────────────────────────────
@@ -47,7 +49,7 @@ type StreamEvent =
 
 // ── 组件 ──────────────────────────────────────────────────────────
 
-export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowProps) {
+export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: AgentChatWindowProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -324,10 +326,18 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose }: AgentChatWindowP
   // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
   useEffect(() => {
     const el = messagesContainerRef.current;
-    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+    if (!el) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
       el.scrollTop = el.scrollHeight;
     }
   }, [messages]);
+
+  // 面板从隐藏恢复可见时强制滚到底
+  useEffect(() => {
+    if (!visible) return;
+    const el = messagesContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [visible]);
 
   const send = useCallback(() => {
     const text = input.trim();
