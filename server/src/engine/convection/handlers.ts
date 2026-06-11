@@ -16,6 +16,7 @@ import { loadAgent, type LoadedAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { buildSystemPrompt } from '../shared/prompt';
 import { buildSandboxSection } from '../shared/sandbox-prompt';
+import { compactConvectionIfNeeded, type ConvectionCompactState } from './convection-compactor';
 import path from 'node:path';
 import {
   runConvectionReAct,
@@ -58,6 +59,8 @@ export type ConvectionStreamEvent =
   | { type: 'heartbeat'; label: string; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-done'; content: string }
+  | { type: 'compact-start' }
+  | { type: 'compact-done'; archivedCycles: number; summaryLength: number }
   | { type: 'error'; message: string };
 
 export { ToolCallRecord };
@@ -168,6 +171,44 @@ export async function handleSpeak(
     }
 
     if (aborted) break;
+  }
+
+  // ── 压缩检测：会长负责整理 ──
+  const promptTokens = session.tokenUsage?.promptTokens;
+  if (promptTokens) {
+    const state: ConvectionCompactState = session.compactState ?? { disabled: false, archiveSeq: 0 };
+    const chairAgent = await getAgent(dataDir, session.chairAgentId);
+    const wsPath = sessionWorkspace(dataDir, session.id);
+    const archiveDir = path.join(wsPath, 'bak');
+
+    // 收集参与者名称
+    const participantNames: string[] = [];
+    for (const pid of session.participantAgentIds) {
+      const a = await getAgent(dataDir, pid);
+      participantNames.push(a.name);
+    }
+
+    const compacted = await compactConvectionIfNeeded(
+      session.publicMessages,
+      promptTokens,
+      state,
+      {
+        dataDir,
+        chairModel: chairAgent.model,
+        archiveDir,
+        participants: participantNames,
+        onEvent: (ev) => {
+          if (ev.type === 'compact-start') onEvent?.({ type: 'compact-start' });
+          if (ev.type === 'compact-done') onEvent?.({ type: 'compact-done', archivedCycles: ev.archivedCycles, summaryLength: ev.summaryLength });
+          if (ev.type === 'compact-warn') onEvent?.({ type: 'error', message: ev.message });
+        },
+      },
+    );
+
+    session.compactState = state;
+    if (compacted) {
+      // 压缩后重新计算 token（下轮 LLM 调用会自然更新，这里先留旧值）
+    }
   }
 
   await saveSession(dataDir, session);

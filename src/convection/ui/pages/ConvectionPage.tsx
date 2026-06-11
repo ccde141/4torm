@@ -248,6 +248,12 @@ export default memo(function ConvectionPage() {
           currentLabel = '';
           streamContent = '';
           pendingTools = [];
+        } else if (ev.type === 'compact-start') {
+          setMsgs(p => [...p, { speaker: '系统', content: '会长正在整理对话记录...', streaming: true, toolCalls: [], timestamp: new Date().toISOString() }]);
+        } else if (ev.type === 'compact-done') {
+          setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === '系统' && m.streaming
+            ? { ...m, content: `对话记录已压缩（归档 ${(ev as any).archivedCycles} 个周期，摘要 ${Math.round(((ev as any).summaryLength || 0) / 1000)}K 字符）`, streaming: false }
+            : m));
         }
       }, ctrl.signal);
     } catch (e: any) {
