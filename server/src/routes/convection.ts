@@ -9,10 +9,15 @@ import type { FastifyInstance } from 'fastify';
 import {
   createSession, loadSession, saveSession, listSessions,
   deleteSession, renameSession, tryAcquireSessionLock, isAgentInAnySession,
+  sessionWorkspace,
 } from '../engine/convection/session';
 import { handleSpeak, handleChair } from '../engine/convection/handlers';
 import type { ConvectionStreamEvent } from '../engine/convection/handlers';
+import { loadAgent } from '../engine/shared/agent-loader';
+import { callLLM } from '../engine/shared/llm-bridge';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { lockAgent, unlockAgent, setPresence, clearPresence } from '../engine/shared/agent-lock';
 
 /** 活跃的轮次 AbortController：sessionId → AbortController */
@@ -198,6 +203,64 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
       s.publicMessages.splice(body.index, 1);
       await saveSession(dataDir, s);
       return reply.send({ ok: true });
+    }
+
+    if (action === 'reset-context') {
+      const s = await loadSession(dataDir, sessionId);
+      if (!s) return reply.status(404).send({ error: '会话不存在' });
+      const mode: 'clean' | 'summary' = body?.mode === 'summary' ? 'summary' : 'clean';
+
+      // 归档当前所有 publicMessages + chairMessages
+      const state = s.compactState ?? { disabled: false, archiveSeq: 0 };
+      state.archiveSeq++;
+      const wsPath = sessionWorkspace(dataDir, s.id);
+      const archiveDir = path.join(wsPath, 'bak');
+      const archiveFileName = `${String(state.archiveSeq).padStart(3, '0')}.json`;
+
+      try {
+        await fs.mkdir(archiveDir, { recursive: true });
+        await fs.writeFile(
+          path.join(archiveDir, archiveFileName),
+          JSON.stringify({ publicMessages: s.publicMessages, chairMessages: s.chairMessages }, null, 2),
+        );
+      } catch { /* 归档失败不阻塞 */ }
+
+      let summaryContent = '';
+      if (mode === 'summary') {
+        // 会长生成极简摘要
+        const chairAgent = await loadAgent(dataDir, s.chairAgentId);
+        if (chairAgent) {
+          try {
+            const summaryResult = await callLLM({
+              dataDir,
+              fullModelKey: chairAgent.model,
+              messages: [
+                { role: 'system', content: '你是会议主持人。请用 3-5 句话极简概括以下对话的当前状态：做了什么、达成了什么结论、还有什么待完成。直接输出，不加前缀。' },
+                { role: 'user', content: s.publicMessages.map(m => `[${m.speaker}] ${m.content}`).join('\n\n') },
+              ],
+              options: { temperature: 0.3 },
+            });
+            summaryContent = summaryResult.content.trim();
+          } catch { /* 摘要失败则退化为 clean */ }
+        }
+      }
+
+      // 清空
+      s.publicMessages = [];
+      s.chairMessages = [];
+      s.compactState = state;
+
+      // summary 模式：插入摘要作为起始消息
+      if (summaryContent) {
+        s.publicMessages.push({
+          speaker: '系统',
+          content: `[会话归档摘要]\n\n${summaryContent}`,
+          timestamp: Date.now(),
+        });
+      }
+
+      await saveSession(dataDir, s);
+      return reply.send({ ok: true, mode, archived: archiveFileName, summary: summaryContent || undefined });
     }
 
     return reply.status(400).send({ error: `未知 action：${action}` });
