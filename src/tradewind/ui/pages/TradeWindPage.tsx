@@ -29,6 +29,20 @@ export default function TradeWindPage() {
   const [, forceUpdate] = useState(0); // 触发重渲染
   const [saveTime, setSaveTime] = useState<number | null>(null);
 
+  // 工作流结束时清除持久面板（下次打开面板会创建新实例）
+  const prevRunningRef = useRef(false);
+  useEffect(() => {
+    if (prevRunningRef.current && !execution.running) {
+      // running → stopped：清掉旧面板
+      openedChatsRef.current.clear();
+      openedMeetingsRef.current.clear();
+      setChatTarget(null);
+      setMeetingTarget(null);
+      forceUpdate(n => n + 1);
+    }
+    prevRunningRef.current = execution.running;
+  }, [execution.running]);
+
   // 页面加载时恢复上次打开的工作流，失败则自动新建
   useEffect(() => {
     const init = async () => {
