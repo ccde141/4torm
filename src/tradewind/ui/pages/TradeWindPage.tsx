@@ -29,6 +29,20 @@ export default function TradeWindPage() {
   const [, forceUpdate] = useState(0); // 触发重渲染
   const [saveTime, setSaveTime] = useState<number | null>(null);
 
+  // 工作流结束时清除持久面板（下次打开面板会创建新实例）
+  const prevRunningRef = useRef(false);
+  useEffect(() => {
+    if (prevRunningRef.current && !execution.running) {
+      // running → stopped：清掉旧面板
+      openedChatsRef.current.clear();
+      openedMeetingsRef.current.clear();
+      setChatTarget(null);
+      setMeetingTarget(null);
+      forceUpdate(n => n + 1);
+    }
+    prevRunningRef.current = execution.running;
+  }, [execution.running]);
+
   // 页面加载时恢复上次打开的工作流，失败则自动新建
   useEffect(() => {
     const init = async () => {
@@ -178,25 +192,23 @@ export default function TradeWindPage() {
       )}
       {/* Agent 聊天面板：曾打开过的持久挂载，只隐藏不卸载 */}
       {[...openedChatsRef.current.values()].map(({ nodeId, label }) => (
-        <div key={nodeId} style={{ display: chatTarget?.nodeId === nodeId ? 'contents' : 'none' }}>
-          <AgentChatWindow
-            nodeId={nodeId}
-            nodeLabel={label}
-            onClose={() => setChatTarget(null)}
-            visible={chatTarget?.nodeId === nodeId}
-          />
-        </div>
+        <AgentChatWindow
+          key={nodeId}
+          nodeId={nodeId}
+          nodeLabel={label}
+          onClose={() => setChatTarget(null)}
+          visible={chatTarget?.nodeId === nodeId}
+        />
       ))}
       {/* 会议室面板：同上 */}
       {[...openedMeetingsRef.current.values()].map(({ nodeId, label }) => (
-        <div key={nodeId} style={{ display: meetingTarget?.nodeId === nodeId ? 'contents' : 'none' }}>
-          <MeetingPanel
-            nodeId={nodeId}
-            nodeLabel={label}
-            onClose={() => setMeetingTarget(null)}
-            visible={meetingTarget?.nodeId === nodeId}
-          />
-        </div>
+        <MeetingPanel
+          key={nodeId}
+          nodeId={nodeId}
+          nodeLabel={label}
+          onClose={() => setMeetingTarget(null)}
+          visible={meetingTarget?.nodeId === nodeId}
+        />
       ))}
       {gateTarget && (
         <HumanGatePanel

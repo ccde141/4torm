@@ -46,6 +46,8 @@ export type MeetingStreamEvent =
   | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; label: string; tool: string; result: string }
   | { type: 'heartbeat'; label: string; phase: string; elapsed: number }
+  | { type: 'contact-start'; label: string; target: string }
+  | { type: 'contact-done'; label: string; target: string; result: string; ok: boolean }
   | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }> }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-done'; content: string }
@@ -139,6 +141,8 @@ export interface HandleSpeakOpts {
   humanMessage: string;
   signal?: AbortSignal;
   onEvent?: (ev: MeetingStreamEvent) => void;
+  /** 工作流团队名册（用于 contact 工具说明） */
+  teamRoster?: Array<{ label: string; role: string }>;
 }
 
 /**
@@ -147,7 +151,7 @@ export interface HandleSpeakOpts {
  * 返回最后一个 Agent 的 promptTokens（用于压缩阈值判断）。
  */
 export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undefined> {
-  const { dataDir, workspace, session, humanMessage, signal, onEvent } = opts;
+  const { dataDir, workspace, session, humanMessage, signal, onEvent, teamRoster } = opts;
 
   session.publicMessages.push({ speaker: '人类', content: humanMessage, timestamp: Date.now() });
   session.round++;
@@ -170,7 +174,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       // 构造 system prompt（参与者列表用 label）
       const participantLabels = session.participants.map(p => p.label);
 
-      const systemText = buildMeetingAgentPrompt(agent, participantLabels, session, toolDefs, workspace, label, session.meetingLabel, dataDir);
+      const systemText = buildMeetingAgentPrompt(agent, participantLabels, session, toolDefs, workspace, label, session.meetingLabel, dataDir, teamRoster);
       const history = formatPublicContext(session);
       const messages: ContextMessage[] = [
         { role: 'system', content: systemText },
@@ -187,7 +191,12 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         async call(tool, args) {
           // contact 假工具：联络 agent 节点
           if (tool === 'contact') {
-            return execMeetingContact(args, label, session.meetingLabel, signal);
+            const target = args.target || '';
+            onEvent?.({ type: 'contact-start', label, target });
+            const result = await execMeetingContact(args, label, session.meetingLabel, signal);
+            const ok = !result.startsWith('联络失败') && !result.startsWith('联络被系统拒绝') && !result.includes('失败');
+            onEvent?.({ type: 'contact-done', label, target, result, ok });
+            return result;
           }
           try {
             const result = await execTool(tool, args, participant.agentId, workspace, signal);
@@ -619,6 +628,7 @@ function buildMeetingAgentPrompt(
   selfLabel: string,
   meetingLabel: string,
   dataDir: string,
+  contactTargets?: Array<{ label: string; role: string }>,
 ): string {
   const sections: string[] = [];
 
@@ -663,16 +673,25 @@ function buildMeetingAgentPrompt(
     ``,
     `你可以联络工作流中其他正在运行的 Agent 节点，让它们协助你或获取它们的工作成果。`,
     ``,
+    ...(contactTargets && contactTargets.length > 0 ? [
+      `可联络的节点：`,
+      ...contactTargets.map(t => `  - ${t.label}：${t.role}`),
+      ``,
+    ] : []),
     `### contact`,
     `  描述: 联络工作流中的 Agent 节点。对方会处理你的消息并返回回复。`,
     `  参数:`,
-    `    target: string [必填] — 目标节点名称`,
+    `    target: string [必填] — 目标节点名称（可选值：${contactTargets && contactTargets.length > 0 ? contactTargets.map(t => t.label).join('、') : '（无可联络节点）'}）`,
     `    message: string [必填] — 你要传达的内容（问题、请求、同步信息等）`,
     ``,
     `  注意：`,
     `  - 对方是工作流中实际执行任务的 Agent 节点，不是会议室内的参与者`,
     `  - 用于将会议讨论结论同步给执行者，或向执行者索取最新进展`,
     `  - 对方处理可能需要时间（涉及工具调用），请耐心等待`,
+    `  - 必须真正调用工具才会联络对方，仅在文字中描述"我联络了xxx"不会触发任何动作`,
+    ``,
+    `  调用示例:`,
+    `  <action tool="contact">{"target":"节点名称","message":"你要传达的具体内容"}</action>`,
     ``,
     `## 会议结束后`,
     `会议结束时，会长会生成完整纪要。`,

@@ -28,6 +28,7 @@ import {
   type CompactorOpts,
 } from './context-compactor';
 import { execDelegate, execContact } from './node-runner-tools';
+import { pushUnified } from './unified-stream';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -166,6 +167,7 @@ export class NodeRunner {
     const emit = (ev: NodeRunnerEvent) => {
       this.currentRoundBuffer.push(ev);
       for (const fn of this.eventListeners) fn(ev);
+      pushUnified('agent', this.opts.nodeId, ev as unknown as Record<string, unknown>);
     };
 
     // 追加 user message 到上下文

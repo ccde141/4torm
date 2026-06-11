@@ -10,8 +10,9 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { subscribe, unsubscribe } from '../stream/unified-client';
 import {
-  connectEventStream, sendSpeak, sendChair, endMeeting, joinMeeting, leaveMeeting, reorderMeeting,
+  sendSpeak, sendChair, endMeeting, joinMeeting, leaveMeeting, reorderMeeting,
   type MeetingMessage, type MeetingStatus, type ToolStep, type MeetingBroadcastEvent,
 } from './meeting-client';
 import { MeetingMessageItem } from './MeetingMessageItem';
@@ -50,23 +51,11 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     return () => clearInterval(timer);
   }, [waitingSince]);
 
-  // 统一 SSE 事件流（持久连接），替代所有轮询
-  // 打开面板时建立，关闭时自动断开
+  // 统一 SSE 事件流（通过 unified-client 复用单连接）
   useEffect(() => {
-    const abort = new AbortController();
-    let connectTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    const tryConnect = () => {
-      connectEventStream(nodeId, (ev) => handleEventRef.current(ev), abort.signal).catch(() => {
-        connectTimeout = setTimeout(tryConnect, 500);
-      });
-    };
-    tryConnect();
-
-    return () => {
-      abort.abort();
-      if (connectTimeout) clearTimeout(connectTimeout);
-    };
+    const handler = (ev: any) => handleEventRef.current(ev);
+    subscribe(nodeId, handler);
+    return () => { unsubscribe(nodeId, handler); };
   }, [nodeId]);
 
   // 事件处理中枢：所有会议室事件通过此函数路由
@@ -196,6 +185,24 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         });
         const snap2 = stream.pendingTools;
         updateLastPublic(last => ({ ...last, toolCalls: snap2 }));
+        break;
+      }
+      case 'contact-start':
+        stream.pendingTools = [...stream.pendingTools, { tool: 'contact', args: { target: ev.target }, status: 'running' }];
+        { const snap = stream.pendingTools;
+          updateLastPublic(last => ({ ...last, toolCalls: snap })); }
+        break;
+      case 'contact-done': {
+        let matched2 = false;
+        stream.pendingTools = stream.pendingTools.map(t => {
+          if (!matched2 && t.tool === 'contact' && t.status === 'running') {
+            matched2 = true;
+            return { ...t, result: ev.result, status: ev.ok ? 'done' : 'error' };
+          }
+          return t;
+        });
+        const snap3 = stream.pendingTools;
+        updateLastPublic(last => ({ ...last, toolCalls: snap3 }));
         break;
       }
       case 'agent-done':
@@ -425,7 +432,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
   const isEnded = phase === 'ended';
 
   return createPortal(
-    <div className="tw-meeting-overlay">
+    <div className="tw-meeting-overlay" style={{ display: visible ? undefined : 'none' }}>
       <div className="tw-meeting-panel">
         <div className="tw-meeting-panel__header">
           <span className="tw-meeting-panel__title">{nodeLabel}{isEnded && '（已结束）'}</span>
