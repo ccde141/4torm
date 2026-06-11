@@ -211,7 +211,32 @@ export default memo(function ConvectionPage() {
 
   const handleSpeak = useCallback(async () => {
     if (!input.trim() || busy || !activeId) return;
-    const msg = input.trim(); setInput(''); setBusy(true);
+    const msg = input.trim(); setInput('');
+
+    // 指令拦截
+    if (msg === '/reset' || msg === '/reset summary') {
+      const mode = msg === '/reset summary' ? 'summary' : 'clean';
+      setBusy(true);
+      try {
+        await fetch(`/api/convection/session/${activeId}/reset-context`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode }),
+        });
+        refreshSessions();
+        const r = await fetch(`/api/convection/session/${activeId}/status`);
+        if (r.ok) {
+          const fresh = await r.json();
+          setMsgs(fresh.publicMessages?.map((m: any) => ({ speaker: m.speaker, content: m.content, streaming: false, toolCalls: [], timestamp: m.timestamp ? new Date(m.timestamp).toISOString() : new Date().toISOString() })) || []);
+        } else {
+          setMsgs([]);
+        }
+      } catch {}
+      setBusy(false);
+      return;
+    }
+
+    setBusy(true);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     const now = new Date().toISOString();
@@ -336,33 +361,6 @@ export default memo(function ConvectionPage() {
               )}
               <span className="conv__header-id">{activeSession.id}</span>
               <span className="conv__header-tokens">{(() => { const t = activeSession.tokenUsage ? activeSession.tokenUsage.totalTokens : activeSession.tokenEstimate; return t >= 1000 ? `${(t / 1000).toFixed(1)}K` : t; })()} tokens</span>
-              <button
-                onClick={async () => {
-                  if (!activeId || busy) return;
-                  if (!confirm('归档并清空对话历史？（工作区文件保留）')) return;
-                  const mode = confirm('生成极简摘要？\n确定 = 摘要模式\n取消 = 完全清零') ? 'summary' : 'clean';
-                  try {
-                    await fetch(`/api/convection/session/${activeId}/reset-context`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ mode }),
-                    });
-                    refreshSessions();
-                    const r = await fetch(`/api/convection/session/${activeId}/status`);
-                    if (r.ok) {
-                      const fresh = await r.json();
-                      setMsgs(fresh.publicMessages?.map((m: any) => ({ speaker: m.speaker, content: m.content, streaming: false, toolCalls: [], timestamp: m.timestamp ? new Date(m.timestamp).toISOString() : new Date().toISOString() })) || []);
-                    } else {
-                      setMsgs([]);
-                    }
-                  } catch {}
-                }}
-                disabled={busy}
-                className="conv__header-cmd"
-                title="归档对话记录并清空（工作区保留）"
-              >
-                /reset
-              </button>
             </div>
             {/* Config bar */}
             <div className="conv__config">
@@ -558,6 +556,10 @@ export default memo(function ConvectionPage() {
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
                   </button>
                 )}
+              </div>
+              <div className="chat__command-hints">
+                <span>/reset 归档清空</span>
+                <span>/reset summary 归档+摘要</span>
               </div>
             </div>
           </>
