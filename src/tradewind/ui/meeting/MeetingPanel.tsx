@@ -198,6 +198,24 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         updateLastPublic(last => ({ ...last, toolCalls: snap2 }));
         break;
       }
+      case 'contact-start':
+        stream.pendingTools = [...stream.pendingTools, { tool: 'contact', args: { target: ev.target }, status: 'running' }];
+        { const snap = stream.pendingTools;
+          updateLastPublic(last => ({ ...last, toolCalls: snap })); }
+        break;
+      case 'contact-done': {
+        let matched2 = false;
+        stream.pendingTools = stream.pendingTools.map(t => {
+          if (!matched2 && t.tool === 'contact' && t.status === 'running') {
+            matched2 = true;
+            return { ...t, result: ev.result, status: ev.ok ? 'done' : 'error' };
+          }
+          return t;
+        });
+        const snap3 = stream.pendingTools;
+        updateLastPublic(last => ({ ...last, toolCalls: snap3 }));
+        break;
+      }
       case 'agent-done':
         setWaitingSince(null);
         {

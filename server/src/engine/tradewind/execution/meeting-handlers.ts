@@ -46,6 +46,8 @@ export type MeetingStreamEvent =
   | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; label: string; tool: string; result: string }
   | { type: 'heartbeat'; label: string; phase: string; elapsed: number }
+  | { type: 'contact-start'; label: string; target: string }
+  | { type: 'contact-done'; label: string; target: string; result: string; ok: boolean }
   | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }> }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-done'; content: string }
@@ -187,7 +189,12 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         async call(tool, args) {
           // contact 假工具：联络 agent 节点
           if (tool === 'contact') {
-            return execMeetingContact(args, label, session.meetingLabel, signal);
+            const target = args.target || '';
+            onEvent?.({ type: 'contact-start', label, target });
+            const result = await execMeetingContact(args, label, session.meetingLabel, signal);
+            const ok = !result.startsWith('联络失败') && !result.startsWith('联络被系统拒绝') && !result.includes('失败');
+            onEvent?.({ type: 'contact-done', label, target, result, ok });
+            return result;
           }
           try {
             const result = await execTool(tool, args, participant.agentId, workspace, signal);
