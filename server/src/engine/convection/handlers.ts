@@ -17,7 +17,6 @@ import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { buildSystemPrompt } from '../shared/prompt';
 import { buildSandboxSection } from '../shared/sandbox-prompt';
 import { compactConvectionIfNeeded, type ConvectionCompactState } from './convection-compactor';
-import { buildWorkflowToolsSection } from '../shared/workflow-builder';
 import path from 'node:path';
 import {
   runConvectionReAct,
@@ -102,9 +101,6 @@ async function buildAgentMessages(
   systemText += `话题：${session.topic}\n`;
   systemText += `请基于对话上下文回应人类的发言。简洁、有观点、有建设性。\n`;
   systemText += `工具调用过程不会展示给其他参与者，只有最终 <answer> 内容会被公开。`;
-
-  // 工作流搭建假工具说明
-  systemText += buildWorkflowToolsSection();
 
   const system: ContextMessage = { role: 'system', content: systemText };
   const history: ContextMessage = { role: 'user', content: formatPublicContext(session) };

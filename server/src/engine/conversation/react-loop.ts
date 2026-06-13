@@ -159,7 +159,42 @@ export function parseActions(text: string): ParsedAction[] {
     }
     out.push({ tool, args, parseError, start: m.index, end: re.lastIndex });
   }
+  // 兜底：模型有时无视协议，把 ask 写成属性标签 <ask question="..." options='[...]'>
+  // 仅当本轮没有任何标准 action 时才启用，避免与正常解析冲突。
+  if (out.length === 0) {
+    const ask = parseAskTag(text);
+    if (ask) out.push(ask);
+  }
   return out;
+}
+
+/**
+ * 容错解析模型错写的 ask 标签：<ask question="..." options='[...]' /> 或 <ask ...>...</ask>。
+ * 归一化为 tool='ask' 的 ParsedAction。解析不出 question 则返回 null。
+ */
+export function parseAskTag(text: string): ParsedAction | null {
+  const m = /<ask\b([^>]*?)\/?>/i.exec(text);
+  if (!m) return null;
+  const attrs = m[1];
+  const qMatch = /\bquestion\s*=\s*("([^"]*)"|'([^']*)')/i.exec(attrs);
+  const question = (qMatch?.[2] ?? qMatch?.[3] ?? '').trim();
+  if (!question) return null;
+
+  const args: Record<string, string> = { question };
+  const oMatch = /\boptions\s*=\s*("([^"]*)"|'([^']*)')/i.exec(attrs);
+  const optRaw = (oMatch?.[2] ?? oMatch?.[3] ?? '').trim();
+  if (optRaw) {
+    let opts: string[] | null = null;
+    try {
+      const parsed = JSON.parse(optRaw);
+      if (Array.isArray(parsed)) opts = parsed.map(String);
+    } catch {
+      // 非 JSON：按逗号/中文逗号切分兜底
+      opts = optRaw.replace(/^\[|\]$/g, '').split(/[,，]/).map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+    }
+    if (opts && opts.length > 0) args.options = JSON.stringify(opts);
+  }
+  return { tool: 'ask', args, start: m.index, end: m.index + m[0].length };
 }
 
 /** 提取 <answer>...</answer> 内容，null 表示未输出 answer */
@@ -173,6 +208,7 @@ export function stripInternalTags(text: string): string {
   return text
     .replace(/<think>[\s\S]*?<\/think>/g, '')
     .replace(/<action\s+[^>]*>[\s\S]*?<\/action>/g, '')
+    .replace(/<ask\b[^>]*?\/?>(?:[\s\S]*?<\/ask>)?/gi, '')
     .trim();
 }
 

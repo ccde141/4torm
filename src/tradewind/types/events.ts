@@ -62,8 +62,6 @@ export const BUILTIN_EVENT_IDS = {
   MEETING_SPEAK: 'meeting-speak',
   MEETING_END: 'meeting-end',
   HUMAN_GATE_ARRIVE: 'human-gate-arrive',
-  HUMAN_GATE_APPROVE: 'human-gate-approve',
-  HUMAN_GATE_REJECT: 'human-gate-reject',
   WORKFLOW_END: 'workflow-end',
 } as const;
 

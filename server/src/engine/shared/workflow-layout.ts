@@ -67,8 +67,8 @@ function assignLayers(
     adj.set(n.id, []);
   }
   for (const e of edges) {
-    adj.get(e.from)?.push(e.to);
-    inDegree.set(e.to, (inDegree.get(e.to) || 0) + 1);
+    adj.get(e.source)?.push(e.target);
+    inDegree.set(e.target, (inDegree.get(e.target) || 0) + 1);
   }
 
   const layers = new Map<string, number>();

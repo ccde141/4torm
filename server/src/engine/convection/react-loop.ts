@@ -12,7 +12,6 @@ import type { ContextMessage } from '../shared/types';
 import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import { callTool } from './tool-bridge';
 import { extractAnswer } from '../shared/answer-extractor';
-import { execListAgents, execCreateWorkflow } from '../shared/workflow-builder';
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
@@ -285,14 +284,7 @@ export async function runConvectionReAct(params: RunReActParams): Promise<AgentR
 
       let result: string;
       try {
-        // 工作流搭建假工具拦截
-        if (action.tool === 'list_agents') {
-          result = await execListAgents(dataDir);
-        } else if (action.tool === 'create_workflow') {
-          result = await execCreateWorkflow(dataDir, action.args);
-        } else {
-          result = await callTool({ tool: action.tool, args: action.args, agentId, workspaceDir: `data/convection/sessions/${sessionId}/workspace` });
-        }
+        result = await callTool({ tool: action.tool, args: action.args, agentId, workspaceDir: `data/convection/sessions/${sessionId}/workspace` });
       } catch (e) {
         result = `错误：${(e as Error).message}`;
       } finally {
