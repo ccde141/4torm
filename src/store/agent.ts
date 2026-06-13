@@ -168,3 +168,18 @@ export async function checkModelAvailable(modelKey: string): Promise<boolean> {
   const provider = await getProviderForModel(modelKey);
   return !!provider;
 }
+
+/**
+ * 批量检测 Agent 列表中哪些处于离线状态（模型不可用）。
+ * 返回离线 Agent ID 集合。ChatPage / DashboardPage 共用此函数。
+ */
+export async function getOfflineAgentIds(agents: Agent[]): Promise<Set<string>> {
+  const offline = new Set<string>();
+  await Promise.all(agents.map(async a => {
+    if (a.status === 'idle' || !a.status) {
+      const available = a.model ? await checkModelAvailable(a.model) : false;
+      if (!available) offline.add(a.id);
+    }
+  }));
+  return offline;
+}

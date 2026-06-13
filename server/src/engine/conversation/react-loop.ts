@@ -34,6 +34,13 @@ const TOOL_RESULT_LINE_THRESHOLD = 80;
 const TOOL_RESULT_HEAD_LINES = 30;
 const TOOL_RESULT_TAIL_LINES = 20;
 
+/**
+ * 续写指令：明确要求模型从断点无缝接续，禁止重复和重起标签。
+ * 弱指令（如单纯"继续"）会导致模型重新组织、重复已输出内容、重起 think/answer 标签，
+ * 在超长输出场景下引发"截断→重写→再截断"的放大循环。
+ */
+const CONTINUATION_HINT = '【系统：续写指令】你上一条输出因长度上限被截断。请直接从被截断的那个字符紧接着往下写，补全剩余内容即可。严禁重复任何已经输出的内容，严禁重新开启 <think>、<answer> 等标签，严禁重新组织或重头叙述。如果已经接近写完，就把剩下的收尾部分补完。';
+
 // ── 类型 ──────────────────────────────────────────────────────────
 
 export interface ParsedAction {
@@ -152,7 +159,42 @@ export function parseActions(text: string): ParsedAction[] {
     }
     out.push({ tool, args, parseError, start: m.index, end: re.lastIndex });
   }
+  // 兜底：模型有时无视协议，把 ask 写成属性标签 <ask question="..." options='[...]'>
+  // 仅当本轮没有任何标准 action 时才启用，避免与正常解析冲突。
+  if (out.length === 0) {
+    const ask = parseAskTag(text);
+    if (ask) out.push(ask);
+  }
   return out;
+}
+
+/**
+ * 容错解析模型错写的 ask 标签：<ask question="..." options='[...]' /> 或 <ask ...>...</ask>。
+ * 归一化为 tool='ask' 的 ParsedAction。解析不出 question 则返回 null。
+ */
+export function parseAskTag(text: string): ParsedAction | null {
+  const m = /<ask\b([^>]*?)\/?>/i.exec(text);
+  if (!m) return null;
+  const attrs = m[1];
+  const qMatch = /\bquestion\s*=\s*("([^"]*)"|'([^']*)')/i.exec(attrs);
+  const question = (qMatch?.[2] ?? qMatch?.[3] ?? '').trim();
+  if (!question) return null;
+
+  const args: Record<string, string> = { question };
+  const oMatch = /\boptions\s*=\s*("([^"]*)"|'([^']*)')/i.exec(attrs);
+  const optRaw = (oMatch?.[2] ?? oMatch?.[3] ?? '').trim();
+  if (optRaw) {
+    let opts: string[] | null = null;
+    try {
+      const parsed = JSON.parse(optRaw);
+      if (Array.isArray(parsed)) opts = parsed.map(String);
+    } catch {
+      // 非 JSON：按逗号/中文逗号切分兜底
+      opts = optRaw.replace(/^\[|\]$/g, '').split(/[,，]/).map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+    }
+    if (opts && opts.length > 0) args.options = JSON.stringify(opts);
+  }
+  return { tool: 'ask', args, start: m.index, end: m.index + m[0].length };
 }
 
 /** 提取 <answer>...</answer> 内容，null 表示未输出 answer */
@@ -166,6 +208,7 @@ export function stripInternalTags(text: string): string {
   return text
     .replace(/<think>[\s\S]*?<\/think>/g, '')
     .replace(/<action\s+[^>]*>[\s\S]*?<\/action>/g, '')
+    .replace(/<ask\b[^>]*?\/?>(?:[\s\S]*?<\/ask>)?/gi, '')
     .trim();
 }
 
@@ -254,13 +297,13 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
       reply = result.content;
       recordUsage(result.usage);
 
-      // D+续写：finishReason=length 或字符级截断检测 → 自动追加"继续"
+      // D+续写：finishReason=length 或字符级截断检测 → 自动追加续写指令
       const shouldContinue = result.finishReason === 'length'
         || (result.finishReason !== 'stop' && reply.length > 0 && isLikelyTruncated(reply));
       if (shouldContinue) {
         for (let cont = 0; cont < MAX_CONTINUATIONS; cont++) {
           msgs.push({ role: 'assistant', content: reply });
-          msgs.push({ role: 'user', content: '继续' });
+          msgs.push({ role: 'user', content: CONTINUATION_HINT });
           const contResult = await llm.call(msgs, undefined, onChunk, abortCtrl.signal);
           recordUsage(contResult.usage);
           msgs.pop();

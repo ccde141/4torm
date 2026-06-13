@@ -159,6 +159,8 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
       // 创建 assistant 占位消息
       const assistantMsgId = generateMessageId();
       let streamContent = '';
+      let lastFlushAt = 0;
+      const TOKEN_FLUSH_MS = 80;
       const assistantMsg: ChatMessage = {
         id: assistantMsgId, role: 'assistant', content: '',
         timestamp: new Date().toISOString(), agentId: selectedAgent.id,
@@ -169,10 +171,11 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let streamDone = false;
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done || streamDone) break;
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -186,10 +189,38 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
           let ev: any;
           try { ev = JSON.parse(json); } catch { continue; }
 
-          // 简化事件处理（token + answer + ask + done）
+          // 简化事件处理（token + answer + ask + tool-call + tool-result + done）
           if (ev.type === 'token') {
             streamContent += ev.content;
             allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: streamContent } : m);
+            const now = Date.now();
+            if (now - lastFlushAt >= TOKEN_FLUSH_MS) {
+              lastFlushAt = now;
+              setMessages([...allMessages]);
+            }
+          } else if (ev.type === 'tool-call') {
+            // 清理 assistant 流式内容中的 action/think 标签
+            const cleanContent = streamContent
+              .replace(/<action[^>]*>[\s\S]*?<\/action>/g, '')
+              .replace(/<think>[\s\S]*?<\/think>/g, '')
+              .trim();
+            allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: cleanContent } : m);
+            const toolMsg: ChatMessage = {
+              id: generateMessageId(), role: 'assistant',
+              content: `📋 ${ev.tool}`,
+              timestamp: new Date().toISOString(), agentId: selectedAgent.id,
+              toolCall: { toolName: ev.tool, params: ev.args, status: 'running' as any },
+            };
+            const idx = allMessages.findIndex(m => m.id === assistantMsgId);
+            allMessages.splice(idx, 0, toolMsg);
+            setMessages([...allMessages]);
+          } else if (ev.type === 'tool-result') {
+            for (let i = allMessages.length - 1; i >= 0; i--) {
+              if (allMessages[i].toolCall && (allMessages[i].toolCall as any).status === 'running') {
+                allMessages[i] = { ...allMessages[i], toolCall: { ...allMessages[i].toolCall!, result: ev.result, status: ev.ok ? 'success' : 'error' } };
+                break;
+              }
+            }
             setMessages([...allMessages]);
           } else if (ev.type === 'answer') {
             const finalMsg: ChatMessage = {
@@ -200,20 +231,34 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
             allMessages = allMessages.map(m => m.id === assistantMsgId ? finalMsg : m);
             setMessages([...allMessages]);
           } else if (ev.type === 'ask') {
-            // 嵌套 ask（agent 继续提问）
+            // 嵌套 ask：保留 assistantMsg 的描述性内容，追加 ask 消息
             const askMsg: ChatMessage = {
               id: generateMessageId(), role: 'assistant',
               content: ev.question,
               timestamp: new Date().toISOString(), agentId: selectedAgent.id,
               ask: { question: ev.question, options: ev.options, answered: false },
             };
-            allMessages = allMessages.filter(m => m.id !== assistantMsgId);
+            const cleanContent = streamContent
+              .replace(/<action[^>]*>[\s\S]*?<\/action>/g, '')
+              .replace(/<think>[\s\S]*?<\/think>/g, '')
+              .trim();
+            if (cleanContent) {
+              allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: cleanContent } : m);
+            } else {
+              allMessages = allMessages.filter(m => m.id !== assistantMsgId);
+            }
             allMessages.push(askMsg);
             setMessages([...allMessages]);
+          } else if (ev.type === 'done') {
+            // 后端明确告知流结束 — 主动退出循环
+            streamDone = true;
+            break;
           }
         }
       }
 
+      // 流结束：强制最终刷新，保证节流期间未渲染的尾部 token 全部呈现
+      setMessages([...allMessages]);
       await saveSession({ ...session, messages: allMessages, title: session.titleManual ? session.title : autoTitle(allMessages), model: selectedModel }).catch(() => {});
       refreshSessions(selectedAgent);
     } catch (e) {

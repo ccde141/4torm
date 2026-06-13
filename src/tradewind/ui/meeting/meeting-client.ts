@@ -47,103 +47,86 @@ export interface MeetingStatus {
   streamingCurrent?: { speaker: string; content: string } | null;
 }
 
-/** 人类发言 → SSE 流式接收参与 Agent 响应 */
-export async function speakStream(
+export type MeetingBroadcastEvent =
+  | { type: 'connected'; phase: string; round: number; messages: MeetingMessage[]; chairMessages: Array<{ role: string; content: string }>; participants: MeetingParticipant[]; configuredParticipants: MeetingParticipant[] }
+  | { type: 'agent-start'; label: string }
+  | { type: 'token'; label: string; chunk: string }
+  | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
+  | { type: 'tool-result'; label: string; tool: string; result: string }
+  | { type: 'heartbeat'; label: string; phase?: string; elapsed?: number }
+  | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: ToolStep[] }
+  | { type: 'round-done'; messages: MeetingMessage[]; compacted?: boolean }
+  | { type: 'chair-token'; chunk: string }
+  | { type: 'chair-done'; content: string }
+  | { type: 'minutes-done'; content: string }
+  | { type: 'summary-chunk'; chunk: string }
+  | { type: 'summary-done'; minutes: string }
+  | { type: 'phase-change'; phase: string }
+  | { type: 'compact-start' }
+  | { type: 'compact-done'; archivedRounds?: number; summaryLength?: number }
+  | { type: 'compact-warn'; message: string }
+  | { type: 'done'; messages: Array<{ role: string; content: string }> }
+  | { type: 'error'; message: string };
+
+/** 建立会议室统一 SSE 事件流（持久连接） */
+export function connectEventStream(
   nodeId: string,
-  message: string,
-  onEvent: (ev: MeetingSpeakEvent) => void,
-  signal?: AbortSignal,
+  onEvent: (ev: MeetingBroadcastEvent) => void,
+  signal: AbortSignal,
 ): Promise<void> {
+  return fetch(`/api/tradewind/meeting/${nodeId}/events`, { signal })
+    .then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const json = line.slice(6).trim();
+          if (!json) continue;
+          try {
+            const ev = JSON.parse(json) as MeetingBroadcastEvent;
+            onEvent(ev);
+          } catch { /* skip */ }
+        }
+      }
+    });
+}
+
+/** 发送公共发言（fire-and-forget，事件通过 /events 流返回） */
+export async function sendSpeak(nodeId: string, message: string, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`/api/tradewind/meeting/${nodeId}/speak`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message }),
     signal,
   });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(text || `HTTP ${res.status}`);
-  }
-
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const json = line.slice(6).trim();
-      if (!json) continue;
-      try {
-        const ev = JSON.parse(json) as MeetingSpeakEvent;
-        onEvent(ev);
-      } catch { /* skip */ }
-    }
-  }
+  if (res.ok) return { ok: true };
+  const text = await res.text().catch(() => '');
+  return { ok: false, error: text || `HTTP ${res.status}` };
 }
 
-export type MeetingSpeakEvent =
-  | { type: 'agent-start'; label: string }
-  | { type: 'token'; label: string; chunk: string }
-  | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; label: string; tool: string; result: string }
-  | { type: 'heartbeat'; label: string; phase: string; elapsed: number }
-  | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: ToolStep[] }
-  | { type: 'round-done'; messages: MeetingMessage[] }
-  | { type: 'error'; message: string };
-
-/** 人类给会长发消息（SSE 流式） */
-export async function chairStream(
-  nodeId: string,
-  message: string,
-  onEvent: (ev: ChairStreamEvent) => void,
-  signal?: AbortSignal,
-): Promise<void> {
+/** 发送会长私聊（fire-and-forget，事件通过 /events 流返回） */
+export async function sendChair(nodeId: string, message: string, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`/api/tradewind/meeting/${nodeId}/chair`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message }),
     signal,
   });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(text || `HTTP ${res.status}`);
-  }
-
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const json = line.slice(6).trim();
-      if (!json) continue;
-      try {
-        const ev = JSON.parse(json) as ChairStreamEvent;
-        onEvent(ev);
-      } catch { /* skip */ }
-    }
-  }
+  if (res.ok) return { ok: true };
+  const text = await res.text().catch(() => '');
+  return { ok: false, error: text || `HTTP ${res.status}` };
 }
-
-export type ChairStreamEvent =
-  | { type: 'chair-token'; chunk: string }
-  | { type: 'chair-done'; content: string }
-  | { type: 'done'; messages: Array<{ role: string; content: string }> }
-  | { type: 'error'; message: string };
 
 /** 人类结束会议 → 会长生成纪要 */
 export async function endMeeting(nodeId: string): Promise<{ minutes: string }> {

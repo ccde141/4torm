@@ -26,6 +26,7 @@ import { ArchiveManager } from './archive-manager';
 import { clearExecution as clearNodeContextStore } from '../foundation/node-context-store';
 import { clearExecution as clearNodeStatusStore } from '../foundation/node-status-store';
 import { lockAgent, unlockAgent } from '../../shared/agent-lock';
+import { initContactRegistry, clearContactRegistry } from '../execution/contact-registry';
 
 export interface OrchestratorOptions {
   graph: WorkflowGraph;
@@ -160,6 +161,13 @@ export class Orchestrator {
       }
     }
 
+    // 5.6 初始化 Contact Registry（横向联络 label→nodeId 索引）
+    const labelMap: Record<string, string> = {};
+    for (const node of this.graph.nodes) {
+      labelMap[node.id] = node.label || node.id;
+    }
+    initContactRegistry(labelMap, activeNodeRunners);
+
     // 6. 预计算 note 注入（编译期：查找 note 边，读取源 Note 节点的 content）
     const noteContents = new Map<string, string[]>(); // targetNodeId → note 内容列表
     for (const edge of this.graph.edges) {
@@ -199,7 +207,10 @@ export class Orchestrator {
     if (!this.running) return;
     this.running = false;
 
-    // 0. 释放所有 Agent 锁
+    // 0. 清理 Contact Registry
+    clearContactRegistry();
+
+    // 0.1 释放所有 Agent 锁
     for (const agentId of this.agentIds) {
       try { await unlockAgent(this.dataDir, agentId, 'tradewind'); } catch { /* 忽略 */ }
     }

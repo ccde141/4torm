@@ -231,7 +231,7 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
 function getDefaultLabel(type: string): string {
   const map: Record<string, string> = {
     entry: '入口', output: '出口', agent: 'Agent',
-    meeting: '会议室', note: 'Note', 'human-gate': '人类审查',
+    meeting: '会议室', note: 'Note', 'human-gate': '暂停点',
   };
   return map[type] ?? type;
 }
@@ -241,7 +241,6 @@ function getDefaultConfig(type: string): Record<string, unknown> {
     case 'agent': return { agentId: '' };
     case 'meeting': return { chairAgentId: '', participantNodeIds: [] };
     case 'note': return { content: '' };
-    case 'human-gate': return { reworkTargetNodeId: '' };
     default: return {};
   }
 }

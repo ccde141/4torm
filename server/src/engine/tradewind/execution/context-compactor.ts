@@ -217,17 +217,39 @@ export interface MeetingMessage {
   toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }>;
 }
 
-const MEETING_SUMMARY_PROMPT = `你是一位会议记录压缩专家。下面是一段多人会议的历史讨论记录。
+/** 构建会议压缩摘要 prompt（结构化，按参与者分条） */
+function buildMeetingSummaryPrompt(participants: string[], teamRoster?: Array<{ label: string; role: string }>): string {
+  const rosterBlock = teamRoster && teamRoster.length > 0
+    ? `\n\n## 团队名册（供上下文参考）\n${teamRoster.map(m => `- ${m.label}：${m.role}`).join('\n')}\n`
+    : '';
 
-请生成一份详尽的会议摘要，要求：
-1. 保留所有关键观点、决策、结论、数据
-2. 标注每个观点的发言者
-3. 保留未解决的争议和待讨论事项
-4. 压缩重复论述和闲聊内容
-5. 用结构化格式（议题 + 各方观点 + 结论）组织
-6. 摘要应足够详细，让重新加入会议的人能快速了解全部讨论进展
+  const participantSections = participants.map(p => `### ${p}\n- 发言要点：\n- 行动：\n- 产出位置：\n- 当前状态：`).join('\n\n');
 
-直接输出摘要内容，不要加任何前缀说明。`;
+  return `你是一位会议记录压缩专家。下面是一段多人会议的历史讨论记录。
+${rosterBlock}
+请严格按以下格式输出压缩摘要，禁止混合叙述：
+
+## 各参与者记录
+
+${participantSections}
+
+## 议题推进进度
+- 已完成：
+- 进行中：
+- 待讨论：
+
+## 关键决策与数据
+（列出所有已达成的技术/业务决策和重要数据点）
+
+要求：
+- 每个参与者块必须独立完整，不要交叉引用
+- "发言要点"只保留实质性观点和结论，压缩重复论述
+- "行动"记录该参与者做了什么（调了工具、写了代码、发起了提议等）
+- "产出位置"记录产出的文件路径或 URL（如有）
+- "当前状态"记录该参与者最后的工作状态（完成/进行中/等待/阻塞）
+- 摘要应足够详细，让重新加入会议的人能快速了解全部讨论进展
+- 直接输出摘要内容，不要加任何前缀说明`;
+}
 
 /**
  * 会议室压缩：按 speak 周期为粒度。
@@ -240,6 +262,10 @@ export async function compactMeetingIfNeeded(
   lastPromptTokens: number | undefined,
   state: CompactState,
   opts: CompactorOpts,
+  /** 参与者 label 列表（结构化摘要用） */
+  participants?: string[],
+  /** 团队名册（结构化摘要用） */
+  teamRoster?: Array<{ label: string; role: string }>,
 ): Promise<boolean> {
   if (state.disabled) return false;
   if (!lastPromptTokens || lastPromptTokens < opts.threshold) return false;
@@ -271,8 +297,10 @@ export async function compactMeetingIfNeeded(
   } catch { /* 归档写入失败不阻塞 */ }
 
   // 会长做摘要
+  const speakerLabels = participants ?? extractSpeakers(toArchive);
+  const summaryPrompt = buildMeetingSummaryPrompt(speakerLabels, teamRoster);
   const summaryMessages: ContextMessage[] = [
-    { role: 'system', content: MEETING_SUMMARY_PROMPT },
+    { role: 'system', content: summaryPrompt },
     { role: 'user', content: formatMeetingForSummary(toArchive) },
   ];
 
@@ -330,4 +358,15 @@ function splitMeetingIntoCycles(messages: MeetingMessage[]): MeetingMessage[][] 
 
 function formatMeetingForSummary(messages: MeetingMessage[]): string {
   return messages.map(m => `[${m.speaker}] ${m.content}`).join('\n\n');
+}
+
+/** 从消息中提取去重的说话人列表（fallback，当 participants 未传入时使用） */
+function extractSpeakers(messages: MeetingMessage[]): string[] {
+  const seen = new Set<string>();
+  for (const m of messages) {
+    if (m.speaker !== '系统' && m.speaker !== '人类') {
+      seen.add(m.speaker);
+    }
+  }
+  return [...seen];
 }

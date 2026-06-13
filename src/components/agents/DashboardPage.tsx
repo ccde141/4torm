@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { getAgents, deleteAgent, checkModelAvailable } from '../../store/agent';
+import { getAgents, deleteAgent, getOfflineAgentIds } from '../../store/agent';
 import { getAllSessions } from '../../store/chat';
 import { SYSTEM_STATUSES, getLabels, type UserLabel } from '../../store/statuses';
 import type { Agent, DashboardStats } from '../../types';
@@ -42,14 +42,7 @@ export default function DashboardPage() {
   // 首次加载时做重量级 model 可用性检查
   const checkOffline = useCallback(async () => {
     const list = await getAgents();
-    const offline = new Set<string>();
-    await Promise.all(list.map(async a => {
-      if (a.status === 'idle' || !a.status) {
-        const available = a.model ? await checkModelAvailable(a.model) : false;
-        if (!available) offline.add(a.id);
-      }
-    }));
-    setOfflineIds(offline);
+    setOfflineIds(await getOfflineAgentIds(list));
   }, []);
 
   useEffect(() => {

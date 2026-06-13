@@ -32,6 +32,7 @@ import {
 import { extractAnswer } from '../../shared/answer-extractor';
 import { buildTradewindSystemPrompt } from './prompt-builder';
 import { activeNodeRunners } from '../nodes/agent';
+import { execListAgents, execCreateWorkflow } from '../../shared/workflow-builder';
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
@@ -197,6 +198,13 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
             const ok = !result.startsWith('联络失败') && !result.startsWith('联络被系统拒绝') && !result.includes('失败');
             onEvent?.({ type: 'contact-done', label, target, result, ok });
             return result;
+          }
+          // 工作流搭建假工具
+          if (tool === 'list_agents') {
+            return await execListAgents(dataDir);
+          }
+          if (tool === 'create_workflow') {
+            return await execCreateWorkflow(dataDir, args);
           }
           try {
             const result = await execTool(tool, args, participant.agentId, workspace, signal);

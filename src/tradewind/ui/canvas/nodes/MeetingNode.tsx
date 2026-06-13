@@ -2,14 +2,19 @@
  * Meeting 节点 — 圆桌会议（紫色主色调）
  */
 import { useEffect, useState } from 'react';
-import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
+import { Handle, Position, NodeResizer, useNodes, type NodeProps } from '@xyflow/react';
 
 export function MeetingNode({ id, data, selected }: NodeProps) {
   const config = (data as any)?.config ?? {};
   const label = (data as any)?.label ?? '会议室';
   const memo = (data as any)?.memo ?? '';
-  const count = config.participantNodeIds?.length ?? 0;
   const running = !!(window as any).__tw_running;
+
+  // 过滤掉画布上已不存在的 nodeId，避免计数偏差
+  const allNodes = useNodes();
+  const existingNodeIds = new Set(allNodes.map(n => n.id));
+  const participantIds: string[] = config.participantNodeIds ?? [];
+  const count = participantIds.filter(pid => existingNodeIds.has(pid)).length;
 
   const [status, setStatus] = useState<{ busy: boolean; envelopePending: boolean }>({ busy: false, envelopePending: false });
   useEffect(() => {

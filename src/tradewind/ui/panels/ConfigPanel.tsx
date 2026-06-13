@@ -145,6 +145,7 @@ function ConfigFields({ nodeId, nodeType, config, label, onUpdate, nodes, edges,
 function AgentFields({ config, onChange }: { config: Record<string, unknown>; onChange: (k: string, v: unknown) => void }) {
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const agentId = (config.agentId as string) ?? '';
+  const role = (config.role as string) ?? '';
 
   useEffect(() => {
     fetch('/api/tradewind/agents')
@@ -154,19 +155,31 @@ function AgentFields({ config, onChange }: { config: Record<string, unknown>; on
   }, []);
 
   return (
-    <div className="tw-config__field">
-      <label className="tw-config__label">Agent</label>
-      <select
-        className="tw-config__select"
-        value={agentId}
-        onChange={(e) => onChange('agentId', e.target.value)}
-      >
-        <option value="">-- 选择 Agent --</option>
-        {agents.map(a => (
-          <option key={a.id} value={a.id}>{a.name} ({a.id.slice(0, 12)})</option>
-        ))}
-      </select>
-    </div>
+    <>
+      <div className="tw-config__field">
+        <label className="tw-config__label">Agent</label>
+        <select
+          className="tw-config__select"
+          value={agentId}
+          onChange={(e) => onChange('agentId', e.target.value)}
+        >
+          <option value="">-- 选择 Agent --</option>
+          {agents.map(a => (
+            <option key={a.id} value={a.id}>{a.name} ({a.id.slice(0, 12)})</option>
+          ))}
+        </select>
+      </div>
+      <div className="tw-config__field">
+        <label className="tw-config__label">职责</label>
+        <input
+          className="tw-config__input"
+          placeholder="补位协作者，可处理任意交办事务。专业事务请给予对应专业agent。"
+          value={role}
+          onChange={(e) => onChange('role', e.target.value)}
+        />
+        {!role && <span className="tw-config__hint">未填写则使用默认职责</span>}
+      </div>
+    </>
   );
 }
 

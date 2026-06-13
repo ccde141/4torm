@@ -62,6 +62,18 @@ export class ContextBuilder {
     return Object.freeze(map);
   }
 
+  /** 构建 nodeId → role 映射（仅 type=agent 的节点） */
+  private buildNodeRoleMap(): Record<string, string> {
+    const DEFAULT_ROLE = '补位协作者，可处理任意交办事务。专业事务请给予对应专业agent。';
+    const map: Record<string, string> = {};
+    for (const [id, n] of this.deps.nodes) {
+      if (n.type === 'agent') {
+        map[id] = (n.config.role as string) || DEFAULT_ROLE;
+      }
+    }
+    return Object.freeze(map);
+  }
+
   /** Phase R2：构造 BaseContext（Entry/Output 用） */
   buildBase(nodeId: string): BaseContext {
     const { deps } = this;
@@ -71,6 +83,7 @@ export class ContextBuilder {
     const buffer = deps.inputBuffers.get(nodeId);
     const nodeAgentMap = this.buildNodeAgentMap();
     const nodeLabelMap = this.buildNodeLabelMap();
+    const nodeRoleMap = this.buildNodeRoleMap();
 
     return {
       nodeId,
@@ -82,6 +95,7 @@ export class ContextBuilder {
       signal: deps.signal,
       nodeAgentMap,
       nodeLabelMap,
+      nodeRoleMap,
 
       waitForInputs(): Promise<Envelope[]> {
         if (!buffer) return Promise.resolve([]);

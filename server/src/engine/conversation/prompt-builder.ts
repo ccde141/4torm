@@ -11,6 +11,7 @@
 
 import type { ToolDef } from '../shared/tool-defs-loader';
 import { buildSandboxSection, type SandboxLevel } from '../shared/sandbox-prompt';
+import { buildWorkflowToolsSection } from '../shared/workflow-builder';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -117,6 +118,9 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   // 4. ask 说明（向人类提问）
   parts.push(buildAskSection());
 
+  // 4.5 工作流搭建假工具说明
+  parts.push(buildWorkflowToolsSection());
+
   // 5. 「基地 + 沙箱」段
   parts.push(buildSandboxSection({
     workspaceAbs: opts.workspaceAbs,
@@ -217,6 +221,7 @@ function buildAskSection(): string {
   对比要点：
   - question 是一句问句，不是一段引导语
   - options 互斥、≤4 项、每项简短，"其他"由前端自由输入框承载，不必显式列出
+  - **格式铁律**：ask 只能通过 <action tool="ask">{...}</action> 调用。禁止写成 <ask question="..."> 这类属性标签，那样无法被识别。
 
 ## 何时应主动使用 ask
 
