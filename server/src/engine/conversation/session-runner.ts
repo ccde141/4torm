@@ -20,6 +20,7 @@ import {
 } from './react-loop';
 import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
+import { execListAgents, execCreateWorkflow } from '../shared/workflow-builder';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -172,6 +173,20 @@ export class SessionRunner {
         }
         if (tool === 'delegate') {
           return await this.execDelegate(args, onEvent);
+        }
+        // 工作流搭建假工具
+        if (tool === 'list_agents') {
+          onEvent({ type: 'tool-call', tool, args });
+          const result = await execListAgents(dataDir);
+          onEvent({ type: 'tool-result', tool, result, ok: true });
+          return result;
+        }
+        if (tool === 'create_workflow') {
+          onEvent({ type: 'tool-call', tool, args });
+          const result = await execCreateWorkflow(dataDir, args);
+          const ok = !result.startsWith('创建失败');
+          onEvent({ type: 'tool-result', tool, result, ok });
+          return result;
         }
         // 直接执行工具，无二次确认
         onEvent({ type: 'tool-call', tool, args });

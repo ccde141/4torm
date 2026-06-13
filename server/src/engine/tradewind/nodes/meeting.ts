@@ -32,6 +32,7 @@ import {
 } from '../execution/meeting-session';
 import type { MeetingEndResult } from '../execution/meeting-handlers';
 import { handleMeetingOpen } from '../execution/meeting-handlers';
+import { broadcastToMeeting } from '../execution/meeting-broadcast';
 import { appendNodeContext } from '../foundation/node-context-store';
 import { markEnvelopePending, markEnvelopeDone } from '../foundation/node-status-store';
 import { activeNodeRunners } from './agent';
@@ -56,6 +57,8 @@ export interface ActiveMeeting {
   compactState: { disabled: boolean; archiveSeq: number };
   /** 压缩归档目录 */
   compactArchiveDir: string;
+  /** 团队名册（纪要注入用） */
+  teamRoster: Array<{ label: string; role: string }>;
 }
 
 export const activeMeetings = new Map<string, ActiveMeeting>();
@@ -154,8 +157,38 @@ export class MeetingExecutor implements NodeExecutor {
       participants: participants.map(p => p.label),
     });
 
+    // 提前注册到 activeMeetings，使 /status 端点在 opening 阶段可用
+    const workspaceRel = `data/tradewind/workflows/${ctx.workflowId}/workspace`;
+    const projectDir = path.resolve(ctx.dataDir, '..');
+    const workspaceAbs = path.resolve(projectDir, workspaceRel);
+    const compactArchiveDir = path.join(workspaceAbs, 'transcripts', 'bak', `meeting_${meetingLabel}`);
+
+    const teamRoster: Array<{ label: string; role: string }> = [];
+    for (const [nid, role] of Object.entries(ctx.nodeRoleMap)) {
+      teamRoster.push({ label: ctx.nodeLabelMap[nid] || nid, role });
+    }
+
+    let endResolve: ((result: MeetingEndResult) => void) | null = null;
+    const endResultPromise = new Promise<MeetingEndResult>((resolve) => {
+      endResolve = resolve;
+    });
+    activeMeetings.set(ctx.nodeId, {
+      session,
+      configuredParticipants: participants,
+      resolve: endResolve!,
+      executionId: ctx.executionId,
+      dataDir: ctx.dataDir,
+      runDir: ctx.runDir,
+      workspace: workspaceRel,
+      signal: ctx.signal,
+      roundAbort: null,
+      compactState: { disabled: false, archiveSeq: 0 },
+      compactArchiveDir,
+      teamRoster,
+    });
+
     // 入会摘要阶段（信封注入 + 全员摘要发言）
-    // 前端通过轮询 /status 看 publicMessages 增长 + phase 切换，不走 SSE
+    // 通过 /events SSE 推送 token 级进度
     const envelopeContent = envelopes
       .map(e => e.content)
       .filter(c => c && c.trim().length > 0)
@@ -167,37 +200,27 @@ export class MeetingExecutor implements NodeExecutor {
         session,
         envelopeContent,
         signal: ctx.signal,
+        onEvent: (ev) => {
+          broadcastToMeeting(ctx.nodeId, ev);
+        },
       });
     } catch (e) {
+      activeMeetings.delete(ctx.nodeId);
       if ((e as Error).name === 'AbortError') return;
       throw e;
     }
-    if (ctx.signal.aborted) return;
+    if (ctx.signal.aborted) {
+      activeMeetings.delete(ctx.nodeId);
+      return;
+    }
+
+    broadcastToMeeting(ctx.nodeId, { type: 'phase-change', phase: 'discussion' });
 
     // 挂起等待人类 end（Promise 由路由层 resolve）
-    const workspaceRel = `data/tradewind/workflows/${ctx.workflowId}/workspace`;
-    const projectDir = path.resolve(ctx.dataDir, '..');
-    const workspaceAbs = path.resolve(projectDir, workspaceRel);
-    const compactArchiveDir = path.join(workspaceAbs, 'transcripts', 'bak', `meeting_${meetingLabel}`);
+    const endResult = await endResultPromise;
 
-    const endResult = await new Promise<MeetingEndResult>((resolve) => {
-      activeMeetings.set(ctx.nodeId, {
-        session,
-        configuredParticipants: participants,
-        resolve,
-        executionId: ctx.executionId,
-        dataDir: ctx.dataDir,
-        runDir: ctx.runDir,
-        workspace: workspaceRel,
-        signal: ctx.signal,
-        roundAbort: null,
-        compactState: { disabled: false, archiveSeq: 0 },
-        compactArchiveDir,
-      });
-    });
-
-    // 清理注册表
-    activeMeetings.delete(ctx.nodeId);
+    // 注意：不立即删除 activeMeetings——会议结束后保留只读历史 + 会长私聊可用
+    // 下次 runMeeting 会覆盖（同一节点新一轮）；orchestrator stop 时由 abort 级联清理
 
     ctx.emit(BUILTIN_EVENT_IDS.MEETING_END, { minutesLength: endResult.minutes.length });
 

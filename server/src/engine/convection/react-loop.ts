@@ -12,12 +12,13 @@ import type { ContextMessage } from '../shared/types';
 import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import { callTool } from './tool-bridge';
 import { extractAnswer } from '../shared/answer-extractor';
+import { execListAgents, execCreateWorkflow } from '../shared/workflow-builder';
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
 const MAX_TURNS = 200;
 const MAX_CONTINUATIONS = 5;
-const MAX_NUDGES = 2;
+const MAX_NUDGES = 10;
 const LLM_TIMEOUT_MS = 3_600_000;
 const HEARTBEAT_INTERVAL_MS = 5_000;
 const TOOL_RESULT_TRIM_THRESHOLD = 6_000;
@@ -91,22 +92,6 @@ export function isLikelyTruncated(text: string): boolean {
 }
 
 function trimToolResult(result: string): string {
-  const lines = result.split('\n');
-  const totalChars = result.length;
-  const totalLines = lines.length;
-
-  if (totalLines > TOOL_RESULT_LINE_THRESHOLD) {
-    const head = lines.slice(0, TOOL_RESULT_HEAD_LINES).join('\n');
-    const tail = lines.slice(-TOOL_RESULT_TAIL_LINES).join('\n');
-    const omittedLines = totalLines - TOOL_RESULT_HEAD_LINES - TOOL_RESULT_TAIL_LINES;
-    return `${head}\n\n[... 省略 ${omittedLines} 行 / 共 ${totalLines} 行、${totalChars} 字符。如需完整内容，请缩小查询范围（如指定子目录、用 grep 过滤、或分段 read_file）。下面是末尾片段：]\n\n${tail}`;
-  }
-
-  if (totalChars > TOOL_RESULT_TRIM_THRESHOLD) {
-    const omittedChars = totalChars - TOOL_RESULT_HEAD - TOOL_RESULT_TAIL;
-    return `${result.slice(0, TOOL_RESULT_HEAD)}\n\n[... 省略中间 ${omittedChars} 字符 / 共 ${totalChars} 字符。如需完整内容，请精化查询：read_file 可分段读、run_command 可加 head/tail/grep 过滤。下面是末尾片段：]\n\n${result.slice(-TOOL_RESULT_TAIL)}`;
-  }
-
   return result;
 }
 
@@ -300,7 +285,14 @@ export async function runConvectionReAct(params: RunReActParams): Promise<AgentR
 
       let result: string;
       try {
-        result = await callTool({ tool: action.tool, args: action.args, agentId, workspaceDir: `data/convection/sessions/${sessionId}/workspace` });
+        // 工作流搭建假工具拦截
+        if (action.tool === 'list_agents') {
+          result = await execListAgents(dataDir);
+        } else if (action.tool === 'create_workflow') {
+          result = await execCreateWorkflow(dataDir, action.args);
+        } else {
+          result = await callTool({ tool: action.tool, args: action.args, agentId, workspaceDir: `data/convection/sessions/${sessionId}/workspace` });
+        }
       } catch (e) {
         result = `错误：${(e as Error).message}`;
       } finally {

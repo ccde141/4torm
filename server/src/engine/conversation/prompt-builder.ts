@@ -11,6 +11,7 @@
 
 import type { ToolDef } from '../shared/tool-defs-loader';
 import { buildSandboxSection, type SandboxLevel } from '../shared/sandbox-prompt';
+import { buildWorkflowToolsSection } from '../shared/workflow-builder';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -116,6 +117,9 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
 
   // 4. ask 说明（向人类提问）
   parts.push(buildAskSection());
+
+  // 4.5 工作流搭建假工具说明
+  parts.push(buildWorkflowToolsSection());
 
   // 5. 「基地 + 沙箱」段
   parts.push(buildSandboxSection({

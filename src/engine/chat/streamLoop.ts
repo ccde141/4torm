@@ -43,6 +43,8 @@ export async function runStreamLoop(ctx: StreamCtx) {
   // 创建 assistant 占位消息
   const assistantMsgId = generateMessageIdFn();
   let streamContent = '';
+  let lastFlushAt = 0;
+  const TOKEN_FLUSH_MS = 80;
   const assistantMsg: ChatMessage = {
     id: assistantMsgId, role: 'assistant', content: '',
     timestamp: new Date().toISOString(), agentId: agent.id,
@@ -107,9 +109,18 @@ export async function runStreamLoop(ctx: StreamCtx) {
           setStreamContent: (c: string) => { streamContent = c; },
           setAllMessages: (m: ChatMessage[]) => { allMessages = m; },
           setFirstToken: () => { firstTokenReceived = true; clearInterval(waitInterval); },
+          throttledFlush: () => {
+            const now = Date.now();
+            if (now - lastFlushAt >= TOKEN_FLUSH_MS) {
+              lastFlushAt = now;
+              setMessages([...allMessages]);
+            }
+          },
         });
       }
     }
+    // 流正常结束：强制最终刷新，保证节流期间未渲染的尾部 token 全部呈现
+    setMessages([...allMessages]);
   } catch (e) {
     clearInterval(waitInterval);
     if ((e as Error).name === 'AbortError') throw e;
@@ -139,6 +150,8 @@ interface EventHandlerCtx {
   setStreamContent: (c: string) => void;
   setAllMessages: (m: ChatMessage[]) => void;
   setFirstToken: () => void;
+  /** 节流刷新 UI（token 高频场景用，避免每 token 全量重渲染） */
+  throttledFlush: () => void;
 }
 
 async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
@@ -148,7 +161,9 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
       ctx.setStreamContent(ctx.streamContent + ev.content);
       const updated = { ...findMsg(ctx.allMessages, ctx.assistantMsgId)!, content: ctx.streamContent + ev.content };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
-      ctx.setMessages([...ctx.allMessages]);
+      // 节流：超长输出时每个 token 都 setMessages 会导致 O(n²) 渲染塌方，
+      // 改为最多每 THROTTLE_MS 刷新一次 UI（最终内容由后续事件或流结束保证完整）
+      ctx.throttledFlush();
       break;
     }
     case 'tool-call': {
@@ -277,8 +292,19 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
         timestamp: new Date().toISOString(), agentId: ctx.agent.id,
         ask: { question: ev.question, options: ev.options, answered: false },
       };
-      // 移除空的 assistant 占位消息，插入 askMsg
-      const msgs = ctx.allMessages.filter(m => m.id !== ctx.assistantMsgId);
+      // 保留 assistantMsg 中已流式产出的内容（剥离 think/action 标签），追加 askMsg
+      const cleanContent = ctx.streamContent
+        .replace(/<action[^>]*>[\s\S]*?<\/action>/g, '')
+        .replace(/<think>[\s\S]*?<\/think>/g, '')
+        .trim();
+      let msgs = ctx.allMessages;
+      if (cleanContent) {
+        // 把 assistantMsg 内容更新为剥离后的描述性文字，保留它
+        msgs = msgs.map(m => m.id === ctx.assistantMsgId ? { ...m, content: cleanContent } : m);
+      } else {
+        // 没有可保留内容时，移除空占位
+        msgs = msgs.filter(m => m.id !== ctx.assistantMsgId);
+      }
       msgs.push(askMsg);
       ctx.setAllMessages(msgs);
       ctx.setMessages([...msgs]);

@@ -46,6 +46,8 @@ export interface BaseContext {
   readonly nodeAgentMap: Readonly<Record<string, string>>;
   /** nodeId → label 映射（所有节点） */
   readonly nodeLabelMap: Readonly<Record<string, string>>;
+  /** nodeId → role 映射（仅 type=agent 的节点） */
+  readonly nodeRoleMap: Readonly<Record<string, string>>;
 
   /** 等所有 handoff 入线到齐 */
   waitForInputs(): Promise<Envelope[]>;

@@ -34,6 +34,13 @@ const TOOL_RESULT_LINE_THRESHOLD = 80;
 const TOOL_RESULT_HEAD_LINES = 30;
 const TOOL_RESULT_TAIL_LINES = 20;
 
+/**
+ * 续写指令：明确要求模型从断点无缝接续，禁止重复和重起标签。
+ * 弱指令（如单纯"继续"）会导致模型重新组织、重复已输出内容、重起 think/answer 标签，
+ * 在超长输出场景下引发"截断→重写→再截断"的放大循环。
+ */
+const CONTINUATION_HINT = '【系统：续写指令】你上一条输出因长度上限被截断。请直接从被截断的那个字符紧接着往下写，补全剩余内容即可。严禁重复任何已经输出的内容，严禁重新开启 <think>、<answer> 等标签，严禁重新组织或重头叙述。如果已经接近写完，就把剩下的收尾部分补完。';
+
 // ── 类型 ──────────────────────────────────────────────────────────
 
 export interface ParsedAction {
@@ -254,13 +261,13 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
       reply = result.content;
       recordUsage(result.usage);
 
-      // D+续写：finishReason=length 或字符级截断检测 → 自动追加"继续"
+      // D+续写：finishReason=length 或字符级截断检测 → 自动追加续写指令
       const shouldContinue = result.finishReason === 'length'
         || (result.finishReason !== 'stop' && reply.length > 0 && isLikelyTruncated(reply));
       if (shouldContinue) {
         for (let cont = 0; cont < MAX_CONTINUATIONS; cont++) {
           msgs.push({ role: 'assistant', content: reply });
-          msgs.push({ role: 'user', content: '继续' });
+          msgs.push({ role: 'user', content: CONTINUATION_HINT });
           const contResult = await llm.call(msgs, undefined, onChunk, abortCtrl.signal);
           recordUsage(contResult.usage);
           msgs.pop();

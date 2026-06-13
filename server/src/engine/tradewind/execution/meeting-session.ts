@@ -54,8 +54,9 @@ export interface MeetingSessionData {
    * 会议阶段：
    * - opening: 入会摘要阶段（信封注入 + 全员摘要发言）
    * - discussion: 讨论阶段（人类主导 speak/chair/end）
+   * - ended: 会议已结束（只读历史 + 会长私聊仍可用）
    */
-  phase: 'opening' | 'discussion';
+  phase: 'opening' | 'discussion' | 'ended';
   /** 当前正在流式产出的消息（面板关了再开时 replay 用） */
   streamingCurrent?: { speaker: string; content: string };
 }
