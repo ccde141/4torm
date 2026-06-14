@@ -76,6 +76,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       skillIds: agent.skills || [],
       workspace: agent.workspace,
       sandboxLevel: agent.sandboxLevel,
+      native: true, // Phase 2：季风写死走原生工具调用
     };
 
     const runner = getOrCreateRunner(body.sessionId, opts);
@@ -99,6 +100,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       dataDir,
       agentId: agent.id,
       userMessage: lastUserMsg?.content,
+      native: true, // Phase 2：季风写死走原生工具调用
     });
 
     // 构造 chatMessages（system + 历史）

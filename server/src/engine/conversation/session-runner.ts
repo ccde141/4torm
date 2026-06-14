@@ -14,6 +14,7 @@
 import type { ContextMessage } from '../shared/types';
 import {
   runReActLoop,
+  runReActLoopNative,
   SuspendSignal,
   type LLMCaller,
   type ToolCaller,
@@ -21,6 +22,7 @@ import {
 import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execListAgents, execCreateWorkflow } from '../shared/workflow-builder';
+import { buildVirtualToolDefs } from './virtual-tools';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -61,6 +63,11 @@ export interface SessionRunnerOpts {
    * 用于潮汐 self-loop 的 schedule_next 等"只截参数不执行"的工具。
    */
   interceptTool?: (tool: string, args: Record<string, string>) => string | null;
+  /**
+   * 原生工具调用模式。true = 走 runReActLoopNative（结构化 tool_calls）。
+   * 默认 false = 文本协议（向后兼容；潮汐等含 interceptTool 虚拟工具的场景暂留文本）。
+   */
+  native?: boolean;
 }
 
 export class SessionRunner {
@@ -69,7 +76,7 @@ export class SessionRunner {
   private abortController: AbortController | null = null;
   private suspended = false;
   /** 挂起时保存的上下文（messages + systemPrompt），用于 resume */
-  private suspendedState: { messages: ContextMessage[]; systemPrompt: string } | null = null;
+  private suspendedState: { messages: ContextMessage[]; systemPrompt: string; pendingToolCallId?: string } | null = null;
 
   constructor(opts: SessionRunnerOpts) {
     this.opts = opts;
@@ -85,7 +92,8 @@ export class SessionRunner {
 
   /**
    * 恢复挂起的会话：人类回复了 ask 问题。
-   * 把回复作为 <result tool="ask"> 追加到 messages，重新进入 ReAct 循环。
+   * 原生模式：把回复作为 role:'tool' 配对消息补上（pendingToolCallId）。
+   * 文本模式：把回复作为 <result tool="ask"> 文本追加（向后兼容）。
    */
   async resume(
     answer: string,
@@ -100,11 +108,15 @@ export class SessionRunner {
     this.suspended = false;
     this.abortController = new AbortController();
 
-    const { messages, systemPrompt } = this.suspendedState;
+    const { messages, systemPrompt, pendingToolCallId } = this.suspendedState;
     this.suspendedState = null;
 
-    // 把人类回复作为工具结果追加
-    messages.push({ role: 'user', content: `<result tool="ask">${answer}</result>` });
+    // 把人类回复作为工具结果追加：原生 role:'tool' 配对 / 文本 <result> 兜底
+    if (pendingToolCallId) {
+      messages.push({ role: 'tool', toolCallId: pendingToolCallId, content: answer });
+    } else {
+      messages.push({ role: 'user', content: `<result tool="ask">${answer}</result>` });
+    }
 
     try {
       return await this.runLoop(systemPrompt, messages, onEvent);
@@ -144,10 +156,13 @@ export class SessionRunner {
     const signal = this.abortController!.signal;
 
     const toolDefs = await loadAgentToolDefs(dataDir, this.opts.toolNames, this.opts.skillIds);
+    // 原生模式：把虚拟工具（ask/delegate/list_agents/create_workflow）也作为 schema
+    // 注入 tools 参数，否则模型在原生通道看不见它们。执行端 toolCaller 按 name 拦截不变。
+    const nativeToolDefs = [...toolDefs, ...buildVirtualToolDefs(true)];
 
     const llm: LLMCaller = {
-      async call(msgs, _options, onChunk, sig) {
-        return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig });
+      async call(msgs, _options, onChunk, sig, tools) {
+        return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools });
       },
     };
 
@@ -203,20 +218,37 @@ export class SessionRunner {
     };
 
     const enableTools = toolDefs.length > 0 || !!this.opts.interceptTool;
-    const result = await runReActLoop({
-      messages: chatMessages,
-      llm,
-      tools: enableTools ? toolCaller : undefined,
-      onEvent: (ev) => {
-        if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
-      },
-      signal,
-    });
+    // 原生模式（季风路由传 native=true）走 runReActLoopNative；
+    // 文本模式（潮汐等含 interceptTool 虚拟工具的场景）走 runReActLoop。
+    const result = this.opts.native
+      ? await runReActLoopNative({
+          messages: chatMessages,
+          llm,
+          tools: enableTools ? toolCaller : undefined,
+          toolDefs: nativeToolDefs,
+          onEvent: (ev) => {
+            if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
+          },
+          signal,
+        })
+      : await runReActLoop({
+          messages: chatMessages,
+          llm,
+          tools: enableTools ? toolCaller : undefined,
+          onEvent: (ev) => {
+            if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
+          },
+          signal,
+        });
 
     // ask 挂起：保存状态，通知前端
     if (result.suspended) {
       this.suspended = true;
-      this.suspendedState = { messages: chatMessages, systemPrompt };
+      this.suspendedState = {
+        messages: chatMessages,
+        systemPrompt,
+        pendingToolCallId: result.suspended.pendingToolCallId,
+      };
       onEvent({ type: 'ask', question: result.suspended.question, options: result.suspended.options });
       onEvent({ type: 'done' });
       return { content: '', rawContent: '' };

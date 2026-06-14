@@ -30,12 +30,8 @@ const BLOCKED_COMMAND_PATTERNS = [
   /mkfs/i, /format/i, /fdisk/i,
   /dd\s+if=/i,
 ];
-const MAX_CMD_LENGTH = 1000;
-
 function checkBlockedCommand(cmd: string): string | null {
-  if (cmd.length > MAX_CMD_LENGTH) {
-    return `命令过长 (${cmd.length} > ${MAX_CMD_LENGTH} 字符)`;
-  }
+  // 开发环境足量权限：不限命令长度，仅拦截高危破坏性操作
   for (const pattern of BLOCKED_COMMAND_PATTERNS) {
     if (pattern.test(cmd)) {
       return `命令包含被禁止的操作: ${pattern}`;

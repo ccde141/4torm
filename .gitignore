@@ -109,3 +109,6 @@ data/*.db-wal
 docs/old/
 
 .commit-msg.tmp
+
+# 开发内部设计文档（不入库，仅本地参考）
+design/
