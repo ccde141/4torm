@@ -3,15 +3,19 @@
  *
  * 构建内容（按顺序）：
  *   1. 角色定义
- *   2. 输出协议 + 工具列表
- *   3. delegate 说明
- *   4. 「基地 + 沙箱」段（按 sandboxLevel 动态生成）
- *   5. 历史记忆（条件触发）
+ *   2. 基线固件（baseline.txt）
+ *   3. 输出协议 + 工具列表
+ *   4. delegate 说明
+ *   5. ask 说明
+ *   6. 工作流搭建假工具
+ *   7. 「基地 + 沙箱」段（按 sandboxLevel 动态生成）
+ *   8. 历史记忆（条件触发）
  */
 
 import type { ToolDef } from '../shared/tool-defs-loader';
 import { buildSandboxSection, type SandboxLevel } from '../shared/sandbox-prompt';
 import { buildWorkflowToolsSection } from '../shared/workflow-builder';
+import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -125,23 +129,30 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   // 1. 角色定义
   if (opts.rolePrompt.trim()) parts.push(opts.rolePrompt.trim());
 
-  // 2. 协议段：原生模式用精简版（不教 <action>），文本模式用完整输出协议
+  // 2. 基线固件（角色定义优先于基线）
+  const baselinePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'baseline.txt');
+  try {
+    const baseline = await fs.readFile(baselinePath, 'utf-8');
+    if (baseline.trim()) parts.push(baseline.trim());
+  } catch { /* baseline.txt 不存在时跳过 */ }
+
+  // 3. 协议段：原生模式用精简版（不教 <action>），文本模式用完整输出协议
   if (opts.native) {
     parts.push(buildNativeProtocol());
   } else if (opts.toolDefs.length > 0) {
     parts.push(buildOutputProtocol(opts.toolDefs));
   }
 
-  // 3. delegate 说明（沙箱说明跟着母 agent 级别）
+  // 4. delegate 说明（沙箱说明跟着母 agent 级别）
   parts.push(buildDelegateSection(opts.sandboxLevel));
 
-  // 4. ask 说明（向人类提问）
+  // 5. ask 说明（向人类提问）
   parts.push(buildAskSection());
 
-  // 4.5 工作流搭建假工具说明
+  // 6. 工作流搭建假工具说明
   parts.push(buildWorkflowToolsSection());
 
-  // 5. 「基地 + 沙箱」段
+  // 7. 「基地 + 沙箱」段
   parts.push(buildSandboxSection({
     workspaceAbs: opts.workspaceAbs,
     projectDir: opts.projectDir,
@@ -149,7 +160,7 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
     workspaceLabel: '你的工作区（专属）',
   }));
 
-  // 6. 记忆注入
+  // 8. 记忆注入
   if (opts.userMessage && MEMORY_TRIGGERS.test(opts.userMessage)) {
     const memPath = path.join(opts.dataDir, 'agents', opts.agentId, '.workspace', 'MEMORY.md');
     try {
