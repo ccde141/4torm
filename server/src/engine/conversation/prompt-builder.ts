@@ -1,17 +1,22 @@
 /**
  * 普通会话 system prompt 构建器
  *
- * 构建内容（按顺序）：
- *   1. 角色定义
- *   2. 输出协议 + 工具列表
- *   3. delegate 说明
- *   4. 「基地 + 沙箱」段（按 sandboxLevel 动态生成）
- *   5. 历史记忆（条件触发）
+ * 构建顺序（由外到内，由大到小）：
+ *   1. 元认知（meta.md）— 我是什么，我运行在什么平台
+ *   2. 空间 + 权限（sandbox）— 我在哪里操作
+ *   3. 角色定义（rolePrompt）— 我扮演谁
+ *   4. 基线固件（baseline.md）— 我怎么干活
+ *   5. 协议段（native / text）— 我有什么工具
+ *   6. delegate 说明
+ *   7. ask 说明
+ *   8. 工作流搭建假工具
+ *   9. 历史记忆（条件触发）
  */
 
 import type { ToolDef } from '../shared/tool-defs-loader';
 import { buildSandboxSection, type SandboxLevel } from '../shared/sandbox-prompt';
 import { buildWorkflowToolsSection } from '../shared/workflow-builder';
+import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -122,26 +127,14 @@ function buildNativeProtocol(): string {
 export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Promise<string> {
   const parts: string[] = [];
 
-  // 1. 角色定义
-  if (opts.rolePrompt.trim()) parts.push(opts.rolePrompt.trim());
+  // 1. 元认知：我是谁，我运行在什么平台
+  const metaPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'meta.md');
+  try {
+    const meta = await fs.readFile(metaPath, 'utf-8');
+    if (meta.trim()) parts.push(meta.trim());
+  } catch { /* meta.md 不存在时跳过 */ }
 
-  // 2. 协议段：原生模式用精简版（不教 <action>），文本模式用完整输出协议
-  if (opts.native) {
-    parts.push(buildNativeProtocol());
-  } else if (opts.toolDefs.length > 0) {
-    parts.push(buildOutputProtocol(opts.toolDefs));
-  }
-
-  // 3. delegate 说明（沙箱说明跟着母 agent 级别）
-  parts.push(buildDelegateSection(opts.sandboxLevel));
-
-  // 4. ask 说明（向人类提问）
-  parts.push(buildAskSection());
-
-  // 4.5 工作流搭建假工具说明
-  parts.push(buildWorkflowToolsSection());
-
-  // 5. 「基地 + 沙箱」段
+  // 2. 空间 + 权限：我在哪里操作
   parts.push(buildSandboxSection({
     workspaceAbs: opts.workspaceAbs,
     projectDir: opts.projectDir,
@@ -149,7 +142,33 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
     workspaceLabel: '你的工作区（专属）',
   }));
 
-  // 6. 记忆注入
+  // 3. 角色定义：我扮演谁
+  if (opts.rolePrompt.trim()) parts.push(opts.rolePrompt.trim());
+
+  // 4. 基线固件：我怎么干活
+  const baselinePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'baseline.md');
+  try {
+    const baseline = await fs.readFile(baselinePath, 'utf-8');
+    if (baseline.trim()) parts.push(baseline.trim());
+  } catch { /* baseline.md 不存在时跳过 */ }
+
+  // 5. 协议段：我有什么工具（原生模式精简 / 文本模式完整）
+  if (opts.native) {
+    parts.push(buildNativeProtocol());
+  } else if (opts.toolDefs.length > 0) {
+    parts.push(buildOutputProtocol(opts.toolDefs));
+  }
+
+  // 6. delegate 说明
+  parts.push(buildDelegateSection(opts.sandboxLevel));
+
+  // 7. ask 说明
+  parts.push(buildAskSection());
+
+  // 8. 工作流搭建假工具
+  parts.push(buildWorkflowToolsSection());
+
+  // 9. 记忆注入
   if (opts.userMessage && MEMORY_TRIGGERS.test(opts.userMessage)) {
     const memPath = path.join(opts.dataDir, 'agents', opts.agentId, '.workspace', 'MEMORY.md');
     try {

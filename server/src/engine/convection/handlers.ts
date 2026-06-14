@@ -17,6 +17,8 @@ import { loadAgentToolDefs, type ToolDef } from '../shared/tool-defs-loader';
 import { buildSystemPrompt } from '../shared/prompt';
 import { buildSandboxSection } from '../shared/sandbox-prompt';
 import { compactConvectionIfNeeded, type ConvectionCompactState } from './convection-compactor';
+import { fileURLToPath } from 'node:url';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
   runConvectionReAct,
@@ -69,6 +71,7 @@ export { ToolCallRecord };
 
 /**
  * 构造参与 Agent 在对流中的 system prompt + 历史消息。
+ * 组装顺序：元认知 → 空间+权限 → 角色 → 基线 → 协议 → 场景上下文
  */
 async function buildAgentMessages(
   dataDir: string,
@@ -81,31 +84,43 @@ async function buildAgentMessages(
   const wsPath = sessionWorkspace(dataDir, session.id);
   const projectDir = path.resolve(dataDir, '..');
 
-  const participants = [];
-  for (const pid of session.participantAgentIds) {
-    const a = await getAgent(dataDir, pid);
-    participants.push(a.name);
-  }
+  // 读对流自己的 meta.md / baseline.md
+  const selfDir = path.dirname(fileURLToPath(import.meta.url));
 
-  let systemText = '';
-  if (agent.rolePrompt) systemText += agent.rolePrompt;
-  if (toolDefs.length > 0) {
-    systemText += '\n\n' + (native ? buildNativeConvectionProtocol(toolDefs) : buildSystemPrompt(toolDefs));
-  }
-  systemText += '\n\n' + buildSandboxSection({
+  const parts: string[] = [];
+
+  // 1. 元认知
+  try {
+    const meta = await fs.readFile(path.join(selfDir, 'meta.md'), 'utf-8');
+    if (meta.trim()) parts.push(meta.trim());
+  } catch { /* 文件不存在时跳过 */ }
+
+  // 2. 空间 + 权限
+  parts.push(buildSandboxSection({
     workspaceAbs: wsPath,
     projectDir,
     sandboxLevel: agent.sandboxLevel,
     workspaceLabel: '对流会话工作区',
-  });
-  systemText += `\n\n## 当前场景\n`;
-  systemText += `你正以「${agent.name}」的身份参加一场多人对话。\n`;
-  systemText += `参与者：${participants.join('、')}\n`;
-  systemText += `话题：${session.topic}\n`;
-  systemText += `请基于对话上下文回应人类的发言。简洁、有观点、有建设性。\n`;
-  systemText += `工具调用过程不会展示给其他参与者，只有最终 <answer> 内容会被公开。`;
+  }));
 
-  const system: ContextMessage = { role: 'system', content: systemText };
+  // 3. 角色定义
+  if (agent.rolePrompt) parts.push(agent.rolePrompt.trim());
+
+  // 4. 基线固件
+  try {
+    const baseline = await fs.readFile(path.join(selfDir, 'baseline.md'), 'utf-8');
+    if (baseline.trim()) parts.push(baseline.trim());
+  } catch { /* 文件不存在时跳过 */ }
+
+  // 5. 协议段
+  if (toolDefs.length > 0) {
+    parts.push(native ? buildNativeConvectionProtocol(toolDefs) : buildSystemPrompt(toolDefs));
+  }
+
+  // 6. 场景上下文
+  parts.push(`## 当前场景\n你正以「${agent.name}」的身份参加一场多人对话。\n话题：${session.topic}\n请基于对话上下文回应人类的发言。简洁、有观点、有建设性。\n工具调用过程不会展示给其他参与者，只有最终回答会被公开。\n注意：历史消息中的 \`[名字]\` 前缀是系统自动添加的标记，你不需要在自己的回复中加上你的名字或任何类似前缀。`);
+
+  const system: ContextMessage = { role: 'system', content: parts.join('\n\n') };
   const history: ContextMessage = { role: 'user', content: formatPublicContext(session) };
   return { messages: [system, history], agent, toolDefs };
 }

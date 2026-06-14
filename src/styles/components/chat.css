@@ -820,3 +820,138 @@
 .chat__message--user .chat__timestamp {
   text-align: right;
 }
+
+/* ── 流式状态指示器 ───────────────────────────────────── */
+
+.chat__streaming-phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+}
+
+.chat__streaming-phase::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: chat-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes chat-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+/* ── 流式期间内嵌 tool steps（紧凑） ───────────────────── */
+
+.chat__tool-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 8px;
+  padding: 6px 8px;
+  background: var(--color-bg);
+  border-left: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.chat__tool-step {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+}
+
+.chat__tool-step-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.chat__tool-step-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat__tool-step-summary::before {
+  content: '▶';
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-out-expo);
+}
+
+.chat__tool-step[open] .chat__tool-step-summary::before {
+  transform: rotate(90deg);
+}
+
+.chat__tool-step--running {
+  color: var(--color-accent);
+}
+
+.chat__tool-step--done {
+  color: var(--color-text-secondary);
+}
+
+.chat__tool-step--error {
+  color: #ef4444;
+}
+
+.chat__tool-step-icon {
+  font-size: 11px;
+  width: 14px;
+  text-align: center;
+}
+
+.chat__tool-step-name {
+  font-weight: var(--font-medium);
+}
+
+.chat__tool-step-spinner {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: chat-spin 0.8s linear infinite;
+  margin-left: auto;
+}
+
+.chat__tool-step-detail {
+  margin: 4px 0 6px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat__tool-step-args,
+.chat__tool-step-result {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--color-text);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.chat__tool-step-result {
+  background: var(--color-bg);
+}
+
+@keyframes chat-spin {
+  to { transform: rotate(360deg); }
+}
