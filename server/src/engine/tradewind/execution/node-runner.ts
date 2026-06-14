@@ -21,6 +21,8 @@ import {
   type LLMCaller,
   type ToolCaller,
 } from './react-loop';
+import { runTradewindReActNative } from './native-adapter';
+import { buildVirtualToolDefs } from './virtual-tools';
 import {
   compactIfNeeded,
   AGENT_COMPACT_THRESHOLD,
@@ -82,6 +84,12 @@ export interface NodeRunnerOpts {
   persistDir?: string;
   /** 压缩归档目录（output/bak/agent_{nodeName}/） */
   compactArchiveDir?: string;
+  /** 是否允许 delegate（sub-agent 委托） */
+  allowDelegate?: boolean;
+  /** contact 可联络的协作者名称列表（去自身） */
+  contactTargets?: string[];
+  /** 是否走原生 tool calls（启动时 resolve 一次，运行期固定） */
+  native?: boolean;
 }
 
 // ── NodeRunner ───────────────────────────────────────────────────
@@ -269,12 +277,7 @@ export class NodeRunner {
       roundSignal.removeEventListener('abort', onRound);
     };
 
-    const llm: LLMCaller = {
-      async call(msgs, _options, onChunk, sig) {
-        return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig });
-      },
-    };
-
+    // 构建 toolCaller（文本/native 共用同一个执行器）
     const toolCaller: ToolCaller = {
       call: async (tool, args) => {
         if (tool === 'delegate') {
@@ -311,6 +314,34 @@ export class NodeRunner {
     };
 
     try {
+      // native 决策由启动时注入（opts.native），不每轮 resolve
+      if (this.opts.native) {
+        // 原生路径：虚拟工具注册为 function definition
+        const virtualDefs = buildVirtualToolDefs({
+          allowDelegate: this.opts.allowDelegate ?? true,
+          contactTargets: this.opts.contactTargets ?? [],
+        });
+        const nativeToolDefs = [...toolDefs, ...virtualDefs];
+
+        return await runTradewindReActNative({
+          dataDir,
+          model,
+          temperature,
+          messages: [...this.messages],
+          toolDefs: nativeToolDefs,
+          toolCaller,
+          onEvent: emit,
+          signal: combinedAbort.signal,
+        });
+      }
+
+      // 文本路径（保持不变）
+      const llm: LLMCaller = {
+        async call(msgs, _options, onChunk, sig) {
+          return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig });
+        },
+      };
+
       return await runReActLoop({
         messages: [...this.messages],
         llm,
