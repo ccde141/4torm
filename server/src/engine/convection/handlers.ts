@@ -11,9 +11,9 @@
 import type { ContextMessage } from '../shared/types';
 import type { ConvectionSessionData } from './session';
 import { saveSession, sessionWorkspace } from './session';
-import { callLLM, type TokenUsage } from '../shared/llm-bridge';
+import { callLLM, resolveNativeMode, type TokenUsage } from '../shared/llm-bridge';
 import { loadAgent, type LoadedAgent } from '../shared/agent-loader';
-import { loadAgentToolDefs } from '../shared/tool-defs-loader';
+import { loadAgentToolDefs, type ToolDef } from '../shared/tool-defs-loader';
 import { buildSystemPrompt } from '../shared/prompt';
 import { buildSandboxSection } from '../shared/sandbox-prompt';
 import { compactConvectionIfNeeded, type ConvectionCompactState } from './convection-compactor';
@@ -23,6 +23,7 @@ import {
   type ToolCallRecord,
   type ConvectionReActEvent,
 } from './react-loop';
+import { buildNativeConvectionProtocol, runConvectionReActNative } from './native-adapter';
 
 const LLM_TIMEOUT_MS = 3_600_000;
 const HEARTBEAT_INTERVAL_MS = 5_000;
@@ -61,6 +62,7 @@ export type ConvectionStreamEvent =
   | { type: 'chair-done'; content: string }
   | { type: 'compact-start' }
   | { type: 'compact-done'; archivedCycles: number; summaryLength: number }
+  | { type: 'notice'; message: string }
   | { type: 'error'; message: string };
 
 export { ToolCallRecord };
@@ -72,7 +74,8 @@ async function buildAgentMessages(
   dataDir: string,
   session: ConvectionSessionData,
   agentId: string,
-): Promise<{ messages: ContextMessage[]; agent: LoadedAgent }> {
+  native?: boolean,
+): Promise<{ messages: ContextMessage[]; agent: LoadedAgent; toolDefs: ToolDef[] }> {
   const agent = await getAgent(dataDir, agentId);
   const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills);
   const wsPath = sessionWorkspace(dataDir, session.id);
@@ -87,7 +90,7 @@ async function buildAgentMessages(
   let systemText = '';
   if (agent.rolePrompt) systemText += agent.rolePrompt;
   if (toolDefs.length > 0) {
-    systemText += '\n\n' + buildSystemPrompt(toolDefs);
+    systemText += '\n\n' + (native ? buildNativeConvectionProtocol(toolDefs) : buildSystemPrompt(toolDefs));
   }
   systemText += '\n\n' + buildSandboxSection({
     workspaceAbs: wsPath,
@@ -104,7 +107,7 @@ async function buildAgentMessages(
 
   const system: ContextMessage = { role: 'system', content: systemText };
   const history: ContextMessage = { role: 'user', content: formatPublicContext(session) };
-  return { messages: [system, history], agent };
+  return { messages: [system, history], agent, toolDefs };
 }
 
 function formatPublicContext(session: ConvectionSessionData): string {
@@ -132,25 +135,58 @@ export async function handleSpeak(
     const agent = await getAgent(dataDir, agentId);
     onEvent?.({ type: 'agent-start', label: agent.name });
 
-    const { messages, agent: loadedAgent } = await buildAgentMessages(dataDir, session, agentId);
-    const result = await runConvectionReAct({
-      dataDir,
-      model: loadedAgent.model,
-      temperature: loadedAgent.temperature,
-      agentId,
-      sessionId: session.id,
-      label: loadedAgent.name,
-      messages,
-      onEvent: onEvent ? (ev) => {
-        // 转换 ConvectionReActEvent → ConvectionStreamEvent
-        if (ev.type === 'token') onEvent({ type: 'token', label: ev.label, chunk: ev.chunk! });
-        else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', label: ev.label, tool: ev.tool!, args: ev.args! });
-        else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', label: ev.label, tool: ev.tool!, result: ev.result! });
-        else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
-        else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
-      } : undefined,
-      signal,
-    });
+    // 每个 agent 各自决议原生模式（model 可能不同）
+    const nativeDecision = await resolveNativeMode(dataDir, agent.model);
+    console.log(`[convection] ${agent.name} (${agent.model}) → native=${nativeDecision.native} mode=${nativeDecision.mode}`);
+    if (nativeDecision.forcedMismatch) {
+      onEvent?.({ type: 'notice', message: `⚠️ ${agent.name} 的模型配置为强制原生工具调用，但探测显示可能不支持。如遇异常请调整模式。` });
+    }
+
+    let result: { cleanContent: string; rawContent: string; toolCalls: ToolCallRecord[]; usage?: TokenUsage };
+
+    if (nativeDecision.native) {
+      // 原生模式：adapter 注入共享 runReActLoopNative
+      const { messages, agent: loadedAgent, toolDefs } = await buildAgentMessages(dataDir, session, agentId, true);
+      result = await runConvectionReActNative({
+        dataDir,
+        model: loadedAgent.model,
+        temperature: loadedAgent.temperature,
+        agentId,
+        sessionId: session.id,
+        label: loadedAgent.name,
+        messages,
+        toolDefs,
+        onEvent: onEvent ? (ev) => {
+          if (ev.type === 'token') onEvent({ type: 'token', label: ev.label, chunk: ev.chunk! });
+          else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', label: ev.label, tool: ev.tool!, args: ev.args! });
+          else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', label: ev.label, tool: ev.tool!, result: ev.result! });
+          else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
+          else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
+        } : undefined,
+        signal,
+      });
+    } else {
+      // 文本协议模式：现有 runConvectionReAct
+      const { messages, agent: loadedAgent } = await buildAgentMessages(dataDir, session, agentId, false);
+      const textResult = await runConvectionReAct({
+        dataDir,
+        model: loadedAgent.model,
+        temperature: loadedAgent.temperature,
+        agentId,
+        sessionId: session.id,
+        label: loadedAgent.name,
+        messages,
+        onEvent: onEvent ? (ev) => {
+          if (ev.type === 'token') onEvent({ type: 'token', label: ev.label, chunk: ev.chunk! });
+          else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', label: ev.label, tool: ev.tool!, args: ev.args! });
+          else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', label: ev.label, tool: ev.tool!, result: ev.result! });
+          else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
+          else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
+        } : undefined,
+        signal,
+      });
+      result = textResult;
+    }
 
     // abort 时保留已流式产出的有效内容
     const aborted = signal?.aborted;

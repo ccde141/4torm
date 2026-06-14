@@ -70,6 +70,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
 
     // 决议原生模式：读 provider 的 nativeMode + nativeProbe 缓存
     const nativeDecision = await resolveNativeMode(dataDir, agent.model);
+    console.log(`[conversation] ${agent.name} (${agent.model}) → native=${nativeDecision.native} mode=${nativeDecision.mode}`);
 
     const opts: SessionRunnerOpts = {
       dataDir,
