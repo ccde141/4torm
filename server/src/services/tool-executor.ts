@@ -30,12 +30,8 @@ const BLOCKED_COMMAND_PATTERNS = [
   /mkfs/i, /format/i, /fdisk/i,
   /dd\s+if=/i,
 ];
-const MAX_CMD_LENGTH = 1000;
-
 function checkBlockedCommand(cmd: string): string | null {
-  if (cmd.length > MAX_CMD_LENGTH) {
-    return `命令过长 (${cmd.length} > ${MAX_CMD_LENGTH} 字符)`;
-  }
+  // 开发环境足量权限：不限命令长度，仅拦截高危破坏性操作
   for (const pattern of BLOCKED_COMMAND_PATTERNS) {
     if (pattern.test(cmd)) {
       return `命令包含被禁止的操作: ${pattern}`;
@@ -117,7 +113,11 @@ export async function executeTool(
 ): Promise<string> {
   let toolDef = await findToolInRegistry(dataDir, tool);
   if (!toolDef) toolDef = await findToolInSkills(dataDir, tool);
-  if (!toolDef) throw new Error(`未知工具: ${tool}`);
+  if (!toolDef) {
+    // 未知工具不是系统故障，而是模型用错了工具名（或复读了协议示例占位符）。
+    // 返回友好结果让模型自我纠正，不抛异常（避免被上层包成 HTTP 500 崩掉本轮对话）。
+    return `（未知工具：${tool}）该工具不存在。请检查工具名是否正确，或确认是否误把协议示例当成了真实调用。`;
+  }
 
   let workspaceDir: string;
   let sandboxLevel: 'strict' | 'relaxed' | 'unrestricted' = 'relaxed';

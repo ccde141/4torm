@@ -7,6 +7,10 @@ export interface ProviderEntry {
   apiKey: string;
   models: string[];
   customHeaders?: Record<string, string>;
+  /** 原生工具调用模式：auto=探测决定（默认）, native=强制原生, text=强制文本协议 */
+  nativeMode?: 'auto' | 'native' | 'text';
+  /** 原生能力探测缓存：model id → 探测结果（auto 模式据此选循环） */
+  nativeProbe?: Record<string, { native: boolean; probedAt: string }>;
 }
 
 export interface ModelOption {
@@ -110,4 +114,36 @@ export async function setActiveModel(key: string) {
 
 export function invalidateCache() {
   cache = null;
+}
+
+/**
+ * 探测某 model 的原生能力并落盘到 provider.nativeProbe。
+ * 连通失败（reachable=false）不落盘，返回结果供 UI 提示。
+ */
+export async function probeAndStore(providerId: string, model: string): Promise<{ reachable: boolean; native: boolean }> {
+  const { probeNativeCapability } = await import('./native-probe');
+  const provider = await getProvider(providerId);
+  if (!provider) return { reachable: false, native: false };
+
+  const result = await probeNativeCapability({
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    headers: provider.customHeaders,
+    model,
+  });
+
+  if (result.reachable) {
+    const probe = { ...(provider.nativeProbe ?? {}) };
+    probe[model] = { native: result.native, probedAt: new Date().toISOString() };
+    await updateProvider(providerId, { nativeProbe: probe });
+  }
+  return result;
+}
+
+/** 读取某 model 的探测结论（auto 模式运行时用） */
+export async function getNativeProbe(modelKey: string): Promise<{ native: boolean; probedAt: string } | undefined> {
+  const [providerId, ...rest] = modelKey.split(':');
+  const model = rest.join(':');
+  const provider = await getProvider(providerId);
+  return provider?.nativeProbe?.[model];
 }

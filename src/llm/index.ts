@@ -13,6 +13,8 @@ export {
   getAllModels,
   getActiveModel,
   setActiveModel,
+  probeAndStore,
+  getNativeProbe,
   PROVIDER_PRESETS,
 } from './config';
 export type { ProviderEntry, ModelOption } from './config';

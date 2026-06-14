@@ -249,6 +249,15 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
             }
             allMessages.push(askMsg);
             setMessages([...allMessages]);
+          } else if (ev.type === 'notice') {
+            // 系统提示（如强制 native 但探测不支持的警告）
+            const noticeMsg: ChatMessage = {
+              id: generateMessageId(), role: 'assistant',
+              content: ev.message,
+              timestamp: new Date().toISOString(), agentId: selectedAgent.id,
+            };
+            allMessages.push(noticeMsg);
+            setMessages([...allMessages]);
           } else if (ev.type === 'done') {
             // 后端明确告知流结束 — 主动退出循环
             streamDone = true;

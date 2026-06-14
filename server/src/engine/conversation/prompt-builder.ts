@@ -96,9 +96,27 @@ export interface PromptBuildOpts {
   agentId: string;
   /** 用户消息内容（用于判断是否触发记忆注入） */
   userMessage?: string;
+  /**
+   * 原生工具调用模式：跳过 <action>/<answer> 文本协议段（与原生通道冲突），
+   * 工具的调用格式由 provider 处理，prompt 只保留工具的语义指导。
+   */
+  native?: boolean;
 }
 
 const MEMORY_TRIGGERS = /记忆|记住|之前|上次|历史|回忆|还记得/;
+
+/** 原生模式的精简协议段（替代 buildOutputProtocol，不教 <action> 格式） */
+function buildNativeProtocol(): string {
+  return `## 工作方式
+
+你可以调用工具来完成任务。需要时直接发起工具调用，系统会执行并把结果返回给你，你据此继续或给出最终回答。
+
+- 需要外部信息或执行操作（读写文件、运行命令、查询等）时，调用对应工具
+- 串行依赖（需要前一步结果才能进行下一步）请分多轮调用，不要一次性堆叠
+- 工具结果返回后，继续下一步或直接给出最终回答
+- 全部完成后，用自然语言给出完整的最终回答即可（无需任何特殊标签）
+- 不确定时优先用工具确认，不要凭假设行动`;
+}
 
 /** 构建完整 system prompt */
 export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Promise<string> {
@@ -107,8 +125,10 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   // 1. 角色定义
   if (opts.rolePrompt.trim()) parts.push(opts.rolePrompt.trim());
 
-  // 2. 输出协议 + 工具列表
-  if (opts.toolDefs.length > 0) {
+  // 2. 协议段：原生模式用精简版（不教 <action>），文本模式用完整输出协议
+  if (opts.native) {
+    parts.push(buildNativeProtocol());
+  } else if (opts.toolDefs.length > 0) {
     parts.push(buildOutputProtocol(opts.toolDefs));
   }
 

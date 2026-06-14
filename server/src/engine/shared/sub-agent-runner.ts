@@ -238,7 +238,7 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
 
     // LLM 调用（流式，逐 token emit）
     let content: string;
-    let finishReason: 'stop' | 'length' | null;
+    let finishReason: 'stop' | 'length' | 'tool_calls' | null;
     try {
       const result = await callLLM({
         dataDir,

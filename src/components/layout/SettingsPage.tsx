@@ -6,6 +6,7 @@ import {
   removeProvider,
   getAllModels,
   listModels,
+  probeAndStore,
   PROVIDER_PRESETS,
 } from '../../llm';
 import type { ProviderEntry } from '../../llm';
@@ -112,6 +113,29 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [headersJson, setHeadersJson] = useState(p.customHeaders ? JSON.stringify(p.customHeaders, null, 2) : '');
   const [manualModel, setManualModel] = useState('');
+  const [label, setLabel] = useState(p.label);
+  // 外部刷新（如添加新 provider）时同步 label
+  useEffect(() => { setLabel(p.label); }, [p.label]);
+  const [probing, setProbing] = useState<Set<string>>(new Set());
+  const [probeMsg, setProbeMsg] = useState<string>('');
+
+  /** 探测一个 model 的原生能力，结果写入 provider.nativeProbe 并回显 */
+  const probeModel = async (model: string) => {
+    setProbing(prev => new Set(prev).add(model));
+    try {
+      const res = await probeAndStore(p.id, model);
+      if (!res.reachable) {
+        setProbeMsg(`⚠️ ${model}：连接失败，请检查 API 地址 / Key / 模型名`);
+      } else {
+        setProbeMsg(`${model}：原生工具调用 ${res.native ? '✓ 支持' : '✗ 不支持（将走文本协议）'}`);
+      }
+    } catch {
+      setProbeMsg(`⚠️ ${model}：探测异常`);
+    } finally {
+      setProbing(prev => { const n = new Set(prev); n.delete(model); return n; });
+      onRefresh();
+    }
+  };
 
   const handleAddModel = async () => {
     const name = manualModel.trim();
@@ -120,6 +144,7 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
     await updateProvider(p.id, { models: [...p.models, name] });
     setManualModel('');
     onRefresh();
+    await probeModel(name);
   };
 
   const handleRemoveModel = async (modelName: string) => {
@@ -144,9 +169,15 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
   };
 
   const handleConfirmModels = async () => {
-    await updateProvider(p.id, { models: [...checked] });
+    const newModels = [...checked];
+    const added = newModels.filter(m => !p.models.includes(m));
+    await updateProvider(p.id, { models: newModels });
     setFetchedModels([]);
     onRefresh();
+    // 只探测新加入、且尚无探测记录的模型
+    for (const m of added) {
+      if (!p.nativeProbe?.[m]) await probeModel(m);
+    }
   };
 
   const handleToggleModel = (modelId: string) => {
@@ -164,12 +195,16 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
         <div style={{ position: 'relative', flex: 1 }}>
           <input
             type="text"
-            value={p.label}
-            onChange={e => onChange(p.id, 'label', e.target.value)}
+            value={label}
+            onChange={e => setLabel(e.target.value)}
+            onBlur={e => {
+              e.target.style.border = '1px solid transparent';
+              e.target.style.background = 'transparent';
+              if (label !== p.label) onChange(p.id, 'label', label);
+            }}
             placeholder="未命名提供商"
             style={{ ...inputStyle, fontSize: 'var(--text-base)', fontWeight: 'var(--font-semibold)', border: '1px solid transparent', background: 'transparent', padding: '2px var(--space-1)', width: 'auto', minWidth: '120px' }}
             onFocus={e => { e.target.style.border = '1px solid var(--border-color)'; e.target.style.background = 'var(--color-bg)'; }}
-            onBlur={e => { e.target.style.border = '1px solid transparent'; e.target.style.background = 'transparent'; }}
           />
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginLeft: 'var(--space-1)' }}>点击名称可编辑</span>
         </div>
@@ -205,6 +240,18 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
             style={{ ...inputStyle, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', resize: 'vertical' }}
             placeholder='{"x-api-key": "sk-xxx"}'
           />
+          <div style={{ marginTop: 'var(--space-2)' }}>
+            <label style={fieldLabel}>原生工具调用模式 <span style={{ fontWeight: 'var(--font-normal)', color: 'var(--color-text-tertiary)' }}>— auto 按探测结果，native/text 强制</span></label>
+            <select
+              value={p.nativeMode ?? 'auto'}
+              onChange={e => { updateProvider(p.id, { nativeMode: e.target.value as 'auto' | 'native' | 'text' }); onRefresh(); }}
+              style={{ ...inputStyle, cursor: 'pointer' }}
+            >
+              <option value="auto">auto（自动探测，推荐）</option>
+              <option value="native">native（强制原生工具调用）</option>
+              <option value="text">text（强制文本协议）</option>
+            </select>
+          </div>
         </div>
       )}
 
@@ -235,13 +282,26 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
         <div style={{ marginTop: 'var(--space-3)' }}>
           <div style={{ ...fieldLabel, marginBottom: 'var(--space-1)' }}>已启用模型（{p.models.length}）</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
-            {p.models.map(m => (
-              <span key={m} style={{ ...modelTagStyle, display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
-                {m}
-                <button onClick={() => handleRemoveModel(m)} title="移除" style={{ background: 'none', border: 'none', color: 'var(--color-text-tertiary)', cursor: 'pointer', fontSize: 'var(--text-xs)', padding: '0 2px', lineHeight: 1 }}>✕</button>
-              </span>
-            ))}
+            {p.models.map(m => {
+              const probe = p.nativeProbe?.[m];
+              const isProbing = probing.has(m);
+              const badge = isProbing ? '探测中…' : probe ? (probe.native ? '原生' : '文本') : '未探测';
+              const badgeColor = isProbing ? 'var(--color-text-tertiary)' : probe ? (probe.native ? '#34d399' : '#fbbf24') : 'var(--color-text-tertiary)';
+              return (
+                <span key={m} style={{ ...modelTagStyle, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  {m}
+                  <span title="原生工具调用能力" style={{ fontSize: '10px', color: badgeColor, border: `1px solid ${badgeColor}`, borderRadius: '3px', padding: '0 3px', lineHeight: '14px' }}>{badge}</span>
+                  {!isProbing && (
+                    <button onClick={() => probeModel(m)} title="重新探测" style={{ background: 'none', border: 'none', color: 'var(--color-text-tertiary)', cursor: 'pointer', fontSize: '10px', padding: '0 1px', lineHeight: 1 }}>⟳</button>
+                  )}
+                  <button onClick={() => handleRemoveModel(m)} title="移除" style={{ background: 'none', border: 'none', color: 'var(--color-text-tertiary)', cursor: 'pointer', fontSize: 'var(--text-xs)', padding: '0 2px', lineHeight: 1 }}>✕</button>
+                </span>
+              );
+            })}
           </div>
+          {probeMsg && (
+            <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{probeMsg}</div>
+          )}
         </div>
       )}
 

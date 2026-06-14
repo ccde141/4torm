@@ -58,7 +58,7 @@ export interface LLMCaller {
     options?: LLMOptions,
     onChunk?: (chunk: string) => void,
     signal?: AbortSignal,
-  ): Promise<{ content: string; finishReason: 'stop' | 'length' | null; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }>;
+  ): Promise<{ content: string; finishReason: 'stop' | 'length' | 'tool_calls' | null; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }>;
 }
 
 /** 工具调用抽象——调用方注入具体实现 */
