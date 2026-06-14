@@ -11,7 +11,9 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { ContextMessage, LLMOptions } from './types';
+import type { ContextMessage, LLMOptions, NativeToolCall } from './types';
+import type { ToolDef } from './tool-defs-loader';
+import { toProviderTools, parseToolCalls, makeToolCallAccumulator } from './tool-bridge';
 
 interface Provider {
   id: string;
@@ -27,7 +29,7 @@ interface ProvidersFile {
 
 interface ChatCompletionResponse {
   choices?: Array<{
-    message?: { content?: string };
+    message?: { content?: string | null; tool_calls?: unknown[] };
     finish_reason?: string;
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
@@ -44,10 +46,12 @@ export interface TokenUsage {
 /** callLLM 的结构化返回值 */
 export interface LLMResult {
   content: string;
-  /** 'stop' = 正常结束; 'length' = 输出被 max_tokens 截断; null = 未知 */
-  finishReason: 'stop' | 'length' | null;
+  /** 'stop' = 正常结束; 'length' = 输出被 max_tokens 截断; 'tool_calls' = 模型要调工具; null = 未知 */
+  finishReason: 'stop' | 'length' | 'tool_calls' | null;
   /** API 返回的真实 token 用量（部分 provider 可能不返回，此时为 undefined） */
   usage?: TokenUsage;
+  /** 原生模式：解析出的工具调用（文本模式或无调用时为 undefined） */
+  toolCalls?: NativeToolCall[];
 }
 
 /** 从 "pvd_xxx:model-name" 中提取 model id（去掉 provider 前缀） */
@@ -82,6 +86,35 @@ export interface LLMCallParams {
   onChunk?: (chunk: string) => void;
   /** 中止信号：runner stop 时 abort，截断正在进行的 LLM 请求 */
   signal?: AbortSignal;
+  /**
+   * 原生工具调用：传入则激活原生模式（请求带 tools 参数、解析 tool_calls）。
+   * 不传 = 纯文本模式（向后兼容，现有调用方行为不变）。
+   */
+  tools?: ToolDef[];
+}
+
+/** 把 ContextMessage 映射成 provider 消息体（双模式：文本 / 原生）。 */
+function mapMessages(messages: ContextMessage[]): unknown[] {
+  return messages.map(m => {
+    // 原生：工具结果消息
+    if (m.role === 'tool') {
+      return { role: 'tool', tool_call_id: m.toolCallId, content: m.content };
+    }
+    // 原生：assistant 携带 tool_calls
+    if (m.toolCalls && m.toolCalls.length > 0) {
+      return {
+        role: 'assistant',
+        content: m.content || null,
+        tool_calls: m.toolCalls.map(tc => ({
+          id: tc.id,
+          type: 'function',
+          function: { name: tc.name, arguments: tc.arguments },
+        })),
+      };
+    }
+    // 文本模式（现状）
+    return { role: m.role, content: m.content };
+  });
 }
 
 /** 构造请求公共部分 */
@@ -102,11 +135,16 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
 
   const body: Record<string, unknown> = {
     model: options?.model ?? extractModelId(fullModelKey),
-    messages: messages.map(m => ({ role: m.role, content: m.content })),
+    messages: mapMessages(messages),
     temperature: options?.temperature ?? 0.7,
     max_tokens: options?.maxTokens ?? 4096,
     stream,
   };
+  // 原生模式：注入 tools 参数
+  if (params.tools && params.tools.length > 0) {
+    body.tools = toProviderTools(params.tools, 'openai');
+    body.tool_choice = 'auto';
+  }
   // 流式时请求 provider 在最后一个 chunk 返回 usage
   if (stream) {
     body.stream_options = { include_usage: true };
@@ -210,29 +248,37 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
     if (!useStream) {
       const data = (await res.json()) as ChatCompletionResponse;
       if (data.error?.message) throw new Error(`LLM 错误：${data.error.message}`);
-      const content = data.choices?.[0]?.message?.content;
-      if (typeof content !== 'string') {
-        throw new Error('LLM 返回结构异常：缺少 choices[0].message.content');
+      const message = data.choices?.[0]?.message;
+      const rawContent = message?.content;
+      // 原生模式：有 tool_calls 时 content 常为 null/空，属正常
+      const toolCalls = params.tools ? parseToolCalls(message, 'openai') : [];
+      const content = typeof rawContent === 'string' ? rawContent : '';
+      if (!content && toolCalls.length === 0) {
+        // 文本模式下 content 必须有；原生模式下若既无 content 又无 tool_calls 才算异常
+        if (!params.tools) {
+          throw new Error('LLM 返回结构异常：缺少 choices[0].message.content');
+        }
       }
       const rawReason = data.choices?.[0]?.finish_reason;
       const finishReason = normalizeFinishReason(rawReason);
       const usage = parseUsage(data.usage);
-      return { content, finishReason, usage };
+      return { content, finishReason, usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
     }
 
     // 流式：解析 OpenAI SSE 格式
-    return parseSSEStream(res, params.onChunk!);
+    return parseSSEStream(res, params.onChunk!, !!params.tools);
   }
 
   throw lastError ?? new Error('LLM 调用失败（重试耗尽）');
 }
 
 /** 标准化 finish_reason：不同 provider 可能返回不同值 */
-function normalizeFinishReason(raw: string | undefined | null): 'stop' | 'length' | null {
+function normalizeFinishReason(raw: string | undefined | null): 'stop' | 'length' | 'tool_calls' | null {
   if (!raw) return null;
   const lower = raw.toLowerCase();
   if (lower === 'stop' || lower === 'end_turn') return 'stop';
   if (lower === 'length' || lower === 'max_tokens') return 'length';
+  if (lower === 'tool_calls' || lower === 'tool_use') return 'tool_calls';
   return null;
 }
 
@@ -250,6 +296,7 @@ function parseUsage(raw: { prompt_tokens?: number; completion_tokens?: number; t
 async function parseSSEStream(
   res: Response,
   onChunk: (chunk: string) => void,
+  native: boolean,
 ): Promise<LLMResult> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error('LLM 流式响应无 body');
@@ -257,8 +304,9 @@ async function parseSSEStream(
   const decoder = new TextDecoder();
   let buffer = '';
   let full = '';
-  let finishReason: 'stop' | 'length' | null = null;
+  let finishReason: 'stop' | 'length' | 'tool_calls' | null = null;
   let usage: TokenUsage | undefined;
+  const toolAcc = native ? makeToolCallAccumulator() : null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -277,7 +325,7 @@ async function parseSSEStream(
       try {
         const json = JSON.parse(payload) as {
           choices?: Array<{
-            delta?: { content?: string };
+            delta?: { content?: string; tool_calls?: unknown[] };
             finish_reason?: string | null;
           }>;
           usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
@@ -287,6 +335,10 @@ async function parseSSEStream(
         if (token) {
           full += token;
           onChunk(token);
+        }
+        // 原生模式：累加 tool_calls 分片
+        if (toolAcc && choice?.delta?.tool_calls) {
+          toolAcc.push(choice.delta.tool_calls as any);
         }
         // finish_reason 出现在最后一个 chunk
         if (choice?.finish_reason) {
@@ -302,5 +354,6 @@ async function parseSSEStream(
     }
   }
 
-  return { content: full, finishReason, usage };
+  const toolCalls = toolAcc && toolAcc.hasAny() ? toolAcc.finish() : undefined;
+  return { content: full, finishReason, usage, toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined };
 }

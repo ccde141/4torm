@@ -258,7 +258,7 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
     }
 
     let content: string;
-    let finishReason: 'stop' | 'length' | null;
+    let finishReason: 'stop' | 'length' | 'tool_calls' | null;
     try {
       const result = await callLLM({
         dataDir,

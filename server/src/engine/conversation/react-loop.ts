@@ -59,7 +59,7 @@ export interface ToolCallRecord {
 
 /** LLM 调用抽象——调用方注入具体实现 */
 export interface LLMCaller {
-  call(messages: ContextMessage[], options?: LLMOptions, onChunk?: (chunk: string) => void, signal?: AbortSignal): Promise<{ content: string; finishReason: 'stop' | 'length' | null; usage?: TokenUsage }>;
+  call(messages: ContextMessage[], options?: LLMOptions, onChunk?: (chunk: string) => void, signal?: AbortSignal): Promise<{ content: string; finishReason: 'stop' | 'length' | 'tool_calls' | null; usage?: TokenUsage }>;
 }
 
 /** 工具调用抽象——调用方注入具体实现 */
