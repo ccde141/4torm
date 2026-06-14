@@ -230,6 +230,13 @@ export class SessionRunner {
           onEvent: (ev) => {
             if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
           },
+          // 季风专属：识别 ask 触发的 SuspendSignal，让 core 走挂起分支
+          onToolError: (e) => {
+            if (e instanceof SuspendSignal) {
+              return { reason: 'ask', question: e.question, options: e.options };
+            }
+            return null;
+          },
           signal,
         })
       : await runReActLoop({
