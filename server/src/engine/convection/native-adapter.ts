@@ -2,7 +2,7 @@
  * 对流原生 tool calls 适配器
  *
  * 职责：
- * - buildNativeConvectionProtocol：原生模式下的精简协议段（保留 <answer>）
+ * - buildNativeConvectionProtocol：原生模式精简协议段（不教标签格式）
  * - runConvectionReActNative：adapter 注入共享 runReActLoopNative
  *
  * 从 handlers.ts 拆出，保持 handlers.ts ≤ 300 行。
@@ -11,7 +11,6 @@
 import type { ContextMessage } from '../shared/types';
 import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import type { ToolDef } from '../shared/tool-defs-loader';
-import { extractAnswer } from '../shared/answer-extractor';
 import {
   runReActLoopNative,
   type LLMCaller,
@@ -22,8 +21,8 @@ import { callTool } from './tool-bridge';
 import type { ToolCallRecord, ConvectionReActEvent } from './react-loop';
 
 /**
- * 对流原生模式协议段：不教 <action> 格式，但保留 <answer> 要求。
- * 对流特有：只有 <answer> 内的内容会公开到群聊，其余为私有思考/工具过程。
+ * 对流原生模式协议段：不教 <action>/<answer> 标签格式。
+ * 原生 function calling 由 provider 处理，模型直接自然语言输出即可。
  */
 export function buildNativeConvectionProtocol(tools: ToolDef[]): string {
   const toolList = tools.map(t => `- ${t.name}: ${t.description}`).join('\n');
@@ -34,13 +33,7 @@ export function buildNativeConvectionProtocol(tools: ToolDef[]): string {
 - 需要外部信息或执行操作时，调用对应工具
 - 串行依赖请分多轮调用，不要一次性堆叠
 - 工具调用过程对其他参与者不可见，只有最终回答公开
-
-## 最终回答格式（重要）
-
-完成所有工具调用后，用 <answer> 标签包裹最终回答：
-<answer>你的最终回答内容</answer>
-
-只有 <answer> 标签内的内容会展示给对话中的其他参与者。标签外的文字视为私有思考。
+- 完成后用自然语言直接给出最终回答即可
 
 ## 可用工具
 
@@ -109,12 +102,8 @@ export async function runConvectionReActNative(
     signal,
   });
 
-  // 对流特有：从 content 提取 <answer> 作为公开内容
-  const answer = extractAnswer(result.content);
-  const cleanContent = answer ?? result.content.trim();
-
   return {
-    cleanContent,
+    cleanContent: result.content.trim(),
     rawContent: result.rawContent,
     toolCalls: result.toolCalls,
     usage: result.usage,
