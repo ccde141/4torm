@@ -130,11 +130,11 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   if (opts.rolePrompt.trim()) parts.push(opts.rolePrompt.trim());
 
   // 2. 基线固件（角色定义优先于基线）
-  const baselinePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'baseline.txt');
+  const baselinePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'baseline.md');
   try {
     const baseline = await fs.readFile(baselinePath, 'utf-8');
     if (baseline.trim()) parts.push(baseline.trim());
-  } catch { /* baseline.txt 不存在时跳过 */ }
+  } catch { /* baseline.md 不存在时跳过 */ }
 
   // 3. 协议段：原生模式用精简版（不教 <action>），文本模式用完整输出协议
   if (opts.native) {
