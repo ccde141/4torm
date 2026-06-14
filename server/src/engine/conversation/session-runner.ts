@@ -41,6 +41,7 @@ export type ConversationEvent =
   | { type: 'answer'; content: string; rawContent: string }
   | { type: 'usage'; usage: TokenUsage }
   | { type: 'error'; message: string }
+  | { type: 'notice'; message: string }
   | { type: 'done' };
 
 // ── SessionRunner ────────────────────────────────────────────────

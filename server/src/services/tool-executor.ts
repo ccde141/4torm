@@ -113,7 +113,11 @@ export async function executeTool(
 ): Promise<string> {
   let toolDef = await findToolInRegistry(dataDir, tool);
   if (!toolDef) toolDef = await findToolInSkills(dataDir, tool);
-  if (!toolDef) throw new Error(`未知工具: ${tool}`);
+  if (!toolDef) {
+    // 未知工具不是系统故障，而是模型用错了工具名（或复读了协议示例占位符）。
+    // 返回友好结果让模型自我纠正，不抛异常（避免被上层包成 HTTP 500 崩掉本轮对话）。
+    return `（未知工具：${tool}）该工具不存在。请检查工具名是否正确，或确认是否误把协议示例当成了真实调用。`;
+  }
 
   let workspaceDir: string;
   let sandboxLevel: 'strict' | 'relaxed' | 'unrestricted' = 'relaxed';

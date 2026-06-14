@@ -21,6 +21,8 @@ interface Provider {
   apiKey?: string;
   headers?: Record<string, string>;
   models?: string[];
+  nativeMode?: 'auto' | 'native' | 'text';
+  nativeProbe?: Record<string, { native: boolean; probedAt: string }>;
 }
 
 interface ProvidersFile {
@@ -75,6 +77,40 @@ async function loadProviders(dataDir: string): Promise<Provider[]> {
   } catch {
     return [];
   }
+}
+
+/** 原生模式决议结果 */
+export interface NativeModeDecision {
+  /** 最终是否走原生工具调用 */
+  native: boolean;
+  /** 配置模式（用于上层判断是否需要发警告） */
+  mode: 'auto' | 'native' | 'text';
+  /** 强制 native 但探测显示不支持 → 需要前端警告 */
+  forcedMismatch: boolean;
+}
+
+/**
+ * 根据 provider 的 nativeMode + nativeProbe 决议该 model 是否走原生。
+ * - native：强制原生（探测为 false 时标记 forcedMismatch 供警告）
+ * - text：强制文本
+ * - auto（默认）：查探测缓存，有记录按记录；无记录乐观走原生
+ */
+export async function resolveNativeMode(dataDir: string, fullModelKey: string): Promise<NativeModeDecision> {
+  const providers = await loadProviders(dataDir);
+  const provider = resolveProvider(providers, fullModelKey);
+  const model = extractModelId(fullModelKey);
+  const mode = provider?.nativeMode ?? 'auto';
+  const probe = provider?.nativeProbe?.[model];
+
+  if (mode === 'native') {
+    return { native: true, mode, forcedMismatch: probe ? !probe.native : false };
+  }
+  if (mode === 'text') {
+    return { native: false, mode, forcedMismatch: false };
+  }
+  // auto：有探测记录按记录；无记录乐观走原生（赌现代模型大多支持，
+  // 不支持时 finish_reason 终结 + 未知工具友好回填可兜底，不会崩）
+  return { native: probe ? probe.native : true, mode, forcedMismatch: false };
 }
 
 export interface LLMCallParams {

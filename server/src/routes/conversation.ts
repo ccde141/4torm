@@ -15,6 +15,7 @@ import { SessionRunner, type ConversationEvent, type SessionRunnerOpts } from '.
 import { loadAgent } from '../engine/shared/agent-loader';
 import { loadAgentToolDefs } from '../engine/shared/tool-defs-loader';
 import { buildConversationSystemPrompt } from '../engine/conversation/prompt-builder';
+import { resolveNativeMode } from '../engine/shared/llm-bridge';
 import type { ContextMessage } from '../engine/shared/types';
 
 // ── 活跃 runner 注册表（内存级） ─────────────────────────────────
@@ -67,6 +68,9 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: `Agent 不存在：${body.agentId}` });
     }
 
+    // 决议原生模式：读 provider 的 nativeMode + nativeProbe 缓存
+    const nativeDecision = await resolveNativeMode(dataDir, agent.model);
+
     const opts: SessionRunnerOpts = {
       dataDir,
       agentId: agent.id,
@@ -76,7 +80,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       skillIds: agent.skills || [],
       workspace: agent.workspace,
       sandboxLevel: agent.sandboxLevel,
-      native: true, // Phase 2：季风写死走原生工具调用
+      native: nativeDecision.native,
     };
 
     const runner = getOrCreateRunner(body.sessionId, opts);
@@ -100,7 +104,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       dataDir,
       agentId: agent.id,
       userMessage: lastUserMsg?.content,
-      native: true, // Phase 2：季风写死走原生工具调用
+      native: nativeDecision.native,
     });
 
     // 构造 chatMessages（system + 历史）
@@ -116,6 +120,11 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     reply.hijack();
     const raw = reply.raw;
     initSSE(raw);
+
+    // 强制 native 但探测显示不支持 → 显式警告（不阻断，仍按用户选择执行）
+    if (nativeDecision.forcedMismatch) {
+      pushSSE(raw, { type: 'notice', message: '⚠️ 该模型配置为强制原生工具调用（native），但探测显示其可能不支持。如遇工具调用异常，请在「模型提供商设置」中改为 auto 或 text 模式。' });
+    }
 
     runner.chat(systemPrompt, chatMessages, (ev) => {
       try { pushSSE(raw, ev); } catch { runner.abort(); }

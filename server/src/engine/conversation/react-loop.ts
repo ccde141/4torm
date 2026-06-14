@@ -492,6 +492,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
   const allToolCalls: ToolCallRecord[] = [];
   let latestUsage: TokenUsage | undefined;
   let emptyNudge = 0;
+  let continuations = 0;
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (signal?.aborted) {
@@ -538,6 +539,16 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
 
     // ── 无工具调用 → 模型说完了，content 即交付（决策 3：finish_reason 隐式终结）──
     if (!toolCalls || toolCalls.length === 0) {
+      // bug #2：length 截断且有内容 → 是被截断的半句，不能当最终交付，要续写
+      if (finishReason === 'length' && content.trim() && continuations < MAX_CONTINUATIONS) {
+        continuations++;
+        msgs.push({ role: 'assistant', content });
+        msgs.push({
+          role: 'user',
+          content: '【系统：续写指令】你上一条输出因长度上限被截断。请直接从被截断处紧接着往下写，补全剩余内容。严禁重复已输出的内容，严禁重头叙述。',
+        });
+        continue; // 续写不计入 turn 收口
+      }
       if (content.trim()) {
         return { content: content.trim(), rawContent: content, toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage };
       }
@@ -563,22 +574,37 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     // ── 逐个执行工具，回填 role:'tool' 配对消息 ──
     // 注：tool-call/tool-result 事件由 ToolCaller 内部 emit（带 ok 状态），
     //     本循环只在「参数解析失败 / 无执行器」等 ToolCaller 不会触达的旁路补发事件。
-    for (const tc of toolCalls) {
+    for (let ti = 0; ti < toolCalls.length; ti++) {
+      const tc = toolCalls[ti];
+      // bug #4：工具执行途中也响应外部中止
+      if (signal?.aborted) {
+        // 为本轮剩余未执行的 tool_call 补占位，保持历史合法（每个 tool_call 必须配对）
+        for (let rj = ti; rj < toolCalls.length; rj++) {
+          msgs.push({ role: 'tool', toolCallId: toolCalls[rj].id, content: '（已中止，未执行）' });
+        }
+        return { content: '[中止]', rawContent: content, toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage };
+      }
       let args: Record<string, string> = {};
+      let argParseErr: string | undefined;
       try {
         const parsed = JSON.parse(tc.arguments || '{}');
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           for (const [k, v] of Object.entries(parsed)) {
             args[k] = typeof v === 'string' ? v : JSON.stringify(v);
           }
+        } else {
+          // bug #3：arguments 是数组/标量而非对象 → 不能静默丢参，回填错误自纠
+          argParseErr = `参数必须是 JSON 对象，实际收到：${tc.arguments?.slice(0, 200)}`;
         }
       } catch {
         // 原生模式参数解析失败极罕见（provider 已序列化），回填错误让模型自纠
-        const errMsg = `参数 JSON 解析失败：${tc.arguments?.slice(0, 200)}`;
-        msgs.push({ role: 'tool', toolCallId: tc.id, content: errMsg });
-        allToolCalls.push({ tool: tc.name, args: {}, result: errMsg });
+        argParseErr = `参数 JSON 解析失败：${tc.arguments?.slice(0, 200)}`;
+      }
+      if (argParseErr) {
+        msgs.push({ role: 'tool', toolCallId: tc.id, content: argParseErr });
+        allToolCalls.push({ tool: tc.name, args: {}, result: argParseErr });
         onEvent?.({ type: 'tool-call', tool: tc.name, args: {} });
-        onEvent?.({ type: 'tool-result', tool: tc.name, result: errMsg });
+        onEvent?.({ type: 'tool-result', tool: tc.name, result: argParseErr });
         continue;
       }
 
@@ -601,7 +627,12 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
         result = await tools.call(tc.name, args);
       } catch (e) {
         if (e instanceof SuspendSignal) {
-          // ask 挂起：带出当前 tool_call.id（resume 时回填配对）
+          // ask 挂起：当前 tool_call 的配对结果在 resume 时回填（带 pendingToolCallId）。
+          // bug #1：但本轮 ask 之后若还有未执行的 tool_call，必须补占位 role:'tool'，
+          //         否则 assistant 消息里有 tool_call 缺配对结果，下一轮 API 直接 400。
+          for (let rj = ti + 1; rj < toolCalls.length; rj++) {
+            msgs.push({ role: 'tool', toolCallId: toolCalls[rj].id, content: '（因等待用户回复而取消，未执行）' });
+          }
           return {
             content: '',
             rawContent: content,
