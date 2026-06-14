@@ -159,7 +159,9 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
     case 'token': {
       ctx.setFirstToken();
       ctx.setStreamContent(ctx.streamContent + ev.content);
-      const updated = { ...findMsg(ctx.allMessages, ctx.assistantMsgId)!, content: ctx.streamContent + ev.content };
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId)!;
+      // 首 token 到达即清掉等待状态（模型开始写了）
+      const updated = { ...target, content: ctx.streamContent + ev.content, streamingPhase: undefined, phaseElapsed: undefined };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
       // 节流：超长输出时每个 token 都 setMessages 会导致 O(n²) 渲染塌方，
       // 改为最多每 THROTTLE_MS 刷新一次 UI（最终内容由后续事件或流结束保证完整）
@@ -167,38 +169,44 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
       break;
     }
     case 'tool-call': {
-      // 剥离 assistant 消息里的 action/think 标签（只保留干净文本）
-      const cleanContent = ctx.streamContent
-        .replace(/<action[^>]*>[\s\S]*?<\/action>/g, '')
-        .replace(/<think>[\s\S]*?<\/think>/g, '')
-        .trim();
-      const cleanedAssistant = { ...findMsg(ctx.allMessages, ctx.assistantMsgId)!, content: cleanContent };
-
-      const toolMsg: ChatMessage = {
-        id: ctx.generateMessageIdFn(), role: 'assistant',
-        content: `📋 ${ev.tool}`,
-        timestamp: new Date().toISOString(), agentId: ctx.agent.id,
-        toolCall: { toolName: ev.tool, params: ev.args, status: 'running' as any },
+      // 累积到 assistantMsg.toolSteps[]（流式期间内嵌展示，运行时字段不持久化）
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
+      if (!target) break;
+      const newStep: import('../../types').ToolStep = {
+        tool: ev.tool,
+        args: ev.args || {},
+        status: 'running',
       };
-      // 把 toolMsg 插入到 assistantMsg 之前，保证 tool calls 始终在最终回复前面
-      const newMsgs = ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? cleanedAssistant : m);
-      const assistantIdx = newMsgs.findIndex(m => m.id === ctx.assistantMsgId);
-      newMsgs.splice(assistantIdx, 0, toolMsg);
-      ctx.setAllMessages(newMsgs);
-      ctx.setMessages([...newMsgs]);
+      const steps = [...(target.toolSteps || []), newStep];
+      const updated = { ...target, toolSteps: steps, streamingPhase: 'tool-exec' as const, phaseElapsed: 0 };
+      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
+      ctx.setMessages([...ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m)]);
       break;
     }
     case 'tool-result': {
-      // 更新最后一个 toolCall 消息的状态
-      const msgs = [...ctx.allMessages];
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].toolCall && msgs[i].toolCall!.status === ('running' as any)) {
-          msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, result: ev.result, status: ev.ok ? 'success' : 'error' } };
+      // 找最后一个 running step 更新
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
+      if (!target?.toolSteps) break;
+      const steps = [...target.toolSteps];
+      for (let i = steps.length - 1; i >= 0; i--) {
+        if (steps[i].status === 'running') {
+          steps[i] = { ...steps[i], result: ev.result, status: ev.ok === false ? 'error' : 'done' };
           break;
         }
       }
-      ctx.setAllMessages(msgs);
-      ctx.setMessages([...msgs]);
+      const updated = { ...target, toolSteps: steps, streamingPhase: undefined, phaseElapsed: undefined };
+      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
+      ctx.setMessages([...ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m)]);
+      break;
+    }
+    case 'heartbeat': {
+      // 流式期间的等待状态：phase + elapsed 写到 assistantMsg
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
+      if (!target) break;
+      const phase = ev.phase === 'tool-exec' ? 'tool-exec' as const : 'llm-waiting' as const;
+      const updated = { ...target, streamingPhase: phase, phaseElapsed: Math.round((ev.elapsed || 0) / 1000) };
+      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
+      ctx.setMessages([...ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m)]);
       break;
     }
     case 'delegate-start': {
@@ -275,10 +283,13 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
     }
     case 'answer': {
       // 最终回复：用完整 rawContent 替换占位消息
+      // 关键：保留 toolSteps（原生模式下 rawContent 不含 <action>，toolSteps 是源数据）
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
       const finalMsg: ChatMessage = {
         id: ctx.assistantMsgId, role: 'assistant',
         content: ev.rawContent || ev.content,
         timestamp: new Date().toISOString(), agentId: ctx.agent.id,
+        toolSteps: target?.toolSteps,
       };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? finalMsg : m));
       ctx.setMessages([...ctx.allMessages]);

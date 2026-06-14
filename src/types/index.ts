@@ -51,6 +51,23 @@ export interface ChatMessage {
     /** 人类的回复内容（answered=true 后填充） */
     reply?: string;
   };
+  /**
+   * 流式期间的内嵌工具步骤（运行时字段，不持久化到磁盘）。
+   * 流结束后，重新加载时由 parseStructuredOutput(rawContent) 重生成。
+   */
+  toolSteps?: ToolStep[];
+  /** 流式阶段标识（运行时字段，不持久化） */
+  streamingPhase?: 'llm-waiting' | 'tool-exec';
+  /** 当前阶段已等待秒数（运行时字段） */
+  phaseElapsed?: number;
+}
+
+/** 工具调用步骤（StructuredMessage 与流式期间共用） */
+export interface ToolStep {
+  tool: string;
+  args: Record<string, string>;
+  result?: string;
+  status: 'pending' | 'running' | 'done' | 'error';
 }
 
 /** 工具调用记录 */

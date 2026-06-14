@@ -1,13 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { renderTextWithCode } from '../../engine/markdown';
 import { formatTimestamp } from '../../utils/time';
-
-interface ToolStep {
-  tool: string;
-  args: Record<string, string>;
-  result?: string;
-  status: 'pending' | 'running' | 'done' | 'error';
-}
+import type { ToolStep } from '../../types';
 
 interface Props {
   think: string;
@@ -24,7 +18,10 @@ interface Props {
 
 export default function StructuredMessage({ think, tools, answer, note, msgId, timestamp, answerSource, onDelete, actions }: Props) {
   const [showThink, setShowThink] = useState(false);
-  const [showTool, setShowTool] = useState<Record<number, boolean>>({});
+  // 完成态默认折叠，运行中默认展开
+  const [showTool, setShowTool] = useState<Record<number, boolean>>(() =>
+    Object.fromEntries(tools.map((t, i) => [i, t.status === 'running'])),
+  );
 
   const toggleTool = (idx: number) => {
     setShowTool(prev => ({ ...prev, [idx]: !prev[idx] }));

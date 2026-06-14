@@ -41,7 +41,7 @@ function estimateTokens(text: string): number {
 
 const MEMORY_TRIGGERS = /回忆|之前|记得|记忆|回想|回顾|上次|过去/;
 
-export default function ChatPage({ preselectSession, onClearPreselect }: { preselectSession?: string; onClearPreselect?: () => void }) {
+export default function ChatPage({ active, preselectSession, onClearPreselect }: { active?: boolean; preselectSession?: string; onClearPreselect?: () => void }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [offlineIds, setOfflineIds] = useState<Set<string>>(new Set());
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
@@ -98,6 +98,15 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
     // mount 时如果 streaming 残留为 true 但没有活跃的 abort controller，强制重置
     if (streaming && !abortRef.current) setStreaming(false);
   }, []);
+
+  // 切回季风页时重拉模型列表（Settings 加模型后无需刷新浏览器即可见）
+  useEffect(() => {
+    if (!active) return;
+    getAllModels().then(list => {
+      setModels(list);
+      setSelectedModel(prev => { if (list.length && !list.some(m => m.key === prev)) return list[0].key; return prev; });
+    });
+  }, [active]);
 
   // 2s 轮询 agent 状态
   useEffect(() => {
@@ -555,12 +564,49 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
                         display = stripped.replace(/<\/?(?:think|answer|note|action[^>]*)>/gi, '').trim();
                       }
 
-                      // 流式中不显示 recovered badge——过渡期容易误报，等流式结束让 parseStructuredOutput 判断
+                      // 流式状态指示器
+                      const phase = msg.streamingPhase;
+                      const elapsed = msg.phaseElapsed;
+                      const steps = msg.toolSteps;
+                      const lastRunningTool = steps?.findLast(s => s.status === 'running')?.tool;
+
+                      let phaseLabel = '';
+                      if (phase === 'llm-waiting') phaseLabel = `等待模型响应${elapsed ? ` ${elapsed}s` : ''}...`;
+                      else if (phase === 'tool-exec' && lastRunningTool) phaseLabel = `正在调用 ${lastRunningTool}...`;
+                      else if (!display && !steps?.length) phaseLabel = '等待模型响应...';
+
                       return (
                         <div className="chat__message chat__message--assistant">
                           <div className="chat__avatar">AI</div>
                           <div className="chat__bubble">
-                            <div style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>{display || '等待模型响应...'}▍</div>
+                            {/* 流式状态 */}
+                            {phaseLabel && <div className="chat__streaming-phase">{phaseLabel}</div>}
+                            {/* 内嵌 tool steps 紧凑列表 */}
+                            {steps && steps.length > 0 && (
+                              <div className="chat__tool-steps">
+                                {steps.map((step, i) => (
+                                  <details key={i} className={`chat__tool-step chat__tool-step--${step.status}`} open={step.status === 'running'}>
+                                    <summary className="chat__tool-step-summary">
+                                      <span className="chat__tool-step-icon">
+                                        {step.status === 'running' ? '🔄' : step.status === 'done' ? '✅' : step.status === 'error' ? '❌' : '⏸'}
+                                      </span>
+                                      <span className="chat__tool-step-name">{step.tool}</span>
+                                      {step.status === 'running' && <span className="chat__tool-step-spinner" />}
+                                    </summary>
+                                    <div className="chat__tool-step-detail">
+                                      {Object.keys(step.args).length > 0 && (
+                                        <pre className="chat__tool-step-args">{JSON.stringify(step.args, null, 2)}</pre>
+                                      )}
+                                      {step.result && (
+                                        <pre className="chat__tool-step-result">{step.result.length > 500 ? step.result.slice(0, 500) + '...' : step.result}</pre>
+                                      )}
+                                    </div>
+                                  </details>
+                                ))}
+                              </div>
+                            )}
+                            {/* 流式文本内容 */}
+                            {display && <div style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>{display}▍</div>}
                             {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
                           </div>
                         </div>
@@ -568,16 +614,19 @@ export default function ChatPage({ preselectSession, onClearPreselect }: { prese
                     }
                     const parsed = parseStructuredOutput(msg.content, []);
                     const hasStructure = parsed.think || parsed.actions.length > 0 || parsed.note || parsed.answer;
-                    if (hasStructure) {
-                      const toolSteps = parsed.actions.map(a => ({
-                        tool: a.tool, args: a.args,
-                        result: undefined as string | undefined,
-                        status: 'done' as const,
-                      }));
+                    // 优先使用 msg.toolSteps（原生模式下 rawContent 不含 <action>，toolSteps 是源数据）
+                    const toolSteps = msg.toolSteps && msg.toolSteps.length > 0
+                      ? msg.toolSteps
+                      : parsed.actions.map(a => ({
+                          tool: a.tool, args: a.args,
+                          result: undefined as string | undefined,
+                          status: 'done' as const,
+                        }));
+                    if (hasStructure || (msg.toolSteps && msg.toolSteps.length > 0)) {
                       return (
                         <StructuredMessage
                           think={parsed.think}
-                          tools={toolSteps} answer={parsed.answer} note={parsed.note}
+                          tools={toolSteps} answer={parsed.answer || msg.content.replace(/<[^>]+>/g, '').trim()} note={parsed.note}
                           msgId={msg.id}
                           timestamp={msg.timestamp}
                           answerSource={parsed.answerSource}
