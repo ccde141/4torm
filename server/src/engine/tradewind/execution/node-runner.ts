@@ -181,6 +181,10 @@ export class NodeRunner {
 
     // 追加 user message 到上下文
     this.messages.push({ role: 'user', content: msg.content });
+    // 通知前端（人类消息由 send() 自行插入，无需重复推送）
+    if (msg.source !== 'human') {
+      emit({ type: 'user-message', content: msg.content, source: msg.source } as any);
+    }
 
     try {
       const result = await this.runReAct(emit);
