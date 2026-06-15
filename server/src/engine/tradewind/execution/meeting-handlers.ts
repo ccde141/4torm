@@ -18,7 +18,7 @@
 import type { ContextMessage } from '../../shared/types';
 import type { MeetingSessionData, MeetingMessage } from './meeting-session';
 import path from 'node:path';
-import { callLLM } from '../../shared/llm-bridge';
+import { callLLM, resolveNativeMode } from '../../shared/llm-bridge';
 import { loadAgent, type LoadedAgent } from '../../shared/agent-loader';
 import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
 import { buildSystemPrompt } from '../../shared/prompt';
@@ -33,6 +33,8 @@ import { extractAnswer } from '../../shared/answer-extractor';
 import { buildTradewindSystemPrompt } from './prompt-builder';
 import { activeNodeRunners } from '../nodes/agent';
 import { execListAgents, execCreateWorkflow } from '../../shared/workflow-builder';
+import { runTradewindReActNative } from './native-adapter';
+import { buildVirtualToolDefs } from './virtual-tools';
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
@@ -172,25 +174,44 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
 
       const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills);
 
+      // native 模式决议（按 agent.model 决定，每个参与者独立判断）
+      const nativeDecision = await resolveNativeMode(dataDir, agent.model);
+
       // 构造 system prompt（参与者列表用 label）
       const participantLabels = session.participants.map(p => p.label);
+      const contactTargetsForPrompt = session.participants
+        .filter(p => p.label !== label)
+        .map(p => ({ label: p.label, role: '会议参与者' }));
 
-      const systemText = buildMeetingAgentPrompt(agent, participantLabels, session, toolDefs, workspace, label, session.meetingLabel, dataDir, teamRoster);
+      const systemText = buildMeetingAgentPrompt(
+        agent,
+        participantLabels,
+        session,
+        toolDefs,
+        workspace,
+        label,
+        session.meetingLabel,
+        dataDir,
+        contactTargetsForPrompt,
+        nativeDecision.native,
+      );
       const history = formatPublicContext(session);
       const messages: ContextMessage[] = [
         { role: 'system', content: systemText },
         { role: 'user', content: history },
       ];
 
-      // 构造 LLMCaller + ToolCaller
-      const llm: LLMCaller = {
-        async call(msgs, _opts, onChunk, sig) {
-          return callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal: sig });
-        },
-      };
-      const toolCaller: ToolCaller | undefined = toolDefs.length > 0 ? {
+      // toolCaller：双路径共用，contact/list_agents/create_workflow 路由不变
+      //
+      // tool-call/tool-result 事件来源：
+      // - text 路径：由 runReActLoop 内部 emit（react-loop.ts），handleSpeak 在 onEvent 里翻译
+      // - native 路径：runReActLoopNative 内部不发 tool-* 事件，需 toolCaller 自己 emit
+      //
+      // 为避免 text 路径下重复事件，emitToolEvents 仅在 native 路径下为 true。
+      const emitToolEvents = nativeDecision.native;
+      const toolCaller: ToolCaller | undefined = toolDefs.length > 0 || nativeDecision.native ? {
         async call(tool, args) {
-          // contact 假工具：联络 agent 节点
+          // contact 假工具：联络 agent 节点（自带 contact-start/contact-done 事件，不发 tool-* 事件）
           if (tool === 'contact') {
             const target = args.target || '';
             onEvent?.({ type: 'contact-start', label, target });
@@ -201,48 +222,120 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           }
           // 工作流搭建假工具
           if (tool === 'list_agents') {
-            return await execListAgents(dataDir);
+            if (emitToolEvents) onEvent?.({ type: 'tool-call', label, tool, args });
+            const result = await execListAgents(dataDir);
+            if (emitToolEvents) onEvent?.({ type: 'tool-result', label, tool, result });
+            return result;
           }
           if (tool === 'create_workflow') {
-            return await execCreateWorkflow(dataDir, args);
+            if (emitToolEvents) onEvent?.({ type: 'tool-call', label, tool, args });
+            const result = await execCreateWorkflow(dataDir, args);
+            if (emitToolEvents) onEvent?.({ type: 'tool-result', label, tool, result });
+            return result;
           }
+          // 普通工具
+          if (emitToolEvents) onEvent?.({ type: 'tool-call', label, tool, args });
           try {
             const result = await execTool(tool, args, participant.agentId, workspace, signal);
+            if (emitToolEvents) onEvent?.({ type: 'tool-result', label, tool, result });
             return result;
           } catch (e) {
             const err = `错误：${(e as Error).message}`;
+            if (emitToolEvents) onEvent?.({ type: 'tool-result', label, tool, result: err });
             return err;
           }
         },
       } : undefined;
 
-      // 跑 ReAct 循环
-      const result = await runReActLoop({
-        messages,
-        llm,
-        tools: toolCaller,
-        maxTurns: 100,
-        onEvent: (ev) => {
-          if (ev.type === 'token') {
-            if (session.streamingCurrent) session.streamingCurrent.content += ev.chunk;
-            onEvent?.({ type: 'token', label, chunk: ev.chunk });
-          }
-          if (ev.type === 'heartbeat') onEvent?.({ type: 'heartbeat', label, phase: ev.phase, elapsed: ev.elapsed });
-          if (ev.type === 'tool-call') onEvent?.({ type: 'tool-call', label, tool: ev.tool, args: ev.args });
-          if (ev.type === 'tool-result') onEvent?.({ type: 'tool-result', label, tool: ev.tool, result: ev.result });
-        },
-        signal,
-      });
+      // 双路径分流执行
+      let result: { content: string; rawContent: string; toolCalls: Array<{ tool: string; args: Record<string, string>; result: string }>; lastPromptTokens?: number };
+
+      if (nativeDecision.native) {
+        // ── native 路径 ──
+        // 虚拟工具 schema 注入（contact 必备；meeting 不允许 delegate；允许工作流搭建）
+        const virtualDefs = buildVirtualToolDefs({
+          allowDelegate: false,
+          contactTargets: session.participants.filter(p => p.label !== label).map(p => p.label),
+          allowWorkflow: true,
+        });
+        const allToolDefs = [...toolDefs, ...virtualDefs];
+
+        const nativeResult = await runTradewindReActNative({
+          dataDir,
+          model: agent.model,
+          temperature: agent.temperature ?? 0.7,
+          messages,
+          toolDefs: allToolDefs,
+          toolCaller: toolCaller!,
+          // 事件翻译：NodeRunnerEvent → MeetingStreamEvent（补 label）
+          // 注意：tool-call/tool-result 由 toolCaller 内部 emit（contact-* 事件），
+          // adapter 自身只 emit token / error，这里只翻译这两类
+          onEvent: (ev) => {
+            if (ev.type === 'token') {
+              if (session.streamingCurrent) session.streamingCurrent.content += ev.content;
+              onEvent?.({ type: 'token', label, chunk: ev.content });
+            } else if (ev.type === 'error') {
+              onEvent?.({ type: 'error', message: ev.message });
+            }
+          },
+          signal,
+        });
+
+        result = {
+          content: nativeResult.content,
+          rawContent: nativeResult.rawContent,
+          toolCalls: nativeResult.toolCalls,
+          lastPromptTokens: nativeResult.lastPromptTokens,
+        };
+      } else {
+        // ── text 路径（原有逻辑）──
+        const llm: LLMCaller = {
+          async call(msgs, _opts, onChunk, sig) {
+            return callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal: sig });
+          },
+        };
+
+        const textResult = await runReActLoop({
+          messages,
+          llm,
+          tools: toolCaller,
+          maxTurns: 100,
+          onEvent: (ev) => {
+            if (ev.type === 'token') {
+              if (session.streamingCurrent) session.streamingCurrent.content += ev.chunk;
+              onEvent?.({ type: 'token', label, chunk: ev.chunk });
+            }
+            if (ev.type === 'heartbeat') onEvent?.({ type: 'heartbeat', label, phase: ev.phase, elapsed: ev.elapsed });
+            if (ev.type === 'tool-call') onEvent?.({ type: 'tool-call', label, tool: ev.tool, args: ev.args });
+            if (ev.type === 'tool-result') onEvent?.({ type: 'tool-result', label, tool: ev.tool, result: ev.result });
+          },
+          signal,
+        });
+        result = {
+          content: textResult.content,
+          rawContent: textResult.rawContent,
+          toolCalls: textResult.toolCalls,
+          lastPromptTokens: textResult.lastPromptTokens,
+        };
+      }
 
       // 记录最后一个 participant 的 promptTokens
       if (result.lastPromptTokens) lastPromptTokens = result.lastPromptTokens;
 
-      // abort 后 result.content 可能是 '[中止]' 或 '[错误]...'——用已流式积累的内容替代
+      // 最终内容提取 + abort 回填
+      // - native 模式：直接取 result.content（无 <answer> 概念），仅 stripInternalTags 兜底
+      // - text 模式：abort 时用流式累积内容 + extractAnswer/stripInternalTags 兜底
       const aborted = signal?.aborted;
       const streamedContent = session.streamingCurrent?.content?.trim() || '';
-      const finalContent = aborted
-        ? (extractAnswer(streamedContent) ?? stripInternalTags(streamedContent).trim())
-        : result.content;
+      let finalContent: string;
+      if (nativeDecision.native) {
+        const source = aborted ? streamedContent : result.content;
+        finalContent = stripInternalTags(source).trim();
+      } else {
+        finalContent = aborted
+          ? (extractAnswer(streamedContent) ?? stripInternalTags(streamedContent).trim())
+          : result.content;
+      }
 
       if (finalContent && !finalContent.startsWith('[中止]') && !finalContent.startsWith('[错误]')) {
         session.publicMessages.push({
@@ -440,9 +533,18 @@ function buildOpeningPromptWithHistory(
   history: readonly ContextMessage[],
 ): string {
   const otherLabels = participantLabels.filter(l => l !== selfLabel).join('、') || '（仅你一人）';
-  const historyText = history
+
+  // 历史截断：从尾部累加到 60K 字符上限，保留最近内容
+  // 200K token 上下文模型下，留 130K+ token 给后续会议轮次累积
+  const HISTORY_CHAR_LIMIT = 60_000;
+  const truncated = truncateHistoryFromTail(history, HISTORY_CHAR_LIMIT);
+  const omittedNote = truncated.omittedCount > 0
+    ? `[早期 ${truncated.omittedCount} 条对话已省略，仅保留最近内容]\n\n`
+    : '';
+  const historyText = omittedNote + truncated.kept
     .map(m => `[${m.role}]\n${m.content}`)
     .join('\n\n---\n\n');
+
   return [
     rolePrompt ? `# 角色\n\n${rolePrompt}\n\n---\n` : '',
     `# 入会发言`,
@@ -470,6 +572,26 @@ function buildOpeningPromptWithHistory(
     `- 不要调用任何工具`,
     `- 直接进入正题，不要寒暄`,
   ].filter(Boolean).join('\n');
+}
+
+/**
+ * 历史截断：从尾部往前累加，超过字符上限即停止
+ * 返回保留的消息（按原顺序）+ 被省略的消息数
+ */
+function truncateHistoryFromTail(
+  history: readonly ContextMessage[],
+  charLimit: number,
+): { kept: ContextMessage[]; omittedCount: number } {
+  const kept: ContextMessage[] = [];
+  let chars = 0;
+  // 从尾部往前累加
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msgChars = history[i].content.length + 8; // 8 ≈ [role]\n 标记开销
+    if (chars + msgChars > charLimit && kept.length > 0) break;
+    kept.unshift(history[i]);
+    chars += msgChars;
+  }
+  return { kept, omittedCount: history.length - kept.length };
 }
 
 function buildOpeningPromptNoHistory(
@@ -637,6 +759,7 @@ function buildMeetingAgentPrompt(
   meetingLabel: string,
   dataDir: string,
   contactTargets?: Array<{ label: string; role: string }>,
+  native?: boolean,
 ): string {
   const sections: string[] = [];
 
@@ -646,8 +769,10 @@ function buildMeetingAgentPrompt(
   // §2 信风工作环境
   sections.push(buildEnvironmentSection(`${selfLabel}（会议室节点「${meetingLabel}」的参与者）`));
 
-  // §3 完整工具协议（和普通会话一致，来自 shared/prompt）
-  if (toolDefs.length > 0) {
+  // §3 工具协议
+  // - text 模式：完整文本协议（教 <action>/<answer> 格式 + 工具列表）
+  // - native 模式：跳过文本协议教学，schema 由 API tools 参数注入；工具列表由 §5 简述
+  if (toolDefs.length > 0 && !native) {
     sections.push(buildSystemPrompt(toolDefs));
   }
 
@@ -663,6 +788,53 @@ function buildMeetingAgentPrompt(
 
   // §5 会议场景说明
   const otherParticipants = participants.filter(p => p !== selfLabel);
+  const finalReplyDesc = native
+    ? `- 工具调用过程不会展示给其他参与者，只有最终回答会被公开`
+    : `- 工具调用过程不会展示给其他参与者，只有最终 <answer> 内容会被公开\n- 用 <answer>你的发言</answer> 包裹最终回复`;
+
+  const contactSection: string[] = [
+    `## 联络 Agent 节点`,
+    ``,
+    `你可以联络工作流中其他正在运行的 Agent 节点，让它们协助你或获取它们的工作成果。`,
+    ``,
+    ...(contactTargets && contactTargets.length > 0 ? [
+      `可联络的节点：`,
+      ...contactTargets.map(t => `  - ${t.label}：${t.role}`),
+      ``,
+    ] : []),
+  ];
+
+  if (native) {
+    contactSection.push(
+      `调用 \`contact\` 工具向目标节点发送消息。对方处理后会返回回复。`,
+      ``,
+      `注意：`,
+      `- 对方是工作流中实际执行任务的 Agent 节点，不是会议室内的参与者`,
+      `- 用于将会议讨论结论同步给执行者，或向执行者索取最新进展`,
+      `- 对方处理可能需要时间（涉及工具调用），请耐心等待`,
+      `- 必须真正调用工具才会联络对方，仅在文字中描述"我联络了xxx"不会触发任何动作`,
+      ``,
+    );
+  } else {
+    contactSection.push(
+      `### contact`,
+      `  描述: 联络工作流中的 Agent 节点。对方会处理你的消息并返回回复。`,
+      `  参数:`,
+      `    target: string [必填] — 目标节点名称（可选值：${contactTargets && contactTargets.length > 0 ? contactTargets.map(t => t.label).join('、') : '（无可联络节点）'}）`,
+      `    message: string [必填] — 你要传达的内容（问题、请求、同步信息等）`,
+      ``,
+      `  注意：`,
+      `  - 对方是工作流中实际执行任务的 Agent 节点，不是会议室内的参与者`,
+      `  - 用于将会议讨论结论同步给执行者，或向执行者索取最新进展`,
+      `  - 对方处理可能需要时间（涉及工具调用），请耐心等待`,
+      `  - 必须真正调用工具才会联络对方，仅在文字中描述"我联络了xxx"不会触发任何动作`,
+      ``,
+      `  调用示例:`,
+      `  <action tool="contact">{"target":"节点名称","message":"你要传达的具体内容"}</action>`,
+      ``,
+    );
+  }
+
   sections.push([
     `# 当前场景`,
     ``,
@@ -674,33 +846,9 @@ function buildMeetingAgentPrompt(
     `- 基于对话上下文回应人类的发言，简洁、有观点、有建设性`,
     `- 不要重复其他参与者已经说过的内容`,
     `- 如果要回应某人的观点，明确指出是谁的观点`,
-    `- 工具调用过程不会展示给其他参与者，只有最终 <answer> 内容会被公开`,
-    `- 用 <answer>你的发言</answer> 包裹最终回复`,
+    finalReplyDesc,
     ``,
-    `## 联络 Agent 节点`,
-    ``,
-    `你可以联络工作流中其他正在运行的 Agent 节点，让它们协助你或获取它们的工作成果。`,
-    ``,
-    ...(contactTargets && contactTargets.length > 0 ? [
-      `可联络的节点：`,
-      ...contactTargets.map(t => `  - ${t.label}：${t.role}`),
-      ``,
-    ] : []),
-    `### contact`,
-    `  描述: 联络工作流中的 Agent 节点。对方会处理你的消息并返回回复。`,
-    `  参数:`,
-    `    target: string [必填] — 目标节点名称（可选值：${contactTargets && contactTargets.length > 0 ? contactTargets.map(t => t.label).join('、') : '（无可联络节点）'}）`,
-    `    message: string [必填] — 你要传达的内容（问题、请求、同步信息等）`,
-    ``,
-    `  注意：`,
-    `  - 对方是工作流中实际执行任务的 Agent 节点，不是会议室内的参与者`,
-    `  - 用于将会议讨论结论同步给执行者，或向执行者索取最新进展`,
-    `  - 对方处理可能需要时间（涉及工具调用），请耐心等待`,
-    `  - 必须真正调用工具才会联络对方，仅在文字中描述"我联络了xxx"不会触发任何动作`,
-    ``,
-    `  调用示例:`,
-    `  <action tool="contact">{"target":"节点名称","message":"你要传达的具体内容"}</action>`,
-    ``,
+    ...contactSection,
     `## 会议结束后`,
     `会议结束时，会长会生成完整纪要。`,
     `纪要 + 完整对话记录会自动注入你的工作上下文，供你后续工作流任务参考。`,
