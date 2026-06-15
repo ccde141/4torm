@@ -22,6 +22,7 @@ import type {
 import { BUILTIN_EVENT_IDS } from '../foundation/types';
 import { loadAgent } from '../../shared/agent-loader';
 import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
+import { resolveNativeMode } from '../../shared/llm-bridge';
 import { buildTradewindSystemPrompt } from '../execution/prompt-builder';
 import { NodeRunner } from '../execution/node-runner';
 import { consumeNodeContext } from '../foundation/node-context-store';
@@ -82,6 +83,9 @@ export class AgentExecutor implements NodeExecutor {
       });
     }
 
+    // 决议原生工具调用模式（启动时一次，运行期固定）
+    const nativeDecision = await resolveNativeMode(ctx.dataDir, agent.model || '');
+
     // 启动期 system prompt（信封内容稍后通过 user message 注入）
     const systemPrompt = buildTradewindSystemPrompt({
       rolePrompt: agent.rolePrompt || '你是一个工作流中的 Agent。',
@@ -101,6 +105,7 @@ export class AgentExecutor implements NodeExecutor {
       platform: process.platform,
       today: new Date().toLocaleDateString('zh-CN'),
       modelId: agent.model || 'unknown',
+      native: nativeDecision.native,
     });
 
     // 持久化路径（归档用，写 messages.json）
@@ -111,6 +116,7 @@ export class AgentExecutor implements NodeExecutor {
     const compactArchiveDir = path.join(workspaceAbs, 'transcripts', 'bak', `agent_${nodeLabel}`);
 
     // 创建 NodeRunner（持续循环引擎）
+    const contactTargets = teamRoster.filter(m => !m.isSelf).map(m => m.label);
     const runner = new NodeRunner({
       dataDir: ctx.dataDir,
       nodeId: ctx.nodeId,
@@ -125,6 +131,9 @@ export class AgentExecutor implements NodeExecutor {
       signal: ctx.signal,
       persistDir,
       compactArchiveDir,
+      allowDelegate: true,
+      contactTargets,
+      native: nativeDecision.native,
     });
 
     // 立刻注册到全局表（路由层通过此表向节点发人类消息）

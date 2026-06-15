@@ -17,7 +17,13 @@ interface Props {
   actions?: ReactNode;
 }
 
-export default function StructuredMessage({ think, tools, answer, note, msgId, onDelete, actions }: Props) {
+/**
+ * StructuredMessage — 信风文本协议下的结构化消息
+ *
+ * 包含 think / tools / answer / note 四段。
+ * 全部使用 tw-* 类系统，零内联样式。
+ */
+export default function StructuredMessage({ think, tools, answer, note, actions }: Props) {
   const [showThink, setShowThink] = useState(false);
   const [showTool, setShowTool] = useState<Record<number, boolean>>({});
 
@@ -26,61 +32,79 @@ export default function StructuredMessage({ think, tools, answer, note, msgId, o
   };
 
   return (
-    <div className="chat__message chat__message--assistant">
-      <div className="chat__avatar">AI</div>
-      <div className="chat__bubble stmsg-bubble">
+    <div className="tw-chat-row tw-chat-row--assistant">
+      <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div>
+      <div className="tw-chat-bubble tw-stmsg">
+        {/* 思考过程 */}
         {think && (
-          <div className="stmsg-section stmsg-section--collapsible">
-            <button className="stmsg-collapse-trigger" onClick={() => setShowThink(!showThink)} aria-expanded={showThink}>
-              <span className="stmsg-collapse-arrow">{showThink ? '▼' : '▶'}</span>
-              <span className="stmsg-collapse-label">思考过程</span>
+          <div className="tw-meeting-think">
+            <button
+              className="tw-meeting-think__trigger"
+              onClick={() => setShowThink(!showThink)}
+              aria-expanded={showThink}
+            >
+              <span className="tw-meeting-think__arrow">{showThink ? '▼' : '▶'}</span>
+              <span className="tw-meeting-think__label">思考过程</span>
             </button>
             {showThink && (
-              <div className="stmsg-collapse-body">
-                <div className="stmsg-think">{think}</div>
-              </div>
+              <div className="tw-meeting-think__body">{think}</div>
             )}
           </div>
         )}
 
-        {tools.map((t, i) => (
-          <div key={i} className={`stmsg-tool stmsg-tool--${t.status}`}>
-            <button className="stmsg-tool-header" onClick={() => toggleTool(i)} aria-expanded={showTool[i] ?? false}>
-              <span className="stmsg-tool-arrow">{showTool[i] ? '▼' : '▶'}</span>
-              <span className={`stmsg-tool-icon stmsg-tool-icon--${t.status}`}>
-                {t.status === 'running' ? '⏳' : t.status === 'done' ? '✅' : t.status === 'error' ? '❌' : '⏸'}
-              </span>
-              <span className="stmsg-tool-name">{t.tool}</span>
-              {t.status === 'running' && <span className="thinking-card__tool-spinner" />}
-            </button>
-            {showTool[i] && (
-              <div className="stmsg-tool-detail">
-                <div className="stmsg-tool-section">
-                  <span className="stmsg-tool-label">参数</span>
-                  <pre>{JSON.stringify(t.args, null, 2)}</pre>
-                </div>
-                {t.result && (
-                  <div className="stmsg-tool-section">
-                    <span className="stmsg-tool-label">结果</span>
-                    <pre>{t.result}</pre>
-                  </div>
+        {/* 工具调用 */}
+        {tools.map((t, i) => {
+          const statusMod = t.status === 'pending' || t.status === 'running' ? 'pending'
+            : t.status === 'error' ? 'error' : 'success';
+          const icon = t.status === 'running' ? null
+            : t.status === 'done' ? '✓'
+            : t.status === 'error' ? '✗' : '◌';
+          const opened = showTool[i] ?? false;
+          return (
+            <div key={i} className={`tw-tool-card tw-tool-card--${statusMod}`}>
+              <button
+                className="tw-tool-card__header"
+                onClick={() => toggleTool(i)}
+                aria-expanded={opened}
+              >
+                <span className={`tw-tool-card__arrow${opened ? ' tw-tool-card__arrow--open' : ''}`}>
+                  ▶
+                </span>
+                <span className="tw-tool-card__name">{t.tool}</span>
+                {t.status === 'running' ? <span className="tw-tool-card__spinner" /> : (
+                  <span className={`tw-tool-card__step-icon tw-tool-card__step-icon--${statusMod === 'success' ? 'done' : statusMod}`}>{icon}</span>
                 )}
-              </div>
-            )}
-          </div>
-        ))}
+              </button>
+              {opened && (
+                <div className="tw-tool-card__body">
+                  <div>
+                    <div className="tw-tool-card__section-label">参数</div>
+                    <pre className="tw-tool-card__pre">{JSON.stringify(t.args, null, 2)}</pre>
+                  </div>
+                  {t.result && (
+                    <div>
+                      <div className="tw-tool-card__section-label">结果</div>
+                      <pre className="tw-tool-card__pre">{t.result}</pre>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
 
-        {answer && (
-          <div className="stmsg-answer">{answer}</div>
-        )}
+        {/* 最终回答 */}
+        {answer && <div className="tw-stmsg__answer">{answer}</div>}
 
+        {/* 提醒 */}
         {note && (
-          <div className="stmsg-note-area">
-            <div className="stmsg-note-header">💡 提醒</div>
-            <div className="stmsg-note-body">{note}</div>
+          <div className="tw-meeting-note">
+            <div className="tw-meeting-note__header">💡 提醒</div>
+            <div className="tw-meeting-note__body">{note}</div>
           </div>
         )}
-        {actions && <div className="chat__bubble-actions">{actions}</div>}
+
+        {actions && <div className="tw-stmsg__actions">{actions}</div>}
       </div>
     </div>
   );

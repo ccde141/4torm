@@ -42,6 +42,7 @@ type StreamEvent =
   | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
   | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
+  | { type: 'user-message'; content: string; source: string }
   | { type: 'contact-start'; target: string }
   | { type: 'contact-done'; target: string; result: string; ok: boolean }
   | { type: 'answer'; content: string; rawContent: string }
@@ -106,6 +107,13 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
             setStreaming(true);
           }
           break;
+
+        case 'user-message': {
+          // 后端注入的 user msg（envelope/contact）实时推送
+          const id = nextId();
+          setMessages(prev => [...prev, { id, role: 'user', content: ev.content }]);
+          break;
+        }
 
         case 'token': {
           const cur = streamRef.current;
@@ -364,25 +372,16 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
             }
             if (msg.role === 'system') {
               return (
-                <div key={msg.id} className="chat__message chat__message--system">
-                  <div className="chat__bubble" style={{
-                    background: 'var(--color-bg-tertiary, rgba(100,100,100,0.08))',
-                    borderLeft: '3px solid var(--color-border-accent, #6366f1)',
-                    fontSize: 'var(--text-sm)',
-                    whiteSpace: 'pre-wrap',
-                    lineHeight: 1.5,
-                    opacity: 0.85,
-                  }}>
-                    {msg.content}
-                  </div>
+                <div key={msg.id} className="tw-chat-msg tw-chat-msg--system">
+                  {msg.content}
                 </div>
               );
             }
             if (msg.role === 'user') {
               return (
-                <div key={msg.id} className="chat__message chat__message--user">
-                  <div className="chat__avatar">你</div>
-                  <div className="chat__bubble">{msg.content}</div>
+                <div key={msg.id} className="tw-chat-row tw-chat-row--user">
+                  <div className="tw-chat-avatar tw-chat-avatar--user">你</div>
+                  <div className="tw-chat-bubble">{msg.content}</div>
                 </div>
               );
             }
@@ -397,10 +396,20 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
               }
               const display = raw.replace(/<\/?(?:think|answer|note|action[^>]*)>/gi, '').trim();
               return (
-                <div key={msg.id} className="chat__message chat__message--assistant">
-                  <div className="chat__avatar">AI</div>
-                  <div className="chat__bubble">
-                    <div style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>{display || '等待模型响应...'}▍</div>
+                <div key={msg.id} className="tw-chat-row tw-chat-row--assistant">
+                  <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div>
+                  <div className="tw-chat-bubble">
+                    {display ? (
+                      <>
+                        {display}
+                        <span className="tw-chat-cursor" />
+                      </>
+                    ) : (
+                      <>
+                        <span className="tw-chat-streaming-dot" />
+                        等待模型响应...
+                      </>
+                    )}
                   </div>
                 </div>
               );
@@ -425,11 +434,9 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
               );
             }
             return (
-              <div key={msg.id} className="chat__message chat__message--assistant">
-                <div className="chat__avatar">AI</div>
-                <div className="chat__bubble">
-                  <div style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>{msg.content}</div>
-                </div>
+              <div key={msg.id} className="tw-chat-row tw-chat-row--assistant">
+                <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div>
+                <div className="tw-chat-bubble">{msg.content}</div>
               </div>
             );
           })}

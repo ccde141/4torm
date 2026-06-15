@@ -75,7 +75,7 @@ function PageContent({ page, preselectSession, onClearPreselect }: { page: strin
   return (
     <div ref={containerRef} style={{ height: '100%' }}>
       <div className="page-panel" data-page="agent" style={show('agent')}><div style={scrollArea}><DashboardPage /></div></div>
-      <div className="page-panel" data-page="chat" style={show('chat')}><div style={scrollArea}><ChatPage preselectSession={preselectSession ?? undefined} onClearPreselect={onClearPreselect} /></div></div>
+      <div className="page-panel" data-page="chat" style={show('chat')}><div style={scrollArea}><ChatPage active={page === 'chat'} preselectSession={preselectSession ?? undefined} onClearPreselect={onClearPreselect} /></div></div>
       <div className="page-panel" data-page="tools" style={show('tools')}><div style={scrollArea}><ToolsPage /></div></div>
       <div className="page-panel" data-page="skills" style={show('skills')}><div style={scrollArea}><SkillsPage /></div></div>
       <div className="page-panel" data-page="convection" style={show('convection')}><div style={scrollArea}><ConvectionPage /></div></div>

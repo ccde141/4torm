@@ -53,6 +53,8 @@ export interface TradewindPromptParams {
   modelId: string;
   /** 模型族（预留扩展） */
   modelFamily?: 'claude' | 'gpt' | 'gemini' | 'other';
+  /** 是否走原生工具调用模式（true 时使用精简协议段，不教标签格式） */
+  native?: boolean;
 }
 
 /** 构建信风 Agent 的完整 system prompt */
@@ -77,6 +79,12 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
   sections.push(`# 角色\n\n${params.rolePrompt}`);
 
   // §2 工作环境（信风工作流引擎背景）
+  const handoffDesc = params.native
+    ? `你完成后，你的最终回答会自动打包成信封交给下游。`
+    : `你完成后，你的 <answer> 会自动打包成信封交给下游。`;
+  const finishDesc = params.native
+    ? `- 工作完成时给出最终回答即可，会自动通过信封投给下游成员`
+    : `- 工作完成时输出 <answer>，会自动通过信封投给下游成员`;
   sections.push([
     `# 你的工作环境`,
     ``,
@@ -84,7 +92,7 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
     ``,
     `信风是一个多 Agent 协作系统，团队成员通过「信封」传递工作内容。`,
     `上游成员完成工作后，会把成果以信封的形式交给你；`,
-    `你完成后，你的 <answer> 会自动打包成信封交给下游。`,
+    handoffDesc,
     ``,
     `人类作为负责人，可以随时与你对话、补充指令或调整方向。`,
     ``,
@@ -96,7 +104,7 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
     `  · 来自上游的信封（标注为「[系统信息：工作流上游传来的工作指令]」）`,
     `  · 来自人类的直接消息（无系统标注，作为人类语气）`,
     `- 区分清楚是谁在跟你说话，回应方式可以不同`,
-    `- 工作完成时输出 <answer>，会自动通过信封投给下游成员`,
+    finishDesc,
   ].join('\n'));
 
   // §3 团队名册（如果有协作者）
@@ -121,8 +129,12 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
     sections.push(`# 行为约束\n\n${noteBlock}`);
   }
 
-  // §5 输出协议 + 工具列表
-  sections.push(buildToolProtocol(params.toolDefs, params.allowDelegate, params.sandboxLevel, params.teamRoster));
+  // §5 输出协议 + 工具列表（native / text 分支）
+  if (params.native) {
+    sections.push(buildNativeProtocol(params.toolDefs, params.allowDelegate, params.sandboxLevel, params.teamRoster));
+  } else {
+    sections.push(buildToolProtocol(params.toolDefs, params.allowDelegate, params.sandboxLevel, params.teamRoster));
+  }
 
   // §6 「基地 + 沙箱」段
   sections.push(buildSandboxSection({
@@ -286,4 +298,62 @@ function buildContactSection(teamRoster: Array<{ label: string; role: string; is
 
   调用示例:
   <action tool="contact">{"target":"节点名称","message":"你要传达的具体内容"}</action>`;
+}
+
+/**
+ * 原生模式协议段：不教 <action>/<answer> 标签格式。
+ * 原生 function calling 由 provider 处理，模型直接自然语言输出即可。
+ *
+ * 工具列表精简（只列名称 + 描述），不教参数 JSON 格式（schema 已通过 tools 参数注入）。
+ * delegate / contact 段保留语义说明（拆分原则、死锁规避等）但去掉调用示例。
+ */
+function buildNativeProtocol(
+  toolDefs: ToolDef[],
+  allowDelegate: boolean,
+  sandboxLevel: SandboxLevel,
+  teamRoster: Array<{ label: string; role: string; isSelf: boolean }>,
+): string {
+  const tools = toolDefs.filter(t => t.name !== 'delegate' && t.name !== 'contact');
+  const toolList = tools.map(t => `- ${t.name}: ${t.description}`).join('\n');
+
+  const sections: string[] = [`# 工作方式
+
+你可以调用工具来完成任务。需要时直接发起工具调用，系统会执行并把结果返回给你。
+
+- 需要外部信息或执行操作时，调用对应工具
+- 串行依赖请分多轮调用，不要一次性堆叠
+- 工具调用过程对协作者不可见，只有最终回答会通过信封传给下游
+- 完成后用自然语言直接给出最终答复，无需特殊格式
+
+## 可用工具
+
+${toolList}`];
+
+  if (allowDelegate) {
+    sections.push(`## delegate 委托
+
+可调用 \`delegate\` 把子任务交给独立 SubAgent。SubAgent 在隔离上下文中工作，最多 25 轮。
+
+**沙箱继承**：SubAgent 继承你的沙箱级别（${sandboxLevel}）。涉及文件/目录时必须在 context 中写明绝对路径。
+
+**任务拆分**：单个 SubAgent 最多读 3-5 个文件。读 6+ 文件 → 拆成 2 个 delegate。探索+读取+分析 → 各自单独 delegate。宁可多派几个小任务，也不要一个大任务超限失败。
+
+**必须委托**的场景：分析整个模块/项目、对比多方案、读取 2+ 文件才能回答、调研盘点。
+
+**不要委托**的场景：纯推理、读 1 个文件就能答、需要先与人类确认决策。`);
+  }
+
+  if (teamRoster.length > 1) {
+    const others = teamRoster.filter(m => !m.isSelf).map(m => m.label).join('、');
+    sections.push(`## contact 联络
+
+可调用 \`contact\` 联络团队成员（可选目标：${others}）。
+
+- 不要向正在联络你的节点反向联络（会死锁）
+- 收到联络消息后直接回复即可，不要反过来 contact 对方
+- 优先自己解决，只有需要对方专业能力时才用
+- 缺少上游数据/规格/决策依据时主动联络索取，不要凭假设行动`);
+  }
+
+  return sections.join('\n\n');
 }

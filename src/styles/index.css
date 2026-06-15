@@ -7,6 +7,7 @@
 @import './variables/tokens.css';
 @import './skin.css';
 @import './components/tradewind.css';
+@import './components/tradewind-panels.css';
 @import './components/markdown.css';
 
 /* ─── Fonts ─────────────────────────────────────────────── */
