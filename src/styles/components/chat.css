@@ -40,6 +40,15 @@
 .chat__message--assistant {
 }
 
+/* 工具消息：单独成行的 ToolCallMessage / DelegateCard / ContactCard
+   一轮里可能有多个相邻工具调用，加底部间距让它们之间松一些 */
+.chat__message--tool {
+  margin-bottom: var(--space-3);
+}
+.chat__message--tool:last-child {
+  margin-bottom: 0;
+}
+
 .chat__avatar {
   width: 32px;
   height: 32px;
