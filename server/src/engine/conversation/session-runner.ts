@@ -61,12 +61,13 @@ export interface SessionRunnerOpts {
   /**
    * 假工具拦截器（通用扩展点）。
    * 返回非 null 时短路该工具执行，不走 HTTP bridge，直接把返回值当结果。
-   * 用于潮汐 self-loop 的 schedule_next 等"只截参数不执行"的工具。
+   * 用于"只截参数不执行"的虚拟工具。
+   * 注：潮汐 self-loop 已改用文本标记 [NEXT: ...]，不再依赖此拦截器。
    */
   interceptTool?: (tool: string, args: Record<string, string>) => string | null;
   /**
    * 原生工具调用模式。true = 走 runReActLoopNative（结构化 tool_calls）。
-   * 默认 false = 文本协议（向后兼容；潮汐等含 interceptTool 虚拟工具的场景暂留文本）。
+   * 默认 false = 文本协议（向后兼容）。
    */
   native?: boolean;
 }
@@ -219,8 +220,8 @@ export class SessionRunner {
     };
 
     const enableTools = toolDefs.length > 0 || !!this.opts.interceptTool;
-    // 原生模式（季风路由传 native=true）走 runReActLoopNative；
-    // 文本模式（潮汐等含 interceptTool 虚拟工具的场景）走 runReActLoop。
+    // 原生模式（native=true）走 runReActLoopNative（结构化 tool_calls）；
+    // 文本模式走 runReActLoop（<action> 协议）。
     const result = this.opts.native
       ? await runReActLoopNative({
           messages: chatMessages,
