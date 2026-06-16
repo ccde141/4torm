@@ -12,7 +12,7 @@ export default function ToolCallMessage({ toolCall, actions, timestamp }: {
   const summary = resultLines.length > 1 ? `${resultLines.length} 行` : (resultLines[0]?.slice(0, 60) || '无输出');
 
   return (
-    <div className="chat__message chat__message--assistant">
+    <div className="chat__message chat__message--assistant chat__message--tool">
       <div className="chat__avatar" style={{ background: 'var(--color-accent)', color: 'var(--color-text-inverse)' }}>🔧</div>
       <div className="chat__bubble" style={{ minWidth: '200px' }}>
         <button

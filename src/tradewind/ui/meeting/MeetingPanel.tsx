@@ -12,7 +12,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { subscribe, unsubscribe } from '../stream/unified-client';
 import {
-  sendSpeak, sendChair, endMeeting, joinMeeting, leaveMeeting, reorderMeeting,
+  sendSpeak, sendChair, endMeeting, joinMeeting, leaveMeeting, reorderMeeting, getStatus,
   type MeetingMessage, type MeetingStatus, type ToolStep, type MeetingBroadcastEvent,
 } from './meeting-client';
 import { MeetingMessageItem } from './MeetingMessageItem';
@@ -58,6 +58,23 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     return () => { unsubscribe(nodeId, handler); };
   }, [nodeId]);
 
+  // 挂载时通过 REST 拉一次初始状态。
+  // 共享 SSE 连接的 connected 快照只在连接首次建立时发一次，
+  // 面板后挂载时订阅不会补发快照——必须靠 REST 初始化 status，
+  // 否则 status 永远为 null，phase-change 事件被 setStatus(prev?...) 丢弃，卡在 opening。
+  useEffect(() => {
+    let cancelled = false;
+    getStatus(nodeId)
+      .then((s) => {
+        if (cancelled) return;
+        setStatus(s);
+        if (s.publicMessages) setPublicMsgs(s.publicMessages);
+        if (s.chairMessages) setChairMsgs(s.chairMessages);
+      })
+      .catch(() => { /* 会议尚未注册（404）：等 connected/phase-change 事件 */ });
+    return () => { cancelled = true; };
+  }, [nodeId]);
+
   // 事件处理中枢：所有会议室事件通过此函数路由
   const handleEvent = useCallback((ev: MeetingBroadcastEvent) => {
     switch (ev.type) {
@@ -88,7 +105,14 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         break;
       }
       case 'phase-change':
-        setStatus(prev => prev ? { ...prev, phase: ev.phase as MeetingStatus['phase'] } : prev);
+        setStatus(prev => {
+          // prev 为 null（REST 快照尚未回来）：补拉一次，避免 phase 丢失
+          if (!prev) {
+            getStatus(nodeId).then(s => setStatus(s)).catch(() => {});
+            return prev;
+          }
+          return { ...prev, phase: ev.phase as MeetingStatus['phase'] };
+        });
         // opening → discussion：清理 opening 期间残留的 busy 状态
         if (ev.phase === 'discussion') {
           setBusy(false);
@@ -97,12 +121,23 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
           streamRef.current.currentLabel = '';
           streamRef.current.streamContent = '';
           streamRef.current.pendingTools = [];
+          // 关键：opening 阶段的开场发言（agent-start/token/agent-done）若因订阅时序
+          // 被前端错过，会一直缺失，直到下一轮 round-done 才补出（表现为"打招呼延迟蹦出"）。
+          // opening 结束时用服务端权威态 publicMessages 全量同步，补齐所有开场发言。
+          getStatus(nodeId)
+            .then(s => {
+              if (s.publicMessages) setPublicMsgs(s.publicMessages);
+              if (s.chairMessages) setChairMsgs(s.chairMessages);
+            })
+            .catch(() => {});
         }
         break;
       case 'agent-start':
       case 'token':
       case 'tool-call':
       case 'tool-result':
+      case 'contact-start':
+      case 'contact-done':
       case 'agent-done':
       case 'round-done':
       case 'chair-token':
@@ -348,14 +383,28 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     }
   }, [chairMsgs]);
 
-  // 面板从隐藏恢复可见时强制滚到底
+  // 面板从隐藏恢复可见时强制滚到底 + 用服务端权威态校准（自愈）
   useEffect(() => {
     if (!visible) return;
     const pub = publicContainerRef.current;
     const chair = chairContainerRef.current;
     if (pub) pub.scrollTop = pub.scrollHeight;
     if (chair) chair.scrollTop = chair.scrollHeight;
-  }, [visible]);
+    // 自愈：面板持久挂载，事件若因 race 丢失会一直缺失。切回面板时用服务端权威态
+    // 全量同步 publicMessages/chairMessages/phase/busy，纠正任何累积偏差。
+    getStatus(nodeId)
+      .then(s => {
+        setStatus(s);
+        if (s.publicMessages) setPublicMsgs(s.publicMessages);
+        if (s.chairMessages) setChairMsgs(s.chairMessages);
+        if (!s.busy) {
+          setBusy(false);
+          setWaitingSince(null);
+          setWaitingLabel('');
+        }
+      })
+      .catch(() => {});
+  }, [visible, nodeId]);
 
   // 公共发言（fire-and-forget，事件通过 /events 流返回）
   const handleSpeak = useCallback(async () => {

@@ -32,7 +32,7 @@ import {
 } from '../execution/meeting-session';
 import type { MeetingEndResult } from '../execution/meeting-handlers';
 import { handleMeetingOpen } from '../execution/meeting-handlers';
-import { broadcastToMeeting } from '../execution/meeting-broadcast';
+import { broadcastToMeeting } from '../streaming/meeting-broadcast';
 import { appendNodeContext } from '../foundation/node-context-store';
 import { markEnvelopePending, markEnvelopeDone } from '../foundation/node-status-store';
 import { activeNodeRunners } from './agent';

@@ -30,8 +30,7 @@ import {
   type CompactorOpts,
 } from './context-compactor';
 import { execDelegate, execContact } from './node-runner-tools';
-import { execListAgents, execCreateWorkflow } from '../../shared/workflow-builder';
-import { pushUnified } from './unified-stream';
+import { NodeEventEmitter } from '../streaming/node-event-emitter';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -47,7 +46,7 @@ export interface QueuedMessage {
 }
 
 /** SSE 事件（推送给前端） */
-export type NodeRunnerEvent =
+export type NodeRunnerEvent = (
   | { type: 'token'; content: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean }
@@ -58,12 +57,29 @@ export type NodeRunnerEvent =
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
   | { type: 'contact-start'; target: string }
   | { type: 'contact-done'; target: string; result: string; ok: boolean }
+  | { type: 'user-message'; content: string; source: string }
   | { type: 'answer'; content: string; rawContent: string }
   | { type: 'compact-start' }
   | { type: 'compact-done'; archivedRounds: number; summaryLength: number }
   | { type: 'compact-warn'; message: string }
   | { type: 'error'; message: string }
-  | { type: 'done' };
+  | { type: 'done' }
+) & {
+  /** 进程级单调序号（emit 时注入），前端按此对账去重 */
+  seq?: number;
+};
+
+/** Agent 节点快照（REST /snapshot 返回，订阅时对账用） */
+export interface NodeSnapshot {
+  /** 已提交的对话历史（不含首条 system prompt） */
+  messages: Array<{ role: string; content: string }>;
+  /** 当前轮进行中的有序事件日志（前端用同一 reducer 回放） */
+  roundLog: NodeRunnerEvent[];
+  /** 当前是否正在处理 */
+  busy: boolean;
+  /** 已派发的最大序号（前端只应用 seq > lastSeq 的增量） */
+  lastSeq: number;
+}
 
 export interface NodeRunnerOpts {
   dataDir: string;
@@ -100,20 +116,34 @@ export class NodeRunner {
   private readonly messages: ContextMessage[] = [];
   private busy = false;
   private processing = false;
-  private readonly eventListeners = new Set<(ev: NodeRunnerEvent) => void>();
+  private readonly events: NodeEventEmitter;
   private readonly compactState: CompactState = { disabled: false, archiveSeq: 0 };
   private roundAbort: AbortController | null = null;
 
-  /** 当前轮累积事件 buffer（不管有没有 listener 都攒，窗口重开时 replay） */
-  private currentRoundBuffer: NodeRunnerEvent[] = [];
-
   constructor(opts: NodeRunnerOpts) {
     this.opts = opts;
+    this.events = new NodeEventEmitter(opts.nodeId);
     this.messages.push({ role: 'system', content: opts.systemPrompt });
   }
 
   isBusy(): boolean { return this.busy; }
   getMessages(): readonly ContextMessage[] { return this.messages; }
+
+  /**
+   * 订阅对账快照：已提交 messages（去首条 system）+ 当前轮事件日志 + busy + lastSeq。
+   * 前端订阅时拉一次，用同一 reducer 回放 roundLog，再按 seq 应用增量。
+   */
+  getSnapshot(): NodeSnapshot {
+    const msgs = this.messages
+      .filter((_, i) => i !== 0) // 去掉首条 system prompt
+      .map(m => ({ role: m.role, content: m.content }));
+    return {
+      messages: msgs,
+      roundLog: this.events.getRoundLog(),
+      busy: this.busy,
+      lastSeq: this.events.lastSeq,
+    };
+  }
 
   /** 中止当前轮次（人类点停止按钮） */
   abortRound(): void {
@@ -133,18 +163,14 @@ export class NodeRunner {
     void this.persist();
   }
 
-  /** 注册事件监听器（SSE 推送用，支持多个）。注册时自动 replay 当前轮已产生事件。 */
+  /** 注册事件监听器（兼容旧 per-node /events 端点；注册时回放当前轮日志） */
   addEventListener(fn: (ev: NodeRunnerEvent) => void): void {
-    this.eventListeners.add(fn);
-    // 窗口重新打开：补发当前轮已产生的事件（token + tool-call 等）
-    if (this.currentRoundBuffer.length > 0) {
-      for (const ev of this.currentRoundBuffer) fn(ev);
-    }
+    this.events.addListener(fn);
   }
 
   /** 移除事件监听器 */
   removeEventListener(fn: (ev: NodeRunnerEvent) => void): void {
-    this.eventListeners.delete(fn);
+    this.events.removeListener(fn);
   }
 
   /** 投入消息（人类或信封），自动触发处理 */
@@ -171,19 +197,15 @@ export class NodeRunner {
   /** 处理单条消息 */
   private async handle(msg: QueuedMessage): Promise<void> {
     this.busy = true;
-    this.currentRoundBuffer = [];
+    this.events.beginRound();
     this.roundAbort = new AbortController();
-    const emit = (ev: NodeRunnerEvent) => {
-      this.currentRoundBuffer.push(ev);
-      for (const fn of this.eventListeners) fn(ev);
-      pushUnified('agent', this.opts.nodeId, ev as unknown as Record<string, unknown>);
-    };
+    const emit = (ev: NodeRunnerEvent) => this.events.emit(ev);
 
     // 追加 user message 到上下文
     this.messages.push({ role: 'user', content: msg.content });
     // 通知前端（人类消息由 send() 自行插入，无需重复推送）
     if (msg.source !== 'human') {
-      emit({ type: 'user-message', content: msg.content, source: msg.source } as any);
+      emit({ type: 'user-message', content: msg.content, source: msg.source });
     }
 
     try {
@@ -193,8 +215,9 @@ export class NodeRunner {
 
       emit({ type: 'answer', content: result.content, rawContent: result.rawContent });
       emit({ type: 'done' });
-      // 轮次完成，清空 replay buffer（历史已持久化到 messages）
-      this.currentRoundBuffer = [];
+      // 注意：不在此清空 roundLog。该轮已固化进 messages，
+      // 但保留 roundLog 到下一轮 beginRound 才清——确保 done 后、下次 push 前
+      // 新订阅者仍能从快照回放完整一轮（messages 提供历史，roundLog 提供本轮细节渲染）。
 
       // 信封/contact 来源：回调通知系统拿走输出
       if ((msg.source === 'envelope' || msg.source === 'contact') && msg.onComplete) {
@@ -289,20 +312,6 @@ export class NodeRunner {
         }
         if (tool === 'contact') {
           return execContact(this.opts, args, emit);
-        }
-        // 工作流搭建假工具
-        if (tool === 'list_agents') {
-          emit({ type: 'tool-call', tool, args });
-          const result = await execListAgents(dataDir);
-          emit({ type: 'tool-result', tool, result, ok: true });
-          return result;
-        }
-        if (tool === 'create_workflow') {
-          emit({ type: 'tool-call', tool, args });
-          const result = await execCreateWorkflow(dataDir, args);
-          const ok = !result.startsWith('创建失败');
-          emit({ type: 'tool-result', tool, result, ok });
-          return result;
         }
         emit({ type: 'tool-call', tool, args });
         try {

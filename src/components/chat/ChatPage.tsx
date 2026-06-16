@@ -576,40 +576,24 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                       else if (!display && !steps?.length) phaseLabel = '等待模型响应...';
 
                       return (
-                        <div className="chat__message chat__message--assistant">
-                          <div className="chat__avatar">AI</div>
-                          <div className="chat__bubble">
-                            {/* 流式状态 */}
-                            {phaseLabel && <div className="chat__streaming-phase">{phaseLabel}</div>}
-                            {/* 内嵌 tool steps 紧凑列表 */}
-                            {steps && steps.length > 0 && (
-                              <div className="chat__tool-steps">
-                                {steps.map((step, i) => (
-                                  <details key={i} className={`chat__tool-step chat__tool-step--${step.status}`} open={step.status === 'running'}>
-                                    <summary className="chat__tool-step-summary">
-                                      <span className="chat__tool-step-icon">
-                                        {step.status === 'running' ? '🔄' : step.status === 'done' ? '✅' : step.status === 'error' ? '❌' : '⏸'}
-                                      </span>
-                                      <span className="chat__tool-step-name">{step.tool}</span>
-                                      {step.status === 'running' && <span className="chat__tool-step-spinner" />}
-                                    </summary>
-                                    <div className="chat__tool-step-detail">
-                                      {Object.keys(step.args).length > 0 && (
-                                        <pre className="chat__tool-step-args">{JSON.stringify(step.args, null, 2)}</pre>
-                                      )}
-                                      {step.result && (
-                                        <pre className="chat__tool-step-result">{step.result.length > 500 ? step.result.slice(0, 500) + '...' : step.result}</pre>
-                                      )}
-                                    </div>
-                                  </details>
-                                ))}
-                              </div>
-                            )}
-                            {/* 流式文本内容 */}
-                            {display && <div style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>{display}▍</div>}
-                            {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
+                        <>
+                          {/* 工具步骤独立渲染 */}
+                          {steps && steps.map((step, i) => (
+                            <ToolCallMessage
+                              key={`tool-${msg.id}-${i}`}
+                              toolCall={{ toolName: step.tool, params: step.args as Record<string, unknown>, result: step.result, status: step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending' }}
+                            />
+                          ))}
+                          {/* 流式文本气泡 */}
+                          <div className="chat__message chat__message--assistant">
+                            <div className="chat__avatar">AI</div>
+                            <div className="chat__bubble">
+                              {phaseLabel && <div className="chat__streaming-phase">{phaseLabel}</div>}
+                              {display && <div style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>{display}▍</div>}
+                              {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
+                            </div>
                           </div>
-                        </div>
+                        </>
                       );
                     }
                     const parsed = parseStructuredOutput(msg.content, []);
@@ -624,19 +608,28 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                         }));
                     if (hasStructure || (msg.toolSteps && msg.toolSteps.length > 0)) {
                       return (
-                        <StructuredMessage
-                          think={parsed.think}
-                          tools={toolSteps} answer={parsed.answer || msg.content.replace(/<[^>]+>/g, '').trim()} note={parsed.note}
-                          msgId={msg.id}
-                          timestamp={msg.timestamp}
-                          answerSource={parsed.answerSource}
-                          actions={
-                            <>
-                              <button className="chat__msg-action-btn" title="编辑" onClick={() => handleStartEdit(msg)}>✏</button>
-                              <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => handleDeleteMessage(msg.id)}>🗑</button>
-                            </>
-                          }
-                        />
+                        <>
+                          {/* 工具步骤独立渲染 */}
+                          {toolSteps.map((step, i) => (
+                            <ToolCallMessage
+                              key={`tool-${msg.id}-${i}`}
+                              toolCall={{ toolName: step.tool, params: step.args as Record<string, unknown>, result: step.result, status: step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending' }}
+                            />
+                          ))}
+                          <StructuredMessage
+                            think={parsed.think}
+                            tools={[]} answer={parsed.answer || msg.content.replace(/<[^>]+>/g, '').trim()} note={parsed.note}
+                            msgId={msg.id}
+                            timestamp={msg.timestamp}
+                            answerSource={parsed.answerSource}
+                            actions={
+                              <>
+                                <button className="chat__msg-action-btn" title="编辑" onClick={() => handleStartEdit(msg)}>✏</button>
+                                <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => handleDeleteMessage(msg.id)}>🗑</button>
+                              </>
+                            }
+                          />
+                        </>
                       );
                     }
                     return (

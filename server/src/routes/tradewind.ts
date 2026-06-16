@@ -29,8 +29,8 @@ import { NoteExecutor } from '../engine/tradewind/nodes/note';
 import { HumanGateExecutor, activeHumanGates } from '../engine/tradewind/nodes/human-gate';
 import { handleSpeak, handleChair, handleEnd } from '../engine/tradewind/execution/meeting-handlers';
 import { compactMeetingIfNeeded, MEETING_COMPACT_THRESHOLD } from '../engine/tradewind/execution/context-compactor';
-import { addClient, removeClient, broadcastToMeeting, clearClients } from '../engine/tradewind/execution/meeting-broadcast';
-import { addUnifiedClient, removeUnifiedClient } from '../engine/tradewind/execution/unified-stream';
+import { addClient, removeClient, broadcastToMeeting, clearClients } from '../engine/tradewind/streaming/meeting-broadcast';
+import { addUnifiedClient, removeUnifiedClient } from '../engine/tradewind/streaming/unified-stream';
 import { getEnvelopePending } from '../engine/tradewind/foundation/node-status-store';
 import { getMeetingsDir, getMeetingFileName } from '../engine/tradewind/foundation/archive-paths';
 import { validateWorkflow } from '../engine/tradewind/foundation/workflow-validator';
@@ -435,6 +435,33 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: '节点尚未激活' });
     }
     return reply.send({ busy: runner.isBusy() });
+  });
+
+  /**
+   * GET /chat/:nodeId/snapshot — 订阅对账快照
+   * 返回 { messages, roundLog, busy, lastSeq }。
+   * 前端订阅时拉一次：messages 渲染历史，busy 时回放 roundLog 显示进行中轮次，
+   * 之后只应用 seq > lastSeq 的增量事件。彻底消除"面板晚开/订阅竞态丢事件"。
+   */
+  app.get('/chat/:nodeId/snapshot', async (req, reply) => {
+    const { nodeId } = req.params as { nodeId: string };
+    const runner = activeNodeRunners.get(nodeId);
+    if (runner) {
+      return reply.send(runner.getSnapshot());
+    }
+    // 节点未激活：回退磁盘 messages，无进行中轮次
+    const execId = activeOrchestrator?.getExecutionId?.();
+    const wfId = activeOrchestrator?.getWorkflowId?.();
+    if (execId && wfId) {
+      const msgPath = path.join(dataDir, 'tradewind', 'runs', wfId, execId, 'nodes', nodeId, 'messages.json');
+      try {
+        const raw = await fs.readFile(msgPath, 'utf-8');
+        const all = JSON.parse(raw) as Array<{ role: string; content: string }>;
+        const messages = all.filter((_, i) => i !== 0); // 去首条 system
+        return reply.send({ messages, roundLog: [], busy: false, lastSeq: 0 });
+      } catch { /* file not found */ }
+    }
+    return reply.send({ messages: [], roundLog: [], busy: false, lastSeq: 0 });
   });
 
   /** POST /chat/:nodeId/abort — 中止 Agent 节点当前轮次 */

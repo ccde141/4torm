@@ -56,56 +56,38 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const msgIdRef = useRef(0);
   const streamRef = useRef<{ id: string; content: string } | null>(null);
+  // 订阅对账：seq 去重 + 基线建立前缓冲
+  const lastSeqRef = useRef(0);
+  const bufferingRef = useRef(true);
+  const bufferRef = useRef<Array<StreamEvent & { seq?: number }>>([]);
 
   const nextId = () => `msg-${Date.now().toString(36)}-${(msgIdRef.current++).toString(36)}`;
 
-  // 加载历史消息（返回 Promise 供初始化序列化）
-  const loadMessages = useCallback((): Promise<void> => {
-    return fetch(`/api/tradewind/chat/${nodeId}/messages`)
-      .then(r => r.json())
-      .then((d: { messages: Array<{ role: string; content: string }> }) => {
-        console.log(`[AgentChat] loadMessages: ${d.messages.length} msgs, roles=${d.messages.map(m => m.role).join(',')}`);
-        let skippedFirst = false;
-        const loaded = d.messages
-          .filter(m => {
-            if (m.role === 'system' && !skippedFirst) { skippedFirst = true; return false; }
-            return true;
-          })
-          .map(m => ({ id: nextId(), role: m.role as 'user' | 'assistant' | 'system', content: m.content }));
-        setMessages(loaded);
-      })
-      .catch(() => {});
-  }, [nodeId]);
-
-  // 先加载消息，再建立 SSE 连接（避免竞态覆盖）
+  // 持久 SSE + 订阅对账协议：
+  //   1. 先 subscribe，基线建立前事件进 buffer（不立即应用）
+  //   2. 拉 /snapshot：messages 渲染历史；busy 时回放 roundLog 显示进行中轮次
+  //   3. 设 lastSeq，flush buffer 中 seq > lastSeq 的增量
+  //   4. 之后实时应用，seq 去重防止重复
+  // 彻底消除"面板晚开 / loadMessages↔subscribe 竞态"导致的整轮事件丢失。
   useEffect(() => {
-    setReady(false);
+    let cancelled = false;
+    // 重置对账状态
     streamRef.current = null;
-    loadMessages().then(() => setReady(true));
-  }, [loadMessages]);
+    lastSeqRef.current = 0;
+    bufferingRef.current = true;
+    bufferRef.current = [];
 
-  // 持久 SSE 连接 → 改用统一 stream
-  useEffect(() => {
-    if (!ready) return;
-
-    const handleEvent = (ev: StreamEvent & { scope?: string; nodeId?: string }) => {
-      // unified stream 事件带 scope/nodeId，过滤掉不属于本组件的
+    // applyEvent：纯 reducer，回放与实时共用（不含 seq 去重）
+    const applyEvent = (ev: StreamEvent & { scope?: string; nodeId?: string }) => {
       if (ev.scope && ev.nodeId && ev.nodeId !== nodeId) return;
-
       switch (ev.type) {
         case 'connected':
-          console.log(`[AgentChat] SSE connected: busy=${(ev as any).busy}`);
-          if ((ev as any).busy) {
-            const id = nextId();
-            streamRef.current = { id, content: '' };
-            setMessages(prev => [...prev, { id, role: 'assistant', content: '' }]);
-            setStreaming(true);
-          }
+          // 统一 stream 的 connected 仅表示 SSE 通道建立。
+          // busy 态与进行中轮次由 /snapshot 对账负责，这里不再创建占位消息（避免重复）。
           break;
 
         case 'user-message': {
@@ -296,9 +278,80 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
       }
     };
 
-    subscribe(nodeId, handleEvent);
-    return () => { unsubscribe(nodeId, handleEvent); };
-  }, [ready, nodeId, loadMessages]);
+    // 渲染历史消息（snapshot.messages → ChatMessage[]）
+    const renderHistory = (msgs: Array<{ role: string; content: string }>) => {
+      const loaded = msgs.map(m => ({
+        id: nextId(),
+        role: m.role as 'user' | 'assistant' | 'system',
+        content: m.content,
+      }));
+      setMessages(loaded);
+    };
+
+    // seq 去重包装：实时事件经此进入。基线未建立时缓冲，建立后按 seq 过滤。
+    const onStreamEvent = (ev: StreamEvent & { scope?: string; nodeId?: string; seq?: number }) => {
+      if (ev.scope && ev.nodeId && ev.nodeId !== nodeId) return;
+      if (bufferingRef.current) {
+        bufferRef.current.push(ev);
+        return;
+      }
+      if (typeof ev.seq === 'number') {
+        if (ev.seq <= lastSeqRef.current) return; // 已通过快照/历史看到，丢弃
+        lastSeqRef.current = ev.seq;
+      }
+      applyEvent(ev);
+    };
+
+    subscribe(nodeId, onStreamEvent);
+
+    // 拉快照建立基线
+    fetch(`/api/tradewind/chat/${nodeId}/snapshot`)
+      .then(r => r.json())
+      .then((snap: {
+        messages: Array<{ role: string; content: string }>;
+        roundLog: Array<StreamEvent & { seq?: number }>;
+        busy: boolean;
+        lastSeq: number;
+      }) => {
+        if (cancelled) return;
+        renderHistory(snap.messages);
+        // busy 时回放进行中轮次的事件日志（与实时共用 applyEvent）。
+        // 跳过 user-message：该轮 user 消息已同步进 snapshot.messages（handle 开头 push），
+        // 回放再加一次会重复（用户看到两条相同输入）。
+        if (snap.busy && snap.roundLog.length > 0) {
+          setStreaming(true);
+          for (const ev of snap.roundLog) {
+            if (ev.type === 'user-message') continue;
+            applyEvent(ev);
+          }
+        } else {
+          // 不 busy：当前轮已固化进 messages，忽略 roundLog，并确保收尾态
+          setStreaming(false);
+          streamRef.current = null;
+        }
+        lastSeqRef.current = snap.lastSeq;
+        // flush 缓冲：只应用快照之后产生的增量
+        bufferingRef.current = false;
+        for (const ev of bufferRef.current) {
+          if (typeof ev.seq === 'number') {
+            if (ev.seq <= lastSeqRef.current) continue;
+            lastSeqRef.current = ev.seq;
+          }
+          applyEvent(ev);
+        }
+        bufferRef.current = [];
+      })
+      .catch(() => {
+        // 快照失败（节点未激活等）：仍解除缓冲，避免事件永久积压
+        if (cancelled) return;
+        bufferingRef.current = false;
+      });
+
+    return () => {
+      cancelled = true;
+      unsubscribe(nodeId, onStreamEvent);
+    };
+  }, [nodeId]);
 
   // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
   useEffect(() => {
@@ -309,12 +362,23 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
     }
   }, [messages]);
 
-  // 面板从隐藏恢复可见时强制滚到底
+  // 面板从隐藏恢复可见时强制滚到底 + 用服务端 busy 校准 streaming（自愈卡死）
   useEffect(() => {
     if (!visible) return;
     const el = messagesContainerRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [visible]);
+    // 自愈：组件持久挂载，snapshot 仅挂载时拉一次。若 done 因任何 race 丢失导致
+    // streaming 卡在 true（发送按钮卡红色"停止"），切回面板时用服务端权威 busy 纠正。
+    fetch(`/api/tradewind/chat/${nodeId}/status`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((s: { busy: boolean } | null) => {
+        if (s && !s.busy) {
+          setStreaming(false);
+          streamRef.current = null;
+        }
+      })
+      .catch(() => {});
+  }, [visible, nodeId]);
 
   const send = useCallback(() => {
     const text = input.trim();
