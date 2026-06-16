@@ -30,7 +30,6 @@ import {
   type CompactorOpts,
 } from './context-compactor';
 import { execDelegate, execContact } from './node-runner-tools';
-import { execListAgents, execCreateWorkflow } from '../../shared/workflow-builder';
 import { NodeEventEmitter } from '../streaming/node-event-emitter';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -313,20 +312,6 @@ export class NodeRunner {
         }
         if (tool === 'contact') {
           return execContact(this.opts, args, emit);
-        }
-        // 工作流搭建假工具
-        if (tool === 'list_agents') {
-          emit({ type: 'tool-call', tool, args });
-          const result = await execListAgents(dataDir);
-          emit({ type: 'tool-result', tool, result, ok: true });
-          return result;
-        }
-        if (tool === 'create_workflow') {
-          emit({ type: 'tool-call', tool, args });
-          const result = await execCreateWorkflow(dataDir, args);
-          const ok = !result.startsWith('创建失败');
-          emit({ type: 'tool-result', tool, result, ok });
-          return result;
         }
         emit({ type: 'tool-call', tool, args });
         try {

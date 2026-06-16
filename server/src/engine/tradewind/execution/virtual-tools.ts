@@ -1,7 +1,7 @@
 /**
  * 信风虚拟工具 schema —— 原生工具调用模式专用
  *
- * 背景：delegate / contact / list_agents / create_workflow 不在 tools/registry.json，
+ * 背景：delegate / contact 不在 tools/registry.json，
  * 是 NodeRunner 的 toolCaller 按工具名拦截执行的「虚拟工具」。
  *
  * 文本协议模式：靠 system prompt 文本教模型写 <action tool="delegate">，正则解析后拦截。
@@ -18,15 +18,13 @@ export interface BuildVirtualToolDefsParams {
   allowDelegate: boolean;
   /** 当前节点之外的协作者标签列表（teamRoster 去自身）。≥1 才注入 contact */
   contactTargets: string[];
-  /** 是否注入工作流搭建工具（list_agents / create_workflow） */
-  allowWorkflow?: boolean;
 }
 
 /**
  * 构建信风原生模式的虚拟工具定义。
  */
 export function buildVirtualToolDefs(params: BuildVirtualToolDefsParams): ToolDef[] {
-  const { allowDelegate, contactTargets, allowWorkflow = false } = params;
+  const { allowDelegate, contactTargets } = params;
   const defs: ToolDef[] = [];
 
   if (allowDelegate) {
@@ -59,27 +57,6 @@ export function buildVirtualToolDefs(params: BuildVirtualToolDefsParams): ToolDe
         required: ['target', 'message'],
       },
     });
-  }
-
-  if (allowWorkflow) {
-    defs.push(
-      {
-        name: 'list_agents',
-        description: '列出框架内所有可用的 Agent 实体（id + 名称 + 角色）。搭建信风工作流前先调用确认可用 Agent。',
-        parameters: { type: 'object', properties: {}, required: [] },
-      },
-      {
-        name: 'create_workflow',
-        description: '创建一个完整的信风工作流。必须先 list_agents 确认 agentId 真实存在。',
-        parameters: {
-          type: 'object',
-          properties: {
-            params: { type: 'string', description: 'JSON 字符串，包含 name、nodes、edges。节点类型 entry/agent/meeting/human-gate/note/output；边 {source,target} 须构成 DAG（无环）' },
-          },
-          required: ['params'],
-        },
-      },
-    );
   }
 
   return defs;

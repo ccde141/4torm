@@ -32,7 +32,6 @@ import {
 import { extractAnswer } from '../../shared/answer-extractor';
 import { buildTradewindSystemPrompt } from './prompt-builder';
 import { activeNodeRunners } from '../nodes/agent';
-import { execListAgents, execCreateWorkflow } from '../../shared/workflow-builder';
 import { runTradewindReActNative } from './native-adapter';
 import { buildVirtualToolDefs } from './virtual-tools';
 
@@ -201,7 +200,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         { role: 'user', content: history },
       ];
 
-      // toolCaller：双路径共用，contact/list_agents/create_workflow 路由不变
+      // toolCaller：双路径共用，contact 路由不变
       //
       // tool-call/tool-result 事件来源：
       // - text 路径：由 runReActLoop 内部 emit（react-loop.ts），handleSpeak 在 onEvent 里翻译
@@ -218,19 +217,6 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
             const result = await execMeetingContact(args, label, session.meetingLabel, signal);
             const ok = !result.startsWith('联络失败') && !result.startsWith('联络被系统拒绝') && !result.includes('失败');
             onEvent?.({ type: 'contact-done', label, target, result, ok });
-            return result;
-          }
-          // 工作流搭建假工具
-          if (tool === 'list_agents') {
-            if (emitToolEvents) onEvent?.({ type: 'tool-call', label, tool, args });
-            const result = await execListAgents(dataDir);
-            if (emitToolEvents) onEvent?.({ type: 'tool-result', label, tool, result });
-            return result;
-          }
-          if (tool === 'create_workflow') {
-            if (emitToolEvents) onEvent?.({ type: 'tool-call', label, tool, args });
-            const result = await execCreateWorkflow(dataDir, args);
-            if (emitToolEvents) onEvent?.({ type: 'tool-result', label, tool, result });
             return result;
           }
           // 普通工具
@@ -252,11 +238,10 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
 
       if (nativeDecision.native) {
         // ── native 路径 ──
-        // 虚拟工具 schema 注入（contact 必备；meeting 不允许 delegate；允许工作流搭建）
+        // 虚拟工具 schema 注入（contact 必备；meeting 不允许 delegate）
         const virtualDefs = buildVirtualToolDefs({
           allowDelegate: false,
           contactTargets: session.participants.filter(p => p.label !== label).map(p => p.label),
-          allowWorkflow: true,
         });
         const allToolDefs = [...toolDefs, ...virtualDefs];
 
