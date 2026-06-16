@@ -18,6 +18,8 @@
 import type { ContextMessage } from '../../shared/types';
 import type { MeetingSessionData, MeetingMessage } from './meeting-session';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { callLLM, resolveNativeMode } from '../../shared/llm-bridge';
 import { loadAgent, type LoadedAgent } from '../../shared/agent-loader';
 import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
@@ -30,10 +32,19 @@ import {
   type ToolCaller,
 } from './react-loop';
 import { extractAnswer } from '../../shared/answer-extractor';
-import { buildTradewindSystemPrompt } from './prompt-builder';
 import { activeNodeRunners } from '../nodes/agent';
 import { runTradewindReActNative } from './native-adapter';
 import { buildVirtualToolDefs } from './virtual-tools';
+
+/** 读取会议室元认知段（meeting-meta.md，与本文件同级）。读不到则静默跳过。 */
+function loadMeetingMeta(): string {
+  try {
+    const metaPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'meeting-meta.md');
+    return readFileSync(metaPath, 'utf-8').trim();
+  } catch {
+    return '';
+  }
+}
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
@@ -717,20 +728,19 @@ export async function handleEnd(opts: HandleEndOpts): Promise<MeetingEndResult> 
 
 // ── 辅助：构建会议中 Agent 的 system prompt ──────────────────────
 
-/** 信风工作环境通用段（让 Agent 知道自己在多 Agent 协作系统中工作） */
-function buildEnvironmentSection(nodeLabel: string): string {
+/** 会议室工作环境段：身份 + 名字 + 消息来源识别（前缀规律） */
+function buildMeetingEnvironmentSection(selfLabel: string, meetingLabel: string, agentName: string): string {
   return [
     `# 你的工作环境`,
     ``,
-    `你运行在「信风」多 Agent 协作工作流中。`,
+    `你运行在「信风」多 Agent 协作程序中，此刻正参加一场人类组织的圆桌会议。`,
     ``,
-    `信风是一个多 Agent 协作系统，团队成员通过「信封」传递工作内容。`,
-    `上游成员完成工作后，会把成果以信封的形式交给你；`,
-    `你完成后，你的 <answer> 会自动打包成信封交给下游。`,
+    `你当前的身份：${selfLabel}（会议室「${meetingLabel}」的参与者）`,
+    `你的名字：${agentName}`,
     ``,
-    `人类作为负责人，可以随时与你对话、补充指令或调整方向。`,
-    ``,
-    `你当前的身份：${nodeLabel}`,
+    `## 谁在跟你说话`,
+    `- 系统信息（以「[系统信息：...]」开头）—— 会议流程消息、其他节点的联络消息`,
+    `- 人类消息（无系统标注）—— 会议的组织者和决策者，优先级最高`,
   ].join('\n');
 }
 
@@ -748,11 +758,15 @@ function buildMeetingAgentPrompt(
 ): string {
   const sections: string[] = [];
 
+  // §0 元认知（meeting-meta.md，最前注入）
+  const meta = loadMeetingMeta();
+  if (meta) sections.push(meta);
+
   // §1 角色定义（Agent 实体自带的 rolePrompt）
   if (agent.rolePrompt) sections.push(`# 角色\n\n${agent.rolePrompt}`);
 
-  // §2 信风工作环境
-  sections.push(buildEnvironmentSection(`${selfLabel}（会议室节点「${meetingLabel}」的参与者）`));
+  // §2 会议室工作环境（身份 + 名字 + 消息来源识别）
+  sections.push(buildMeetingEnvironmentSection(selfLabel, meetingLabel, agent.name));
 
   // §3 工具协议
   // - text 模式：完整文本协议（教 <action>/<answer> 格式 + 工具列表）
@@ -778,9 +792,7 @@ function buildMeetingAgentPrompt(
     : `- 工具调用过程不会展示给其他参与者，只有最终 <answer> 内容会被公开\n- 用 <answer>你的发言</answer> 包裹最终回复`;
 
   const contactSection: string[] = [
-    `## 联络 Agent 节点`,
-    ``,
-    `你可以联络工作流中其他正在运行的 Agent 节点，让它们协助你或获取它们的工作成果。`,
+    `## 联络节点（contact）`,
     ``,
     ...(contactTargets && contactTargets.length > 0 ? [
       `可联络的节点：`,
@@ -791,29 +803,20 @@ function buildMeetingAgentPrompt(
 
   if (native) {
     contactSection.push(
-      `调用 \`contact\` 工具向目标节点发送消息。对方处理后会返回回复。`,
-      ``,
-      `注意：`,
-      `- 对方是工作流中实际执行任务的 Agent 节点，不是会议室内的参与者`,
-      `- 用于将会议讨论结论同步给执行者，或向执行者索取最新进展`,
-      `- 对方处理可能需要时间（涉及工具调用），请耐心等待`,
-      `- 必须真正调用工具才会联络对方，仅在文字中描述"我联络了xxx"不会触发任何动作`,
+      `调用 \`contact\` 工具向目标节点发送消息，对方处理后返回回复。`,
+      `- 必须真正调用工具才会触发，仅在文字里说"我联络了xxx"不会有任何动作`,
+      `- 对方处理可能涉及工具调用，需耐心等待`,
       ``,
     );
   } else {
     contactSection.push(
       `### contact`,
-      `  描述: 联络工作流中的 Agent 节点。对方会处理你的消息并返回回复。`,
+      `  描述: 向目标节点发送消息，对方处理后返回回复。`,
       `  参数:`,
       `    target: string [必填] — 目标节点名称（可选值：${contactTargets && contactTargets.length > 0 ? contactTargets.map(t => t.label).join('、') : '（无可联络节点）'}）`,
-      `    message: string [必填] — 你要传达的内容（问题、请求、同步信息等）`,
-      ``,
-      `  注意：`,
-      `  - 对方是工作流中实际执行任务的 Agent 节点，不是会议室内的参与者`,
-      `  - 用于将会议讨论结论同步给执行者，或向执行者索取最新进展`,
-      `  - 对方处理可能需要时间（涉及工具调用），请耐心等待`,
-      `  - 必须真正调用工具才会联络对方，仅在文字中描述"我联络了xxx"不会触发任何动作`,
-      ``,
+      `    message: string [必填] — 你要传达的内容`,
+      `  - 必须真正调用工具才会触发，仅在文字里说"我联络了xxx"不会有任何动作`,
+      `  - 对方处理可能涉及工具调用，需耐心等待`,
       `  调用示例:`,
       `  <action tool="contact">{"target":"节点名称","message":"你要传达的具体内容"}</action>`,
       ``,
@@ -827,10 +830,15 @@ function buildMeetingAgentPrompt(
     `- 话题：${session.topic}`,
     `- 其他参与者：${otherParticipants.length > 0 ? otherParticipants.join('、') : '（仅你一人）'}`,
     ``,
-    `## 协作规范`,
-    `- 基于对话上下文回应人类的发言，简洁、有观点、有建设性`,
-    `- 不要重复其他参与者已经说过的内容`,
-    `- 如果要回应某人的观点，明确指出是谁的观点`,
+    `## 这是讨论场，不是执行工位`,
+    `- 默认只发言、不动手——把观点说清楚、把问题想透彻，才是你在这里的价值。`,
+    `- 涉及对会议室之外产生真实影响的操作（写文件、运行命令、修改数据、或用 contact 联络节点），必须等人类明确表达让你执行的意图后才可发起，未经准许绝不擅自行动。`,
+    `- 确需查阅资料（读取、搜索）支撑观点时可以自便，但能凭已知讨论就别动工具。`,
+    ``,
+    `## 发言规范（人类在听，请替人类着想）`,
+    `- 简短，一次说清一个观点，不要长篇大论——你说得越长，人类越难抓住重点。`,
+    `- 不要重复其他参与者已经说过的内容。`,
+    `- 回应某人观点时，明确点名是谁的观点。`,
     finalReplyDesc,
     ``,
     ...contactSection,

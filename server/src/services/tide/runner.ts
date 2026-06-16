@@ -10,6 +10,7 @@
 import path from 'node:path';
 import { SessionRunner, type ConversationEvent, type SessionRunnerOpts } from '../../engine/conversation/session-runner';
 import { loadAgent } from '../../engine/shared/agent-loader';
+import { resolveNativeMode } from '../../engine/shared/llm-bridge';
 import { buildConversationSystemPrompt } from '../../engine/conversation/prompt-builder';
 import { loadAgentToolDefs } from '../../engine/shared/tool-defs-loader';
 import type { ContextMessage } from '../../engine/shared/types';
@@ -44,10 +45,13 @@ export async function runTideTask(dataDir: string, task: TideTask, isManual = fa
   const sessionId = resolved.sessionId;
 
   // self-loop：拼接提示词（不再注入假工具）
+  // native 模式：按 agent.model 决定，与季风/信风一致
+  const nativeDecision = await resolveNativeMode(dataDir, agent.model);
   const opts: SessionRunnerOpts = {
     dataDir, agentId: agent.id, model: agent.model,
     temperature: agent.temperature, toolNames: agent.tools, skillIds: agent.skills,
     workspace: agent.workspace, sandboxLevel: agent.sandboxLevel,
+    native: nativeDecision.native,
   };
 
   const projectDir = path.resolve(dataDir, '..');
@@ -59,6 +63,7 @@ export async function runTideTask(dataDir: string, task: TideTask, isManual = fa
     workspace: opts.workspace, workspaceAbs, projectDir,
     sandboxLevel: agent.sandboxLevel, skillIds: opts.skillIds,
     dataDir, agentId: agent.id, userMessage: task.prompt,
+    native: nativeDecision.native,
   });
 
   // history（不含 system）+ 本轮 user
