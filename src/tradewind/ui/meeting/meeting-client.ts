@@ -54,6 +54,8 @@ export type MeetingBroadcastEvent =
   | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; label: string; tool: string; result: string }
   | { type: 'heartbeat'; label: string; phase?: string; elapsed?: number }
+  | { type: 'contact-start'; label: string; target: string }
+  | { type: 'contact-done'; label: string; target: string; result: string; ok: boolean }
   | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: ToolStep[] }
   | { type: 'round-done'; messages: MeetingMessage[]; compacted?: boolean }
   | { type: 'chair-token'; chunk: string }
