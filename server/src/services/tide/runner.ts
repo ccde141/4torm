@@ -63,6 +63,7 @@ export async function runTideTask(dataDir: string, task: TideTask, isManual = fa
     workspace: opts.workspace, workspaceAbs, projectDir,
     sandboxLevel: agent.sandboxLevel, skillIds: opts.skillIds,
     dataDir, agentId: agent.id, userMessage: task.prompt,
+    native: nativeDecision.native,
   });
 
   // history（不含 system）+ 本轮 user
