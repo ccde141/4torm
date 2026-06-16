@@ -12,11 +12,12 @@
  * 信风独立副本，可自主演进。
  */
 
-import { callLLM } from '../../shared/llm-bridge';
+import { callLLM, resolveNativeMode } from '../../shared/llm-bridge';
 import { loadAgent } from '../../shared/agent-loader';
 import { loadAgentToolDefs, type ToolDef } from '../../shared/tool-defs-loader';
 import { buildSandboxSection } from '../../shared/sandbox-prompt';
 import type { ContextMessage } from '../../shared/types';
+import { runReActLoopNative, type LLMCaller, type ToolCaller } from '../../conversation/react-loop';
 import path from 'node:path';
 
 // ── 类型 ──────────────────────────────────────────────────────────
@@ -178,6 +179,26 @@ function buildToolProtocol(tools: ToolDef[]): string {
 ${toolList}`;
 }
 
+/**
+ * 原生模式协议段：不教 <action> 标签格式（schema 已通过 tools 参数注入）。
+ * 工具列表精简（只列名称 + 描述），但保留 done 收口的语义说明。
+ */
+function buildNativeProtocol(tools: ToolDef[]): string {
+  const list = tools.map(t => `- ${t.name}: ${t.description}`).join('\n');
+  return `## 工作方式
+
+你可以调用工具完成任务。需要时直接发起工具调用，系统会执行并把结果返回给你。
+
+- 需要外部信息或执行操作时，调用对应工具
+- 串行依赖请分多轮调用
+- **任务完成时必须调用 \`done\` 工具提交结果**，summary 字段填写任务的完整结果摘要
+- 调用 done 后 SubAgent 立即终止，不要在 done 之前输出最终结论
+
+## 可用工具
+
+${list}`;
+}
+
 // ── 主入口 ────────────────────────────────────────────────────────
 
 /**
@@ -220,15 +241,33 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
 - **必须**在最终的 done 摘要中明确写出："越权失败：尝试访问 X，被沙箱拦截"，让委托方知情
 - 委托方会决定后续处理（修正路径或调整 agent 配置）`;
 
+  // 通用约束段（text/native 共享）
+  const constraintsSection = [
+    `【硬性限制】你最多只能执行 ${maxRounds} 轮工具调用（每调用一次工具算一轮）。超出此限制任务直接失败，不会给你更多机会。`,
+    `【收口规则】当剩余轮次 ≤ 5 时，你必须停止新工具调用，立即用 done 汇报已获取的全部信息，并在 summary 中明确标注"剩余轮次不足，仅汇报已完成部分"。母 Agent 可以另派 SubAgent 继续未完成的工作。`,
+    '【系统限制】不可调用 delegate。任务完成后必须调用 done 提交结果。',
+  ].join('\n\n');
+
+  // native 模式决议（按 agent model 配置 + 探测缓存）
+  const nativeDecision = await resolveNativeMode(dataDir, agent.model);
+
+  // ── 双路径分流 ──
+  if (nativeDecision.native) {
+    return runSubAgentNative({
+      agent, tools, systemPrompt, task, context, dataDir,
+      sandboxSection, escalationNote, constraintsSection,
+      maxRounds, signal, emitEvent, parentSandboxLevel,
+    });
+  }
+
+  // ── text 路径（原有逻辑不动）──
   // 构建完整 system prompt
   const fullSystemPrompt = [
     systemPrompt,
     buildToolProtocol(tools),
     sandboxSection,
     escalationNote,
-    `【硬性限制】你最多只能执行 ${maxRounds} 轮工具调用（每调用一次工具算一轮）。超出此限制任务直接失败，不会给你更多机会。`,
-    `【收口规则】当剩余轮次 ≤ 5 时，你必须停止新工具调用，立即用 done 汇报已获取的全部信息，并在 summary 中明确标注"剩余轮次不足，仅汇报已完成部分"。母 Agent 可以另派 SubAgent 继续未完成的工作。`,
-    '【系统限制】不可调用 delegate。任务完成后必须调用 done 提交结果。',
+    constraintsSection,
   ].join('\n\n');
 
   const messages: ContextMessage[] = [
@@ -386,4 +425,203 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
   const r = timeout(rounds);
   emitEvent({ type: 'done', data: r });
   return r;
+}
+
+// ─── Native 路径 ───
+
+interface NativeSubAgentParams {
+  agent: NonNullable<Awaited<ReturnType<typeof loadAgent>>>;
+  tools: ToolDef[];
+  systemPrompt: string;
+  task: string;
+  context: string;
+  dataDir: string;
+  sandboxSection: string;
+  escalationNote: string;
+  constraintsSection: string;
+  maxRounds: number;
+  signal: AbortSignal;
+  emitEvent: (event: SubAgentEvent) => void;
+  parentSandboxLevel: 'strict' | 'relaxed' | 'unrestricted';
+}
+
+/**
+ * Native 模式 SubAgent 执行：
+ * - done 通过 abort 信号触发循环退出（toolCaller 拦截 done → 写闭包 + abort）
+ * - 普通工具走 toolCaller，工具事件由 toolCaller 内部 emit
+ * - 超轮次后追加 system 提示，再跑 ≤3 轮要求 done 收口
+ */
+async function runSubAgentNative(p: NativeSubAgentParams): Promise<SubAgentResult> {
+  const {
+    agent, tools, systemPrompt, task, context, dataDir,
+    sandboxSection, escalationNote, constraintsSection,
+    maxRounds, signal, emitEvent, parentSandboxLevel,
+  } = p;
+
+  const fullSystemPrompt = [
+    systemPrompt,
+    buildNativeProtocol(tools),
+    sandboxSection,
+    escalationNote,
+    constraintsSection,
+  ].join('\n\n');
+
+  const messages: ContextMessage[] = [
+    { role: 'system', content: fullSystemPrompt },
+    { role: 'user', content: `任务：${task}\n\n背景：${context}` },
+  ];
+
+  // done 信号闭包：toolCaller 拦到 done 时写 summary 并触发内部 abort
+  let doneSummary: string | undefined;
+  const doneController = new AbortController();
+  const combinedController = new AbortController();
+  const propagateAbort = () => combinedController.abort();
+  signal.addEventListener('abort', propagateAbort);
+  doneController.signal.addEventListener('abort', propagateAbort);
+
+  // 工具调用计数（用于近上限警告）
+  let toolRounds = 0;
+
+  const toolCaller: ToolCaller = {
+    async call(tool, args) {
+      // done 拦截：触发 abort 让 core 退出循环
+      // 注意：done 触发 abort 后，同轮次其他并行 tool_call 仍会执行完毕
+      // sub-agent 场景串行调用，此处无副作用
+      if (tool === 'done') {
+        doneSummary = args.summary || '';
+        doneController.abort();
+        return '已收到完成信号';
+      }
+      // 禁递归
+      if (tool === 'delegate') {
+        return '错误：SubAgent 不可调用 delegate。';
+      }
+      toolRounds++;
+      emitEvent({ type: 'tool_call', data: { tool, args } });
+      try {
+        const { executeTool } = await import('../../../services/tool-executor');
+        const result = await executeTool(dataDir, tool, args, agent.id, undefined, parentSandboxLevel);
+        emitEvent({ type: 'tool_result', data: { tool, result, ok: true } });
+        return result;
+      } catch (e: unknown) {
+        const errMsg = (e as Error)?.message ?? String(e);
+        emitEvent({ type: 'tool_result', data: { tool, result: errMsg, ok: false } });
+        return `工具执行失败：${errMsg}`;
+      }
+    },
+  };
+
+  const llm: LLMCaller = {
+    async call(msgs, _opts, onChunk, sig, llmTools) {
+      return callLLM({
+        dataDir,
+        fullModelKey: agent.model,
+        messages: msgs,
+        options: { temperature: agent.temperature },
+        onChunk,
+        signal: sig,
+        tools: llmTools,
+      });
+    },
+  };
+
+  // 主循环（native）
+  let result: { content: string; turns: number };
+  try {
+    const r = await runReActLoopNative({
+      messages,
+      llm,
+      tools: toolCaller,
+      toolDefs: tools,
+      maxTurns: maxRounds,
+      signal: combinedController.signal,
+      onEvent: (ev) => {
+        if (ev.type === 'token') emitEvent({ type: 'token', data: { t: ev.chunk } });
+      },
+    });
+    result = { content: r.content, turns: r.turns };
+  } finally {
+    signal.removeEventListener('abort', propagateAbort);
+  }
+
+  // 退出原因判定
+  if (doneSummary !== undefined) {
+    const ok = success(doneSummary, toolRounds);
+    emitEvent({ type: 'done', data: ok });
+    return ok;
+  }
+  if (signal.aborted) {
+    const ab = aborted(toolRounds);
+    emitEvent({ type: 'done', data: ab });
+    return ab;
+  }
+
+  // done 提醒：model 可能忘了调 done（对齐文本路径 remindedOnce 逻辑）
+  // 注入一句轻提醒，再跑 ≤5 轮收口
+  messages.push({ role: 'user', content: '请调用 done 工具提交你的结果。' });
+  if (!signal.aborted) {
+    try {
+      await runReActLoopNative({
+        messages,
+        llm,
+        tools: toolCaller,
+        toolDefs: tools,
+        maxTurns: 5,
+        signal: combinedController.signal,
+        onEvent: (ev) => {
+          if (ev.type === 'token') emitEvent({ type: 'token', data: { t: ev.chunk } });
+        },
+      });
+    } catch { /* 提醒 LLM 调用失败，忽略，继续走兜底 */ }
+  }
+  if (doneSummary !== undefined) {
+    const ok = success(doneSummary, toolRounds);
+    emitEvent({ type: 'done', data: ok });
+    return ok;
+  }
+
+  // 超轮次兜底：追加提示，再跑 ≤3 轮逼 done
+  messages.push({
+    role: 'system',
+    content: '⚠️ 轮次已耗尽。你必须立即调用 done 工具汇报已完成的工作，不要再调用任何其他工具。',
+  });
+  const fallbackController = new AbortController();
+  const propagateFallback = () => fallbackController.abort();
+  signal.addEventListener('abort', propagateFallback);
+  doneController.signal.addEventListener('abort', propagateFallback);
+  let retry: { content: string; turns: number };
+  try {
+    const r2 = await runReActLoopNative({
+      messages,
+      llm,
+      tools: toolCaller,
+      toolDefs: tools,
+      maxTurns: 3,
+      signal: fallbackController.signal,
+      onEvent: (ev) => {
+        if (ev.type === 'token') emitEvent({ type: 'token', data: { t: ev.chunk } });
+      },
+    });
+    retry = { content: r2.content, turns: r2.turns };
+  } finally {
+    signal.removeEventListener('abort', propagateFallback);
+  }
+
+  if (doneSummary !== undefined) {
+    const ok: SubAgentResult = { status: 'timeout', summary: doneSummary, rounds: maxRounds + retry.turns };
+    emitEvent({ type: 'done', data: ok });
+    return ok;
+  }
+  // 仍然没调 done，用最后输出兜底
+  const finalText = (retry.content || result.content)
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .trim();
+  if (finalText.length > 20) {
+    const r2: SubAgentResult = { status: 'timeout', summary: finalText, rounds: maxRounds + retry.turns };
+    emitEvent({ type: 'done', data: r2 });
+    return r2;
+  }
+  const t = timeout(maxRounds + retry.turns);
+  emitEvent({ type: 'done', data: t });
+  return t;
 }
