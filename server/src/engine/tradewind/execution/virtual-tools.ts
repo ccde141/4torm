@@ -30,7 +30,7 @@ export function buildVirtualToolDefs(params: BuildVirtualToolDefsParams): ToolDe
   if (allowDelegate) {
     defs.push({
       name: 'delegate',
-      description: '将子任务委托给独立 SubAgent 执行。SubAgent 在隔离上下文中完成任务后返回结果摘要。涉及阅读/探索/调查/对比、或需读取2个以上文件时优先使用。单个 SubAgent 工具调用上限约25轮，任务过大需拆分为多个 delegate。',
+      description: '将子任务委托给独立 SubAgent 执行。SubAgent 在隔离上下文中完成任务后返回结果摘要。涉及阅读/探索/调查/对比、或需读取多个文件时优先使用。单个 SubAgent 工具调用上限约90轮，可独立完成相当复杂的任务，不必切得过碎。',
       parameters: {
         type: 'object',
         properties: {

@@ -10,8 +10,22 @@
  * 信风独立副本，可自主演进。
  */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { ToolDef } from '../../shared/tool-defs-loader';
 import { buildSandboxSection, type SandboxLevel } from '../../shared/sandbox-prompt';
+
+/** 读取信风元认知段（meta.md，与本文件同级）。读不到则静默跳过。 */
+function loadMeta(): string {
+  try {
+    const metaPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'meta.md');
+    const meta = readFileSync(metaPath, 'utf-8');
+    return meta.trim();
+  } catch {
+    return '';
+  }
+}
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -75,36 +89,34 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
     `</env>`,
   ].join('\n'));
 
+  // §0.5 元认知（meta.md，紧接环境头之后）
+  const meta = loadMeta();
+  if (meta) sections.push(meta);
+
   // §1 角色定义
   sections.push(`# 角色\n\n${params.rolePrompt}`);
 
-  // §2 工作环境（信风工作流引擎背景）
+  // §2 工作环境（信风协作程序背景 + 消息来源识别）
   const handoffDesc = params.native
-    ? `你完成后，你的最终回答会自动打包成信封交给下游。`
-    : `你完成后，你的 <answer> 会自动打包成信封交给下游。`;
-  const finishDesc = params.native
-    ? `- 工作完成时给出最终回答即可，会自动通过信封投给下游成员`
-    : `- 工作完成时输出 <answer>，会自动通过信封投给下游成员`;
+    ? `完成后用自然语言给出最终答复即可，会自动打包成信封交给下游。`
+    : `完成后输出 <answer>，会自动打包成信封交给下游。`;
   sections.push([
     `# 你的工作环境`,
     ``,
-    `你运行在「信风」多 Agent 协作工作流中。`,
-    ``,
-    `信风是一个多 Agent 协作系统，团队成员通过「信封」传递工作内容。`,
-    `上游成员完成工作后，会把成果以信封的形式交给你；`,
-    handoffDesc,
-    ``,
-    `人类作为负责人，可以随时与你对话、补充指令或调整方向。`,
+    `你运行在「信风」多 Agent 协作程序中，与人类及其他 Agent 持续协作。`,
     ``,
     `你当前的身份：${params.nodeLabel}`,
     `你的名字：${params.agentName}`,
     ``,
-    `补充说明：`,
-    `- 你的对话上下文会持续累积，期间你可能交替收到：`,
-    `  · 来自上游的信封（标注为「[系统信息：工作流上游传来的工作指令]」）`,
-    `  · 来自人类的直接消息（无系统标注，作为人类语气）`,
-    `- 区分清楚是谁在跟你说话，回应方式可以不同`,
-    finishDesc,
+    `## 你和谁协作`,
+    `- 人类可以随时与你对话、交办任务、调整方向`,
+    `- 其他节点可以通过 contact 联络你，你也可以主动联络他们`,
+    `- 收到信封时，按其中的职责要求完成当前阶段任务，${handoffDesc}`,
+    ``,
+    `## 谁在跟你说话`,
+    `上下文中所有消息只有两种来源：`,
+    `- 系统信息（以「[系统信息：...]」开头）—— 包括流程指令（信封）、其他节点的联络消息，按内容处理`,
+    `- 人类消息（无系统标注）—— 优先级更高，可覆盖既定计划`,
   ].join('\n'));
 
   // §3 团队名册（如果有协作者）
@@ -179,32 +191,21 @@ function buildDelegateSection(parentSandboxLevel: SandboxLevel): string {
 你的核心工作模式是「委托收集 → 自己综合」：
 - 当任务涉及阅读、探索、调查、对比时，先用 delegate 派出 SubAgent 收集原始信息，然后基于返回的结果进行综合分析和回答。
 
-### 任务拆分原则（重要，违反将导致 SubAgent 超限失败）
+### 关于 SubAgent 的能力
 
-SubAgent 有严格的工具调用次数上限（单次最多 25 轮）。超过此上限任务直接失败。
+SubAgent 单次最多 90 轮工具调用，可独立完成相当复杂的任务（深度探索、多文件分析、整模块梳理都没问题）。不必把任务切得过碎——一个 SubAgent 完全可以读十几个文件做完整分析。
 
-你必须提前估算任务需要的步数。如果一个任务需要约 5 步以上工具调用，就必须拆分为多个 delegate。
-
-硬性规则：
-- 一个 delegate 最多读取 3-5 个文件
-- 读取 6 个以上文件 → 至少拆成 2 个 delegate
-- 探索搜索 + 读取 + 分析 → 每个环节单独 delegate
-- 不要把"扫描整个模块"或"审计整个项目"塞给单个 SubAgent
-- 宁可多派 3-4 个小任务，也不要一个大任务超限失败
-
-正确拆分示例：
-❌ 错误："审计 src/ 目录下所有模块" → 1 个 SubAgent → 必超限
-✅ 正确：拆成 "审计 src/auth/" + "审计 src/api/" + "审计 src/store/" → 3 个并行
+仅当任务确实庞大（如同时审计多个互不相关的大模块）时，才按模块拆成几个并行 delegate，让每个聚焦一块、互不干扰。
 
 ### 必须 delegate 的场景
 1. 任务要求分析/理解一个项目、模块、或代码库
 2. 任务要求对比多个方案/文件/实现
-3. 任务需要读取 2 个以上文件才能回答
+3. 任务需要读取多个文件才能回答
 4. 任务要求做调研、梳理、盘点
 
 ### 不要 delegate 的场景
 - 已经知道答案的问题（纯推理）
-- 只需要读一个文件就能回答
+- 列示完文件后发现读取较少文件就能回答
 - 需要先与人类确认才能继续的决策`;
 }
 
@@ -322,7 +323,6 @@ function buildNativeProtocol(
 
 - 需要外部信息或执行操作时，调用对应工具
 - 串行依赖请分多轮调用，不要一次性堆叠
-- 工具调用过程对协作者不可见，只有最终回答会通过信封传给下游
 - 完成后用自然语言直接给出最终答复，无需特殊格式
 
 ## 可用工具
@@ -332,27 +332,27 @@ ${toolList}`];
   if (allowDelegate) {
     sections.push(`## delegate 委托
 
-可调用 \`delegate\` 把子任务交给独立 SubAgent。SubAgent 在隔离上下文中工作，最多 25 轮。
+可调用 \`delegate\` 把子任务交给独立 SubAgent。SubAgent 在隔离上下文中工作，最多 90 轮，可独立完成相当复杂的任务（深度探索、多文件分析、整模块梳理都没问题）。
 
 **沙箱继承**：SubAgent 继承你的沙箱级别（${sandboxLevel}）。涉及文件/目录时必须在 context 中写明绝对路径。
 
-**任务拆分**：单个 SubAgent 最多读 3-5 个文件。读 6+ 文件 → 拆成 2 个 delegate。探索+读取+分析 → 各自单独 delegate。宁可多派几个小任务，也不要一个大任务超限失败。
+**必须委托**的场景：分析整个模块/项目、对比多方案、读取多个文件才能回答、调研盘点。
 
-**必须委托**的场景：分析整个模块/项目、对比多方案、读取 2+ 文件才能回答、调研盘点。
-
-**不要委托**的场景：纯推理、读 1 个文件就能答、需要先与人类确认决策。`);
+**不要委托**的场景：纯推理、列示完文件后发现读取较少文件就能答、需要先与人类确认决策。`);
   }
 
   if (teamRoster.length > 1) {
     const others = teamRoster.filter(m => !m.isSelf).map(m => m.label).join('、');
     sections.push(`## contact 联络
 
-可调用 \`contact\` 联络团队成员（可选目标：${others}）。
+可调用 \`contact\` 联络工作流中的其他节点（可选目标：${others}）。
 
-- 不要向正在联络你的节点反向联络（会死锁）
-- 收到联络消息后直接回复即可，不要反过来 contact 对方
-- 优先自己解决，只有需要对方专业能力时才用
-- 缺少上游数据/规格/决策依据时主动联络索取，不要凭假设行动`);
+适合使用 contact 的场景：
+- 需要对方的专业能力或已有成果
+- 缺少完成本职所必需的信息
+- 某个子任务更适合由特定节点承担——可以直接交办给对方
+
+注意：收到联络后直接回复，不要反过来 contact 对方（会死锁）`);
   }
 
   return sections.join('\n\n');
