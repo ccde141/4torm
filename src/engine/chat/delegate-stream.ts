@@ -5,6 +5,8 @@
  * 返回 SubAgentResult（summary 作为 tool_result 回流主 Agent）。
  */
 
+import { streamUrl } from '../../lib/apiBase';
+
 export interface DelegateParams {
   task: string;
   context: string;
@@ -38,7 +40,7 @@ export async function delegateStream(
   handlers: DelegateEventHandler = {},
   signal?: AbortSignal,
 ): Promise<DelegateResult> {
-  const res = await fetch('/api/delegate', {
+  const res = await fetch(streamUrl('/api/delegate'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),

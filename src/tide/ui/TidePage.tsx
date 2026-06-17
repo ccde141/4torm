@@ -68,7 +68,7 @@ const sessItem: React.CSSProperties = {
   marginBottom: '2px',
 };
 
-export default function TidePage() {
+export default function TidePage({ active = true }: { active?: boolean }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [tasks, setTasks] = useState<TideTask[]>([]);
@@ -97,15 +97,16 @@ export default function TidePage() {
   }, [selectedAgent]);
 
   useEffect(() => { refresh(); refreshSessions(); }, [selectedAgent]);
-  // 3s 轮询
+  // 3s 轮询（仅当前页面活跃时跑，避免切走后后台持续刷请求）
   useEffect(() => {
+    if (!active) return;
     const id = setInterval(() => { refresh(); refreshSessions(); }, 3000);
     return () => clearInterval(id);
-  }, [refresh, refreshSessions]);
+  }, [refresh, refreshSessions, active]);
 
   // 正在查看的会话内容自动刷新
   useEffect(() => {
-    if (!viewingSession || !selectedAgent) return;
+    if (!active || !viewingSession || !selectedAgent) return;
     const id = setInterval(async () => {
       try {
         const s = await getTideSession(selectedAgent.id, viewingSession.id);
@@ -113,7 +114,7 @@ export default function TidePage() {
       } catch {}
     }, 3000);
     return () => clearInterval(id);
-  }, [viewingSession?.id, selectedAgent]);
+  }, [viewingSession?.id, selectedAgent, active]);
 
   const selectAgent = (a: Agent) => {
     setSelectedAgent(prev => prev?.id === a.id ? null : a);

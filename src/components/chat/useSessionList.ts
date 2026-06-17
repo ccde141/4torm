@@ -4,10 +4,19 @@ import {
   getSession,
   saveSession,
   deleteSession,
-  createSession,
+  buildSession,
+  getCachedMessages,
 } from '../../store/chat';
 import type { Agent, ChatMessage } from '../../types';
 import type { ChatSession } from '../../store/chat';
+import { streamUrl } from '../../lib/apiBase';
+
+/** 流注册表钩子（来自 useStreamRunners）：让切会话/删会话与后台流协同。 */
+interface StreamHooks {
+  background: (sessionId: string) => void;
+  reconnect: (sessionId: string) => boolean;
+  kill: (sessionId: string) => void;
+}
 
 export function useSessionList(
   selectedAgent: Agent | null,
@@ -17,44 +26,55 @@ export function useSessionList(
   setMessages: (msgs: ChatMessage[]) => void,
   setStreaming: (v: boolean) => void,
   setSelectedModel: (m: string) => void,
-  streaming?: boolean,
-  abortRef?: React.RefObject<(() => void) | null>,
+  streamHooks?: StreamHooks,
 ) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState('');
   const titleInputRef = useRef<HTMLInputElement>(null);
-  const streamingRef = useRef(false);
-  streamingRef.current = streaming ?? false;
 
   const refreshSessions = useCallback(async (agent: Agent) => {
     setSessions(await getSessionsByAgent(agent.id));
   }, []);
 
   const selectAgent = useCallback((agent: Agent) => {
+    if (activeSessionId) streamHooks?.background(activeSessionId);
     setSelectedAgent(agent);
     setActiveSessionId(null);
+    setStreaming(false);
     setMessages([]);
     refreshSessions(agent);
-  }, [setSelectedAgent, setMessages, refreshSessions]);
+  }, [activeSessionId, setSelectedAgent, setMessages, setStreaming, refreshSessions, streamHooks]);
 
   const selectSession = useCallback(async (sessionId: string) => {
     if (sessionId === activeSessionId) return;
-    // 流式进行中：先 abort 当前流，等 streaming 状态重置后再切换
-    if (streamingRef.current && abortRef?.current) {
-      abortRef.current();
-    }
+    // 切走：旧会话的流转入后台继续跑（不再 abort，杜绝丢数据 + 跨 origin Failed to fetch）
+    if (activeSessionId) streamHooks?.background(activeSessionId);
     setActiveSessionId(sessionId);
-    const s = await getSession(sessionId);
-    if (s) {
-      setMessages(s.messages);
-      if (s?.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
-      s.lastReadAt = new Date().toISOString();
-      await saveSession({ ...s, lastReadAt: s.lastReadAt });
-      setSessions(prev => prev.map(p => p.id === sessionId ? { ...p, lastReadAt: s.lastReadAt } : p));
+
+    // 目标会话有活流 → 直接重连其缓冲，接着往下显示
+    if (streamHooks?.reconnect(sessionId)) {
+      getSession(sessionId).then(s => {
+        if (s?.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
+      });
+      return;
     }
-  }, [activeSessionId, setMessages, models, setSelectedModel, abortRef]);
+
+    setStreaming(false);
+    // 优先从消息缓存上屏（上次完整加载过 —— 由 getSession/saveSession 维护）
+    const cachedMsgs = getCachedMessages(sessionId);
+    if (cachedMsgs) setMessages(cachedMsgs);
+    // 后台读最新磁盘版本校准
+    getSession(sessionId).then(s => {
+      if (!s) return;
+      if (!cachedMsgs || s.messages !== cachedMsgs) setMessages(s.messages);
+      if (s.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
+      s.lastReadAt = new Date().toISOString();
+      saveSession({ ...s, lastReadAt: s.lastReadAt }).catch(() => {});
+      setSessions(prev => prev.map(p => p.id === sessionId ? { ...p, lastReadAt: s.lastReadAt } : p));
+    });
+  }, [activeSessionId, setMessages, models, setSelectedModel, setStreaming, streamHooks]);
 
   const renameSession = useCallback(async () => {
     if (!activeSessionId) return;
@@ -74,21 +94,31 @@ export function useSessionList(
     setTimeout(() => titleInputRef.current?.focus(), 0);
   }, [sessions, activeSessionId]);
 
-  const newSession = useCallback(async () => {
-    if (!selectedAgent) return;
-    const s = await createSession(selectedAgent);
+  const newSession = useCallback(async (agentOverride?: Agent) => {
+    const agent = agentOverride ?? selectedAgent;
+    if (!agent) return;
+    // 切走当前会话：其流转入后台继续跑
+    if (activeSessionId) streamHooks?.background(activeSessionId);
+    // 先同步构造并上屏，UI 立即响应；持久化转后台。
+    const s = buildSession(agent);
     s.lastReadAt = new Date().toISOString();
-    await saveSession(s);
     setActiveSessionId(s.id);
+    setStreaming(false);
     setMessages([]);
-    refreshSessions(selectedAgent);
-  }, [selectedAgent, setMessages, refreshSessions]);
+    setSessions(prev => [s, ...prev]);
+    // 后台保存，不阻塞 UI
+    saveSession(s).catch(() => {});
+  }, [selectedAgent, activeSessionId, setMessages, setStreaming, streamHooks]);
 
-  const deleteSessionFn = useCallback(async (sessionId: string) => {
-    await deleteSession(sessionId);
+  const deleteSessionFn = useCallback((sessionId: string) => {
+    // 流式中删会话：先掐流并标记弃用，阻止后台流 finalize 时重建文件（僵尸复活）
+    streamHooks?.kill(sessionId);
+    // 先同步从列表移除 + 清空当前会话视图，UI 立即响应。
+    setSessions(prev => prev.filter(p => p.id !== sessionId));
     if (activeSessionId === sessionId) { setActiveSessionId(null); setMessages([]); }
-    if (selectedAgent) refreshSessions(selectedAgent);
-  }, [activeSessionId, selectedAgent, setMessages, refreshSessions]);
+    // 后台删除文件，不阻塞 UI
+    deleteSession(sessionId).catch(() => {});
+  }, [activeSessionId, setMessages, streamHooks]);
 
   const compactSession = useCallback(async (session: ChatSession) => {
     if (!selectedAgent) return;
@@ -106,7 +136,7 @@ export function useSessionList(
     setMessages(msgsWithTemp);
 
     try {
-      const res = await fetch('/api/chat/compact', {
+      const res = await fetch(streamUrl('/api/chat/compact'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

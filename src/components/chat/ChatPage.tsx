@@ -5,15 +5,12 @@ import { LOCKED_STATUSES, LOCKED_STATUS_LABELS, SYSTEM_STATUSES, type LockedStat
 const STATUS_COLOR_MAP: Record<string, string> = {};
 for (const s of SYSTEM_STATUSES) STATUS_COLOR_MAP[s.id] = s.color;
 import { getAllModels } from '../../llm';
-import StructuredMessage from './StructuredMessage';
-import ToolCallMessage from './ToolCallMessage';
-import DelegateCard from './DelegateCard';
-import AskCard from './AskCard';
+import MessageItem from './MessageItem';
 import { useSessionList } from './useSessionList';
 import { useMessageEditor } from './useMessageEditor';
-import { parseStructuredOutput } from '../../engine/parser';
-import { renderTextWithCode } from '../../engine/markdown';
+import { useStreamRunners } from './useStreamRunners';
 import { runStreamLoop } from '../../engine/chat/streamLoop';
+import { streamUrl } from '../../lib/apiBase';
 import {
   getSession,
   saveSession,
@@ -22,24 +19,9 @@ import {
   autoTitle,
 } from '../../store/chat';
 import type { Agent, ChatMessage } from '../../types';
-import { formatTimestamp } from '../../utils/time';
 import '../../styles/components/chat.css';
 import '../../styles/components/session-list.css';
 import '../../styles/components/loading.css';
-
-function estimateTokens(text: string): number {
-  let total = 0;
-  for (const ch of text) {
-    const code = ch.charCodeAt(0);
-    if (code >= 0x4E00 && code <= 0x9FFF) total += 0.6;
-    else if (code >= 0x3040 && code <= 0x30FF) total += 0.6;
-    else if (code >= 0xAC00 && code <= 0xD7AF) total += 0.6;
-    else total += 0.3;
-  }
-  return Math.ceil(total);
-}
-
-const MEMORY_TRIGGERS = /回忆|之前|记得|记忆|回想|回顾|上次|过去/;
 
 export default function ChatPage({ active, preselectSession, onClearPreselect }: { active?: boolean; preselectSession?: string; onClearPreselect?: () => void }) {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -53,15 +35,21 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<(() => void) | null>(null);
-  const userStoppedRef = useRef(false);
+  // 同步发送锁：streaming state 是异步的，挡不住"卡顿期间快速二次点击"，
+  // 用 ref 在 handleSend 入口同步置位，从根上杜绝重复发送（两条消息 bug）
+  const sendingRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>([]);
   const setMessages = useCallback((msgs: ChatMessage[]) => {
     messagesRef.current = msgs;
     setMessagesRaw(msgs);
   }, []);
 
+  // emit 判断「当前会话」必须读最新值，故用 ref 跟踪 activeSessionId（闭包会捕获旧值）
+  const activeSessionIdRef = useRef<string | null>(null);
+  const streamRunners = useStreamRunners(() => activeSessionIdRef.current, setMessages, setStreaming);
+
   const {
-    sessions, setSessions, activeSessionId,
+    sessions, activeSessionId,
     editingTitle, setEditingTitle, editTitleValue, setEditTitleValue, titleInputRef,
     refreshSessions,
     selectAgent, selectSession,
@@ -69,15 +57,18 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     newSession, deleteSession: handleDeleteSession,
     compactSession,
     setActiveSessionId,
-  } = useSessionList(selectedAgent, selectedModel, models, setSelectedAgent, setMessages, setStreaming, setSelectedModel, streaming, abortRef);
+  } = useSessionList(selectedAgent, selectedModel, models, setSelectedAgent, setMessages, setStreaming, setSelectedModel, streamRunners);
+  // 同步 activeSessionId 到 ref 供 emit 读最新值（effect 中写，避免 render 期改 ref）
+  useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
 
   const {
-    editingMsgId, editContent,
+    editingMsgId, editContent, setEditContent,
     deleteMessage: handleDeleteMessage,
     startEdit: handleStartEdit,
     saveEdit: handleSaveEdit,
     cancelEdit: handleCancelEdit,
   } = useMessageEditor(activeSessionId, selectedAgent, setMessages, refreshSessions);
+
 
   useEffect(() => {
     const el = messagesContainerRef.current;
@@ -108,15 +99,16 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     });
   }, [active]);
 
-  // 2s 轮询 agent 状态
+  // 2s 轮询 agent 状态（仅当前页面活跃时跑，避免切走后后台持续刷请求）
   useEffect(() => {
+    if (!active) return;
     const id = setInterval(async () => {
       const list = await getAgents();
       setAgents(list);
       setOfflineIds(await getOfflineAgentIds(list));
     }, 2000);
     return () => clearInterval(id);
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     if (!preselectSession) return;
@@ -135,6 +127,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   /** 处理 agent ask 的回复 */
   const handleAskReply = async (msgId: string, answer: string) => {
     if (!selectedAgent || !activeSessionId || streaming) return;
+    const sid = activeSessionId;
 
     // 标记 ask 为已回复
     const updatedMessages = messagesRef.current.map(m =>
@@ -142,18 +135,21 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     );
     setMessages(updatedMessages);
 
-    const session = await getSession(activeSessionId);
+    const session = await getSession(sid);
     if (!session) return;
 
     setStreaming(true);
     setAgentStatus(selectedAgent.id, 'busy');
 
     const abortController = new AbortController();
+    // 流归属 sessionId：切走不掐、后台续跑，emit 仅激活会话刷界面
+    streamRunners.register(sid, () => abortController.abort(), updatedMessages);
     abortRef.current = () => abortController.abort();
+    const emit = (msgs: ChatMessage[]) => streamRunners.emit(sid, msgs);
 
     try {
-      // 调 /reply 端点恢复循环（SSE 流式）
-      const res = await fetch('/api/conversation/reply', {
+      // 调 /reply 端点恢复循环（SSE 流式，dev 下直连 3001 分摊连接）
+      const res = await fetch(streamUrl('/api/conversation/reply'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: activeSessionId, answer }),
@@ -175,7 +171,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
         timestamp: new Date().toISOString(), agentId: selectedAgent.id,
       };
       let allMessages = [...updatedMessages, assistantMsg];
-      setMessages([...allMessages]);
+      emit([...allMessages]);
 
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
@@ -205,7 +201,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             const now = Date.now();
             if (now - lastFlushAt >= TOKEN_FLUSH_MS) {
               lastFlushAt = now;
-              setMessages([...allMessages]);
+              emit([...allMessages]);
             }
           } else if (ev.type === 'tool-call') {
             // 清理 assistant 流式内容中的 action/think 标签
@@ -222,7 +218,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             };
             const idx = allMessages.findIndex(m => m.id === assistantMsgId);
             allMessages.splice(idx, 0, toolMsg);
-            setMessages([...allMessages]);
+            emit([...allMessages]);
           } else if (ev.type === 'tool-result') {
             for (let i = allMessages.length - 1; i >= 0; i--) {
               if (allMessages[i].toolCall && (allMessages[i].toolCall as any).status === 'running') {
@@ -230,7 +226,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                 break;
               }
             }
-            setMessages([...allMessages]);
+            emit([...allMessages]);
           } else if (ev.type === 'answer') {
             const finalMsg: ChatMessage = {
               id: assistantMsgId, role: 'assistant',
@@ -238,7 +234,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               timestamp: new Date().toISOString(), agentId: selectedAgent.id,
             };
             allMessages = allMessages.map(m => m.id === assistantMsgId ? finalMsg : m);
-            setMessages([...allMessages]);
+            emit([...allMessages]);
           } else if (ev.type === 'ask') {
             // 嵌套 ask：保留 assistantMsg 的描述性内容，追加 ask 消息
             const askMsg: ChatMessage = {
@@ -257,7 +253,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               allMessages = allMessages.filter(m => m.id !== assistantMsgId);
             }
             allMessages.push(askMsg);
-            setMessages([...allMessages]);
+            emit([...allMessages]);
           } else if (ev.type === 'notice') {
             // 系统提示（如强制 native 但探测不支持的警告）
             const noticeMsg: ChatMessage = {
@@ -266,7 +262,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               timestamp: new Date().toISOString(), agentId: selectedAgent.id,
             };
             allMessages.push(noticeMsg);
-            setMessages([...allMessages]);
+            emit([...allMessages]);
           } else if (ev.type === 'done') {
             // 后端明确告知流结束 — 主动退出循环
             streamDone = true;
@@ -276,16 +272,25 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       }
 
       // 流结束：强制最终刷新，保证节流期间未渲染的尾部 token 全部呈现
-      setMessages([...allMessages]);
-      await saveSession({ ...session, messages: allMessages, title: session.titleManual ? session.title : autoTitle(allMessages), model: selectedModel }).catch(() => {});
-      refreshSessions(selectedAgent);
+      emit([...allMessages]);
+      // 被删会话（弃用）跳过存盘，杜绝僵尸复活
+      if (!(streamRunners.runners.current.get(sid)?.abandoned)) {
+        await saveSession({ ...session, messages: allMessages, title: session.titleManual ? session.title : autoTitle(allMessages), model: selectedModel }).catch(() => {});
+        refreshSessions(selectedAgent);
+      }
     } catch (e) {
-      if ((e as Error).name !== 'AbortError') {
+      // 主动中断（停止/淘汰，跨 origin 抛 Failed to fetch）不写错误气泡
+      if (!abortController.signal.aborted) {
+        const buf = streamRunners.runners.current.get(sid)?.messages ?? updatedMessages;
         const errMsg: ChatMessage = { id: generateMessageId(), role: 'assistant', content: `错误: ${(e as Error).message}`, timestamp: new Date().toISOString(), agentId: selectedAgent.id };
-        setMessages([...messagesRef.current, errMsg]);
+        const withErr = [...buf, errMsg];
+        emit(withErr);
+        if (!(streamRunners.runners.current.get(sid)?.abandoned)) {
+          await saveSession({ ...session, messages: withErr, title: session.titleManual ? session.title : autoTitle(withErr), model: selectedModel }).catch(() => {});
+        }
       }
     } finally {
-      setStreaming(false);
+      streamRunners.finalize(sid);
       setAgentStatus(selectedAgent.id, 'idle');
     }
   };
@@ -294,7 +299,11 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     const cmd = input.trim();
 
     if (!input.trim() || !selectedAgent || streaming) return;
+    // 同步锁：入口立即置位，挡住 await 期间（getAgent/getSession 读大文件慢）的二次点击
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     if (cmd === '/compact') {
+      sendingRef.current = false;
       setInput('');
       if (!activeSessionId) return;
       const session = await getSession(activeSessionId);
@@ -303,7 +312,19 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       return;
     }
 
-    // 占用锁拦截（重读磁盘状态，防止 React state 滞后于后端写入）
+    // 立即上屏：在任何 await 之前同步完成，按下发送的瞬间消息就显示、输入框就清空。
+    // （之前 setMessages 被前面的 await getAgent 挡住，连接堵车时要等 1~2s 才上屏，
+    //  造成"按了没反应"的错觉 → 用户二次点击 → 双发。）
+    const userMsg: ChatMessage = { id: generateMessageId(), role: 'user', content: input.trim(), timestamp: new Date().toISOString(), agentId: selectedAgent.id };
+    console.log(`[${userMsg.timestamp}] 人类 → ${selectedAgent.name}: ${userMsg.content.slice(0, 80)}`);
+    const updatedMessages = [...messagesRef.current, userMsg];
+    setMessages(updatedMessages);
+    setInput('');
+    setStreaming(true);
+    setAgentStatus(selectedAgent.id, 'busy');
+
+    // 占用锁拦截（重读磁盘状态，防止 React state 滞后于后端写入）。
+    // 放在上屏之后：它是防御性检查，晚一步无妨，但绝不能挡住消息显示。
     const freshAgent = await getAgent(selectedAgent.id);
     if (freshAgent && LOCKED_STATUSES.includes(freshAgent.status as LockedStatus)) {
       const label = LOCKED_STATUS_LABELS[freshAgent.status as LockedStatus];
@@ -314,92 +335,79 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       if (ok) {
         await forceUnlock(selectedAgent.id);
       } else {
+        // 用户取消：回退已上屏的消息和状态
+        setMessages(messagesRef.current.filter(m => m.id !== userMsg.id));
+        setStreaming(false);
+        setAgentStatus(selectedAgent.id, 'idle');
+        sendingRef.current = false;
         return;
       }
     }
 
+    // 会话准备 + 保存（后台进行，不阻塞已上屏的 UI）
     let sid = activeSessionId;
+    const isNewSession = !sid;
     if (!sid) {
       const s = await createSession(selectedAgent);
-      await saveSession(s);
       sid = s.id;
       setActiveSessionId(sid);
-      refreshSessions(selectedAgent);
     }
 
     const session = await getSession(sid);
-    if (!session) return;
-
-    const userMsg: ChatMessage = { id: generateMessageId(), role: 'user', content: input.trim(), timestamp: new Date().toISOString(), agentId: selectedAgent.id };
-    console.log(`[${userMsg.timestamp}] 人类 → ${selectedAgent.name}: ${userMsg.content.slice(0, 80)}`);
-    const updatedMessages = [...session.messages, userMsg];
-    setMessages(updatedMessages);
-    setInput('');
-    setStreaming(true);
-    setAgentStatus(selectedAgent.id, 'busy');
+    if (!session) { sendingRef.current = false; setStreaming(false); setAgentStatus(selectedAgent.id, 'idle'); return; }
 
     const title = session.titleManual ? session.title : autoTitle(updatedMessages);
     await saveSession({ ...session, messages: updatedMessages, title });
+    if (isNewSession) refreshSessions(selectedAgent);
 
     const abortController = new AbortController();
-    abortRef.current = () => abortController.abort();
-
-    try {
-      const agent = await getAgent(selectedAgent.id);
-
-      // compact-marker 过滤：只发 marker 摘要 + marker 之后的消息给后端
-      const lastMarkerIdx = updatedMessages.findLastIndex((m: any) => m.type === 'compact-marker');
-      const llmMessages = lastMarkerIdx >= 0
-        ? updatedMessages.slice(lastMarkerIdx)
-        : updatedMessages;
-
-      const chatMessages: Array<{ role: string; content: string }> = llmMessages.map(m => {
-        // compact-marker 作为 system 消息发送（摘要内容）
-        if ((m as any).type === 'compact-marker') {
-          return { role: 'system', content: `[历史上下文摘要]\n${m.content}` };
-        }
-        if (m.toolCall && !m.content.startsWith('<')) {
-          return { role: 'assistant', content: `<action tool="${m.toolCall.toolName}">${JSON.stringify(m.toolCall.params)}</action>` };
-        }
-        return { role: m.role === 'user' ? 'user' : 'assistant', content: m.content };
-      });
-
-      let allMessages = [...updatedMessages];
-
-      await runStreamLoop({
-        session, allMessages: updatedMessages, chatMessages,
-        providerInfo: { baseUrl: '', apiKey: '', signal: abortController.signal },
-        modelId: '', toolDefs: [], agent: agent!, selectedModel,
-        setMessages,
-        saveSessionFn: saveSession, refreshSessions, autoTitleFn: autoTitle, generateMessageIdFn: generateMessageId,
-        abortController,
-      });
-    } catch (e) {
-      if (userStoppedRef.current) {
-        userStoppedRef.current = false;
-        // 保留已完成的 toolCall 消息，不回退到发送前状态
-        const currentMsgs = messagesRef.current;
-        // 过滤掉最后一条正在 streaming 的空内容消息（如果有）
-        const cleaned = currentMsgs.filter(m => m.content.trim() || m.toolCall);
-        setMessages(cleaned);
-        // 重读最新 session 避免用 stale 快照覆盖中间已保存的状态
-        const freshSession = await getSession(session.id) || session;
-        const title = freshSession.titleManual ? freshSession.title : autoTitle(cleaned);
-        await saveSession({ ...freshSession, messages: cleaned, title, model: selectedModel });
-      } else {
-        const errMsg: ChatMessage = { id: generateMessageId(), role: 'assistant', content: `错误: ${(e as Error).message}`, timestamp: new Date().toISOString(), agentId: selectedAgent.id };
-        const currentMsgs = messagesRef.current;
-        const finalMessages = [...currentMsgs, errMsg];
-        setMessages(finalMessages);
-        const freshSession = await getSession(session.id) || session;
-        const title = freshSession.titleManual ? freshSession.title : autoTitle(finalMessages);
-        await saveSession({ ...freshSession, messages: finalMessages, title, model: selectedModel });
-      }
-      refreshSessions(selectedAgent);
-    } finally {
-      setStreaming(false);
-      setAgentStatus(selectedAgent.id, 'idle');
+    const sid2 = session.id;
+    // 防同会话双流：该会话已有活 runner（如后台流未结束就切回又发）则拒绝重入。
+    // existing 流是权威：回滚刚上屏的 userMsg，重连到 runner 真实状态。
+    if (streamRunners.runners.current.has(sid2)) {
+      sendingRef.current = false;
+      streamRunners.reconnect(sid2);
+      return;
     }
+    // 流归属 sessionId：emit 写进 runner 缓冲，仅激活会话才刷界面
+    streamRunners.register(sid2, () => abortController.abort(), updatedMessages);
+    abortRef.current = () => abortController.abort();
+    sendingRef.current = false; // 流已托管给 runner，发送锁可释放（防同会话重发由 runner 存在性兜底）
+
+    // 复用上面占用锁检查时已读的 freshAgent，砍掉这里冗余的第二次 getAgent
+    const agent = freshAgent;
+
+    // compact-marker 过滤：只发 marker 摘要 + marker 之后的消息给后端
+    const lastMarkerIdx = updatedMessages.findLastIndex((m: any) => m.type === 'compact-marker');
+    const llmMessages = lastMarkerIdx >= 0
+      ? updatedMessages.slice(lastMarkerIdx)
+      : updatedMessages;
+
+    const chatMessages: Array<{ role: string; content: string }> = llmMessages.map(m => {
+      // compact-marker 作为 system 消息发送（摘要内容）
+      if ((m as any).type === 'compact-marker') {
+        return { role: 'system', content: `[历史上下文摘要]\n${m.content}` };
+      }
+      if (m.toolCall && !m.content.startsWith('<')) {
+        return { role: 'assistant', content: `<action tool="${m.toolCall.toolName}">${JSON.stringify(m.toolCall.params)}</action>` };
+      }
+      return { role: m.role === 'user' ? 'user' : 'assistant', content: m.content };
+    });
+
+    // 流跑完后端处理 idle 状态（仅当它仍是当前激活会话时才动全局 streaming）
+    runStreamLoop({
+      session, allMessages: updatedMessages, chatMessages,
+      providerInfo: { baseUrl: '', apiKey: '', signal: abortController.signal },
+      modelId: '', toolDefs: [], agent: agent!, selectedModel,
+      setMessages: (msgs) => streamRunners.emit(sid2, msgs),
+      saveSessionFn: saveSession, refreshSessions, autoTitleFn: autoTitle, generateMessageIdFn: generateMessageId,
+      abortController,
+      isAbandoned: () => streamRunners.runners.current.get(sid2)?.abandoned ?? false,
+      onFinish: () => {
+        streamRunners.finalize(sid2);
+        setAgentStatus(selectedAgent.id, 'idle');
+      },
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
@@ -423,16 +431,13 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
               <div style={sectionLabelStyle}>会话</div>
-              <button onClick={newSession} style={newBtnStyle} title="新建会话">+</button>
+              <button onClick={() => newSession()} style={newBtnStyle} title="新建会话">+</button>
             </div>
             <div className="session-list" style={{ flex: 1, overflowY: 'auto' }}>
               {sessions.length === 0 && <div style={{ padding: 'var(--space-4)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center' }}>暂无会话，点击 + 创建</div>}
               {sessions.map(s => {
-                const lastRead = s.lastReadAt || s.createdAt;
-                const unread = s.messages.filter(m => (m.role === 'assistant' || (m.role === 'system' && m.content.startsWith('[上下文压缩]'))) && m.timestamp > lastRead).length;
-                const tokens = s.tokenUsage
-                  ? s.tokenUsage.totalTokens
-                  : estimateTokens(s.messages.map(m => m.content).join(' ') + (s.systemPrompt || ''));
+                const unread = s.unreadCount ?? 0;
+                const tokens = s.tokenUsage?.totalTokens ?? 0;
                 const tokenLabel = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}K` : `${tokens}`;
                 return (
                 <div key={s.id} style={{ position: 'relative' }}>
@@ -478,186 +483,18 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             <div className="chat__messages" ref={messagesContainerRef}>
               {messages.filter(msg => msg.toolCall || msg.content.trim()).map(msg => (
                 <div key={msg.id}>
-                  {editingMsgId === msg.id ? (
-                    <div className={`chat__message chat__message--${msg.role}`}>
-                      <div className="chat__avatar">{msg.role === 'user' ? '你' : msg.role === 'assistant' ? 'AI' : 'S'}</div>
-                      <div className="chat__bubble chat__bubble--editing">
-                        <textarea className="chat__edit-textarea" value={editContent} onChange={e => setEditContent(e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Escape') handleCancelEdit(); if (e.key === 'Enter' && e.ctrlKey) handleSaveEdit(); }}
-                          rows={3} autoFocus />
-                        <div className="chat__edit-actions">
-                          <button onClick={handleSaveEdit}>保存</button>
-                          <button onClick={handleCancelEdit}>取消</button>
-                        </div>
-                        {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
-                      </div>
-                    </div>
-                  ) : (msg as any).type === 'compact-marker' ? (
-                    <div className="chat__compact-marker">
-                      <span className="chat__compact-marker-line" />
-                      <button
-                        className="chat__compact-marker-toggle"
-                        onClick={() => {
-                          const el = document.getElementById(`compact-detail-${msg.id}`);
-                          if (el) el.classList.toggle('chat__compact-detail--open');
-                        }}
-                      >
-                        以上已压缩 · 点击查看摘要
-                      </button>
-                      <span className="chat__compact-marker-line" />
-                      <div id={`compact-detail-${msg.id}`} className="chat__compact-detail">
-                        <div className="chat__compact-detail-content">{msg.content}</div>
-                      </div>
-                    </div>
-                  ) : msg.toolCall ? (
-                    msg.toolCall.toolName === 'delegate' ? (
-                      <DelegateCard
-                        toolCall={msg.toolCall}
-                        content={msg.content}
-                        timestamp={msg.timestamp}
-                        actions={
-                          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => handleDeleteMessage(msg.id)}>🗑</button>
-                        }
-                      />
-                    ) : (
-                      <ToolCallMessage
-                        toolCall={msg.toolCall}
-                        timestamp={msg.timestamp}
-                        actions={
-                          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => handleDeleteMessage(msg.id)}>🗑</button>
-                        }
-                      />
-                    )
-                  ) : msg.ask ? (
-                    <AskCard
-                      question={msg.ask.question}
-                      options={msg.ask.options}
-                      answered={msg.ask.answered}
-                      reply={msg.ask.reply}
-                      onReply={(answer) => handleAskReply(msg.id, answer)}
-                    />
-                  ) : msg.role === 'assistant' ? (() => {
-                    // 流式中的最后一条消息：识别 <answer> 段（含未闭合）+ 剥离 think/action 标签
-                    const isStreamingMsg = streaming && msg === messages[messages.length - 1];
-                    if (isStreamingMsg) {
-                      const raw = msg.content;
-                      // 优先级 1: 已闭合 <answer>...</answer>
-                      const closed = /<answer>([\s\S]*?)<\/answer>/i.exec(raw);
-                      // 优先级 2: 未闭合 <answer>... 取到末尾
-                      const open = !closed ? /<answer>([\s\S]*)$/i.exec(raw) : null;
-
-                      let display: string;
-                      if (closed) {
-                        display = closed[1].trim();
-                      } else if (open) {
-                        display = open[1].trim();
-                      } else {
-                        // 优先级 3: 剥离已知标签，显示标签外裸文本
-                        let stripped = raw;
-                        stripped = stripped.replace(/<think>[\s\S]*?<\/think>/gi, '');
-                        stripped = stripped.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '');
-                        const unclosed = stripped.lastIndexOf('<action');
-                        if (unclosed !== -1 && stripped.indexOf('</action>', unclosed) === -1) {
-                          stripped = stripped.slice(0, unclosed);
-                        }
-                        stripped = stripped.replace(/<think>[\s\S]*$/i, '');
-                        display = stripped.replace(/<\/?(?:think|answer|note|action[^>]*)>/gi, '').trim();
-                      }
-
-                      // 流式状态指示器
-                      const phase = msg.streamingPhase;
-                      const elapsed = msg.phaseElapsed;
-                      const steps = msg.toolSteps;
-                      const lastRunningTool = steps?.findLast(s => s.status === 'running')?.tool;
-
-                      let phaseLabel = '';
-                      if (phase === 'llm-waiting') phaseLabel = `等待模型响应${elapsed ? ` ${elapsed}s` : ''}...`;
-                      else if (phase === 'tool-exec' && lastRunningTool) phaseLabel = `正在调用 ${lastRunningTool}...`;
-                      else if (!display && !steps?.length) phaseLabel = '等待模型响应...';
-
-                      return (
-                        <>
-                          {/* 工具步骤独立渲染 */}
-                          {steps && steps.map((step, i) => (
-                            <ToolCallMessage
-                              key={`tool-${msg.id}-${i}`}
-                              toolCall={{ toolName: step.tool, params: step.args as Record<string, unknown>, result: step.result, status: step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending' }}
-                            />
-                          ))}
-                          {/* 流式文本气泡 */}
-                          <div className="chat__message chat__message--assistant">
-                            <div className="chat__avatar">AI</div>
-                            <div className="chat__bubble">
-                              {phaseLabel && <div className="chat__streaming-phase">{phaseLabel}</div>}
-                              {display && <div style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>{display}▍</div>}
-                              {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
-                            </div>
-                          </div>
-                        </>
-                      );
-                    }
-                    const parsed = parseStructuredOutput(msg.content, []);
-                    const hasStructure = parsed.think || parsed.actions.length > 0 || parsed.note || parsed.answer;
-                    // 优先使用 msg.toolSteps（原生模式下 rawContent 不含 <action>，toolSteps 是源数据）
-                    const toolSteps = msg.toolSteps && msg.toolSteps.length > 0
-                      ? msg.toolSteps
-                      : parsed.actions.map(a => ({
-                          tool: a.tool, args: a.args,
-                          result: undefined as string | undefined,
-                          status: 'done' as const,
-                        }));
-                    if (hasStructure || (msg.toolSteps && msg.toolSteps.length > 0)) {
-                      return (
-                        <>
-                          {/* 工具步骤独立渲染 */}
-                          {toolSteps.map((step, i) => (
-                            <ToolCallMessage
-                              key={`tool-${msg.id}-${i}`}
-                              toolCall={{ toolName: step.tool, params: step.args as Record<string, unknown>, result: step.result, status: step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending' }}
-                            />
-                          ))}
-                          <StructuredMessage
-                            think={parsed.think}
-                            tools={[]} answer={parsed.answer || msg.content.replace(/<[^>]+>/g, '').trim()} note={parsed.note}
-                            msgId={msg.id}
-                            timestamp={msg.timestamp}
-                            answerSource={parsed.answerSource}
-                            actions={
-                              <>
-                                <button className="chat__msg-action-btn" title="编辑" onClick={() => handleStartEdit(msg)}>✏</button>
-                                <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => handleDeleteMessage(msg.id)}>🗑</button>
-                              </>
-                            }
-                          />
-                        </>
-                      );
-                    }
-                    return (
-                      <div className={`chat__message chat__message--assistant`}>
-                        <div className="chat__avatar">AI</div>
-                        <div className="chat__bubble">
-                          <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>
-                          {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
-                          <div className="chat__bubble-actions">
-                            <button className="chat__msg-action-btn" title="编辑" onClick={() => handleStartEdit(msg)}>✏</button>
-                            <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => handleDeleteMessage(msg.id)}>🗑</button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })() : (
-                    <div className={`chat__message chat__message--${msg.role}`}>
-                      <div className="chat__avatar">{msg.role === 'user' ? '你' : msg.role === 'assistant' ? 'AI' : 'S'}</div>
-                      <div className="chat__bubble">
-                        <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>
-                        {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
-                        <div className="chat__bubble-actions">
-                          <button className="chat__msg-action-btn" title="编辑" onClick={() => handleStartEdit(msg)}>✏</button>
-                          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => handleDeleteMessage(msg.id)}>🗑</button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                  <MessageItem
+                    msg={msg}
+                    isStreaming={streaming && msg === messages[messages.length - 1]}
+                    isEditing={editingMsgId === msg.id}
+                    editContent={editContent}
+                    setEditContent={setEditContent}
+                    onSaveEdit={handleSaveEdit}
+                    onCancelEdit={handleCancelEdit}
+                    onStartEdit={handleStartEdit}
+                    onDeleteMessage={handleDeleteMessage}
+                    onAskReply={handleAskReply}
+                  />
                 </div>
               ))}
               {streaming && <div className="chat__message chat__message--assistant"><div className="chat__avatar">AI</div><div className="chat__bubble"><div className="loading-spinner" /></div></div>}
@@ -668,7 +505,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               <div className="chat__input-wrapper">
                 <textarea className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} placeholder={streaming ? '等待回复中...' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} disabled={streaming} aria-label="输入消息" />
                 {streaming ? (
-                  <button className="chat__stop-btn" onClick={() => { userStoppedRef.current = true; abortRef.current?.(); fetch('/api/conversation/abort', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); if (!abortRef.current) setStreaming(false); }} title="停止生成">
+                  <button className="chat__stop-btn" onClick={() => { if (activeSessionId) streamRunners.runners.current.get(activeSessionId)?.abort(); fetch(streamUrl('/api/conversation/abort'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); setStreaming(false); }} title="停止生成">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                   </button>
                 ) : (

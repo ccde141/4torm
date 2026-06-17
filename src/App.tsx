@@ -74,13 +74,13 @@ function PageContent({ page, preselectSession, onClearPreselect }: { page: strin
 
   return (
     <div ref={containerRef} style={{ height: '100%' }}>
-      <div className="page-panel" data-page="agent" style={show('agent')}><div style={scrollArea}><DashboardPage /></div></div>
+      <div className="page-panel" data-page="agent" style={show('agent')}><div style={scrollArea}><DashboardPage active={page === 'agent'} /></div></div>
       <div className="page-panel" data-page="chat" style={show('chat')}><div style={scrollArea}><ChatPage active={page === 'chat'} preselectSession={preselectSession ?? undefined} onClearPreselect={onClearPreselect} /></div></div>
       <div className="page-panel" data-page="tools" style={show('tools')}><div style={scrollArea}><ToolsPage /></div></div>
       <div className="page-panel" data-page="skills" style={show('skills')}><div style={scrollArea}><SkillsPage /></div></div>
-      <div className="page-panel" data-page="convection" style={show('convection')}><div style={scrollArea}><ConvectionPage /></div></div>
+      <div className="page-panel" data-page="convection" style={show('convection')}><div style={scrollArea}><ConvectionPage active={page === 'convection'} /></div></div>
       <div className="page-panel" data-page="tradewind" style={show('tradewind')}><div style={scrollArea}><TradeWindPage /></div></div>
-      <div className="page-panel" data-page="tide" style={show('tide')}><div style={scrollArea}><TidePage /></div></div>
+      <div className="page-panel" data-page="tide" style={show('tide')}><div style={scrollArea}><TidePage active={page === 'tide'} /></div></div>
       <div className="page-panel" data-page="model" style={show('model')}><div style={scrollArea}><SettingsPage /></div></div>
       <div className="page-panel" data-page="mcp" style={show('mcp')}><div style={scrollArea}><McpPage /></div></div>
     </div>

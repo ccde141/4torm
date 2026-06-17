@@ -10,7 +10,7 @@
  * 前端页面组件（ChatPage.tsx）的 UI 结构不变。
  */
 
-import { generateMessageId, saveSession, autoTitle } from '../../store/chat';
+import { streamUrl } from '../../lib/apiBase';
 import type { ChatMessage, Agent } from '../../types';
 import type { ChatSession } from '../../store/chat';
 import type { ToolDef } from '../../store/tools';
@@ -30,6 +30,10 @@ export type StreamCtx = {
   autoTitleFn: (msgs: ChatMessage[]) => string;
   generateMessageIdFn: () => string;
   abortController: AbortController;
+  /** finalize 前查询：该会话是否已被删（弃用）→ 跳过存盘，杜绝僵尸复活 */
+  isAbandoned?: () => boolean;
+  /** 流彻底结束（自然/abort/淘汰/错误）后回调，用于清理 runner 注册表 */
+  onFinish?: () => void;
 };
 
 export async function runStreamLoop(ctx: StreamCtx) {
@@ -65,7 +69,7 @@ export async function runStreamLoop(ctx: StreamCtx) {
 
   try {
     // POST 到后端 SSE 端点
-    const res = await fetch('/api/conversation/chat', {
+    const res = await fetch(streamUrl('/api/conversation/chat'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -123,14 +127,22 @@ export async function runStreamLoop(ctx: StreamCtx) {
     setMessages([...allMessages]);
   } catch (e) {
     clearInterval(waitInterval);
-    if ((e as Error).name === 'AbortError') throw e;
-    const errContent = streamContent || `(连接中断: ${(e as Error).message})`;
-    allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: errContent } : m);
-    setMessages([...allMessages]);
+    // 主动中断：用户点停止 / 切走被淘汰。跨 origin 直连时 abort 抛的是
+    // TypeError「Failed to fetch」而非 AbortError，故以 signal.aborted 为准。
+    // 主动中断不写错误气泡，已收到的部分内容静默存盘即可。
+    if (!abortController.signal.aborted) {
+      const errContent = streamContent || `(连接中断: ${(e as Error).message})`;
+      allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: errContent } : m);
+      setMessages([...allMessages]);
+    }
   }
 
-  await saveSessionFn({ ...session, messages: allMessages, title: getTitle(allMessages), model: selectedModel }).catch(() => {});
-  refreshSessions(agent);
+  // 被删会话（弃用）跳过存盘，否则 saveSession 会把文件和索引重建出来 → 僵尸复活
+  if (!ctx.isAbandoned?.()) {
+    await saveSessionFn({ ...session, messages: allMessages, title: getTitle(allMessages), model: selectedModel }).catch(() => {});
+    refreshSessions(agent);
+  }
+  ctx.onFinish?.();
 }
 
 // ── SSE 事件处理 ─────────────────────────────────────────────────

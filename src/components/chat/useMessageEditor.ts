@@ -42,5 +42,5 @@ export function useMessageEditor(
 
   const cancelEdit = useCallback(() => { setEditingMsgId(null); }, []);
 
-  return { editingMsgId, editContent, deleteMessage, startEdit, saveEdit, cancelEdit };
+  return { editingMsgId, editContent, setEditContent, deleteMessage, startEdit, saveEdit, cancelEdit };
 }
