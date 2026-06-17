@@ -4,7 +4,8 @@ import {
   getSession,
   saveSession,
   deleteSession,
-  createSession,
+  buildSession,
+  getCachedMessages,
 } from '../../store/chat';
 import type { Agent, ChatMessage } from '../../types';
 import type { ChatSession } from '../../store/chat';
@@ -41,19 +42,22 @@ export function useSessionList(
 
   const selectSession = useCallback(async (sessionId: string) => {
     if (sessionId === activeSessionId) return;
-    // 流式进行中：先 abort 当前流，等 streaming 状态重置后再切换
     if (streamingRef.current && abortRef?.current) {
       abortRef.current();
     }
     setActiveSessionId(sessionId);
-    const s = await getSession(sessionId);
-    if (s) {
-      setMessages(s.messages);
-      if (s?.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
+    // 优先从消息缓存上屏（上次完整加载过 —— 由 getSession/saveSession 维护）
+    const cachedMsgs = getCachedMessages(sessionId);
+    if (cachedMsgs) setMessages(cachedMsgs);
+    // 后台读最新磁盘版本校准
+    getSession(sessionId).then(s => {
+      if (!s) return;
+      if (!cachedMsgs || s.messages !== cachedMsgs) setMessages(s.messages);
+      if (s.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
       s.lastReadAt = new Date().toISOString();
-      await saveSession({ ...s, lastReadAt: s.lastReadAt });
+      saveSession({ ...s, lastReadAt: s.lastReadAt }).catch(() => {});
       setSessions(prev => prev.map(p => p.id === sessionId ? { ...p, lastReadAt: s.lastReadAt } : p));
-    }
+    });
   }, [activeSessionId, setMessages, models, setSelectedModel, abortRef]);
 
   const renameSession = useCallback(async () => {
@@ -74,21 +78,26 @@ export function useSessionList(
     setTimeout(() => titleInputRef.current?.focus(), 0);
   }, [sessions, activeSessionId]);
 
-  const newSession = useCallback(async () => {
-    if (!selectedAgent) return;
-    const s = await createSession(selectedAgent);
+  const newSession = useCallback(async (agentOverride?: Agent) => {
+    const agent = agentOverride ?? selectedAgent;
+    if (!agent) return;
+    // 先同步构造并上屏，UI 立即响应；持久化转后台。
+    const s = buildSession(agent);
     s.lastReadAt = new Date().toISOString();
-    await saveSession(s);
     setActiveSessionId(s.id);
     setMessages([]);
-    refreshSessions(selectedAgent);
-  }, [selectedAgent, setMessages, refreshSessions]);
+    setSessions(prev => [s, ...prev]);
+    // 后台保存，不阻塞 UI
+    saveSession(s).catch(() => {});
+  }, [selectedAgent, setMessages]);
 
-  const deleteSessionFn = useCallback(async (sessionId: string) => {
-    await deleteSession(sessionId);
+  const deleteSessionFn = useCallback((sessionId: string) => {
+    // 先同步从列表移除 + 清空当前会话视图，UI 立即响应。
+    setSessions(prev => prev.filter(p => p.id !== sessionId));
     if (activeSessionId === sessionId) { setActiveSessionId(null); setMessages([]); }
-    if (selectedAgent) refreshSessions(selectedAgent);
-  }, [activeSessionId, selectedAgent, setMessages, refreshSessions]);
+    // 后台删除文件，不阻塞 UI
+    deleteSession(sessionId).catch(() => {});
+  }, [activeSessionId, setMessages]);
 
   const compactSession = useCallback(async (session: ChatSession) => {
     if (!selectedAgent) return;
