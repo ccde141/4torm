@@ -33,12 +33,20 @@ function getOrCreateRunner(sessionId: string, opts: SessionRunnerOpts): SessionR
 
 // ── SSE 工具函数 ─────────────────────────────────────────────────
 
-function initSSE(raw: ServerResponse): void {
+function initSSE(raw: ServerResponse, origin?: string): void {
   raw.statusCode = 200;
   raw.setHeader('Content-Type', 'text/event-stream');
   raw.setHeader('Cache-Control', 'no-cache');
   raw.setHeader('Connection', 'keep-alive');
   raw.setHeader('X-Accel-Buffering', 'no');
+  // reply.hijack() 绕过了 @fastify/cors 的 hook，跨 origin 直连（dev 下前端直连
+  // 3001 分摊连接）会因缺 CORS 头被浏览器拦截 → fetch 抛 Failed to fetch。
+  // 这里手动回显 Origin（等价 cors origin:true）补回。
+  if (origin) {
+    raw.setHeader('Access-Control-Allow-Origin', origin);
+    raw.setHeader('Access-Control-Allow-Credentials', 'true');
+    raw.setHeader('Vary', 'Origin');
+  }
   raw.write(': connected\n\n');
 }
 
@@ -120,7 +128,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     // SSE 流式响应
     reply.hijack();
     const raw = reply.raw;
-    initSSE(raw);
+    initSSE(raw, req.headers.origin);
 
     // 强制 native 但探测显示不支持 → 显式警告（不阻断，仍按用户选择执行）
     if (nativeDecision.forcedMismatch) {
@@ -175,7 +183,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     // SSE 流式响应（resume 后 agent 继续执行）
     reply.hijack();
     const raw = reply.raw;
-    initSSE(raw);
+    initSSE(raw, req.headers.origin);
 
     runner.resume(body.answer, (ev) => {
       try { pushSSE(raw, ev); } catch { runner.abort(); }
