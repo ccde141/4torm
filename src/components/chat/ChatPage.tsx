@@ -8,7 +8,9 @@ import { getAllModels } from '../../llm';
 import MessageItem from './MessageItem';
 import { useSessionList } from './useSessionList';
 import { useMessageEditor } from './useMessageEditor';
+import { useStreamRunners } from './useStreamRunners';
 import { runStreamLoop } from '../../engine/chat/streamLoop';
+import { streamUrl } from '../../lib/apiBase';
 import {
   getSession,
   saveSession,
@@ -20,8 +22,6 @@ import type { Agent, ChatMessage } from '../../types';
 import '../../styles/components/chat.css';
 import '../../styles/components/session-list.css';
 import '../../styles/components/loading.css';
-
-const MEMORY_TRIGGERS = /回忆|之前|记得|记忆|回想|回顾|上次|过去/;
 
 export default function ChatPage({ active, preselectSession, onClearPreselect }: { active?: boolean; preselectSession?: string; onClearPreselect?: () => void }) {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -35,7 +35,6 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<(() => void) | null>(null);
-  const userStoppedRef = useRef(false);
   // 同步发送锁：streaming state 是异步的，挡不住"卡顿期间快速二次点击"，
   // 用 ref 在 handleSend 入口同步置位，从根上杜绝重复发送（两条消息 bug）
   const sendingRef = useRef(false);
@@ -45,8 +44,12 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     setMessagesRaw(msgs);
   }, []);
 
+  // emit 判断「当前会话」必须读最新值，故用 ref 跟踪 activeSessionId（闭包会捕获旧值）
+  const activeSessionIdRef = useRef<string | null>(null);
+  const streamRunners = useStreamRunners(() => activeSessionIdRef.current, setMessages, setStreaming);
+
   const {
-    sessions, setSessions, activeSessionId,
+    sessions, activeSessionId,
     editingTitle, setEditingTitle, editTitleValue, setEditTitleValue, titleInputRef,
     refreshSessions,
     selectAgent, selectSession,
@@ -54,7 +57,9 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     newSession, deleteSession: handleDeleteSession,
     compactSession,
     setActiveSessionId,
-  } = useSessionList(selectedAgent, selectedModel, models, setSelectedAgent, setMessages, setStreaming, setSelectedModel, streaming, abortRef);
+  } = useSessionList(selectedAgent, selectedModel, models, setSelectedAgent, setMessages, setStreaming, setSelectedModel, streamRunners);
+  // 同步 activeSessionId 到 ref 供 emit 读最新值（effect 中写，避免 render 期改 ref）
+  useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
 
   const {
     editingMsgId, editContent, setEditContent,
@@ -63,6 +68,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     saveEdit: handleSaveEdit,
     cancelEdit: handleCancelEdit,
   } = useMessageEditor(activeSessionId, selectedAgent, setMessages, refreshSessions);
+
 
   useEffect(() => {
     const el = messagesContainerRef.current;
@@ -121,6 +127,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   /** 处理 agent ask 的回复 */
   const handleAskReply = async (msgId: string, answer: string) => {
     if (!selectedAgent || !activeSessionId || streaming) return;
+    const sid = activeSessionId;
 
     // 标记 ask 为已回复
     const updatedMessages = messagesRef.current.map(m =>
@@ -128,18 +135,21 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     );
     setMessages(updatedMessages);
 
-    const session = await getSession(activeSessionId);
+    const session = await getSession(sid);
     if (!session) return;
 
     setStreaming(true);
     setAgentStatus(selectedAgent.id, 'busy');
 
     const abortController = new AbortController();
+    // 流归属 sessionId：切走不掐、后台续跑，emit 仅激活会话刷界面
+    streamRunners.register(sid, () => abortController.abort(), updatedMessages);
     abortRef.current = () => abortController.abort();
+    const emit = (msgs: ChatMessage[]) => streamRunners.emit(sid, msgs);
 
     try {
-      // 调 /reply 端点恢复循环（SSE 流式）
-      const res = await fetch('/api/conversation/reply', {
+      // 调 /reply 端点恢复循环（SSE 流式，dev 下直连 3001 分摊连接）
+      const res = await fetch(streamUrl('/api/conversation/reply'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: activeSessionId, answer }),
@@ -161,7 +171,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
         timestamp: new Date().toISOString(), agentId: selectedAgent.id,
       };
       let allMessages = [...updatedMessages, assistantMsg];
-      setMessages([...allMessages]);
+      emit([...allMessages]);
 
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
@@ -191,7 +201,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             const now = Date.now();
             if (now - lastFlushAt >= TOKEN_FLUSH_MS) {
               lastFlushAt = now;
-              setMessages([...allMessages]);
+              emit([...allMessages]);
             }
           } else if (ev.type === 'tool-call') {
             // 清理 assistant 流式内容中的 action/think 标签
@@ -208,7 +218,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             };
             const idx = allMessages.findIndex(m => m.id === assistantMsgId);
             allMessages.splice(idx, 0, toolMsg);
-            setMessages([...allMessages]);
+            emit([...allMessages]);
           } else if (ev.type === 'tool-result') {
             for (let i = allMessages.length - 1; i >= 0; i--) {
               if (allMessages[i].toolCall && (allMessages[i].toolCall as any).status === 'running') {
@@ -216,7 +226,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                 break;
               }
             }
-            setMessages([...allMessages]);
+            emit([...allMessages]);
           } else if (ev.type === 'answer') {
             const finalMsg: ChatMessage = {
               id: assistantMsgId, role: 'assistant',
@@ -224,7 +234,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               timestamp: new Date().toISOString(), agentId: selectedAgent.id,
             };
             allMessages = allMessages.map(m => m.id === assistantMsgId ? finalMsg : m);
-            setMessages([...allMessages]);
+            emit([...allMessages]);
           } else if (ev.type === 'ask') {
             // 嵌套 ask：保留 assistantMsg 的描述性内容，追加 ask 消息
             const askMsg: ChatMessage = {
@@ -243,7 +253,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               allMessages = allMessages.filter(m => m.id !== assistantMsgId);
             }
             allMessages.push(askMsg);
-            setMessages([...allMessages]);
+            emit([...allMessages]);
           } else if (ev.type === 'notice') {
             // 系统提示（如强制 native 但探测不支持的警告）
             const noticeMsg: ChatMessage = {
@@ -252,7 +262,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               timestamp: new Date().toISOString(), agentId: selectedAgent.id,
             };
             allMessages.push(noticeMsg);
-            setMessages([...allMessages]);
+            emit([...allMessages]);
           } else if (ev.type === 'done') {
             // 后端明确告知流结束 — 主动退出循环
             streamDone = true;
@@ -262,16 +272,25 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       }
 
       // 流结束：强制最终刷新，保证节流期间未渲染的尾部 token 全部呈现
-      setMessages([...allMessages]);
-      await saveSession({ ...session, messages: allMessages, title: session.titleManual ? session.title : autoTitle(allMessages), model: selectedModel }).catch(() => {});
-      refreshSessions(selectedAgent);
+      emit([...allMessages]);
+      // 被删会话（弃用）跳过存盘，杜绝僵尸复活
+      if (!(streamRunners.runners.current.get(sid)?.abandoned)) {
+        await saveSession({ ...session, messages: allMessages, title: session.titleManual ? session.title : autoTitle(allMessages), model: selectedModel }).catch(() => {});
+        refreshSessions(selectedAgent);
+      }
     } catch (e) {
-      if ((e as Error).name !== 'AbortError') {
+      // 主动中断（停止/淘汰，跨 origin 抛 Failed to fetch）不写错误气泡
+      if (!abortController.signal.aborted) {
+        const buf = streamRunners.runners.current.get(sid)?.messages ?? updatedMessages;
         const errMsg: ChatMessage = { id: generateMessageId(), role: 'assistant', content: `错误: ${(e as Error).message}`, timestamp: new Date().toISOString(), agentId: selectedAgent.id };
-        setMessages([...messagesRef.current, errMsg]);
+        const withErr = [...buf, errMsg];
+        emit(withErr);
+        if (!(streamRunners.runners.current.get(sid)?.abandoned)) {
+          await saveSession({ ...session, messages: withErr, title: session.titleManual ? session.title : autoTitle(withErr), model: selectedModel }).catch(() => {});
+        }
       }
     } finally {
-      setStreaming(false);
+      streamRunners.finalize(sid);
       setAgentStatus(selectedAgent.id, 'idle');
     }
   };
@@ -342,66 +361,46 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     if (isNewSession) refreshSessions(selectedAgent);
 
     const abortController = new AbortController();
+    const sid2 = session.id;
+    // 流归属 sessionId：emit 写进 runner 缓冲，仅激活会话才刷界面
+    streamRunners.register(sid2, () => abortController.abort(), updatedMessages);
     abortRef.current = () => abortController.abort();
+    sendingRef.current = false; // 流已托管给 runner，发送锁可释放（防同会话重发由 runner 存在性兜底）
 
-    try {
-      // 复用上面占用锁检查时已读的 freshAgent，砍掉这里冗余的第二次 getAgent
-      const agent = freshAgent;
+    // 复用上面占用锁检查时已读的 freshAgent，砍掉这里冗余的第二次 getAgent
+    const agent = freshAgent;
 
-      // compact-marker 过滤：只发 marker 摘要 + marker 之后的消息给后端
-      const lastMarkerIdx = updatedMessages.findLastIndex((m: any) => m.type === 'compact-marker');
-      const llmMessages = lastMarkerIdx >= 0
-        ? updatedMessages.slice(lastMarkerIdx)
-        : updatedMessages;
+    // compact-marker 过滤：只发 marker 摘要 + marker 之后的消息给后端
+    const lastMarkerIdx = updatedMessages.findLastIndex((m: any) => m.type === 'compact-marker');
+    const llmMessages = lastMarkerIdx >= 0
+      ? updatedMessages.slice(lastMarkerIdx)
+      : updatedMessages;
 
-      const chatMessages: Array<{ role: string; content: string }> = llmMessages.map(m => {
-        // compact-marker 作为 system 消息发送（摘要内容）
-        if ((m as any).type === 'compact-marker') {
-          return { role: 'system', content: `[历史上下文摘要]\n${m.content}` };
-        }
-        if (m.toolCall && !m.content.startsWith('<')) {
-          return { role: 'assistant', content: `<action tool="${m.toolCall.toolName}">${JSON.stringify(m.toolCall.params)}</action>` };
-        }
-        return { role: m.role === 'user' ? 'user' : 'assistant', content: m.content };
-      });
-
-      let allMessages = [...updatedMessages];
-
-      await runStreamLoop({
-        session, allMessages: updatedMessages, chatMessages,
-        providerInfo: { baseUrl: '', apiKey: '', signal: abortController.signal },
-        modelId: '', toolDefs: [], agent: agent!, selectedModel,
-        setMessages,
-        saveSessionFn: saveSession, refreshSessions, autoTitleFn: autoTitle, generateMessageIdFn: generateMessageId,
-        abortController,
-      });
-    } catch (e) {
-      if (userStoppedRef.current) {
-        userStoppedRef.current = false;
-        // 保留已完成的 toolCall 消息，不回退到发送前状态
-        const currentMsgs = messagesRef.current;
-        // 过滤掉最后一条正在 streaming 的空内容消息（如果有）
-        const cleaned = currentMsgs.filter(m => m.content.trim() || m.toolCall);
-        setMessages(cleaned);
-        // 重读最新 session 避免用 stale 快照覆盖中间已保存的状态
-        const freshSession = await getSession(session.id) || session;
-        const title = freshSession.titleManual ? freshSession.title : autoTitle(cleaned);
-        await saveSession({ ...freshSession, messages: cleaned, title, model: selectedModel });
-      } else {
-        const errMsg: ChatMessage = { id: generateMessageId(), role: 'assistant', content: `错误: ${(e as Error).message}`, timestamp: new Date().toISOString(), agentId: selectedAgent.id };
-        const currentMsgs = messagesRef.current;
-        const finalMessages = [...currentMsgs, errMsg];
-        setMessages(finalMessages);
-        const freshSession = await getSession(session.id) || session;
-        const title = freshSession.titleManual ? freshSession.title : autoTitle(finalMessages);
-        await saveSession({ ...freshSession, messages: finalMessages, title, model: selectedModel });
+    const chatMessages: Array<{ role: string; content: string }> = llmMessages.map(m => {
+      // compact-marker 作为 system 消息发送（摘要内容）
+      if ((m as any).type === 'compact-marker') {
+        return { role: 'system', content: `[历史上下文摘要]\n${m.content}` };
       }
-      refreshSessions(selectedAgent);
-    } finally {
-      sendingRef.current = false;
-      setStreaming(false);
-      setAgentStatus(selectedAgent.id, 'idle');
-    }
+      if (m.toolCall && !m.content.startsWith('<')) {
+        return { role: 'assistant', content: `<action tool="${m.toolCall.toolName}">${JSON.stringify(m.toolCall.params)}</action>` };
+      }
+      return { role: m.role === 'user' ? 'user' : 'assistant', content: m.content };
+    });
+
+    // 流跑完后端处理 idle 状态（仅当它仍是当前激活会话时才动全局 streaming）
+    runStreamLoop({
+      session, allMessages: updatedMessages, chatMessages,
+      providerInfo: { baseUrl: '', apiKey: '', signal: abortController.signal },
+      modelId: '', toolDefs: [], agent: agent!, selectedModel,
+      setMessages: (msgs) => streamRunners.emit(sid2, msgs),
+      saveSessionFn: saveSession, refreshSessions, autoTitleFn: autoTitle, generateMessageIdFn: generateMessageId,
+      abortController,
+      isAbandoned: () => streamRunners.runners.current.get(sid2)?.abandoned ?? false,
+      onFinish: () => {
+        streamRunners.finalize(sid2);
+        setAgentStatus(selectedAgent.id, 'idle');
+      },
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
@@ -425,7 +424,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
               <div style={sectionLabelStyle}>会话</div>
-              <button onClick={newSession} style={newBtnStyle} title="新建会话">+</button>
+              <button onClick={() => newSession()} style={newBtnStyle} title="新建会话">+</button>
             </div>
             <div className="session-list" style={{ flex: 1, overflowY: 'auto' }}>
               {sessions.length === 0 && <div style={{ padding: 'var(--space-4)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center' }}>暂无会话，点击 + 创建</div>}
@@ -499,7 +498,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               <div className="chat__input-wrapper">
                 <textarea className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} placeholder={streaming ? '等待回复中...' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} disabled={streaming} aria-label="输入消息" />
                 {streaming ? (
-                  <button className="chat__stop-btn" onClick={() => { userStoppedRef.current = true; abortRef.current?.(); fetch('/api/conversation/abort', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); if (!abortRef.current) setStreaming(false); }} title="停止生成">
+                  <button className="chat__stop-btn" onClick={() => { if (activeSessionId) streamRunners.runners.current.get(activeSessionId)?.abort(); abortRef.current?.(); fetch(streamUrl('/api/conversation/abort'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); setStreaming(false); }} title="停止生成">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                   </button>
                 ) : (
