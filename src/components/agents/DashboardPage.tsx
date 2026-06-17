@@ -14,7 +14,7 @@ interface FilterOption {
   kind: 'system' | 'label';
 }
 
-export default function DashboardPage() {
+export default function DashboardPage({ active = true }: { active?: boolean }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [filterOptions, setFilterOptions] = useState<FilterOption[]>([]);
@@ -63,11 +63,12 @@ export default function DashboardPage() {
     refresh().finally(() => setLoading(false));
   }, [refresh, checkOffline]);
 
-  // 2s 轮询 agent 状态（轻量级，不重复检查 model 可用性）
+  // 2s 轮询 agent 状态（仅当前页面活跃时跑；含 getAllSessions 全量扫描，后台跑会灌爆请求）
   useEffect(() => {
+    if (!active) return;
     const id = setInterval(refresh, 2000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [refresh, active]);
 
   const handleDelete = async (id: string) => {
     await deleteAgent(id);

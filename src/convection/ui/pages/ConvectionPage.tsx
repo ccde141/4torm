@@ -21,7 +21,7 @@ interface SessionSummary { id: string; title: string; chairAgentId: string; part
 
 
 
-export default memo(function ConvectionPage() {
+export default memo(function ConvectionPage({ active = true }: { active?: boolean }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -77,7 +77,8 @@ export default memo(function ConvectionPage() {
   }, [mainFlex]);
 
   const refreshAgents = useCallback(async () => { try { setAgents(await getAgents()); } catch {} }, []);
-  useEffect(() => { refreshAgents(); const t = setInterval(refreshAgents, 5000); return () => clearInterval(t); }, [refreshAgents]);
+  // 5s 轮询 agent（仅当前页面活跃时跑，避免切走后后台持续刷请求）
+  useEffect(() => { if (!active) return; refreshAgents(); const t = setInterval(refreshAgents, 5000); return () => clearInterval(t); }, [refreshAgents, active]);
 
   const refreshSessions = useCallback(async () => {
     try { const r = await fetch('/api/convection/list'); if (r.ok) setSessions(await r.json()); } catch {}
