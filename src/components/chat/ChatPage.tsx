@@ -362,6 +362,13 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
 
     const abortController = new AbortController();
     const sid2 = session.id;
+    // 防同会话双流：该会话已有活 runner（如后台流未结束就切回又发）则拒绝重入。
+    // existing 流是权威：回滚刚上屏的 userMsg，重连到 runner 真实状态。
+    if (streamRunners.runners.current.has(sid2)) {
+      sendingRef.current = false;
+      streamRunners.reconnect(sid2);
+      return;
+    }
     // 流归属 sessionId：emit 写进 runner 缓冲，仅激活会话才刷界面
     streamRunners.register(sid2, () => abortController.abort(), updatedMessages);
     abortRef.current = () => abortController.abort();
@@ -498,7 +505,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               <div className="chat__input-wrapper">
                 <textarea className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} placeholder={streaming ? '等待回复中...' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} disabled={streaming} aria-label="输入消息" />
                 {streaming ? (
-                  <button className="chat__stop-btn" onClick={() => { if (activeSessionId) streamRunners.runners.current.get(activeSessionId)?.abort(); abortRef.current?.(); fetch(streamUrl('/api/conversation/abort'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); setStreaming(false); }} title="停止生成">
+                  <button className="chat__stop-btn" onClick={() => { if (activeSessionId) streamRunners.runners.current.get(activeSessionId)?.abort(); fetch(streamUrl('/api/conversation/abort'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); setStreaming(false); }} title="停止生成">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                   </button>
                 ) : (
