@@ -139,11 +139,15 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       try { pushSSE(raw, ev); } catch { runner.abort(); }
     }).then(() => {
       try { raw.end(); } catch {}
+      // 非挂起（ask 等 reply）才清出注册表，否则 /reply 找不到 runner。
+      // 不清会导致 activeRunners 内存泄漏（每个聊过的 session 永久驻留）。
+      if (!runner.isSuspended()) activeRunners.delete(body.sessionId!);
     }).catch((e) => {
       try {
         pushSSE(raw, { type: 'error', message: (e as Error).message });
         raw.end();
       } catch {}
+      activeRunners.delete(body.sessionId!); // 出错必清
     });
   });
 
@@ -161,6 +165,9 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     }
 
     runner.abort();
+    // 挂起中（等 reply）的 runner abort 是空操作、chat 的 catch 不会触发清理，
+    // 这里显式删除避免永久驻留；正在流式的 runner catch 也会删（幂等无害）。
+    activeRunners.delete(body.sessionId);
     return reply.send({ ok: true });
   });
 
@@ -189,11 +196,14 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       try { pushSSE(raw, ev); } catch { runner.abort(); }
     }).then(() => {
       try { raw.end(); } catch {}
+      // resume 后可能再次挂起（嵌套 ask）；非挂起才清出注册表
+      if (!runner.isSuspended()) activeRunners.delete(body.sessionId!);
     }).catch((e) => {
       try {
         pushSSE(raw, { type: 'error', message: (e as Error).message });
         raw.end();
       } catch {}
+      activeRunners.delete(body.sessionId!); // 出错必清
     });
   });
 }
