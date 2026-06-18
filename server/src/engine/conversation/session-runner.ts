@@ -22,6 +22,7 @@ import {
 import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execListAgents, execCreateWorkflow } from '../shared/workflow-builder';
+import { execListWorkflows, execUpdateWorkflow } from '../shared/workflow-editor';
 import { buildVirtualToolDefs } from './virtual-tools';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -202,6 +203,19 @@ export class SessionRunner {
           onEvent({ type: 'tool-call', tool, args });
           const result = await execCreateWorkflow(dataDir, args);
           const ok = !result.startsWith('创建失败');
+          onEvent({ type: 'tool-result', tool, result, ok });
+          return result;
+        }
+        if (tool === 'list_workflows') {
+          onEvent({ type: 'tool-call', tool, args });
+          const result = await execListWorkflows(dataDir, args);
+          onEvent({ type: 'tool-result', tool, result, ok: true });
+          return result;
+        }
+        if (tool === 'update_workflow') {
+          onEvent({ type: 'tool-call', tool, args });
+          const result = await execUpdateWorkflow(dataDir, args);
+          const ok = !result.startsWith('更新失败');
           onEvent({ type: 'tool-result', tool, result, ok });
           return result;
         }

@@ -64,6 +64,29 @@ export function buildVirtualToolDefs(allowWorkflow = true): ToolDef[] {
           required: ['params'],
         },
       },
+      {
+        name: 'list_workflows',
+        description: '查看已有的信风工作流。不传参数=列出所有工作流（id/名称/节点数）；传 workflowId=返回该工作流的完整结构（节点+边）。修改工作流前必须先调用它拿到当前结构。',
+        parameters: {
+          type: 'object',
+          properties: {
+            workflowId: { type: 'string', description: '可选。要查看详情的工作流 id；不填则列出全部。' },
+          },
+          required: [],
+        },
+      },
+      {
+        name: 'update_workflow',
+        description: '修改已有的信风工作流（整图替换）。仅当用户明确要求修改某个工作流或编辑其节点内容时才使用，且修改前应先向用户确认改动方案。必须先 list_workflows 拿到完整结构，在其基础上改动后提交完整的 nodes/edges。',
+        parameters: {
+          type: 'object',
+          properties: {
+            workflowId: { type: 'string', description: '要修改的工作流 id（必须已存在，不会新建）' },
+            params: { type: 'string', description: 'JSON 字符串，包含完整的 name、nodes、edges（整图替换，不是增量）。结构与 create_workflow 一致。未改动的节点也要原样带上。' },
+          },
+          required: ['workflowId', 'params'],
+        },
+      },
     );
   }
 
