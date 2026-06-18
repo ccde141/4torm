@@ -93,7 +93,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
         case 'user-message': {
           // 后端注入的 user msg（envelope/contact）实时推送
           const id = nextId();
-          setMessages(prev => [...prev, { id, role: 'user', content: ev.content }]);
+          setMessages(prev => [...prev, { id, role: 'user', content: ev.content, timestamp: new Date().toISOString() }]);
           break;
         }
 
@@ -102,7 +102,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
           if (!cur) {
             const id = nextId();
             streamRef.current = { id, content: ev.content };
-            setMessages(prev => [...prev, { id, role: 'assistant', content: ev.content }]);
+            setMessages(prev => [...prev, { id, role: 'assistant', content: ev.content, timestamp: new Date().toISOString() }]);
             setStreaming(true);
           } else {
             cur.content += ev.content;
@@ -284,6 +284,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
         id: nextId(),
         role: m.role as 'user' | 'assistant' | 'system',
         content: m.content,
+        timestamp: new Date().toISOString(),
       }));
       setMessages(loaded);
     };
@@ -386,7 +387,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
     setInput('');
     setError(null);
 
-    const userMsg: ChatMessage = { id: nextId(), role: 'user', content: text };
+    const userMsg: ChatMessage = { id: nextId(), role: 'user', content: text, timestamp: new Date().toISOString() };
     setMessages(prev => [...prev, userMsg]);
 
     fetch(`/api/tradewind/chat/${nodeId}`, {

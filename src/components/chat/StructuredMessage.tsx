@@ -12,11 +12,10 @@ interface Props {
   timestamp?: string;
   /** answer 来源（recovered/from-think 时显示对应 badge） */
   answerSource?: 'closed' | 'open' | 'from-think' | 'recovered';
-  onDelete?: () => void;
   actions?: ReactNode;
 }
 
-export default function StructuredMessage({ think, tools, answer, note, msgId, timestamp, answerSource, onDelete, actions }: Props) {
+export default function StructuredMessage({ think, tools, answer, note, msgId, timestamp, answerSource, actions }: Props) {
   const [showThink, setShowThink] = useState(false);
   // 完成态默认折叠，运行中默认展开
   const [showTool, setShowTool] = useState<Record<number, boolean>>(() =>

@@ -2,8 +2,6 @@ import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { loadSkinConfig } from '../../store/skin';
 import { getAgents } from '../../store/agent';
 import { getAllSessions } from '../../store/chat';
-import type { Agent } from '../../types';
-import type { ChatSession } from '../../store/chat';
 import SkinPanel from './SkinPanel';
 import '../../styles/components/header.css';
 
@@ -27,7 +25,7 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
   const [results, setResults] = useState<SearchResult[]>([]);
   const [showResults, setShowResults] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     loadSkinConfig();

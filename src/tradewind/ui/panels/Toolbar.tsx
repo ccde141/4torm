@@ -2,7 +2,7 @@
  * 信风工具栏 — 工作流名称 + 保存 + 运行/停止 + 状态
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 interface ToolbarProps {
   workflowId: string;

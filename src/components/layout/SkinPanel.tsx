@@ -12,7 +12,7 @@ import '../../styles/components/skin-panel.css';
 
 interface SkinPanelProps {
   onClose: () => void;
-  triggerRef?: React.RefObject<HTMLElement>;
+  triggerRef?: React.RefObject<HTMLElement | null>;
 }
 
 const SkinPanel: React.FC<SkinPanelProps> = ({ onClose, triggerRef }) => {

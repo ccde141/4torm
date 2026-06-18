@@ -223,7 +223,7 @@ function MessageItemInner({
   // user / system 文本气泡
   return (
     <div className={`chat__message chat__message--${msg.role}`}>
-      <div className="chat__avatar">{msg.role === 'user' ? '你' : msg.role === 'assistant' ? 'AI' : 'S'}</div>
+      <div className="chat__avatar">{msg.role === 'user' ? '你' : 'S'}</div>
       <div className="chat__bubble">
         <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>
         {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}

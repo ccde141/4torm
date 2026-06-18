@@ -78,7 +78,7 @@ export interface ToolCall {
   durationMs?: number;
   status: 'pending' | 'success' | 'error' | 'running';
   /** delegate 子步骤 */
-  steps?: Array<{ type: string; tool: string; args?: Record<string, string>; result?: string; ok?: boolean }>;
+  steps?: Array<{ type: 'tool' | 'thought'; tool?: string; args?: Record<string, string>; result?: string; ok?: boolean; text?: string }>;
 }
 
 /** Agent 会话 */
@@ -134,7 +134,7 @@ export interface AgentConfig {
 export interface NavItem {
   id: string;
   label: string;
-  icon: 'dashboard' | 'agents' | 'chat' | 'tools' | 'skills' | 'convection' | 'tradewind' | 'settings';
+  icon: 'dashboard' | 'agents' | 'chat' | 'tools' | 'skills' | 'convection' | 'tradewind' | 'tide' | 'mcp' | 'settings';
   badge?: number;
 }
 

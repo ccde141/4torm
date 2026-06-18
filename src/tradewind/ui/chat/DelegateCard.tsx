@@ -22,7 +22,7 @@ export default function DelegateCard({ toolCall, content }: {
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  const task = toolCall.params?.task || '子任务';
+  const task = String(toolCall.params?.task ?? '子任务');
   const status = toolCall.status || 'pending';
   const summary = toolCall.result || '';
   const steps: Step[] = (toolCall as any).steps || [];
