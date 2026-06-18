@@ -23,8 +23,10 @@ const MAX_NUDGES = 10;
 const DELEGATE_NUDGE_THRESHOLD = 7;
 /** 每隔 N 轮注入协议 reminder */
 const REMINDER_INTERVAL = 12;
-/** LLM 调用硬超时（毫秒） */
-const LLM_TIMEOUT_MS = 3_600_000;
+/** LLM 静默超时（毫秒）：连续无 token 流入超过此值判定卡死，abort 报错。
+ *  注意是「无活动」超时而非总时长——只要持续吐 token（哪怕是很长的回答）就不会触发，
+ *  仅在网络断/模型不响应（一个 token 都收不到）时才触发。 */
+const LLM_IDLE_TIMEOUT_MS = 180_000;
 /** 心跳推送间隔（毫秒） */
 const HEARTBEAT_INTERVAL_MS = 5_000;
 /** 工具结果裁切阈值 */
@@ -181,10 +183,18 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
       return { content: '[中止]', rawContent: '', toolCalls: allToolCalls, turns: turn, lastPromptTokens };
     }
 
-    // ── LLM 调用：心跳 + 超时 + 续写 ──
+    // ── LLM 调用：心跳 + 静默超时（idle）+ 续写 ──
     const llmStart = Date.now();
     const abortCtrl = new AbortController();
-    const llmTimer = setTimeout(() => abortCtrl.abort(), LLM_TIMEOUT_MS);
+    // idle 超时：收到任意 token 就重置；连续 LLM_IDLE_TIMEOUT_MS 无 token 才判卡死。
+    // timedOut 标志区分「静默超时 abort」与「外层 signal 主动中止」（catch 里据此给不同信息）。
+    let timedOut = false;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => { timedOut = true; abortCtrl.abort(); }, LLM_IDLE_TIMEOUT_MS);
+    };
+    resetIdle(); // 发起前先起表，给首 token 留出等待窗口
     const onAbort = () => abortCtrl.abort();
     signal?.addEventListener('abort', onAbort, { once: true });
 
@@ -197,9 +207,11 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
         }, HEARTBEAT_INTERVAL_MS)
       : null;
 
-    const onChunk = onEvent
-      ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'token', chunk }); }
-      : undefined;
+    const onChunk = (chunk: string) => {
+      tokenReceived = true;
+      resetIdle(); // 每收到 token 重置静默计时——持续吐字永不超时
+      onEvent?.({ type: 'token', chunk });
+    };
 
     let reply: string;
     try {
@@ -214,6 +226,7 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
         for (let cont = 0; cont < MAX_CONTINUATIONS; cont++) {
           msgs.push({ role: 'assistant', content: reply });
           msgs.push({ role: 'user', content: '继续' });
+          resetIdle(); // 续写前重置静默窗口，覆盖两次 call 间的空窗
           const contResult = await llm.call(msgs, undefined, onChunk, abortCtrl.signal);
           msgs.pop();
           msgs.pop();
@@ -223,14 +236,21 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
         }
       }
     } catch (e) {
-      const msg = abortCtrl.signal.aborted
-        ? `LLM 响应超时（${LLM_TIMEOUT_MS / 1000}s），已中止`
-        : (e as Error).message;
+      // timedOut（静默超时）与外层 signal（用户主动停止）都会让 abortCtrl.signal.aborted=true，
+      // 用独立标志区分，避免把「用户停止」误报成「超时」。
+      let msg: string;
+      if (timedOut) {
+        msg = `LLM 静默超时（${LLM_IDLE_TIMEOUT_MS / 1000}s 无响应），已中止`;
+      } else if (signal?.aborted) {
+        msg = '已停止';
+      } else {
+        msg = (e as Error).message;
+      }
       onEvent?.({ type: 'error', message: msg });
       return { content: `[错误] ${msg}`, rawContent: '', toolCalls: allToolCalls, turns: turn, lastPromptTokens };
     } finally {
       if (hbInterval) clearInterval(hbInterval);
-      clearTimeout(llmTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       signal?.removeEventListener('abort', onAbort);
     }
 
@@ -244,10 +264,11 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
         : '【系统提示】你的上一次回复为空。请用 <think> + <answer> 模式重新作答。';
       msgs.push({ role: 'user', content: retryHint });
       let retryReply = '';
+      const retryTimer = setTimeout(() => abortCtrl.abort(), LLM_IDLE_TIMEOUT_MS);
       try {
         const rr = await llm.call(msgs, undefined, onChunk, abortCtrl.signal);
         retryReply = rr.content;
-      } catch { /* 走兜底 */ }
+      } catch { /* 走兜底 */ } finally { clearTimeout(retryTimer); }
       msgs.pop();
       msgs.push({ role: 'assistant', content: retryReply });
 
