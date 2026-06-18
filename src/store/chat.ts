@@ -32,13 +32,13 @@ interface SessionMeta {
   un?: number; // unreadCount
 }
 
-/** 计算未读数：最后一条 assistant 消息之后的消息数量 */
+/** 计算未读数：最后一条 assistant 消息之后、lastReadAt 之后的消息数量 */
 function computeUnread(s: ChatSession): number {
   const lastAssist = s.messages.findLastIndex(m => m.role === 'assistant');
   if (lastAssist < 0) return 0;
-  const lastReadIdx = s.lastReadAt
-    ? s.messages.findLastIndex(m => m.timestamp <= s.lastReadAt!)
-    : -1;
+  // 从未读过的老会话视为已读（不是新未读），避免历史会话显示全量虚高未读数
+  if (!s.lastReadAt) return 0;
+  const lastReadIdx = s.messages.findLastIndex(m => m.timestamp <= s.lastReadAt!);
   return lastAssist > lastReadIdx ? s.messages.length - lastReadIdx - 1 : 0;
 }
 
@@ -153,6 +153,17 @@ export async function getSession(id: string): Promise<ChatSession | null> {
 
 export function getCachedMessages(sessionId: string): ChatMessage[] | undefined {
   return msgCache.get(sessionId);
+}
+
+/**
+ * 标记会话为已读：lastReadAt 推进到当前时刻，存盘后 unreadCount 归零。
+ * 用于切入 / 切走会话时。轻量、单一职责；与流式 saveSession 若并发，以最后写入为准，下次交互自校正。
+ */
+export async function markSessionRead(sessionId: string): Promise<void> {
+  const s = await getSession(sessionId);
+  if (!s) return;
+  s.lastReadAt = new Date().toISOString();
+  await saveSession(s);
 }
 
 export async function saveSession(session: ChatSession) {
