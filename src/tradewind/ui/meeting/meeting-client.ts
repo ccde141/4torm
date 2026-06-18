@@ -35,8 +35,8 @@ export interface MeetingStatus {
   nodeId: string;
   round: number;
   busy: boolean;
-  /** 'opening' = 入会摘要中，禁用人类交互；'discussion' = 讨论阶段 */
-  phase?: 'opening' | 'discussion';
+  /** 'opening' = 入会摘要中，禁用人类交互；'discussion' = 讨论阶段；'ended' = 会议结束 */
+  phase?: 'opening' | 'discussion' | 'ended';
   messageCount: number;
   participants: MeetingParticipant[];
   configuredParticipants: MeetingParticipant[];

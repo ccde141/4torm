@@ -11,7 +11,7 @@ export default function ContactCard({ toolCall }: {
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  const target = toolCall.params?.target || '未知';
+  const target = String(toolCall.params?.target ?? '未知');
   const status = toolCall.status || 'pending';
   const result = toolCall.result || '';
 

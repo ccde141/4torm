@@ -56,14 +56,6 @@ function getEdgeFadeAlpha(p1: [number, number], p2: [number, number], w: number,
   return baseAlpha * (0.75 + edgeFade * 0.25);
 }
 
-const EDGE_MAP: Record<number, number[]> = {
-  1: [3, 0, 0, 1], 2: [2, 0, 1, 0], 3: [2, 0, 0, 1], 4: [0, 0, 2, 0],
-  5: [0, 0, 2, 0, 3, 0, 0, 1], 6: [0, 0, 1, 0], 7: [0, 0, 0, 1],
-  8: [0, 0, 0, 1], 9: [0, 0, 1, 0], 10: [0, 0, 0, 1, 2, 0, 1, 0],
-  11: [0, 0, 2, 0], 12: [2, 0, 0, 1], 13: [2, 0, 1, 0], 14: [1, 0, 0, 1],
-};
-// 编码方式：每对 (i,j) 表示一个端点；0=t,1=r,2=b,3=l。原 HTML 用对象映射，这里用扁平数组节省 GC。
-
 /**
  * Marching squares 绘制等高线。
  * 颜色梯度从冷青 → 暖青（按 height level 线性插值）。

@@ -436,7 +436,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             <div className="session-list" style={{ flex: 1, overflowY: 'auto' }}>
               {sessions.length === 0 && <div style={{ padding: 'var(--space-4)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center' }}>暂无会话，点击 + 创建</div>}
               {sessions.map(s => {
-                const unread = s.unreadCount ?? 0;
+                const unread = activeSessionId === s.id ? 0 : (s.unreadCount ?? 0);
                 const tokens = s.tokenUsage?.totalTokens ?? 0;
                 const tokenLabel = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}K` : `${tokens}`;
                 return (

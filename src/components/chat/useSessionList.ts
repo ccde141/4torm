@@ -6,6 +6,7 @@ import {
   deleteSession,
   buildSession,
   getCachedMessages,
+  markSessionRead,
 } from '../../store/chat';
 import type { Agent, ChatMessage } from '../../types';
 import type { ChatSession } from '../../store/chat';
@@ -50,13 +51,24 @@ export function useSessionList(
   const selectSession = useCallback(async (sessionId: string) => {
     if (sessionId === activeSessionId) return;
     // 切走：旧会话的流转入后台继续跑（不再 abort，杜绝丢数据 + 跨 origin Failed to fetch）
-    if (activeSessionId) streamHooks?.background(activeSessionId);
+    // 切走前用户已看过旧会话，标记其为已读（推进 lastReadAt），避免切走后被自身回复标红
+    if (activeSessionId) {
+      const prevId = activeSessionId;
+      streamHooks?.background(prevId);
+      markSessionRead(prevId).catch(() => {});
+      setSessions(prev => prev.map(p => p.id === prevId ? { ...p, unreadCount: 0 } : p));
+    }
     setActiveSessionId(sessionId);
 
     // 目标会话有活流 → 直接重连其缓冲，接着往下显示
     if (streamHooks?.reconnect(sessionId)) {
       getSession(sessionId).then(s => {
-        if (s?.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
+        if (!s) return;
+        if (s.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
+        // 切入即已读：推进 lastReadAt 并清未读（reconnect 分支此前漏更新，导致活流会话红点清不掉）
+        const lastReadAt = new Date().toISOString();
+        saveSession({ ...s, lastReadAt }).catch(() => {});
+        setSessions(prev => prev.map(p => p.id === sessionId ? { ...p, lastReadAt, unreadCount: 0 } : p));
       });
       return;
     }
@@ -72,7 +84,7 @@ export function useSessionList(
       if (s.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
       s.lastReadAt = new Date().toISOString();
       saveSession({ ...s, lastReadAt: s.lastReadAt }).catch(() => {});
-      setSessions(prev => prev.map(p => p.id === sessionId ? { ...p, lastReadAt: s.lastReadAt } : p));
+      setSessions(prev => prev.map(p => p.id === sessionId ? { ...p, lastReadAt: s.lastReadAt, unreadCount: 0 } : p));
     });
   }, [activeSessionId, setMessages, models, setSelectedModel, setStreaming, streamHooks]);
 

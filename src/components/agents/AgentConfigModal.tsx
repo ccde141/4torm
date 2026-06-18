@@ -18,7 +18,6 @@ interface CreateMode { mode: 'create'; onClose: () => void; onSave: () => void; 
 interface EditMode { mode: 'edit'; agent: Agent; onClose: () => void; onSave: () => void; }
 type Props = CreateMode | EditMode;
 
-const EXAMPLE_MASTER = '你是全栈代码开发助手。\n遵循 ReAct 模式（Thought → Action → Observation）。\n严格遵守用户指令，代码完整可运行。';
 const EXAMPLE_ROLE = '你是一个认真思考、注重质量的编程专家。';
 
 const TABS = ['基本', '提示词', '技能'] as const;
@@ -32,7 +31,6 @@ export default function AgentConfigModal(props: Props) {
   const [name, setName] = useState(agent?.name ?? '');
   const [role, setRole] = useState(agent?.role ?? '');
   const [description, setDescription] = useState(agent?.description ?? '');
-  const [masterPrompt, setMasterPrompt] = useState(agent?.config?.masterPrompt ?? (isCreate ? EXAMPLE_MASTER : ''));
   const [rolePrompt, setRolePrompt] = useState(agent?.config?.rolePrompt ?? (isCreate ? EXAMPLE_ROLE : ''));
   const [temperature, setTemperature] = useState(agent?.config?.temperature ?? 0.7);
   const [workspace, setWorkspace] = useState(agent?.config?.workspace ?? (isCreate ? '' : `data/agents/${(agent as Agent).id}/.workspace/`));

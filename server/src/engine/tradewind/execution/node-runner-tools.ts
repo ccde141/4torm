@@ -104,8 +104,8 @@ export async function execContact(
 
     const answer = await new Promise<string>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error('contact 超时（5 分钟未响应）'));
-      }, 5 * 60 * 1000);
+        reject(new Error('contact 超时（20 分钟未响应）'));
+      }, 20 * 60 * 1000);
 
       found.runner.push({
         source: 'contact',

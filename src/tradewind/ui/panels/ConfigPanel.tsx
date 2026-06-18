@@ -117,7 +117,9 @@ interface ConfigFieldsProps extends FieldProps {
   onSyncReworkEdge: (gateNodeId: string, targetNodeId: string | null) => void;
 }
 
-function ConfigFields({ nodeId, nodeType, config, label, onUpdate, nodes, edges, currentNodeId, onSyncReworkEdge }: ConfigFieldsProps) {
+// TODO(返工边): edges / onSyncReworkEdge 已由 ConfigPanel 透传进来，但 gate 节点配置
+// 控件尚未接线调用 onSyncReworkEdge 同步返工边。功能待接，暂以下划线标记避免 lint 报未用。
+function ConfigFields({ nodeId, nodeType, config, label, onUpdate, nodes, edges: _edges, currentNodeId, onSyncReworkEdge: _onSyncReworkEdge }: ConfigFieldsProps) {
   const update = (key: string, value: unknown) => {
     onUpdate(nodeId, { label, config: { ...config, [key]: value } });
   };

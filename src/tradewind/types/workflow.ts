@@ -64,6 +64,9 @@ export interface WorkflowEdge {
 
   /** 连线语义类型 */
   kind: EdgeKind;
+
+  /** 是否为返工边（可选，UI 标记，持久化以便重载保留） */
+  rework?: boolean;
 }
 
 /** 完整工作流图 */
