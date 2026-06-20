@@ -69,7 +69,13 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
   }, [workshopId, seatId, onReloaded]);
 
   useEffect(() => { reload(); }, [reload]);
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [history, live]);
+  // 粘性底部：仅当用户已在底部 150px 内才自动跟随，否则尊重上翻（对齐季风）
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [history, live]);
 
   /** 在 live.blocks 里按 id 找 delegate/contact 块（实时更新用） */
   function handleEvent(ev: any, ls: Live, flush: () => void) {
