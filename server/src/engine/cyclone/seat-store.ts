@@ -18,11 +18,16 @@ export async function addSeat(
 ): Promise<SeatData> {
   const w = await loadWorkshop(dataDir, workshopId);
   if (!w) throw new Error(`工作室不存在：${workshopId}`);
+  const title = opts.title || '工位';
+  // 工位 title 在工作室内唯一（contact 按 title 寻址，复刻信风 label 唯一约束）
+  if (await titleExists(dataDir, workshopId, title)) {
+    throw new Error(`工位名「${title}」已存在，请换一个（同工作室内工位名不能重复，否则无法 contact 寻址）`);
+  }
   const id = genId('seat');
   const now = new Date().toISOString();
   const seat: SeatData = {
     id,
-    title: opts.title || '工位',
+    title,
     rolePrompt: opts.rolePrompt || '',
     agentId: opts.agentId,
     messages: [],
@@ -34,6 +39,20 @@ export async function addSeat(
   w.seatIds.push(id);
   await saveWorkshop(dataDir, w);
   return seat;
+}
+
+/** 检查工作室内是否已有同名工位（可排除指定 seatId 自身，用于改名校验） */
+export async function titleExists(
+  dataDir: string, workshopId: string, title: string, excludeSeatId?: string,
+): Promise<boolean> {
+  const w = await loadWorkshop(dataDir, workshopId);
+  if (!w) return false;
+  for (const sid of w.seatIds) {
+    if (sid === excludeSeatId) continue;
+    const seat = await loadSeat(dataDir, workshopId, sid);
+    if (seat && seat.title === title) return true;
+  }
+  return false;
 }
 
 /** 加载工位（不存在返回 null） */
@@ -70,7 +89,12 @@ export async function updateSeatRole(
 ): Promise<SeatData | null> {
   const seat = await loadSeat(dataDir, workshopId, seatId);
   if (!seat) return null;
-  if (patch.title !== undefined) seat.title = patch.title;
+  if (patch.title !== undefined && patch.title !== seat.title) {
+    if (await titleExists(dataDir, workshopId, patch.title, seatId)) {
+      throw new Error(`工位名「${patch.title}」已存在，请换一个`);
+    }
+    seat.title = patch.title;
+  }
   if (patch.rolePrompt !== undefined) seat.rolePrompt = patch.rolePrompt;
   await saveSeat(dataDir, workshopId, seat);
   return seat;

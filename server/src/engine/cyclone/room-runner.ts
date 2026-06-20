@@ -18,7 +18,10 @@ import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execToolUnified } from '../shared/exec-tool';
 import { runReActLoop, runReActLoopNative, type ToolCaller } from './react-loop';
 import { buildSeatRoomSystemPrompt } from './seat-prompt';
+import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { makeLLM, wsRelPath } from './seat-runner';
+import { execContact } from './contact';
+import { listOtherSeatTitles } from './contact-registry';
 import { loadSeat } from './seat-store';
 import { saveRoom } from './room-store';
 import type { RoomData, SeatData } from './types';
@@ -40,14 +43,25 @@ function formatPublicContext(room: RoomData): string {
     .join('\n\n');
 }
 
-/** 群聊里工位的真实工具调用器（无 ask/delegate；contact 在 1b 接） */
+/** 群聊里工位的工具调用器（无 ask/delegate；保留真实工具 + contact） */
 function makeRoomToolCaller(opts: {
-  dataDir: string; agentId: string; sandboxLevel: string; wsDir: string;
+  dataDir: string; workshopId: string; seatId: string; seatTitle: string;
+  agentId: string; sandboxLevel: string; wsDir: string;
   speaker: string; signal: AbortSignal | undefined; onEvent: (ev: RoomEvent) => void;
 }): ToolCaller {
-  const { dataDir, agentId, sandboxLevel, wsDir, speaker, signal, onEvent } = opts;
+  const { dataDir, workshopId, seatId, seatTitle, agentId, sandboxLevel, wsDir, speaker, signal, onEvent } = opts;
   return {
     async call(tool, args) {
+      if (tool === 'contact') {
+        onEvent({ type: 'tool-call', speaker, tool, args });
+        const result = await execContact(
+          { dataDir, workshopId, fromSeatId: seatId, fromTitle: seatTitle, depth: 0, signal },
+          args.target || '', args.message || '',
+        );
+        const ok = !result.startsWith('联络失败') && !result.startsWith('联络被系统拒绝') && !result.includes('正忙');
+        onEvent({ type: 'tool-result', speaker, tool, result, ok });
+        return result;
+      }
       onEvent({ type: 'tool-call', speaker, tool, args });
       try {
         const result = await execToolUnified({ tool, args, agentId, workspaceDir: wsDir, sandboxLevel, signal });
@@ -76,8 +90,10 @@ async function runSeatInRoom(
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
   const wsDir = wsRelPath(dataDir, workshopId);
   const llm = makeLLM(dataDir, agent.model, agent.temperature);
+  const contactTargets = await listOtherSeatTitles(dataDir, workshopId, seat.id);
   const toolCaller = makeRoomToolCaller({
-    dataDir, agentId: agent.id, sandboxLevel: agent.sandboxLevel, wsDir,
+    dataDir, workshopId, seatId: seat.id, seatTitle: seat.title,
+    agentId: agent.id, sandboxLevel: agent.sandboxLevel, wsDir,
     speaker: seat.title, signal, onEvent,
   });
 
@@ -87,15 +103,18 @@ async function runSeatInRoom(
   };
   const history: ContextMessage = { role: 'user', content: formatPublicContext(room) };
   const messages: ContextMessage[] = [system, history];
+  // 群聊讨论场：剥 ask/delegate，保留 contact（热注入名单）
+  const nativeToolDefs = [...toolDefs, ...buildSeatVirtualToolDefs({ allowAsk: false, allowDelegate: false, contactTargets })];
+  const hasTools = toolDefs.length > 0 || contactTargets.length > 0;
 
   const result = native
     ? await runReActLoopNative({
-        messages, llm, tools: toolDefs.length > 0 ? toolCaller : undefined, toolDefs,
+        messages, llm, tools: hasTools ? toolCaller : undefined, toolDefs: nativeToolDefs,
         onEvent: (ev) => { if (ev.type === 'token') onEvent({ type: 'token', speaker: seat.title, content: ev.chunk }); },
         signal,
       })
     : await runReActLoop({
-        messages, llm, tools: toolDefs.length > 0 ? toolCaller : undefined,
+        messages, llm, tools: hasTools ? toolCaller : undefined,
         onEvent: (ev) => { if (ev.type === 'token') onEvent({ type: 'token', speaker: seat.title, content: ev.chunk }); },
         signal,
       });

@@ -27,6 +27,8 @@ import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { buildSeatSystemPrompt } from './seat-prompt';
 import { workshopWorkspace } from './paths';
 import { loadSeat, saveSeat, tryAcquireSeatLock } from './seat-store';
+import { execContact } from './contact';
+import { listOtherSeatTitles } from './contact-registry';
 import type { SeatData } from './types';
 import path from 'node:path';
 
@@ -87,12 +89,13 @@ async function execDelegate(
   return `[${result.status}] ${result.summary}`;
 }
 
-/** 构造工位工具调用器：ask 抛挂起信号，delegate 派子，其余走 shared/execToolUnified */
+/** 构造工位工具调用器：ask 抛挂起信号，delegate 派子，contact 联络其他工位，其余走 shared/execToolUnified */
 function makeToolCaller(opts: {
-  dataDir: string; agentId: string; sandboxLevel: string; wsDir: string;
+  dataDir: string; workshopId: string; seatId: string; seatTitle: string;
+  agentId: string; sandboxLevel: string; wsDir: string;
   signal: AbortSignal | undefined; onEvent: (ev: SeatEvent) => void;
 }): ToolCaller {
-  const { dataDir, agentId, sandboxLevel, wsDir, signal, onEvent } = opts;
+  const { dataDir, workshopId, seatId, seatTitle, agentId, sandboxLevel, wsDir, signal, onEvent } = opts;
   return {
     async call(tool, args) {
       if (tool === 'ask') {
@@ -103,6 +106,16 @@ function makeToolCaller(opts: {
       }
       if (tool === 'delegate') {
         return execDelegate(dataDir, agentId, sandboxLevel, args, signal, onEvent);
+      }
+      if (tool === 'contact') {
+        onEvent({ type: 'tool-call', tool, args });
+        const result = await execContact(
+          { dataDir, workshopId, fromSeatId: seatId, fromTitle: seatTitle, depth: 0, signal },
+          args.target || '', args.message || '',
+        );
+        const ok = !result.startsWith('联络失败') && !result.startsWith('联络被系统拒绝') && !result.includes('正忙');
+        onEvent({ type: 'tool-result', tool, result, ok });
+        return result;
       }
       onEvent({ type: 'tool-call', tool, args });
       try {
@@ -129,6 +142,8 @@ interface DriveCtx {
   native: boolean;
   toolDefs: import('../shared/tool-defs-loader').ToolDef[];
   agent: import('../shared/agent-loader').LoadedAgent;
+  /** 可联络的其他工位 title（热注入 contact 名单） */
+  contactTargets: string[];
   signal?: AbortSignal;
   onEvent: (ev: SeatEvent) => void;
 }
@@ -139,12 +154,15 @@ interface DriveCtx {
  * ask 挂起 → 存 pending；正常完成 → 存 assistant 回复 + 清 pending。
  */
 async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: string }> {
-  const { dataDir, workshopId, seat, messages, native, toolDefs, agent, signal, onEvent } = ctx;
+  const { dataDir, workshopId, seat, messages, native, toolDefs, agent, contactTargets, signal, onEvent } = ctx;
   const wsDir = wsRelPath(dataDir, workshopId);
   const llm = makeLLM(dataDir, agent.model, agent.temperature);
-  const toolCaller = makeToolCaller({ dataDir, agentId: agent.id, sandboxLevel: agent.sandboxLevel, wsDir, signal, onEvent });
+  const toolCaller = makeToolCaller({
+    dataDir, workshopId, seatId: seat.id, seatTitle: seat.title,
+    agentId: agent.id, sandboxLevel: agent.sandboxLevel, wsDir, signal, onEvent,
+  });
   const enableTools = toolDefs.length > 0;
-  const nativeToolDefs = [...toolDefs, ...buildSeatVirtualToolDefs(true)];
+  const nativeToolDefs = [...toolDefs, ...buildSeatVirtualToolDefs({ allowAsk: true, allowDelegate: true, contactTargets })];
 
   const result = native
     ? await runReActLoopNative({
@@ -190,7 +208,7 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
   return { content: result.content, rawContent: result.rawContent };
 }
 
-/** 加载工位 + 绑定 agent + 工具定义 + 决议 native（chat/resume 共用前置） */
+/** 加载工位 + 绑定 agent + 工具定义 + 决议 native + 可联络名单（chat/resume 共用前置） */
 async function prepare(dataDir: string, workshopId: string, seatId: string) {
   const seat = await loadSeat(dataDir, workshopId, seatId);
   if (!seat) throw new Error(`工位不存在：${seatId}`);
@@ -198,7 +216,8 @@ async function prepare(dataDir: string, workshopId: string, seatId: string) {
   if (!agent) throw new Error(`工位绑定的 agent 不存在或已删除：${seat.agentId}`);
   const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills);
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
-  return { seat, agent, toolDefs, native };
+  const contactTargets = await listOtherSeatTitles(dataDir, workshopId, seatId);
+  return { seat, agent, toolDefs, native, contactTargets };
 }
 
 /**
@@ -212,7 +231,7 @@ export async function chatSeat(
   const release = tryAcquireSeatLock(workshopId, seatId);
   if (!release) throw new Error('工位正在执行中');
   try {
-    const { seat, agent, toolDefs, native } = await prepare(dataDir, workshopId, seatId);
+    const { seat, agent, toolDefs, native, contactTargets } = await prepare(dataDir, workshopId, seatId);
     if (seat.pending) throw new Error('工位处于挂起状态，请先回复其提问（resume）');
     const system: ContextMessage = {
       role: 'system',
@@ -220,7 +239,7 @@ export async function chatSeat(
     };
     seat.messages.push({ role: 'user', content: humanMessage });
     const messages: ContextMessage[] = [system, ...seat.messages];
-    return await driveSeat({ dataDir, workshopId, seat, messages, native, toolDefs, agent, signal, onEvent });
+    return await driveSeat({ dataDir, workshopId, seat, messages, native, toolDefs, agent, contactTargets, signal, onEvent });
   } finally {
     release();
   }
@@ -237,7 +256,7 @@ export async function resumeSeat(
   const release = tryAcquireSeatLock(workshopId, seatId);
   if (!release) throw new Error('工位正在执行中');
   try {
-    const { seat, agent, toolDefs } = await prepare(dataDir, workshopId, seatId);
+    const { seat, agent, toolDefs, native: _n, contactTargets } = await prepare(dataDir, workshopId, seatId);
     if (!seat.pending) throw new Error('工位未处于挂起状态');
     const pending = seat.pending;
     if (pending.pendingToolCallId) {
@@ -251,7 +270,7 @@ export async function resumeSeat(
       content: buildSeatSystemPrompt({ dataDir, seat, agent, toolDefs, native: pending.native, wsRelPath: wsRelPath(dataDir, workshopId) }),
     };
     const messages: ContextMessage[] = [system, ...seat.messages];
-    return await driveSeat({ dataDir, workshopId, seat, messages, native: pending.native, toolDefs, agent, signal, onEvent });
+    return await driveSeat({ dataDir, workshopId, seat, messages, native: pending.native, toolDefs, agent, contactTargets, signal, onEvent });
   } finally {
     release();
   }
