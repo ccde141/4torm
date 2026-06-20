@@ -139,8 +139,15 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
   async function run(action: 'chat' | 'resume', text: string) {
     if (streaming) return;
     setStreaming(true);
-    // 乐观插入用户气泡（resume 也显示为用户回答）
-    setHistory(h => [...h, { id: `u${Date.now()}`, role: 'user', content: text }]);
+    if (action === 'chat') {
+      // 乐观插入用户气泡
+      setHistory(h => [...h, { id: `u${Date.now()}`, role: 'user', content: text }]);
+    } else if (seat?.pending) {
+      // 乐观把挂起的 ask 标记为已回答（对齐季风：问题 + ✓ 选择，不另起用户气泡）
+      const p = seat.pending;
+      setHistory(h => [...h, { id: `ask${Date.now()}`, role: 'assistant', content: '',
+        blocks: [{ kind: 'ask', question: p.question, options: p.options, answered: true, reply: text }] }]);
+    }
     const ls: Live = { blocks: [], text: '', phase: '等待模型响应...' };
     const flush = () => setLive({ ...ls, blocks: [...ls.blocks] });
     flush();
@@ -215,6 +222,9 @@ function BlockRow({ block }: { block: DisplayBlock }) {
   }
   if (block.kind === 'delegate') {
     return <DelegateCard toolCall={{ toolName: 'delegate', params: { task: block.task }, result: block.summary, status: block.status, steps: block.steps as any }} content={block.content} />;
+  }
+  if (block.kind === 'ask') {
+    return <AskCard question={block.question} options={block.options} answered={block.answered} reply={block.reply} onReply={() => {}} />;
   }
   return <ContactCard data={{ target: block.target, message: block.message, reply: block.reply, status: block.status }} />;
 }
