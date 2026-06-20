@@ -129,7 +129,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
       {/* 右：私聊 or 群聊 */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {view?.kind === 'room' && activeWid && (
-          <RoomPanel workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} />
+          <RoomPanel workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} onChanged={() => loadWorkshop(activeWid)} />
         )}
         {view?.kind !== 'room' && !activeSeat && <div style={{ opacity: .5, margin: 'auto' }}>选择或创建一个工位开始私聊，或进入群聊</div>}
         {view?.kind === 'seat' && activeSeat && activeWid && (

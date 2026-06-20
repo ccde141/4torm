@@ -89,6 +89,29 @@ export async function leaveRoom(
   return room;
 }
 
+/** 设置在场工位完整有序列表（调序/批量增减用，比 reorder(from,to) 更健壮） */
+export async function setRoomParticipants(
+  dataDir: string, workshopId: string, roomId: string, seatIds: string[],
+): Promise<RoomData | null> {
+  const room = await loadRoom(dataDir, workshopId, roomId);
+  if (!room) return null;
+  // 去重保序
+  room.participantSeatIds = [...new Set(seatIds)];
+  await saveRoom(dataDir, workshopId, room);
+  return room;
+}
+
+/** 重命名群聊 */
+export async function renameRoom(
+  dataDir: string, workshopId: string, roomId: string, title: string,
+): Promise<RoomData | null> {
+  const room = await loadRoom(dataDir, workshopId, roomId);
+  if (!room) return null;
+  const t = title.trim();
+  if (t) { room.title = t; await saveRoom(dataDir, workshopId, room); }
+  return room;
+}
+
 // ── per-room 并发锁（按 roomId 互斥，非阻塞） ──────────────────
 
 const roomLocks = new Set<string>();

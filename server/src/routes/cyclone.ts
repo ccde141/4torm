@@ -14,7 +14,7 @@ import {
   addSeat, loadSeat, deleteSeat, updateSeatRole,
 } from '../engine/cyclone/seat-store';
 import {
-  createRoom, loadRoom, deleteRoom, joinRoom, leaveRoom, tryAcquireRoomLock,
+  createRoom, loadRoom, deleteRoom, joinRoom, leaveRoom, setRoomParticipants, renameRoom, tryAcquireRoomLock,
 } from '../engine/cyclone/room-store';
 import { chatSeat, resumeSeat, type SeatEvent } from '../engine/cyclone/seat-runner';
 import { speakInRoom, type RoomEvent } from '../engine/cyclone/room-runner';
@@ -199,6 +199,20 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       const room = await leaveRoom(dataDir, workshopId, roomId, body.seatId);
       if (!room) return reply.status(404).send({ error: '群聊不存在' });
       return reply.send({ participantSeatIds: room.participantSeatIds });
+    }
+
+    if (action === 'reorder') {
+      if (!Array.isArray(body?.seatIds)) return reply.status(400).send({ error: '缺少 seatIds 数组' });
+      const room = await setRoomParticipants(dataDir, workshopId, roomId, body.seatIds);
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
+      return reply.send({ participantSeatIds: room.participantSeatIds });
+    }
+
+    if (action === 'rename') {
+      if (!body?.title) return reply.status(400).send({ error: '缺少 title' });
+      const room = await renameRoom(dataDir, workshopId, roomId, body.title);
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
+      return reply.send({ title: room.title });
     }
 
     if (action === 'abort') {
