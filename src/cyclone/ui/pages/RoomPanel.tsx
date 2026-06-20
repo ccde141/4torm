@@ -43,6 +43,8 @@ export default function RoomPanel({ workshopId, roomId, seats }: { workshopId: s
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [live, setLive] = useState<{ speaker: string; text: string } | null>(null);
+  /** 乐观 echo：本地暂存已发出但服务端尚未回写的人类发言，立即上屏 */
+  const [pendingEcho, setPendingEcho] = useState<RoomMsg[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
   const reload = useCallback(async () => {
@@ -79,6 +81,8 @@ export default function RoomPanel({ workshopId, roomId, seats }: { workshopId: s
     setInput('');
     setStreaming(true);
     setLive(null);
+    // 乐观 echo：人类发言立即上屏，不等服务端回写
+    setPendingEcho([{ speaker: '人类', content: text, timestamp: Date.now() }]);
     const abort = new AbortController();
     abortRef.current = abort;
     let acc = '';
@@ -98,6 +102,7 @@ export default function RoomPanel({ workshopId, roomId, seats }: { workshopId: s
       abortRef.current = null;
       await reload();
       setLive(null);
+      setPendingEcho([]);
     }
   }
 
@@ -118,6 +123,14 @@ export default function RoomPanel({ workshopId, roomId, seats }: { workshopId: s
           <div key={i} style={{ margin: '8px 0', textAlign: m.speaker === '人类' ? 'right' : 'left' }}>
             <div style={{ fontSize: 11, opacity: .5, margin: '0 4px' }}>{m.speaker}</div>
             <div style={{ display: 'inline-block', maxWidth: '80%', padding: '6px 10px', borderRadius: 8, background: m.speaker === '人类' ? '#2d4a7a' : '#333', whiteSpace: 'pre-wrap' }}>
+              {m.content}
+            </div>
+          </div>
+        ))}
+        {pendingEcho.map((m, i) => (
+          <div key={`echo-${i}`} style={{ margin: '8px 0', textAlign: 'right' }}>
+            <div style={{ fontSize: 11, opacity: .5, margin: '0 4px' }}>{m.speaker}</div>
+            <div style={{ display: 'inline-block', maxWidth: '80%', padding: '6px 10px', borderRadius: 8, background: '#2d4a7a', whiteSpace: 'pre-wrap' }}>
               {m.content}
             </div>
           </div>
