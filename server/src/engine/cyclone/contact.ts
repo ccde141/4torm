@@ -162,6 +162,13 @@ async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: 
     : await runReActLoop({ messages, llm, tools: toolDefs.length > 0 || contactTargets.length > 0 ? toolCaller : undefined, signal });
 
   // 落盘目标会话（剔除 system）
+  // react-loop 最终回答只 return、不 push，气旋后端持久化需在此补 push（同 driveSeat）
+  if (result.content && !result.content.startsWith('[中止]') && !result.content.startsWith('[错误]')) {
+    const last = messages[messages.length - 1];
+    if (!(last?.role === 'assistant' && last.content === result.content)) {
+      messages.push({ role: 'assistant', content: result.content });
+    }
+  }
   seat.messages = messages.filter(m => m.role !== 'system');
   if (result.usage) {
     seat.tokenUsage = {

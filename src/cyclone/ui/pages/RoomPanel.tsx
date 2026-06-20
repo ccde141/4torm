@@ -83,11 +83,12 @@ export default function RoomPanel({ workshopId, roomId, seats }: { workshopId: s
     abortRef.current = abort;
     let acc = '';
     let cur = '';
+    const finished: { speaker: string; content: string }[] = [];
     try {
       await streamSSE(`/api/cyclone/workshop/${workshopId}/room/${roomId}/speak`, { message: text }, (ev) => {
         if (ev.type === 'seat-start') { cur = ev.speaker; acc = ''; setLive({ speaker: cur, text: '' }); }
         else if (ev.type === 'token') { acc += ev.content; setLive({ speaker: cur, text: acc }); }
-        else if (ev.type === 'seat-done') { setLive(null); reload(); }
+        else if (ev.type === 'seat-done') { finished.push({ speaker: ev.speaker, content: ev.content }); setLive(null); }
         else if (ev.type === 'error') { setLive({ speaker: '系统', text: ev.message }); }
       }, abort.signal);
     } catch (e) {

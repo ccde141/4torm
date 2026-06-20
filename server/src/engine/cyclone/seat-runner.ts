@@ -177,6 +177,16 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
         signal,
       });
 
+  // react-loop 给出最终回答时只 return content、不 push 进 messages（季风行为：历史存前端）。
+  // 气旋历史存后端，故在此补 push，否则 reload 后最终回复丢失（复用陷阱 §2）。
+  if (!result.suspended && result.content
+      && !result.content.startsWith('[中止]') && !result.content.startsWith('[错误]')) {
+    const last = messages[messages.length - 1];
+    if (!(last?.role === 'assistant' && last.content === result.content)) {
+      messages.push({ role: 'assistant', content: result.content });
+    }
+  }
+
   // messages 被循环原地追加了 assistant/tool 消息；剔除开头 system 后即新历史
   seat.messages = messages.filter(m => m.role !== 'system');
   if (result.usage) {
