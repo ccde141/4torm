@@ -89,3 +89,36 @@ export interface WorkshopSummary {
   createdAt: string;
   updatedAt: string;
 }
+
+/** 群聊一条公共消息（发言者 = 工位 title 或「人类」） */
+export interface RoomMessage {
+  /** 发言者显示名（工位 title 或「人类」） */
+  speaker: string;
+  content: string;
+  timestamp: number;
+  /** 工位回复的原始 LLM 输出（含标签），前端解析渲染用 */
+  rawContent?: string;
+  /** 本轮工具调用记录 */
+  toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }>;
+}
+
+/**
+ * 群聊/会议室（Room）：同一工作室下的讨论场。
+ * 对齐对流：人发一句 → 在场工位依次回一句，公共上下文快照。
+ * 讨论场剥离 ask/delegate（不阻塞串行循环），保留真实工具 + contact。
+ * 工位在群里的发言只落 publicMessages，不落工位私聊会话。
+ */
+export interface RoomData {
+  id: string;
+  title: string;
+  /** 话题 */
+  topic: string;
+  /** 在场工位 id 列表（顺序即发言顺序） */
+  participantSeatIds: string[];
+  /** 公共消息历史 */
+  publicMessages: RoomMessage[];
+  tokenUsage?: CycloneTokenUsage;
+  compactState?: CycloneCompactState;
+  createdAt: string;
+  updatedAt: string;
+}

@@ -3,7 +3,7 @@
  *
  * 直接调用 engine/cyclone/ 下的业务函数。HTTP 层很薄。
  * Phase 0：工作室/工位 CRUD + 工位私聊（chat/resume，SSE 流式）。
- * 群聊（room）在 Phase 1 接入。
+ * Phase 1：群聊 CRUD + 拉工位 + 串行发言（speak，SSE 流式）。
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -13,10 +13,14 @@ import {
 import {
   addSeat, loadSeat, deleteSeat, updateSeatRole,
 } from '../engine/cyclone/seat-store';
+import {
+  createRoom, loadRoom, deleteRoom, joinRoom, leaveRoom, tryAcquireRoomLock,
+} from '../engine/cyclone/room-store';
 import { chatSeat, resumeSeat, type SeatEvent } from '../engine/cyclone/seat-runner';
+import { speakInRoom, type RoomEvent } from '../engine/cyclone/room-runner';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
 
-/** 活跃轮次 AbortController：`${workshopId}/${seatId}` → ctrl */
+/** 活跃轮次 AbortController：`${workshopId}/${seatId}` 或 `${workshopId}/room/${roomId}` → ctrl */
 const activeAborts = new Map<string, AbortController>();
 
 export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
@@ -124,6 +128,87 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
         pushSSE(reply, { type: 'error', message: (e as Error).message });
       } finally {
         activeAborts.delete(lockKey);
+        stopHB();
+        endSSE(reply);
+      }
+      return;
+    }
+
+    return reply.status(400).send({ error: `未知 action：${action}` });
+  });
+
+  // POST /api/cyclone/workshop/:workshopId/create-room —— 建群聊
+  app.post('/workshop/:workshopId/create-room', async (req, reply) => {
+    const { workshopId } = req.params as any;
+    const body = (req.body as any) || {};
+    const w = await loadWorkshop(dataDir, workshopId);
+    if (!w) return reply.status(404).send({ error: '工作室不存在' });
+    const room = await createRoom(dataDir, workshopId, {
+      title: body.title, topic: body.topic, participantSeatIds: body.participantSeatIds,
+    });
+    return reply.send(room);
+  });
+
+  // ALL /api/cyclone/workshop/:workshopId/room/:roomId/:action
+  app.all('/workshop/:workshopId/room/:roomId/:action', async (req, reply) => {
+    const { workshopId, roomId, action } = req.params as any;
+    const body = (req.body as any) || {};
+    const lockKey = `${workshopId}/room/${roomId}`;
+
+    if (action === 'status') {
+      const room = await loadRoom(dataDir, workshopId, roomId);
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
+      return reply.send(room);
+    }
+
+    if (action === 'delete') {
+      await deleteRoom(dataDir, workshopId, roomId);
+      return reply.send({ ok: true });
+    }
+
+    if (action === 'join') {
+      if (!body?.seatId) return reply.status(400).send({ error: '缺少 seatId' });
+      const room = await joinRoom(dataDir, workshopId, roomId, body.seatId);
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
+      return reply.send({ participantSeatIds: room.participantSeatIds });
+    }
+
+    if (action === 'leave') {
+      if (!body?.seatId) return reply.status(400).send({ error: '缺少 seatId' });
+      const room = await leaveRoom(dataDir, workshopId, roomId, body.seatId);
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
+      return reply.send({ participantSeatIds: room.participantSeatIds });
+    }
+
+    if (action === 'abort') {
+      const ctrl = activeAborts.get(lockKey);
+      if (!ctrl) return reply.status(409).send({ error: 'No active round' });
+      ctrl.abort();
+      return reply.send({ ok: true });
+    }
+
+    if (action === 'speak') {
+      const text = (body?.message ?? '').trim();
+      if (!text) return reply.status(400).send({ error: '缺少 message' });
+      const room = await loadRoom(dataDir, workshopId, roomId);
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
+      const release = tryAcquireRoomLock(workshopId, roomId);
+      if (!release) return reply.status(409).send({ error: '该群聊正在处理中，请稍后再试' });
+
+      reply.hijack();
+      initSSE(reply);
+      const stopHB = startHeartbeat(reply);
+      const abort = new AbortController();
+      activeAborts.set(lockKey, abort);
+      const onEvent = (ev: RoomEvent) => { pushSSE(reply, ev); };
+      try {
+        await speakInRoom(dataDir, workshopId, room, text, onEvent, abort.signal);
+        pushSSE(reply, { type: 'done' });
+      } catch (e) {
+        pushSSE(reply, { type: 'error', message: (e as Error).message });
+      } finally {
+        activeAborts.delete(lockKey);
+        release();
         stopHB();
         endSSE(reply);
       }

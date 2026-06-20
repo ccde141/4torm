@@ -45,13 +45,13 @@ export type SeatEvent =
   | { type: 'done' };
 
 /** workspace 项目根相对路径（execToolUnified / sandbox prompt 都用相对路径） */
-function wsRelPath(dataDir: string, workshopId: string): string {
+export function wsRelPath(dataDir: string, workshopId: string): string {
   const projectDir = path.resolve(dataDir, '..');
   return path.relative(projectDir, workshopWorkspace(dataDir, workshopId));
 }
 
 /** 构造工位的 LLM 调用器（落到 shared/callLLM） */
-function makeLLM(dataDir: string, model: string, temperature: number): LLMCaller {
+export function makeLLM(dataDir: string, model: string, temperature: number): LLMCaller {
   return {
     async call(msgs, _opts, onChunk, sig, tools) {
       return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools });
