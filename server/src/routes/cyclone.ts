@@ -189,9 +189,13 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
 
     if (action === 'join') {
       if (!body?.seatId) return reply.status(400).send({ error: '缺少 seatId' });
-      const room = await joinRoom(dataDir, workshopId, roomId, body.seatId);
-      if (!room) return reply.status(404).send({ error: '群聊不存在' });
-      return reply.send({ participantSeatIds: room.participantSeatIds });
+      try {
+        const room = await joinRoom(dataDir, workshopId, roomId, body.seatId);
+        if (!room) return reply.status(404).send({ error: '群聊不存在' });
+        return reply.send({ participantSeatIds: room.participantSeatIds });
+      } catch (e) {
+        return reply.status(400).send({ error: (e as Error).message });
+      }
     }
 
     if (action === 'leave') {
