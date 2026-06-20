@@ -6,11 +6,11 @@
  * 群聊（Room）在 Phase 1 接入，此页先只做私聊。
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { getAgents } from '../../../store/agent';
-import { streamUrl } from '../../../lib/apiBase';
 import type { Agent } from '../../../types';
 import RoomPanel from './RoomPanel';
+import SeatChat from './SeatChat';
 
 interface WorkshopSummary {
   id: string; title: string; seatCount: number; roomCount: number;
@@ -24,30 +24,6 @@ interface Seat {
 interface RoomLite { id: string; title: string; }
 interface Workshop { id: string; title: string; seatIds: string[]; roomIds: string[]; }
 
-async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal?: AbortSignal): Promise<void> {
-  const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
-  if (!res.ok) throw new Error(await res.text());
-  const reader = res.body?.getReader();
-  if (!reader) return;
-  const dec = new TextDecoder();
-  let buf = '';
-  while (true) {
-    if (signal?.aborted) { reader.cancel(); break; }
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() ?? '';
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t.startsWith('data:')) continue;
-      const p = t.slice(5).trim();
-      if (!p || p === '[DONE]') continue;
-      try { onEvent(JSON.parse(p)); } catch {}
-    }
-  }
-}
-
 export default function CyclonePage({ active }: { active?: boolean }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [workshops, setWorkshops] = useState<WorkshopSummary[]>([]);
@@ -58,10 +34,6 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   const [rooms, setRooms] = useState<RoomLite[]>([]);
   /** 右侧视图：私聊某工位 or 进入某群聊 */
   const [view, setView] = useState<{ kind: 'seat'; id: string } | { kind: 'room'; id: string } | null>(null);
-  const [input, setInput] = useState('');
-  const [streaming, setStreaming] = useState(false);
-  const [liveToken, setLiveToken] = useState('');
-  const abortRef = useRef<AbortController | null>(null);
 
   const refreshAgents = useCallback(async () => { try { setAgents(await getAgents()); } catch {} }, []);
   const refreshWorkshops = useCallback(async () => {
@@ -124,35 +96,6 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     if (r.ok) { const rm = await r.json(); await loadWorkshop(activeWid); setView({ kind: 'room', id: rm.id }); }
   }
 
-  async function send(action: 'chat' | 'resume') {
-    if (!activeWid || view?.kind !== 'seat' || !input.trim() || streaming) return;
-    const seatId = view.id;
-    const text = input.trim();
-    setInput('');
-    setStreaming(true);
-    setLiveToken('');
-    const abort = new AbortController();
-    abortRef.current = abort;
-    const payloadKey = action === 'chat' ? 'message' : 'answer';
-    let acc = '';
-    try {
-      await streamSSE(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/${action}`,
-        { [payloadKey]: text },
-        (ev) => {
-          if (ev.type === 'token') { acc += ev.content; setLiveToken(acc); }
-          else if (ev.type === 'ask') { /* pending 会在 reload 后显示 */ }
-          else if (ev.type === 'error') { acc += `\n[错误] ${ev.message}`; setLiveToken(acc); }
-        }, abort.signal);
-    } catch (e) {
-      setLiveToken(`[请求失败] ${(e as Error).message}`);
-    } finally {
-      setStreaming(false);
-      abortRef.current = null;
-      await loadWorkshop(activeWid);
-      setLiveToken('');
-    }
-  }
-
   if (!active) return null;
 
   return (
@@ -194,34 +137,8 @@ export default function CyclonePage({ active }: { active?: boolean }) {
           <RoomPanel workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} />
         )}
         {view?.kind !== 'room' && !activeSeat && <div style={{ opacity: .5, margin: 'auto' }}>选择或创建一个工位开始私聊，或进入群聊</div>}
-        {view?.kind === 'seat' && activeSeat && (
-          <>
-            <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
-              {activeSeat.messages.filter(m => m.role === 'user' || m.role === 'assistant').map((m, i) => (
-                <div key={i} style={{ margin: '8px 0', textAlign: m.role === 'user' ? 'right' : 'left' }}>
-                  <div style={{ display: 'inline-block', maxWidth: '80%', padding: '6px 10px', borderRadius: 8, background: m.role === 'user' ? '#2d4a7a' : '#333', whiteSpace: 'pre-wrap' }}>
-                    {m.content}
-                  </div>
-                </div>
-              ))}
-              {liveToken && <div style={{ margin: '8px 0', opacity: .8, whiteSpace: 'pre-wrap' }}>{liveToken}</div>}
-              {activeSeat.pending && (
-                <div style={{ margin: '8px 0', padding: 10, border: '1px solid #c90', borderRadius: 8 }}>
-                  ❓ 工位提问：{activeSeat.pending.question}
-                  {activeSeat.pending.options?.length ? <div style={{ opacity: .7, fontSize: 12 }}>选项：{activeSeat.pending.options.join(' / ')}</div> : null}
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: 8, padding: 8 }}>
-              <input value={input} onChange={e => setInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') send(activeSeat.pending ? 'resume' : 'chat'); }}
-                placeholder={activeSeat.pending ? '回答工位的提问…' : '对工位说点什么…'}
-                disabled={streaming} style={{ flex: 1, padding: 8, background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, color: '#eee' }} />
-              <button onClick={() => send(activeSeat.pending ? 'resume' : 'chat')} disabled={streaming} style={btn}>
-                {streaming ? '…' : (activeSeat.pending ? '回答' : '发送')}
-              </button>
-            </div>
-          </>
+        {view?.kind === 'seat' && activeSeat && activeWid && (
+          <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id} onReloaded={() => loadWorkshop(activeWid)} />
         )}
       </div>
     </div>
