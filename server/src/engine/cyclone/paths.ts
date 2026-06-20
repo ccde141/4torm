@@ -37,6 +37,16 @@ export function seatsDir(dataDir: string, workshopId: string): string {
   return path.join(workshopDir(dataDir, workshopId), 'seats');
 }
 
+/** 群聊文件：data/cyclone/{id}/rooms/{roomId}.json */
+export function roomFile(dataDir: string, workshopId: string, roomId: string): string {
+  return path.join(workshopDir(dataDir, workshopId), 'rooms', `${roomId}.json`);
+}
+
+/** 群聊目录：data/cyclone/{id}/rooms/ */
+export function roomsDir(dataDir: string, workshopId: string): string {
+  return path.join(workshopDir(dataDir, workshopId), 'rooms');
+}
+
 // ── 底层 IO ──────────────────────────────────────────────────
 
 /** 安全读 JSON：文件不存在或损坏返回 null，不抛 */

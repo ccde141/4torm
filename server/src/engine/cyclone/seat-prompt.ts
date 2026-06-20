@@ -74,3 +74,83 @@ export function buildSeatSystemPrompt(opts: {
 
   return parts.join('\n\n');
 }
+
+/**
+ * 构造工位在群聊中的 system prompt。
+ * 群聊是讨论场：剥离 ask/delegate，场景提示也不提这两个工具。
+ */
+export function buildSeatRoomSystemPrompt(opts: {
+  dataDir: string;
+  seat: SeatData;
+  agent: LoadedAgent;
+  toolDefs: ToolDef[];
+  native: boolean;
+  wsRelPath: string;
+  topic: string;
+}): string {
+  const { dataDir, seat, agent, toolDefs, native, wsRelPath, topic } = opts;
+  const projectDir = path.resolve(dataDir, '..');
+  const wsAbs = path.resolve(projectDir, wsRelPath);
+  const parts: string[] = [];
+
+  parts.push(buildSandboxSection({
+    workspaceAbs: wsAbs,
+    projectDir,
+    sandboxLevel: agent.sandboxLevel,
+    workspaceLabel: '气旋工作室共享工作区',
+  }));
+
+  if (agent.rolePrompt && agent.rolePrompt.trim()) {
+    parts.push(agent.rolePrompt.trim());
+  }
+  if (seat.rolePrompt && seat.rolePrompt.trim()) {
+    parts.push(`## 你在本工作室的岗位\n${seat.rolePrompt.trim()}`);
+  }
+  if (toolDefs.length > 0) {
+    parts.push(native ? buildNativeProtocol(toolDefs) : buildSystemPrompt(toolDefs));
+  }
+
+  parts.push(`## 当前场景\n你是气旋工作室里的「${seat.title}」工位，正在参加一场群聊讨论。\n\n讨论话题：${topic}\n\n你会看到群聊记录（含人类和其他工位的发言）。请基于讨论上下文，以「${seat.title}」的身份发表你的观点或回应。这是讨论场，简明扼要地说你要说的，一轮一句，不要长篇大论；需要时可调用工具佐证。`);
+
+  return parts.join('\n\n');
+}
+
+/**
+ * 构造工位被「联络」时的 system prompt（无人类在场的一轮处理）。
+ * 剥离 ask（没人可答），保留真实工具 + delegate + 继续 contact（可嵌套联络）。
+ */
+export function buildSeatContactSystemPrompt(opts: {
+  dataDir: string;
+  seat: SeatData;
+  agent: LoadedAgent;
+  toolDefs: ToolDef[];
+  native: boolean;
+  wsRelPath: string;
+  fromTitle: string;
+}): string {
+  const { dataDir, seat, agent, toolDefs, native, wsRelPath, fromTitle } = opts;
+  const projectDir = path.resolve(dataDir, '..');
+  const wsAbs = path.resolve(projectDir, wsRelPath);
+  const parts: string[] = [];
+
+  parts.push(buildSandboxSection({
+    workspaceAbs: wsAbs,
+    projectDir,
+    sandboxLevel: agent.sandboxLevel,
+    workspaceLabel: '气旋工作室共享工作区',
+  }));
+
+  if (agent.rolePrompt && agent.rolePrompt.trim()) {
+    parts.push(agent.rolePrompt.trim());
+  }
+  if (seat.rolePrompt && seat.rolePrompt.trim()) {
+    parts.push(`## 你在本工作室的岗位\n${seat.rolePrompt.trim()}`);
+  }
+  if (toolDefs.length > 0) {
+    parts.push(native ? buildNativeProtocol(toolDefs) : buildSystemPrompt(toolDefs));
+  }
+
+  parts.push(`## 当前场景\n你是气旋工作室里的「${seat.title}」工位。同事工位「${fromTitle}」刚刚联络你，需要你处理一件事。\n\n请在你自己的会话上下文里完整处理这条联络消息，把活干完，然后用自然语言给出可直接回传给「${fromTitle}」的结论。注意：此刻没有人类在场，不要发起需要人类回答的提问；信息不足时基于现有上下文做合理判断或直接说明无法完成的原因。`);
+
+  return parts.join('\n\n');
+}
