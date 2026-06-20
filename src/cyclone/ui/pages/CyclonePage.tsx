@@ -16,19 +16,16 @@ interface WorkshopSummary {
   id: string; title: string; seatCount: number; roomCount: number;
   createdAt: string; updatedAt: string;
 }
+/** 侧栏工位摘要（轻量，不含会话内容） */
 interface Seat {
-  id: string; title: string; rolePrompt: string; agentId: string;
-  messages: { role: string; content: string }[];
-  pending?: { question: string; options?: string[] };
+  id: string; title: string; pending?: boolean;
 }
 interface RoomLite { id: string; title: string; }
-interface Workshop { id: string; title: string; seatIds: string[]; roomIds: string[]; }
 
 export default function CyclonePage({ active }: { active?: boolean }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [workshops, setWorkshops] = useState<WorkshopSummary[]>([]);
   const [activeWid, setActiveWid] = useState<string | null>(null);
-  const [workshop, setWorkshop] = useState<Workshop | null>(null);
   const [seats, setSeats] = useState<Seat[]>([]);
   const [activeSeatId, setActiveSeatId] = useState<string | null>(null);
   const [rooms, setRooms] = useState<RoomLite[]>([]);
@@ -41,24 +38,15 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   }, []);
 
   const loadWorkshop = useCallback(async (wid: string) => {
-    const r = await fetch(`/api/cyclone/workshop/${wid}/status`);
+    // 侧栏只取轻量摘要（一次请求，服务端并行读），不拉每个工位/群聊的完整会话。
+    // 完整内容由 SeatChat/RoomPanel 选中时各自加载。
+    const r = await fetch(`/api/cyclone/workshop/${wid}/summary`);
     if (!r.ok) return;
-    const w: Workshop = await r.json();
-    setWorkshop(w);
-    const loaded: Seat[] = [];
-    for (const sid of w.seatIds) {
-      const sr = await fetch(`/api/cyclone/workshop/${wid}/seat/${sid}/status`);
-      if (sr.ok) loaded.push(await sr.json());
-    }
-    setSeats(loaded);
-    const loadedRooms: RoomLite[] = [];
-    for (const rid of w.roomIds) {
-      const rr = await fetch(`/api/cyclone/workshop/${wid}/room/${rid}/status`);
-      if (rr.ok) { const rm = await rr.json(); loadedRooms.push({ id: rm.id, title: rm.title }); }
-    }
-    setRooms(loadedRooms);
-    if (loaded.length && !loaded.some(s => s.id === activeSeatId)) setActiveSeatId(loaded[0].id);
-  }, [activeSeatId]);
+    const sum: { id: string; title: string; seats: Seat[]; rooms: RoomLite[] } = await r.json();
+    setSeats(sum.seats);
+    setRooms(sum.rooms);
+    setActiveSeatId(prev => (sum.seats.length && !sum.seats.some(s => s.id === prev)) ? sum.seats[0].id : prev);
+  }, []);
 
   useEffect(() => { if (!active) return; refreshAgents(); refreshWorkshops(); }, [active, refreshAgents, refreshWorkshops]);
   useEffect(() => { if (activeWid) loadWorkshop(activeWid); }, [activeWid, loadWorkshop]);

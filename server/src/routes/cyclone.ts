@@ -49,6 +49,27 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       return reply.send(w);
     }
 
+    // 侧栏轻量摘要：一次返回工位/群聊的 id+标题（+工位是否挂起），并行读，不拉完整会话
+    if (action === 'summary') {
+      const w = await loadWorkshop(dataDir, workshopId);
+      if (!w) return reply.status(404).send({ error: '工作室不存在' });
+      const [seats, rooms] = await Promise.all([
+        Promise.all(w.seatIds.map(async (sid) => {
+          const s = await loadSeat(dataDir, workshopId, sid);
+          return s ? { id: s.id, title: s.title, pending: !!s.pending } : null;
+        })),
+        Promise.all(w.roomIds.map(async (rid) => {
+          const rm = await loadRoom(dataDir, workshopId, rid);
+          return rm ? { id: rm.id, title: rm.title } : null;
+        })),
+      ]);
+      return reply.send({
+        id: w.id, title: w.title,
+        seats: seats.filter(Boolean),
+        rooms: rooms.filter(Boolean),
+      });
+    }
+
     if (action === 'rename') {
       if (!body?.title?.trim()) return reply.status(400).send({ error: '缺少 title' });
       await renameWorkshop(dataDir, workshopId, body.title.trim());

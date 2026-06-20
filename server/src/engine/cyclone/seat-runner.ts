@@ -39,7 +39,11 @@ export type SeatEvent =
   | { type: 'tool-result'; tool: string; result: string; ok: boolean }
   | { type: 'delegate-start'; task: string; delegateId: string }
   | { type: 'delegate-token'; delegateId: string; content: string }
+  | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
+  | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
+  | { type: 'contact-start'; target: string; message: string; contactId: string }
+  | { type: 'contact-done'; contactId: string; reply: string; ok: boolean }
   | { type: 'ask'; question: string; options?: string[] }
   | { type: 'answer'; content: string; rawContent: string }
   | { type: 'usage'; usage: TokenUsage }
@@ -83,6 +87,8 @@ async function execDelegate(
     parentSandboxLevel: sandboxLevel as 'strict' | 'relaxed' | 'unrestricted',
     emit: (ev) => {
       if (ev.type === 'token') onEvent({ type: 'delegate-token', delegateId, content: ev.data.t });
+      else if (ev.type === 'tool_call') onEvent({ type: 'delegate-tool-call', delegateId, tool: ev.data.tool, args: ev.data.args });
+      else if (ev.type === 'tool_result') onEvent({ type: 'delegate-tool-result', delegateId, tool: ev.data.tool, result: ev.data.result, ok: ev.data.ok });
     },
   });
   onEvent({ type: 'delegate-done', delegateId, summary: result.summary, status: result.status });
@@ -108,13 +114,15 @@ function makeToolCaller(opts: {
         return execDelegate(dataDir, agentId, sandboxLevel, args, signal, onEvent);
       }
       if (tool === 'contact') {
-        onEvent({ type: 'tool-call', tool, args });
+        const contactId = `ct-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        const target = args.target || '';
+        onEvent({ type: 'contact-start', target, message: args.message || '', contactId });
         const result = await execContact(
           { dataDir, workshopId, fromSeatId: seatId, fromTitle: seatTitle, depth: 0, signal },
-          args.target || '', args.message || '',
+          target, args.message || '',
         );
         const ok = !result.startsWith('联络失败') && !result.startsWith('联络被系统拒绝') && !result.includes('正忙');
-        onEvent({ type: 'tool-result', tool, result, ok });
+        onEvent({ type: 'contact-done', contactId, reply: result, ok });
         return result;
       }
       onEvent({ type: 'tool-call', tool, args });

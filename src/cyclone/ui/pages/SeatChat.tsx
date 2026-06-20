@@ -1,22 +1,28 @@
 /**
  * 气旋工位私聊面板 —— 复用季风渲染原子，对齐季风会话视觉
  *
- * 渲染：季风 ToolCallMessage（工具卡片）+ renderTextWithCode（markdown）+ chat__* 全局 CSS。
- * 流式：消费 SeatEvent（token/tool-call/tool-result/answer/ask）实时构建工具卡片 + 气泡。
- * 重载：从 /status 取 ContextMessage[]，contextToDisplay 配对成工具卡片，不丢内容。
+ * 渲染：季风 ToolCallMessage / DelegateCard / AskCard + 气旋 ContactCard + renderTextWithCode。
+ * 流式：消费 SeatEvent（token、tool、delegate、contact、ask、answer）实时构建有序卡片块。
+ * 重载：从 /status 取 ContextMessage[]，contextToDisplay 配对成块，不丢内容。
+ * ask：渲染季风 AskCard（选项按钮+自由输入），回复走 resume 端点续跑挂起循环。
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { streamUrl } from '../../../lib/apiBase';
 import { renderTextWithCode } from '../../../engine/markdown';
 import ToolCallMessage from '../../../components/chat/ToolCallMessage';
-import { contextToDisplay, type DisplayMessage, type DisplayTool } from './messageDisplay';
+import DelegateCard from '../../../components/chat/DelegateCard';
+import AskCard from '../../../components/chat/AskCard';
+import ContactCard from './ContactCard';
+import { contextToDisplay, type DisplayMessage, type DisplayBlock } from './messageDisplay';
 
 interface SeatStatus {
   id: string; title: string;
   messages: { role: string; content: string; toolCalls?: any[]; toolCallId?: string }[];
   pending?: { question: string; options?: string[] };
 }
+
+interface Live { blocks: DisplayBlock[]; text: string; phase: string; ask?: { question: string; options?: string[] } }
 
 async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal?: AbortSignal): Promise<void> {
   const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
@@ -49,8 +55,7 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
   const [history, setHistory] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
-  /** 流式期间的实时构建消息（独立于已落库 history） */
-  const [live, setLive] = useState<{ text: string; tools: DisplayTool[]; phase: string } | null>(null);
+  const [live, setLive] = useState<Live | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -64,49 +69,88 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
   }, [workshopId, seatId, onReloaded]);
 
   useEffect(() => { reload(); }, [reload]);
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }, [history, live]);
+  // 粘性底部：仅当用户已在底部 150px 内才自动跟随，否则尊重上翻（对齐季风）
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [history, live]);
 
-  async function send(action: 'chat' | 'resume') {
-    if (!input.trim() || streaming) return;
-    const text = input.trim();
-    setInput('');
+  /** 在 live.blocks 里按 id 找 delegate/contact 块（实时更新用） */
+  function handleEvent(ev: any, ls: Live, flush: () => void) {
+    switch (ev.type) {
+      case 'token':
+        ls.text += ev.content; ls.phase = ''; break;
+      case 'tool-call':
+        ls.blocks.push({ kind: 'tool', tool: ev.tool, args: ev.args, status: 'running' });
+        ls.phase = `正在调用 ${ev.tool}...`; break;
+      case 'tool-result': {
+        for (let i = ls.blocks.length - 1; i >= 0; i--) {
+          const b = ls.blocks[i];
+          if (b.kind === 'tool' && b.status === 'running') { ls.blocks[i] = { ...b, result: ev.result, status: ev.ok ? 'success' : 'error' }; break; }
+        }
+        ls.phase = ''; break;
+      }
+      case 'delegate-start':
+        ls.blocks.push({ kind: 'delegate', id: ev.delegateId, task: ev.task, steps: [], status: 'running' });
+        ls.phase = '子任务执行中...'; break;
+      case 'delegate-token': {
+        const b = ls.blocks.find(x => x.kind === 'delegate' && x.id === ev.delegateId);
+        if (b && b.kind === 'delegate') b.content = (b.content || '') + ev.content; break;
+      }
+      case 'delegate-tool-call': {
+        const b = ls.blocks.find(x => x.kind === 'delegate' && x.id === ev.delegateId);
+        if (b && b.kind === 'delegate') b.steps.push({ type: 'tool', tool: ev.tool, args: ev.args }); break;
+      }
+      case 'delegate-tool-result': {
+        const b = ls.blocks.find(x => x.kind === 'delegate' && x.id === ev.delegateId);
+        if (b && b.kind === 'delegate') {
+          for (let i = b.steps.length - 1; i >= 0; i--) {
+            if (b.steps[i].tool === ev.tool && b.steps[i].result === undefined) { b.steps[i].result = ev.result; b.steps[i].ok = ev.ok; break; }
+          }
+        }
+        break;
+      }
+      case 'delegate-done': {
+        const b = ls.blocks.find(x => x.kind === 'delegate' && x.id === ev.delegateId);
+        if (b && b.kind === 'delegate') { b.summary = ev.summary; b.status = ev.status === 'error' ? 'error' : 'success'; }
+        ls.phase = ''; break;
+      }
+      case 'contact-start':
+        ls.blocks.push({ kind: 'contact', id: ev.contactId, target: ev.target, message: ev.message, status: 'running' });
+        ls.phase = `联络 ${ev.target}...`; break;
+      case 'contact-done': {
+        const b = ls.blocks.find(x => x.kind === 'contact' && x.id === ev.contactId);
+        if (b && b.kind === 'contact') { b.reply = ev.reply; b.status = ev.ok ? 'success' : 'error'; }
+        ls.phase = ''; break;
+      }
+      case 'answer':
+        ls.text = ev.content; ls.phase = ''; break;
+      case 'ask':
+        ls.ask = { question: ev.question, options: ev.options }; ls.phase = ''; break;
+      case 'error':
+        ls.text += `\n[错误] ${ev.message}`; break;
+    }
+    flush();
+  }
+
+  /** 统一发送：chat（新消息）/ resume（回答挂起的 ask） */
+  async function run(action: 'chat' | 'resume', text: string) {
+    if (streaming) return;
     setStreaming(true);
     // 乐观插入用户气泡（resume 也显示为用户回答）
     setHistory(h => [...h, { id: `u${Date.now()}`, role: 'user', content: text }]);
-    const liveState = { text: '', tools: [] as DisplayTool[], phase: '等待模型响应...' };
-    setLive({ ...liveState });
+    const ls: Live = { blocks: [], text: '', phase: '等待模型响应...' };
+    const flush = () => setLive({ ...ls, blocks: [...ls.blocks] });
+    flush();
     const abort = new AbortController();
     abortRef.current = abort;
     const payloadKey = action === 'chat' ? 'message' : 'answer';
     try {
-      await streamSSE(`/api/cyclone/workshop/${workshopId}/seat/${seatId}/${action}`, { [payloadKey]: text }, (ev) => {
-        if (ev.type === 'token') {
-          liveState.text += ev.content; liveState.phase = '';
-          setLive({ ...liveState, tools: [...liveState.tools] });
-        } else if (ev.type === 'tool-call') {
-          liveState.tools.push({ tool: ev.tool, args: ev.args, status: 'running' });
-          liveState.phase = `正在调用 ${ev.tool}...`;
-          setLive({ ...liveState, tools: [...liveState.tools] });
-        } else if (ev.type === 'tool-result') {
-          for (let i = liveState.tools.length - 1; i >= 0; i--) {
-            if (liveState.tools[i].status === 'running') {
-              liveState.tools[i] = { ...liveState.tools[i], result: ev.result, status: ev.ok ? 'success' : 'error' };
-              break;
-            }
-          }
-          liveState.phase = '';
-          setLive({ ...liveState, tools: [...liveState.tools] });
-        } else if (ev.type === 'answer') {
-          liveState.text = ev.content; liveState.phase = '';
-          setLive({ ...liveState, tools: [...liveState.tools] });
-        } else if (ev.type === 'error') {
-          liveState.text += `\n[错误] ${ev.message}`;
-          setLive({ ...liveState, tools: [...liveState.tools] });
-        }
-      }, abort.signal);
+      await streamSSE(`/api/cyclone/workshop/${workshopId}/seat/${seatId}/${action}`, { [payloadKey]: text }, (ev) => handleEvent(ev, ls, flush), abort.signal);
     } catch (e) {
-      liveState.text += `\n[请求失败] ${(e as Error).message}`;
-      setLive({ ...liveState });
+      ls.text += `\n[请求失败] ${(e as Error).message}`; flush();
     } finally {
       setStreaming(false);
       abortRef.current = null;
@@ -115,8 +159,16 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
     }
   }
 
+  function sendInput() {
+    const text = input.trim();
+    if (!text) return;
+    setInput('');
+    run('chat', text);
+  }
+
   if (!seat) return <div style={{ opacity: .5, margin: 'auto' }}>加载工位…</div>;
-  const pending = seat.pending;
+  // 挂起态：流式结束后若 seat.pending 存在，渲染交互 AskCard；流式期间用 live.ask
+  const pending = !streaming ? seat.pending : undefined;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -124,41 +176,47 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
         {history.map(m => <DisplayRow key={m.id} msg={m} />)}
         {live && (
           <>
-            {live.tools.map((t, i) => (
-              <ToolCallMessage key={`live-tool-${i}`} toolCall={{ toolName: t.tool, params: t.args, result: t.result, status: t.status === 'success' ? 'success' : t.status === 'error' ? 'error' : 'running' }} />
-            ))}
-            <div className="chat__message chat__message--assistant">
-              <div className="chat__avatar">AI</div>
-              <div className="chat__bubble">
-                {live.phase && <div className="chat__streaming-phase">{live.phase}</div>}
-                {live.text && <div className="md-bubble" style={{ whiteSpace: 'pre-wrap' }}>{live.text}▍</div>}
+            {live.blocks.map((b, i) => <BlockRow key={`live-${i}`} block={b} />)}
+            {live.ask && <AskCard question={live.ask.question} options={live.ask.options} answered={false} onReply={(a) => run('resume', a)} />}
+            {(live.text || live.phase) && (
+              <div className="chat__message chat__message--assistant">
+                <div className="chat__avatar">AI</div>
+                <div className="chat__bubble">
+                  {live.phase && <div className="chat__streaming-phase">{live.phase}</div>}
+                  {live.text && <div className="md-bubble" style={{ whiteSpace: 'pre-wrap' }}>{live.text}▍</div>}
+                </div>
               </div>
-            </div>
+            )}
           </>
         )}
-        {pending && !streaming && (
-          <div className="chat__message chat__message--assistant">
-            <div className="chat__avatar">AI</div>
-            <div className="chat__bubble" style={{ borderColor: 'var(--color-accent)' }}>
-              <div style={{ fontWeight: 600 }}>❓ {pending.question}</div>
-              {pending.options?.length ? <div style={{ opacity: .7, fontSize: 'var(--text-xs)', marginTop: 4 }}>{pending.options.join(' / ')}</div> : null}
-            </div>
-          </div>
+        {pending && (
+          <AskCard question={pending.question} options={pending.options} answered={false} onReply={(a) => run('resume', a)} />
         )}
       </div>
 
       <div className="chat__input-area" style={{ display: 'flex', gap: 'var(--space-2)', padding: 'var(--space-3)', borderTop: '1px solid var(--border-color)' }}>
         <input value={input} onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(pending ? 'resume' : 'chat'); } }}
-          placeholder={pending ? '回答工位的提问…' : '对工位说点什么…'}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInput(); } }}
+          placeholder={pending ? '也可在上方卡片回答，或在此自由输入…' : '对工位说点什么…'}
           disabled={streaming}
           style={{ flex: 1, padding: 'var(--space-2) var(--space-3)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--color-text)' }} />
-        <button onClick={() => send(pending ? 'resume' : 'chat')} disabled={streaming} className="btn btn--primary">
+        <button onClick={sendInput} disabled={streaming} className="btn btn--primary">
           {streaming ? '…' : (pending ? '回答' : '发送')}
         </button>
       </div>
     </div>
   );
+}
+
+/** 渲染单个卡片块（流式 + 重载共用） */
+function BlockRow({ block }: { block: DisplayBlock }) {
+  if (block.kind === 'tool') {
+    return <ToolCallMessage toolCall={{ toolName: block.tool, params: block.args, result: block.result, status: block.status }} />;
+  }
+  if (block.kind === 'delegate') {
+    return <DelegateCard toolCall={{ toolName: 'delegate', params: { task: block.task }, result: block.summary, status: block.status, steps: block.steps as any }} content={block.content} />;
+  }
+  return <ContactCard data={{ target: block.target, message: block.message, reply: block.reply, status: block.status }} />;
 }
 
 /** 单条已落库展示消息 */
@@ -173,9 +231,7 @@ function DisplayRow({ msg }: { msg: DisplayMessage }) {
   }
   return (
     <>
-      {msg.tools?.map((t, i) => (
-        <ToolCallMessage key={`${msg.id}-tool-${i}`} toolCall={{ toolName: t.tool, params: t.args, result: t.result, status: t.status }} />
-      ))}
+      {msg.blocks?.map((b, i) => <BlockRow key={`${msg.id}-b-${i}`} block={b} />)}
       {msg.content && (
         <div className="chat__message chat__message--assistant">
           <div className="chat__avatar">AI</div>
