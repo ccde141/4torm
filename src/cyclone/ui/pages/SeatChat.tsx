@@ -58,15 +58,19 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
   const [live, setLive] = useState<Live | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 稳定 onReloaded 引用，避免父级每次 render 重建闭包导致 reload 身份变化、effect 反复重拉
+  const onReloadedRef = useRef(onReloaded);
+  onReloadedRef.current = onReloaded;
 
-  const reload = useCallback(async () => {
+  /** 拉取工位会话。notifyParent=true 时通知父级刷新侧栏（仅发送完成后用，挂载时不通知） */
+  const reload = useCallback(async (notifyParent = false) => {
     const r = await fetch(`/api/cyclone/workshop/${workshopId}/seat/${seatId}/status`);
     if (!r.ok) return;
     const s: SeatStatus = await r.json();
     setSeat(s);
     setHistory(contextToDisplay(s.messages));
-    onReloaded?.();
-  }, [workshopId, seatId, onReloaded]);
+    if (notifyParent) onReloadedRef.current?.();
+  }, [workshopId, seatId]);
 
   useEffect(() => { reload(); }, [reload]);
   // 粘性底部：仅当用户已在底部 150px 内才自动跟随，否则尊重上翻（对齐季风）
@@ -139,8 +143,15 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
   async function run(action: 'chat' | 'resume', text: string) {
     if (streaming) return;
     setStreaming(true);
-    // 乐观插入用户气泡（resume 也显示为用户回答）
-    setHistory(h => [...h, { id: `u${Date.now()}`, role: 'user', content: text }]);
+    if (action === 'chat') {
+      // 乐观插入用户气泡
+      setHistory(h => [...h, { id: `u${Date.now()}`, role: 'user', content: text }]);
+    } else if (seat?.pending) {
+      // 乐观把挂起的 ask 标记为已回答（对齐季风：问题 + ✓ 选择，不另起用户气泡）
+      const p = seat.pending;
+      setHistory(h => [...h, { id: `ask${Date.now()}`, role: 'assistant', content: '',
+        blocks: [{ kind: 'ask', question: p.question, options: p.options, answered: true, reply: text }] }]);
+    }
     const ls: Live = { blocks: [], text: '', phase: '等待模型响应...' };
     const flush = () => setLive({ ...ls, blocks: [...ls.blocks] });
     flush();
@@ -154,7 +165,7 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
     } finally {
       setStreaming(false);
       abortRef.current = null;
-      await reload();
+      await reload(true);
       setLive(null);
     }
   }
@@ -164,6 +175,15 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
     if (!text) return;
     setInput('');
     run('chat', text);
+  }
+
+  /** 停止生成：取消本地流 + 通知服务端 abort 当前运行 */
+  function stop() {
+    abortRef.current?.abort();
+    fetch(streamUrl(`/api/cyclone/workshop/${workshopId}/seat/${seatId}/abort`), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    }).catch(() => {});
+    setStreaming(false);
   }
 
   if (!seat) return <div style={{ opacity: .5, margin: 'auto' }}>加载工位…</div>;
@@ -194,15 +214,26 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
         )}
       </div>
 
-      <div className="chat__input-area" style={{ display: 'flex', gap: 'var(--space-2)', padding: 'var(--space-3)', borderTop: '1px solid var(--border-color)' }}>
-        <input value={input} onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInput(); } }}
-          placeholder={pending ? '也可在上方卡片回答，或在此自由输入…' : '对工位说点什么…'}
-          disabled={streaming}
-          style={{ flex: 1, padding: 'var(--space-2) var(--space-3)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--color-text)' }} />
-        <button onClick={sendInput} disabled={streaming} className="btn btn--primary">
-          {streaming ? '…' : (pending ? '回答' : '发送')}
-        </button>
+      <div className="chat__input-area">
+        <div className="chat__input-wrapper">
+          <textarea className="chat__input"
+            value={input}
+            onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInput(); } }}
+            placeholder={streaming ? '工位思考中…' : (pending ? '也可在上方卡片回答，或在此自由输入…（Enter 发送，Shift+Enter 换行）' : '对工位说点什么…（Enter 发送，Shift+Enter 换行）')}
+            rows={1}
+            disabled={streaming}
+            aria-label="对工位发送消息" />
+          {streaming ? (
+            <button className="chat__stop-btn" onClick={stop} title="停止生成">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+            </button>
+          ) : (
+            <button className="chat__send-btn" onClick={sendInput} disabled={!input.trim()} title={pending ? '回答' : '发送'}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -215,6 +246,9 @@ function BlockRow({ block }: { block: DisplayBlock }) {
   }
   if (block.kind === 'delegate') {
     return <DelegateCard toolCall={{ toolName: 'delegate', params: { task: block.task }, result: block.summary, status: block.status, steps: block.steps as any }} content={block.content} />;
+  }
+  if (block.kind === 'ask') {
+    return <AskCard question={block.question} options={block.options} answered={block.answered} reply={block.reply} onReply={() => {}} />;
   }
   return <ContactCard data={{ target: block.target, message: block.message, reply: block.reply, status: block.status }} />;
 }

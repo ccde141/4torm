@@ -15,7 +15,8 @@ export type DelegateStep = { type: 'tool'; tool: string; args?: Record<string, u
 export type DisplayBlock =
   | { kind: 'tool'; tool: string; args: Record<string, unknown>; result?: string; status: 'running' | 'success' | 'error' }
   | { kind: 'delegate'; id: string; task: string; summary?: string; content?: string; steps: DelegateStep[]; status: 'running' | 'success' | 'error' }
-  | { kind: 'contact'; id: string; target: string; message: string; reply?: string; status: 'running' | 'success' | 'error' };
+  | { kind: 'contact'; id: string; target: string; message: string; reply?: string; status: 'running' | 'success' | 'error' }
+  | { kind: 'ask'; question: string; options?: string[]; answered: boolean; reply?: string };
 
 export interface DisplayMessage {
   id: string;
@@ -91,6 +92,12 @@ export function contextToDisplay(stored: StoredMsg[]): DisplayMessage[] {
         }
         if (tc.name === 'contact') {
           return { kind: 'contact', id: tc.id, target: String(args.target ?? ''), message: String(args.message ?? ''), reply: result, status: contactOk(result) };
+        }
+        if (tc.name === 'ask') {
+          let options: string[] | undefined;
+          if (args.options) { try { options = typeof args.options === 'string' ? JSON.parse(args.options) : args.options as string[]; } catch {} }
+          // result 即用户答案（resume 落库的 role:'tool' 配对）；undefined 表示仍挂起
+          return { kind: 'ask', question: String(args.question ?? '需要你的确认'), options, answered: result !== undefined, reply: result };
         }
         return { kind: 'tool', tool: tc.name, args, result, status: statusOf(result) };
       });
