@@ -87,31 +87,38 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   if (!active) return null;
 
   return (
-    <div style={{ display: 'flex', height: '100%', gap: 12, padding: 12 }}>
-      {/* 左：工作室 + 工位 */}
-      <div style={{ width: 240, borderRight: '1px solid #2a2a2a', paddingRight: 12, overflowY: 'auto' }}>
-        <button onClick={createWorkshop} style={btn}>+ 新工作室</button>
+    <div style={{ display: 'flex', height: '100%' }}>
+      {/* 左：工作室 + 工位 + 群聊 */}
+      <div style={leftPanelStyle}>
+        <div style={sectionHeadStyle}>
+          <span style={sectionLabelStyle}>工作室</span>
+          <button onClick={createWorkshop} style={newBtnStyle} title="新建工作室">+</button>
+        </div>
         {workshops.map(w => (
           <div key={w.id} onClick={() => setActiveWid(w.id)}
-            style={{ ...item, fontWeight: w.id === activeWid ? 700 : 400 }}>
+            style={{ ...itemStyle, ...(w.id === activeWid ? itemActiveStyle : null) }}>
             {w.title} <span style={{ opacity: .5 }}>({w.seatCount})</span>
           </div>
         ))}
         {activeWid && (
           <>
-            <div style={{ margin: '12px 0 4px', opacity: .6, fontSize: 12 }}>工位</div>
-            <button onClick={addSeat} style={btn}>+ 加工位</button>
+            <div style={sectionHeadStyle}>
+              <span style={sectionLabelStyle}>工位</span>
+              <button onClick={addSeat} style={newBtnStyle} title="添加工位">+</button>
+            </div>
             {seats.map(s => (
               <div key={s.id} onClick={() => { setActiveSeatId(s.id); setView({ kind: 'seat', id: s.id }); }}
-                style={{ ...item, fontWeight: view?.kind === 'seat' && view.id === s.id ? 700 : 400 }}>
+                style={{ ...itemStyle, ...(view?.kind === 'seat' && view.id === s.id ? itemActiveStyle : null) }}>
                 {s.title}{s.pending ? ' ❓' : ''}
               </div>
             ))}
-            <div style={{ margin: '12px 0 4px', opacity: .6, fontSize: 12 }}>群聊</div>
-            <button onClick={createRoom} style={btn}>+ 新群聊</button>
+            <div style={sectionHeadStyle}>
+              <span style={sectionLabelStyle}>群聊</span>
+              <button onClick={createRoom} style={newBtnStyle} title="新建群聊">+</button>
+            </div>
             {rooms.map(rm => (
               <div key={rm.id} onClick={() => setView({ kind: 'room', id: rm.id })}
-                style={{ ...item, fontWeight: view?.kind === 'room' && view.id === rm.id ? 700 : 400 }}>
+                style={{ ...itemStyle, ...(view?.kind === 'room' && view.id === rm.id ? itemActiveStyle : null) }}>
                 # {rm.title}
               </div>
             ))}
@@ -120,7 +127,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
       </div>
 
       {/* 右：私聊 or 群聊 */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {view?.kind === 'room' && activeWid && (
           <RoomPanel workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} />
         )}
@@ -133,5 +140,9 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   );
 }
 
-const btn: React.CSSProperties = { padding: '6px 12px', background: '#2d4a7a', border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', width: '100%', marginBottom: 6 };
-const item: React.CSSProperties = { padding: '6px 8px', cursor: 'pointer', borderRadius: 4, fontSize: 14 };
+const leftPanelStyle: React.CSSProperties = { width: '240px', borderRight: '1px solid var(--border-color)', padding: 'var(--space-4)', overflowY: 'auto', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '2px' };
+const sectionHeadStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'var(--space-3)', marginBottom: 'var(--space-1)' };
+const sectionLabelStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-tertiary)' };
+const newBtnStyle: React.CSSProperties = { width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-md)', cursor: 'pointer', lineHeight: 1, flexShrink: 0 };
+const itemStyle: React.CSSProperties = { padding: 'var(--space-2) var(--space-3)', cursor: 'pointer', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+const itemActiveStyle: React.CSSProperties = { background: 'var(--color-accent-subtle)', color: 'var(--color-accent)', fontWeight: 600 };

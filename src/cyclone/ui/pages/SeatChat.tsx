@@ -173,6 +173,15 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
     run('chat', text);
   }
 
+  /** 停止生成：取消本地流 + 通知服务端 abort 当前运行 */
+  function stop() {
+    abortRef.current?.abort();
+    fetch(streamUrl(`/api/cyclone/workshop/${workshopId}/seat/${seatId}/abort`), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    }).catch(() => {});
+    setStreaming(false);
+  }
+
   if (!seat) return <div style={{ opacity: .5, margin: 'auto' }}>加载工位…</div>;
   // 挂起态：流式结束后若 seat.pending 存在，渲染交互 AskCard；流式期间用 live.ask
   const pending = !streaming ? seat.pending : undefined;
@@ -201,15 +210,26 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
         )}
       </div>
 
-      <div className="chat__input-area" style={{ display: 'flex', gap: 'var(--space-2)', padding: 'var(--space-3)', borderTop: '1px solid var(--border-color)' }}>
-        <input value={input} onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInput(); } }}
-          placeholder={pending ? '也可在上方卡片回答，或在此自由输入…' : '对工位说点什么…'}
-          disabled={streaming}
-          style={{ flex: 1, padding: 'var(--space-2) var(--space-3)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--color-text)' }} />
-        <button onClick={sendInput} disabled={streaming} className="btn btn--primary">
-          {streaming ? '…' : (pending ? '回答' : '发送')}
-        </button>
+      <div className="chat__input-area">
+        <div className="chat__input-wrapper">
+          <textarea className="chat__input"
+            value={input}
+            onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInput(); } }}
+            placeholder={streaming ? '工位思考中…' : (pending ? '也可在上方卡片回答，或在此自由输入…（Enter 发送，Shift+Enter 换行）' : '对工位说点什么…（Enter 发送，Shift+Enter 换行）')}
+            rows={1}
+            disabled={streaming}
+            aria-label="对工位发送消息" />
+          {streaming ? (
+            <button className="chat__stop-btn" onClick={stop} title="停止生成">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+            </button>
+          ) : (
+            <button className="chat__send-btn" onClick={sendInput} disabled={!input.trim()} title={pending ? '回答' : '发送'}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
