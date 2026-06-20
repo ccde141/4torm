@@ -10,7 +10,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "postinstall": "npx playwright install chromium"
+    "_comment_postinstall": "已禁用自动下载 Chromium：下载常卡在解压阶段。需要时手动跑 npx playwright install chromium，或把下面的 key 改回 postinstall 即可恢复",
+    "_postinstall_disabled": "npx playwright install chromium"
   },
   "dependencies": {
     "@xyflow/react": "^12.10.2",

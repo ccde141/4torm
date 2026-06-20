@@ -31,6 +31,7 @@ import SkillsPage from './components/skills/SkillsPage';
 import TradeWindPage from './tradewind/ui/pages/TradeWindPage';
 import TidePage from './tide/ui/TidePage';
 import ConvectionPage from './convection/ui/pages/ConvectionPage';
+import CyclonePage from './cyclone/ui/pages/CyclonePage';
 import { McpPage } from './components/mcp/McpPage';
 import ContourBackground from './components/layout/ContourBackground';
 import WindBackground from './components/layout/WindBackground';
@@ -43,6 +44,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   tools:     { title: '工具', subtitle: '全局工具注册与管理' },
   skills:    { title: '技能', subtitle: '管理与安装 Agent 能力包' },
   convection: { title: '对流', subtitle: '多 Agent 持续协作会话' },
+  cyclone:   { title: '气旋', subtitle: '团队工作室：工位私聊与协作' },
   tradewind: { title: '信风', subtitle: '多 Agent 协作工作流' },
   tide:      { title: '潮汐', subtitle: '定时自动化任务' },
   model:     { title: '模型', subtitle: '模型提供商与 API 配置' },
@@ -79,6 +81,7 @@ function PageContent({ page, preselectSession, onClearPreselect }: { page: strin
       <div className="page-panel" data-page="tools" style={show('tools')}><div style={scrollArea}><ToolsPage /></div></div>
       <div className="page-panel" data-page="skills" style={show('skills')}><div style={scrollArea}><SkillsPage /></div></div>
       <div className="page-panel" data-page="convection" style={show('convection')}><div style={scrollArea}><ConvectionPage active={page === 'convection'} /></div></div>
+      <div className="page-panel" data-page="cyclone" style={show('cyclone')}><div style={scrollArea}><CyclonePage active={page === 'cyclone'} /></div></div>
       <div className="page-panel" data-page="tradewind" style={show('tradewind')}><div style={scrollArea}><TradeWindPage /></div></div>
       <div className="page-panel" data-page="tide" style={show('tide')}><div style={scrollArea}><TidePage active={page === 'tide'} /></div></div>
       <div className="page-panel" data-page="model" style={show('model')}><div style={scrollArea}><SettingsPage /></div></div>

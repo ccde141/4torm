@@ -40,23 +40,8 @@ dist-ssr
 # API Key 敏感数据
 data/providers.json
 
-# Agent 数据（用户 agent 全部忽略，仅白名单示例 agent 入库）
-data/agents/*
-!data/agents/registry.json
-!data/agents/agent-mop6zz2fdpjv/
-!data/agents/agent-moquco791grt/
-!data/agents/agent-mpg7od2t2pnd/
-!data/agents/agent-mppcuxq71p24/
-
-# Agent 会话历史（对话内容不入仓库）
-data/agents/*/sessions/
-data/agents/*/sessions-tide/
-
-# Agent 工作区产出文件（时间戳文件等运行时产物）
-data/agents/*/.workspace/*.txt
-data/agents/*/.workspace/*.py
-data/agents/*/.workspace/.workspace/
-data/agents/*/.workspace/test/
+# Agent 数据（全部本地为王，不入仓库：配置/工作区/提示词/注册表/会话/产出）
+data/agents/
 
 # 工作流运行时数据（workflow 定义 + 执行状态 + 运行历史）
 data/workflows/
@@ -86,8 +71,8 @@ data/skills/baidu-search/
 data/tradewind/runs/
 !data/tradewind/runs/.gitkeep
 
-# 工作流 workspace 产出（运行时生成，不入仓库。示例产出留在首次 commit 快照）
-data/tradewind/workflows/*/workspace/
+# 信风工作流（定义 + workspace 产出，全部本地为王，不入仓库）
+data/tradewind/workflows/
 
 # 潮汐运行记录（测试期间持续产生，不入库）
 data/tide/runs/
@@ -99,6 +84,9 @@ data/tide/tasks.json
 
 # �����Ự���ݣ��û��Ի���ʷ������ֿ⣩
 data/convection/sessions/
+
+# 气旋工作室数据（工作室/工位/群聊会话 + 共享工作区，全部本地为王，不入仓库）
+data/cyclone/
 
 # SQLite ���ݿ⣨�û�����ʱ���ݣ�
 data/*.db
