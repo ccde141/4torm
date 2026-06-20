@@ -15,6 +15,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'agent', label: '控制台', icon: 'agents' },
   { id: 'chat', label: '季风  对话', icon: 'chat' },
   { id: 'convection', label: '对流  会议室', icon: 'convection' },
+  { id: 'cyclone', label: '气旋  工作室', icon: 'cyclone' },
   { id: 'tradewind', label: '信风  工作流', icon: 'tradewind' },
   { id: 'tide', label: '潮汐  自动化', icon: 'tide' },
 ];
@@ -65,6 +66,12 @@ const ICONS: Record<string, React.FC<{ className?: string }>> = {
       <path d="M3 8 Q 9 5, 14 8 T 21 8" />
       <path d="M3 13 Q 10 10, 16 13 T 21 13" />
       <path d="M3 18 Q 8 15, 13 18 T 19 18" />
+    </svg>
+  ),
+  // 气旋：螺旋气流，呼应"团队围绕一处旋转协作"
+  cyclone: ({ className }) => (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 12 m0 0 a3 3 0 1 1 -2.5 -2.9 a5.5 5.5 0 1 1 -4.2 6.8 a8 8 0 1 1 9.7 -9.4" />
     </svg>
   ),
   // 潮汐：波浪线 + 时钟指针，呼应"定时 + 海潮涨落"
