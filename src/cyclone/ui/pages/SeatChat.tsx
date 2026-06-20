@@ -58,15 +58,19 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
   const [live, setLive] = useState<Live | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 稳定 onReloaded 引用，避免父级每次 render 重建闭包导致 reload 身份变化、effect 反复重拉
+  const onReloadedRef = useRef(onReloaded);
+  onReloadedRef.current = onReloaded;
 
-  const reload = useCallback(async () => {
+  /** 拉取工位会话。notifyParent=true 时通知父级刷新侧栏（仅发送完成后用，挂载时不通知） */
+  const reload = useCallback(async (notifyParent = false) => {
     const r = await fetch(`/api/cyclone/workshop/${workshopId}/seat/${seatId}/status`);
     if (!r.ok) return;
     const s: SeatStatus = await r.json();
     setSeat(s);
     setHistory(contextToDisplay(s.messages));
-    onReloaded?.();
-  }, [workshopId, seatId, onReloaded]);
+    if (notifyParent) onReloadedRef.current?.();
+  }, [workshopId, seatId]);
 
   useEffect(() => { reload(); }, [reload]);
   // 粘性底部：仅当用户已在底部 150px 内才自动跟随，否则尊重上翻（对齐季风）
@@ -161,7 +165,7 @@ export default function SeatChat({ workshopId, seatId, onReloaded }: {
     } finally {
       setStreaming(false);
       abortRef.current = null;
-      await reload();
+      await reload(true);
       setLive(null);
     }
   }
