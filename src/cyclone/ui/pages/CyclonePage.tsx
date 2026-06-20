@@ -10,6 +10,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { getAgents } from '../../../store/agent';
 import { streamUrl } from '../../../lib/apiBase';
 import type { Agent } from '../../../types';
+import RoomPanel from './RoomPanel';
 
 interface WorkshopSummary {
   id: string; title: string; seatCount: number; roomCount: number;
@@ -20,6 +21,7 @@ interface Seat {
   messages: { role: string; content: string }[];
   pending?: { question: string; options?: string[] };
 }
+interface RoomLite { id: string; title: string; }
 interface Workshop { id: string; title: string; seatIds: string[]; roomIds: string[]; }
 
 async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal?: AbortSignal): Promise<void> {
@@ -53,6 +55,9 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   const [workshop, setWorkshop] = useState<Workshop | null>(null);
   const [seats, setSeats] = useState<Seat[]>([]);
   const [activeSeatId, setActiveSeatId] = useState<string | null>(null);
+  const [rooms, setRooms] = useState<RoomLite[]>([]);
+  /** 右侧视图：私聊某工位 or 进入某群聊 */
+  const [view, setView] = useState<{ kind: 'seat'; id: string } | { kind: 'room'; id: string } | null>(null);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [liveToken, setLiveToken] = useState('');
@@ -74,13 +79,19 @@ export default function CyclonePage({ active }: { active?: boolean }) {
       if (sr.ok) loaded.push(await sr.json());
     }
     setSeats(loaded);
+    const loadedRooms: RoomLite[] = [];
+    for (const rid of w.roomIds) {
+      const rr = await fetch(`/api/cyclone/workshop/${wid}/room/${rid}/status`);
+      if (rr.ok) { const rm = await rr.json(); loadedRooms.push({ id: rm.id, title: rm.title }); }
+    }
+    setRooms(loadedRooms);
     if (loaded.length && !loaded.some(s => s.id === activeSeatId)) setActiveSeatId(loaded[0].id);
   }, [activeSeatId]);
 
   useEffect(() => { if (!active) return; refreshAgents(); refreshWorkshops(); }, [active, refreshAgents, refreshWorkshops]);
   useEffect(() => { if (activeWid) loadWorkshop(activeWid); }, [activeWid, loadWorkshop]);
 
-  const activeSeat = seats.find(s => s.id === activeSeatId) || null;
+  const activeSeat = view?.kind === 'seat' ? seats.find(s => s.id === view.id) || null : null;
 
   async function createWorkshop() {
     const title = prompt('工作室名称', '新工作室');
@@ -102,8 +113,20 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     if (r.ok) { await refreshWorkshops(); await loadWorkshop(activeWid); }
   }
 
+  async function createRoom() {
+    if (!activeWid) return;
+    const title = prompt('群聊名称', '新群聊');
+    if (title === null) return;
+    const topic = prompt('讨论话题', '自由讨论') || '自由讨论';
+    const r = await fetch(`/api/cyclone/workshop/${activeWid}/create-room`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, topic }),
+    });
+    if (r.ok) { const rm = await r.json(); await loadWorkshop(activeWid); setView({ kind: 'room', id: rm.id }); }
+  }
+
   async function send(action: 'chat' | 'resume') {
-    if (!activeWid || !activeSeatId || !input.trim() || streaming) return;
+    if (!activeWid || view?.kind !== 'seat' || !input.trim() || streaming) return;
+    const seatId = view.id;
     const text = input.trim();
     setInput('');
     setStreaming(true);
@@ -113,7 +136,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     const payloadKey = action === 'chat' ? 'message' : 'answer';
     let acc = '';
     try {
-      await streamSSE(`/api/cyclone/workshop/${activeWid}/seat/${activeSeatId}/${action}`,
+      await streamSSE(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/${action}`,
         { [payloadKey]: text },
         (ev) => {
           if (ev.type === 'token') { acc += ev.content; setLiveToken(acc); }
@@ -148,19 +171,30 @@ export default function CyclonePage({ active }: { active?: boolean }) {
             <div style={{ margin: '12px 0 4px', opacity: .6, fontSize: 12 }}>工位</div>
             <button onClick={addSeat} style={btn}>+ 加工位</button>
             {seats.map(s => (
-              <div key={s.id} onClick={() => setActiveSeatId(s.id)}
-                style={{ ...item, fontWeight: s.id === activeSeatId ? 700 : 400 }}>
+              <div key={s.id} onClick={() => { setActiveSeatId(s.id); setView({ kind: 'seat', id: s.id }); }}
+                style={{ ...item, fontWeight: view?.kind === 'seat' && view.id === s.id ? 700 : 400 }}>
                 {s.title}{s.pending ? ' ❓' : ''}
+              </div>
+            ))}
+            <div style={{ margin: '12px 0 4px', opacity: .6, fontSize: 12 }}>群聊</div>
+            <button onClick={createRoom} style={btn}>+ 新群聊</button>
+            {rooms.map(rm => (
+              <div key={rm.id} onClick={() => setView({ kind: 'room', id: rm.id })}
+                style={{ ...item, fontWeight: view?.kind === 'room' && view.id === rm.id ? 700 : 400 }}>
+                # {rm.title}
               </div>
             ))}
           </>
         )}
       </div>
 
-      {/* 右：私聊 */}
+      {/* 右：私聊 or 群聊 */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        {!activeSeat && <div style={{ opacity: .5, margin: 'auto' }}>选择或创建一个工位开始私聊</div>}
-        {activeSeat && (
+        {view?.kind === 'room' && activeWid && (
+          <RoomPanel workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} />
+        )}
+        {view?.kind !== 'room' && !activeSeat && <div style={{ opacity: .5, margin: 'auto' }}>选择或创建一个工位开始私聊，或进入群聊</div>}
+        {view?.kind === 'seat' && activeSeat && (
           <>
             <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
               {activeSeat.messages.filter(m => m.role === 'user' || m.role === 'assistant').map((m, i) => (
