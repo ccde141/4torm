@@ -2,7 +2,7 @@
  * 气旋工位私聊面板 —— 复用季风渲染原子，对齐季风会话视觉
  *
  * 渲染：季风 ToolCallMessage / DelegateCard / AskCard + 气旋 ContactCard + renderTextWithCode。
- * 流式：消费 SeatEvent（token/tool/delegate-*/contact-*/ask/answer）实时构建有序卡片块。
+ * 流式：消费 SeatEvent（token、tool、delegate、contact、ask、answer）实时构建有序卡片块。
  * 重载：从 /status 取 ContextMessage[]，contextToDisplay 配对成块，不丢内容。
  * ask：渲染季风 AskCard（选项按钮+自由输入），回复走 resume 端点续跑挂起循环。
  */
