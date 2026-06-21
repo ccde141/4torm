@@ -19,6 +19,7 @@ import {
 import { chatSeat, resumeSeat, type SeatEvent } from '../engine/cyclone/seat-runner';
 import { speakInRoom, type RoomEvent } from '../engine/cyclone/room-runner';
 import { generateJoinSpeech } from '../engine/cyclone/seat-summary';
+import { generateSeatDuty } from '../engine/cyclone/seat-duty';
 import type { JoinBehavior } from '../engine/cyclone/types';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
 
@@ -95,8 +96,18 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       if (!w) return reply.status(404).send({ error: '工作室不存在' });
       const seat = await addSeat(dataDir, workshopId, {
         agentId: body.agentId, title: body.title, rolePrompt: body.rolePrompt,
+        duty: body.duty, overrideAgentRole: body.overrideAgentRole,
       });
       return reply.send(seat);
+    }
+
+    // 无状态职责名片生成（创建工位前调用，不依赖已存工位）
+    if (action === 'gen-duty') {
+      if (!body?.agentId) return reply.status(400).send({ error: '缺少 agentId' });
+      const duty = await generateSeatDuty(dataDir, {
+        agentId: body.agentId, title: body.title || '工位', rolePrompt: body.rolePrompt,
+      });
+      return reply.send({ duty });
     }
 
     return reply.status(400).send({ error: `未知 action：${action}` });
@@ -117,6 +128,7 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     if (action === 'update-role') {
       const updated = await updateSeatRole(dataDir, workshopId, seatId, {
         title: body.title, rolePrompt: body.rolePrompt,
+        duty: body.duty, overrideAgentRole: body.overrideAgentRole,
       });
       if (!updated) return reply.status(404).send({ error: '工位不存在' });
       return reply.send(updated);

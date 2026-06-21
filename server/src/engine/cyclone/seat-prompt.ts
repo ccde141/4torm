@@ -12,6 +12,29 @@ import type { ToolDef } from '../shared/tool-defs-loader';
 import { buildSystemPrompt } from '../shared/prompt';
 import { buildSandboxSection } from '../shared/sandbox-prompt';
 import type { SeatData } from './types';
+import { DEFAULT_DUTY } from './types';
+
+/**
+ * 组装"角色身份段"：agent 人设 + 工位岗位 + 职责名片。
+ * - overrideAgentRole=true：工位 rolePrompt 顶替 agent 人设（agent 人设不进 prompt）
+ * - 否则：agent 人设 + 工位岗位叠加
+ * - 职责名片（duty）独立注入，与覆盖开关无关，让工位自己清楚对外的能力定位
+ */
+function buildRoleParts(seat: SeatData, agent: LoadedAgent): string[] {
+  const out: string[] = [];
+  const agentRole = agent.rolePrompt?.trim();
+  const seatRole = seat.rolePrompt?.trim();
+  if (seat.overrideAgentRole) {
+    // 覆盖：只用工位提示词（兜底用 agent 人设，避免两者皆空时无身份）
+    if (seatRole) out.push(seatRole);
+    else if (agentRole) out.push(agentRole);
+  } else {
+    if (agentRole) out.push(agentRole);
+    if (seatRole) out.push(`## 你在本工作室的岗位\n${seatRole}`);
+  }
+  out.push(`## 你的职责\n${seat.duty?.trim() || DEFAULT_DUTY}\n\n这是你对外的能力名片，同事工位通过它判断该不该把活交给你。`);
+  return out;
+}
 
 /** 原生模式协议段：不教 <action>/<answer> 标签，provider 处理 function calling */
 function buildNativeProtocol(tools: ToolDef[]): string {
@@ -54,15 +77,8 @@ export function buildSeatSystemPrompt(opts: {
     workspaceLabel: '气旋工作室共享工作区',
   }));
 
-  // 2. 绑定 agent 自身角色（可能为空）
-  if (agent.rolePrompt && agent.rolePrompt.trim()) {
-    parts.push(agent.rolePrompt.trim());
-  }
-
-  // 3. 工位角色提示词（叠加在 agent 角色之上，可能为空）
-  if (seat.rolePrompt && seat.rolePrompt.trim()) {
-    parts.push(`## 你在本工作室的岗位\n${seat.rolePrompt.trim()}`);
-  }
+  // 2~3. 角色身份（agent 人设 / 工位覆盖 + 职责名片）
+  parts.push(...buildRoleParts(seat, agent));
 
   // 4. 协议段
   if (toolDefs.length > 0) {
@@ -100,12 +116,7 @@ export function buildSeatRoomSystemPrompt(opts: {
     workspaceLabel: '气旋工作室共享工作区',
   }));
 
-  if (agent.rolePrompt && agent.rolePrompt.trim()) {
-    parts.push(agent.rolePrompt.trim());
-  }
-  if (seat.rolePrompt && seat.rolePrompt.trim()) {
-    parts.push(`## 你在本工作室的岗位\n${seat.rolePrompt.trim()}`);
-  }
+  parts.push(...buildRoleParts(seat, agent));
   if (toolDefs.length > 0) {
     parts.push(native ? buildNativeProtocol(toolDefs) : buildSystemPrompt(toolDefs));
   }
@@ -140,12 +151,7 @@ export function buildSeatContactSystemPrompt(opts: {
     workspaceLabel: '气旋工作室共享工作区',
   }));
 
-  if (agent.rolePrompt && agent.rolePrompt.trim()) {
-    parts.push(agent.rolePrompt.trim());
-  }
-  if (seat.rolePrompt && seat.rolePrompt.trim()) {
-    parts.push(`## 你在本工作室的岗位\n${seat.rolePrompt.trim()}`);
-  }
+  parts.push(...buildRoleParts(seat, agent));
   if (toolDefs.length > 0) {
     parts.push(native ? buildNativeProtocol(toolDefs) : buildSystemPrompt(toolDefs));
   }

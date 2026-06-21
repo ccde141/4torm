@@ -19,6 +19,9 @@
 
 import type { ContextMessage } from '../shared/types';
 
+/** 工位职责名片默认值（空 duty 兜底，借信风 DEFAULT_ROLE 同款语义） */
+export const DEFAULT_DUTY = '补位协作者，可处理任意交办事务。专业事务请交给对应专业工位。';
+
 /** 累计 token 用量（真实 API 返回值，provider 可能不返回） */
 export interface CycloneTokenUsage {
   promptTokens: number;
@@ -40,8 +43,15 @@ export interface SeatData {
   id: string;
   /** 工位显示名（如「架构师」「测试」） */
   title: string;
-  /** 角色提示词（叠加在绑定 agent 自身 rolePrompt 之上） */
+  /** 角色提示词（默认叠加在绑定 agent 自身 rolePrompt 之上；overrideAgentRole=true 时顶替之） */
   rolePrompt: string;
+  /**
+   * 职责名片（一句话）：自己注入进自己的 prompt + 进 contact 名册供同事识别。
+   * 工位级，与 title 对应。空 = 注入时用 DEFAULT_DUTY 兜底。
+   */
+  duty?: string;
+  /** 覆盖开关：true = 工位 rolePrompt 顶替 agent 自身人设段；false/缺省 = 叠加 */
+  overrideAgentRole?: boolean;
   /** 绑定的框架内 agent 实体 id（data/agents/registry.json） */
   agentId: string;
   /** 私聊会话历史（= 该工位的 contact 收件箱） */

@@ -21,7 +21,7 @@ import { buildSeatRoomSystemPrompt } from './seat-prompt';
 import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { makeLLM, wsRelPath } from './seat-runner';
 import { execContact } from './contact';
-import { listOtherSeatTitles } from './contact-registry';
+import { listOtherSeats } from './contact-registry';
 import { loadSeat } from './seat-store';
 import { saveRoom } from './room-store';
 import type { RoomData, SeatData } from './types';
@@ -94,7 +94,7 @@ async function runSeatInRoom(
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
   const wsDir = wsRelPath(dataDir, workshopId);
   const llm = makeLLM(dataDir, agent.model, agent.temperature);
-  const contactTargets = await listOtherSeatTitles(dataDir, workshopId, seat.id);
+  const contactTargets = await listOtherSeats(dataDir, workshopId, seat.id);
   const toolCaller = makeRoomToolCaller({
     dataDir, workshopId, seatId: seat.id, seatTitle: seat.title,
     agentId: agent.id, sandboxLevel: agent.sandboxLevel, wsDir,

@@ -21,7 +21,7 @@ import { callLLM } from '../shared/llm-bridge';
 import { buildSeatContactSystemPrompt } from './seat-prompt';
 import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { loadSeat, saveSeat, tryAcquireSeatLock } from './seat-store';
-import { findSeatIdByTitle, listOtherSeatTitles, tryRegisterWait, clearWait } from './contact-registry';
+import { findSeatIdByTitle, listOtherSeats, tryRegisterWait, clearWait } from './contact-registry';
 import { workshopWorkspace } from './paths';
 import path from 'node:path';
 
@@ -116,7 +116,7 @@ async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: 
   const llm = makeLLM(dataDir, agent.model, agent.temperature);
 
   // 目标可联络的其他工位（去自身），用于嵌套 contact 热注入
-  const contactTargets = await listOtherSeatTitles(dataDir, workshopId, targetSeatId);
+  const contactTargets = await listOtherSeats(dataDir, workshopId, targetSeatId);
 
   const toolCaller: ToolCaller = {
     async call(tool, args) {

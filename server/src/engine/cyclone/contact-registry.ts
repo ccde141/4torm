@@ -11,6 +11,10 @@
 
 import { loadWorkshop } from './workshop-store';
 import { loadSeat } from './seat-store';
+import { DEFAULT_DUTY } from './types';
+
+/** 一个可联络目标：工位名 + 职责名片（供发起方判断该不该联络它） */
+export interface ContactTarget { title: string; duty: string; }
 
 // ── 寻址 ─────────────────────────────────────────────────────────
 
@@ -30,19 +34,19 @@ export async function findSeatIdByTitle(
   return null;
 }
 
-/** 列出工作室内其他工位的 title（去掉指定 seatId 自身），用于热注入 contact 名单 */
-export async function listOtherSeatTitles(
+/** 列出工作室内其他工位（去掉指定 seatId 自身），带职责名片，用于热注入 contact 名单 */
+export async function listOtherSeats(
   dataDir: string, workshopId: string, selfSeatId: string,
-): Promise<string[]> {
+): Promise<ContactTarget[]> {
   const w = await loadWorkshop(dataDir, workshopId);
   if (!w) return [];
-  const titles: string[] = [];
+  const out: ContactTarget[] = [];
   for (const sid of w.seatIds) {
     if (sid === selfSeatId) continue;
     const seat = await loadSeat(dataDir, workshopId, sid);
-    if (seat) titles.push(seat.title);
+    if (seat) out.push({ title: seat.title, duty: seat.duty?.trim() || DEFAULT_DUTY });
   }
-  return titles;
+  return out;
 }
 
 // ── 等待图 + 环检测（按 workshopId 隔离） ─────────────────────────
