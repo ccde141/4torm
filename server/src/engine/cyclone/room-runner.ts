@@ -87,6 +87,10 @@ async function runSeatInRoom(
     return null;
   }
   const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills);
+  // plan 模式：只放行只读工具（dangerous !== true），砍掉写工具（write/edit/delete/run_command）。
+  // contact 是虚拟工具，单独热注入，不受此过滤影响。
+  const planMode = room.mode === 'plan';
+  const effectiveToolDefs = planMode ? toolDefs.filter(t => t.dangerous !== true) : toolDefs;
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
   const wsDir = wsRelPath(dataDir, workshopId);
   const llm = makeLLM(dataDir, agent.model, agent.temperature);
@@ -99,13 +103,13 @@ async function runSeatInRoom(
 
   const system: ContextMessage = {
     role: 'system',
-    content: buildSeatRoomSystemPrompt({ dataDir, seat, agent, toolDefs, native, wsRelPath: wsDir, topic: room.topic }),
+    content: buildSeatRoomSystemPrompt({ dataDir, seat, agent, toolDefs: effectiveToolDefs, native, wsRelPath: wsDir, topic: room.topic }),
   };
   const history: ContextMessage = { role: 'user', content: formatPublicContext(room) };
   const messages: ContextMessage[] = [system, history];
   // 群聊讨论场：剥 ask/delegate，保留 contact（热注入名单）
-  const nativeToolDefs = [...toolDefs, ...buildSeatVirtualToolDefs({ allowAsk: false, allowDelegate: false, contactTargets })];
-  const hasTools = toolDefs.length > 0 || contactTargets.length > 0;
+  const nativeToolDefs = [...effectiveToolDefs, ...buildSeatVirtualToolDefs({ allowAsk: false, allowDelegate: false, contactTargets })];
+  const hasTools = effectiveToolDefs.length > 0 || contactTargets.length > 0;
 
   const result = native
     ? await runReActLoopNative({

@@ -72,6 +72,8 @@ export interface SeatData {
 export interface WorkshopData {
   id: string;
   title: string;
+  /** 会长 agent id（工作室级，创建时指定，不随机；场外私聊参谋 + 压缩整理）。空 = 未设会长 */
+  chairAgentId?: string;
   /** 工位 id 列表（顺序即创建顺序） */
   seatIds: string[];
   /** 群聊 id 列表（Phase 1） */
@@ -108,11 +110,19 @@ export interface RoomMessage {
  * 讨论场剥离 ask/delegate（不阻塞串行循环），保留真实工具 + contact。
  * 工位在群里的发言只落 publicMessages，不落工位私聊会话。
  */
+/** 群聊模式：build = 全套工具可写工作区；plan = 只读工具 + contact，砍写工具（按 dangerous 过滤） */
+export type RoomMode = 'build' | 'plan';
+
+/** 工位入会发言行为：summary = 调 LLM 总结私聊近况；intro = 基于角色简短自我介绍；none = 静默入会 */
+export type JoinBehavior = 'summary' | 'intro' | 'none';
+
 export interface RoomData {
   id: string;
   title: string;
   /** 话题 */
   topic: string;
+  /** 群聊模式（默认 build）。plan 下工位只能用只读工具 + contact */
+  mode?: RoomMode;
   /** 在场工位 id 列表（顺序即发言顺序） */
   participantSeatIds: string[];
   /** 公共消息历史 */

@@ -14,13 +14,14 @@ import {
 /** 创建工作室（建目录骨架 + 写 meta + 维护索引） */
 export async function createWorkshop(
   dataDir: string,
-  opts: { title?: string } = {},
+  opts: { title?: string; chairAgentId?: string } = {},
 ): Promise<WorkshopData> {
   const id = genId('cyc');
   const now = new Date().toISOString();
   const workshop: WorkshopData = {
     id,
     title: opts.title || `工作室 ${new Date().toLocaleString('zh-CN', { hour12: false })}`,
+    chairAgentId: opts.chairAgentId,
     seatIds: [],
     roomIds: [],
     createdAt: now,
@@ -76,4 +77,13 @@ export async function renameWorkshop(dataDir: string, id: string, title: string)
   if (!w) return;
   w.title = title;
   await saveWorkshop(dataDir, w);
+}
+
+/** 设置工作室会长 agent（空串 = 取消会长） */
+export async function setChair(dataDir: string, id: string, chairAgentId: string): Promise<WorkshopData | null> {
+  const w = await loadWorkshop(dataDir, id);
+  if (!w) return null;
+  w.chairAgentId = chairAgentId || undefined;
+  await saveWorkshop(dataDir, w);
+  return w;
 }
