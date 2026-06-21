@@ -10,6 +10,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { getAgents } from '../../../store/agent';
 import type { Agent } from '../../../types';
 import RoomPanel from './RoomPanel';
+import CreateRoomPanel from './CreateRoomPanel';
+import CreateWorkshopPanel from './CreateWorkshopPanel';
 import SeatChat from './SeatChat';
 
 interface WorkshopSummary {
@@ -29,8 +31,8 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   const [seats, setSeats] = useState<Seat[]>([]);
   const [activeSeatId, setActiveSeatId] = useState<string | null>(null);
   const [rooms, setRooms] = useState<RoomLite[]>([]);
-  /** 右侧视图：私聊某工位 or 进入某群聊 */
-  const [view, setView] = useState<{ kind: 'seat'; id: string } | { kind: 'room'; id: string } | null>(null);
+  /** 右侧视图：私聊某工位 / 进入某群聊 / 创建群聊配置面板 / 创建工作室配置面板 */
+  const [view, setView] = useState<{ kind: 'seat'; id: string } | { kind: 'room'; id: string } | { kind: 'create-room' } | { kind: 'create-workshop' } | null>(null);
 
   const refreshAgents = useCallback(async () => { try { setAgents(await getAgents()); } catch {} }, []);
   const refreshWorkshops = useCallback(async () => {
@@ -53,11 +55,17 @@ export default function CyclonePage({ active }: { active?: boolean }) {
 
   const activeSeat = view?.kind === 'seat' ? seats.find(s => s.id === view.id) || null : null;
 
-  async function createWorkshop() {
-    const title = prompt('工作室名称', '新工作室');
-    if (title === null) return;
-    const r = await fetch('/api/cyclone/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
-    if (r.ok) { const w = await r.json(); await refreshWorkshops(); setActiveWid(w.id); }
+  async function handleCreateWorkshop(cfg: { title: string; chairAgentId?: string }) {
+    const r = await fetch('/api/cyclone/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
+    if (r.ok) { const w = await r.json(); await refreshWorkshops(); setActiveWid(w.id); setView(null); }
+  }
+
+  async function deleteWorkshop(wid: string, title: string) {
+    if (!confirm(`删除工作室「${title}」？工位、群聊及全部会话将一并删除，不可恢复。`)) return;
+    const r = await fetch(`/api/cyclone/workshop/${wid}/delete`, { method: 'POST' });
+    if (!r.ok) return;
+    if (activeWid === wid) { setActiveWid(null); setView(null); setSeats([]); setRooms([]); }
+    await refreshWorkshops();
   }
 
   async function addSeat() {
@@ -73,15 +81,31 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     if (r.ok) { await refreshWorkshops(); await loadWorkshop(activeWid); }
   }
 
-  async function createRoom() {
+  /** 创建群聊：建群 → 跑入会发言（SSE 流式落库）→ 进入。入会发言的可视化在 RoomPanel 进入后 reload 自然呈现。 */
+  async function handleCreateRoom(cfg: {
+    title: string; topic: string; mode: 'build' | 'plan';
+    participantSeatIds: string[];
+    intros: Array<{ seatId: string; behavior: 'summary' | 'intro' | 'none' }>;
+  }) {
     if (!activeWid) return;
-    const title = prompt('群聊名称', '新群聊');
-    if (title === null) return;
-    const topic = prompt('讨论话题', '自由讨论') || '自由讨论';
     const r = await fetch(`/api/cyclone/workshop/${activeWid}/create-room`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, topic }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: cfg.title, topic: cfg.topic, mode: cfg.mode, participantSeatIds: cfg.participantSeatIds }),
     });
-    if (r.ok) { const rm = await r.json(); await loadWorkshop(activeWid); setView({ kind: 'room', id: rm.id }); }
+    if (!r.ok) return;
+    const rm = await r.json();
+    // 跑入会发言（若有非 none 行为）。逐条流式落库，等整体结束再进入群聊。
+    const needIntro = cfg.intros.some(i => i.behavior !== 'none');
+    if (needIntro) {
+      try {
+        await fetch(`/api/cyclone/workshop/${activeWid}/room/${rm.id}/intro`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ intros: cfg.intros }),
+        });
+      } catch { /* 入会发言失败不阻断进入群聊 */ }
+    }
+    await loadWorkshop(activeWid);
+    setView({ kind: 'room', id: rm.id });
   }
 
   if (!active) return null;
@@ -92,12 +116,13 @@ export default function CyclonePage({ active }: { active?: boolean }) {
       <div style={leftPanelStyle}>
         <div style={sectionHeadStyle}>
           <span style={sectionLabelStyle}>工作室</span>
-          <button onClick={createWorkshop} style={newBtnStyle} title="新建工作室">+</button>
+          <button onClick={() => setView({ kind: 'create-workshop' })} style={newBtnStyle} title="新建工作室">+</button>
         </div>
         {workshops.map(w => (
           <div key={w.id} onClick={() => setActiveWid(w.id)}
-            style={{ ...itemStyle, ...(w.id === activeWid ? itemActiveStyle : null) }}>
-            {w.title} <span style={{ opacity: .5 }}>({w.seatCount})</span>
+            style={{ ...itemStyle, display: 'flex', alignItems: 'center', gap: 4, ...(w.id === activeWid ? itemActiveStyle : null) }}>
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{w.title} <span style={{ opacity: .5 }}>({w.seatCount})</span></span>
+            <button onClick={e => { e.stopPropagation(); deleteWorkshop(w.id, w.title); }} style={delBtnStyle} title="删除工作室">×</button>
           </div>
         ))}
         {activeWid && (
@@ -114,7 +139,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
             ))}
             <div style={sectionHeadStyle}>
               <span style={sectionLabelStyle}>群聊</span>
-              <button onClick={createRoom} style={newBtnStyle} title="新建群聊">+</button>
+              <button onClick={() => setView({ kind: 'create-room' })} style={newBtnStyle} title="新建群聊">+</button>
             </div>
             {rooms.map(rm => (
               <div key={rm.id} onClick={() => setView({ kind: 'room', id: rm.id })}
@@ -126,12 +151,22 @@ export default function CyclonePage({ active }: { active?: boolean }) {
         )}
       </div>
 
-      {/* 右：私聊 or 群聊 */}
+      {/* 右：私聊 / 群聊 / 创建群聊 / 创建工作室 */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        {view?.kind === 'create-workshop' && (
+          <CreateWorkshopPanel agents={agents} onCreate={handleCreateWorkshop} onCancel={() => setView(null)} />
+        )}
+        {view?.kind === 'create-room' && activeWid && (
+          <CreateRoomPanel
+            seats={seats.map(s => ({ id: s.id, title: s.title }))}
+            onCreate={handleCreateRoom}
+            onCancel={() => setView(null)}
+          />
+        )}
         {view?.kind === 'room' && activeWid && (
           <RoomPanel workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} onChanged={() => loadWorkshop(activeWid)} />
         )}
-        {view?.kind !== 'room' && !activeSeat && <div style={{ opacity: .5, margin: 'auto' }}>选择或创建一个工位开始私聊，或进入群聊</div>}
+        {view?.kind !== 'room' && view?.kind !== 'create-room' && view?.kind !== 'create-workshop' && !activeSeat && <div style={{ opacity: .5, margin: 'auto' }}>选择或创建一个工位开始私聊，或进入群聊</div>}
         {view?.kind === 'seat' && activeSeat && activeWid && (
           <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id} onReloaded={() => loadWorkshop(activeWid)} />
         )}
@@ -146,3 +181,4 @@ const sectionLabelStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', fon
 const newBtnStyle: React.CSSProperties = { width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-md)', cursor: 'pointer', lineHeight: 1, flexShrink: 0 };
 const itemStyle: React.CSSProperties = { padding: 'var(--space-2) var(--space-3)', cursor: 'pointer', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', border: '1px solid transparent', transition: 'all var(--duration-fast) var(--ease-out-expo)' };
 const itemActiveStyle: React.CSSProperties = { background: 'var(--color-accent-subtle)', borderColor: 'var(--color-accent)', color: 'var(--color-accent)', fontWeight: 600 };
+const delBtnStyle: React.CSSProperties = { width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: 'var(--color-text-tertiary)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-md)', cursor: 'pointer', lineHeight: 1, flexShrink: 0, padding: 0 };

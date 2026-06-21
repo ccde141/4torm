@@ -14,14 +14,15 @@
  */
 
 import type { ToolDef } from '../shared/tool-defs-loader';
+import type { ContactTarget } from './contact-registry';
 
 export interface SeatVirtualToolOpts {
   /** 是否注入 ask（向人类提问挂起）。群聊/被联络方=false */
   allowAsk?: boolean;
   /** 是否注入 delegate（拆子任务给 SubAgent）。群聊=false */
   allowDelegate?: boolean;
-  /** 可联络的其他工位 title 列表（去自身）。非空才注入 contact */
-  contactTargets?: string[];
+  /** 可联络的其他工位（去自身，带职责名片）。非空才注入 contact */
+  contactTargets?: ContactTarget[];
 }
 
 /**
@@ -63,14 +64,15 @@ export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDe
   }
 
   if (contactTargets.length > 0) {
-    const targetList = contactTargets.join('、');
+    const nameList = contactTargets.map(t => t.title).join('、');
+    const roster = contactTargets.map(t => `  - ${t.title}：${t.duty}`).join('\n');
     defs.push({
       name: 'contact',
-      description: `联络本工作室里的另一个工位。对方会在自己的会话里完整处理你的消息并返回回复。可选目标：${targetList}。不要向正在联络你的工位反向联络（死锁）。`,
+      description: `联络本工作室里的另一个工位。对方会在自己的会话里完整处理你的消息并返回回复。\n可选目标（工位：职责）：\n${roster}\n按职责挑对人，不要向正在联络你的工位反向联络（死锁）。`,
       parameters: {
         type: 'object',
         properties: {
-          target: { type: 'string', description: `目标工位名称（可选值：${targetList}）` },
+          target: { type: 'string', description: `目标工位名称（可选值：${nameList}）` },
           message: { type: 'string', description: '你要传达的内容（问题、请求、交办事项等）' },
         },
         required: ['target', 'message'],

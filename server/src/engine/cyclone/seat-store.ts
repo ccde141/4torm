@@ -14,7 +14,7 @@ import { loadWorkshop, saveWorkshop } from './workshop-store';
 export async function addSeat(
   dataDir: string,
   workshopId: string,
-  opts: { agentId: string; title?: string; rolePrompt?: string },
+  opts: { agentId: string; title?: string; rolePrompt?: string; duty?: string; overrideAgentRole?: boolean },
 ): Promise<SeatData> {
   const w = await loadWorkshop(dataDir, workshopId);
   if (!w) throw new Error(`工作室不存在：${workshopId}`);
@@ -29,6 +29,8 @@ export async function addSeat(
     id,
     title,
     rolePrompt: opts.rolePrompt || '',
+    duty: opts.duty?.trim() || undefined,
+    overrideAgentRole: opts.overrideAgentRole || undefined,
     agentId: opts.agentId,
     messages: [],
     createdAt: now,
@@ -82,10 +84,10 @@ export async function deleteSeat(
   }
 }
 
-/** 更新工位角色提示词 / 标题（运行中可改） */
+/** 更新工位角色提示词 / 标题 / 职责 / 覆盖开关（运行中可改，仅更新传入字段） */
 export async function updateSeatRole(
   dataDir: string, workshopId: string, seatId: string,
-  patch: { title?: string; rolePrompt?: string },
+  patch: { title?: string; rolePrompt?: string; duty?: string; overrideAgentRole?: boolean },
 ): Promise<SeatData | null> {
   const seat = await loadSeat(dataDir, workshopId, seatId);
   if (!seat) return null;
@@ -96,6 +98,8 @@ export async function updateSeatRole(
     seat.title = patch.title;
   }
   if (patch.rolePrompt !== undefined) seat.rolePrompt = patch.rolePrompt;
+  if (patch.duty !== undefined) seat.duty = patch.duty.trim() || undefined;
+  if (patch.overrideAgentRole !== undefined) seat.overrideAgentRole = patch.overrideAgentRole || undefined;
   await saveSeat(dataDir, workshopId, seat);
   return seat;
 }

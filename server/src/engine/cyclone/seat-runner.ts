@@ -28,7 +28,7 @@ import { buildSeatSystemPrompt } from './seat-prompt';
 import { workshopWorkspace } from './paths';
 import { loadSeat, saveSeat, tryAcquireSeatLock } from './seat-store';
 import { execContact } from './contact';
-import { listOtherSeatTitles } from './contact-registry';
+import { listOtherSeats } from './contact-registry';
 import type { SeatData } from './types';
 import path from 'node:path';
 
@@ -150,8 +150,8 @@ interface DriveCtx {
   native: boolean;
   toolDefs: import('../shared/tool-defs-loader').ToolDef[];
   agent: import('../shared/agent-loader').LoadedAgent;
-  /** 可联络的其他工位 title（热注入 contact 名单） */
-  contactTargets: string[];
+  /** 可联络的其他工位（热注入 contact 名单，带职责名片） */
+  contactTargets: import('./contact-registry').ContactTarget[];
   signal?: AbortSignal;
   onEvent: (ev: SeatEvent) => void;
 }
@@ -234,7 +234,7 @@ async function prepare(dataDir: string, workshopId: string, seatId: string) {
   if (!agent) throw new Error(`工位绑定的 agent 不存在或已删除：${seat.agentId}`);
   const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills);
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
-  const contactTargets = await listOtherSeatTitles(dataDir, workshopId, seatId);
+  const contactTargets = await listOtherSeats(dataDir, workshopId, seatId);
   return { seat, agent, toolDefs, native, contactTargets };
 }
 

@@ -15,7 +15,7 @@ import { loadSeat } from './seat-store';
 export async function createRoom(
   dataDir: string,
   workshopId: string,
-  opts: { title?: string; topic?: string; participantSeatIds?: string[] } = {},
+  opts: { title?: string; topic?: string; participantSeatIds?: string[]; mode?: RoomData['mode'] } = {},
 ): Promise<RoomData> {
   const w = await loadWorkshop(dataDir, workshopId);
   if (!w) throw new Error(`工作室不存在：${workshopId}`);
@@ -25,6 +25,7 @@ export async function createRoom(
     id,
     title: opts.title || `群聊 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`,
     topic: opts.topic || '自由讨论',
+    mode: opts.mode || 'build',
     participantSeatIds: opts.participantSeatIds || [],
     publicMessages: [],
     createdAt: now,
@@ -119,6 +120,17 @@ export async function renameRoom(
   if (!room) return null;
   const t = title.trim();
   if (t) { room.title = t; await saveRoom(dataDir, workshopId, room); }
+  return room;
+}
+
+/** 切换群聊模式（build / plan） */
+export async function setRoomMode(
+  dataDir: string, workshopId: string, roomId: string, mode: RoomData['mode'],
+): Promise<RoomData | null> {
+  const room = await loadRoom(dataDir, workshopId, roomId);
+  if (!room) return null;
+  room.mode = mode === 'plan' ? 'plan' : 'build';
+  await saveRoom(dataDir, workshopId, room);
   return room;
 }
 

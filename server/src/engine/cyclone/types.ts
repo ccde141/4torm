@@ -19,6 +19,9 @@
 
 import type { ContextMessage } from '../shared/types';
 
+/** 工位职责名片默认值（空 duty 兜底，借信风 DEFAULT_ROLE 同款语义） */
+export const DEFAULT_DUTY = '补位协作者，可处理任意交办事务。专业事务请交给对应专业工位。';
+
 /** 累计 token 用量（真实 API 返回值，provider 可能不返回） */
 export interface CycloneTokenUsage {
   promptTokens: number;
@@ -40,8 +43,15 @@ export interface SeatData {
   id: string;
   /** 工位显示名（如「架构师」「测试」） */
   title: string;
-  /** 角色提示词（叠加在绑定 agent 自身 rolePrompt 之上） */
+  /** 角色提示词（默认叠加在绑定 agent 自身 rolePrompt 之上；overrideAgentRole=true 时顶替之） */
   rolePrompt: string;
+  /**
+   * 职责名片（一句话）：自己注入进自己的 prompt + 进 contact 名册供同事识别。
+   * 工位级，与 title 对应。空 = 注入时用 DEFAULT_DUTY 兜底。
+   */
+  duty?: string;
+  /** 覆盖开关：true = 工位 rolePrompt 顶替 agent 自身人设段；false/缺省 = 叠加 */
+  overrideAgentRole?: boolean;
   /** 绑定的框架内 agent 实体 id（data/agents/registry.json） */
   agentId: string;
   /** 私聊会话历史（= 该工位的 contact 收件箱） */
@@ -72,6 +82,8 @@ export interface SeatData {
 export interface WorkshopData {
   id: string;
   title: string;
+  /** 会长 agent id（工作室级，创建时指定，不随机；场外私聊参谋 + 压缩整理）。空 = 未设会长 */
+  chairAgentId?: string;
   /** 工位 id 列表（顺序即创建顺序） */
   seatIds: string[];
   /** 群聊 id 列表（Phase 1） */
@@ -108,11 +120,19 @@ export interface RoomMessage {
  * 讨论场剥离 ask/delegate（不阻塞串行循环），保留真实工具 + contact。
  * 工位在群里的发言只落 publicMessages，不落工位私聊会话。
  */
+/** 群聊模式：build = 全套工具可写工作区；plan = 只读工具 + contact，砍写工具（按 dangerous 过滤） */
+export type RoomMode = 'build' | 'plan';
+
+/** 工位入会发言行为：summary = 调 LLM 总结私聊近况；intro = 基于角色简短自我介绍；none = 静默入会 */
+export type JoinBehavior = 'summary' | 'intro' | 'none';
+
 export interface RoomData {
   id: string;
   title: string;
   /** 话题 */
   topic: string;
+  /** 群聊模式（默认 build）。plan 下工位只能用只读工具 + contact */
+  mode?: RoomMode;
   /** 在场工位 id 列表（顺序即发言顺序） */
   participantSeatIds: string[];
   /** 公共消息历史 */

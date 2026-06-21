@@ -15,11 +15,27 @@ import '../../../styles/components/convection.css';
 
 interface RoomToolCall { tool: string; args: Record<string, string>; result: string; }
 interface RoomMsg { speaker: string; content: string; timestamp: number; rawContent?: string; toolCalls?: RoomToolCall[]; }
-interface Room { id: string; title: string; topic: string; participantSeatIds: string[]; publicMessages: RoomMsg[]; }
+interface Room { id: string; title: string; topic: string; mode?: 'build' | 'plan'; participantSeatIds: string[]; publicMessages: RoomMsg[]; }
 interface SeatLite { id: string; title: string; }
 
-/** 流式期间某工位的实时态 */
-interface LiveSeat { speaker: string; text: string; tools: { tool: string; args: Record<string, string>; result?: string; status: 'running' | 'success' | 'error' }[]; phase: string; }
+/** 统一渲染项：历史消息 + 本轮实时消息共用一个数组（仿对流单数组模型） */
+interface FeedMsg {
+  speaker: string;
+  content: string;
+  isHuman: boolean;
+  streaming?: boolean;
+  phase?: string;
+  tools: { tool: string; args: Record<string, string>; result?: string; status: 'running' | 'success' | 'error' }[];
+}
+
+function publicToFeed(msgs: RoomMsg[]): FeedMsg[] {
+  return msgs.map(m => ({
+    speaker: m.speaker,
+    content: m.content,
+    isHuman: m.speaker === '人类',
+    tools: (m.toolCalls || []).map(t => ({ tool: t.tool, args: t.args, result: t.result, status: 'success' as const })),
+  }));
+}
 
 async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal?: AbortSignal): Promise<void> {
   const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
@@ -49,10 +65,9 @@ export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
   workshopId: string; roomId: string; seats: SeatLite[]; onChanged?: () => void;
 }) {
   const [room, setRoom] = useState<Room | null>(null);
+  const [feed, setFeed] = useState<FeedMsg[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
-  const [live, setLive] = useState<LiveSeat | null>(null);
-  const [pendingEcho, setPendingEcho] = useState<RoomMsg[]>([]);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const abortRef = useRef<AbortController | null>(null);
@@ -62,14 +77,19 @@ export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
 
   const reload = useCallback(async (notify = false) => {
     const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/status`);
-    if (r.ok) { setRoom(await r.json()); if (notify) onChangedRef.current?.(); }
+    if (r.ok) {
+      const data: Room = await r.json();
+      setRoom(data);
+      setFeed(publicToFeed(data.publicMessages));
+      if (notify) onChangedRef.current?.();
+    }
   }, [workshopId, roomId]);
 
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => {
     const el = scrollRef.current;
     if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 150) el.scrollTop = el.scrollHeight;
-  }, [room?.publicMessages, live, pendingEcho]);
+  }, [feed]);
 
   const seatName = (id: string) => seats.find(s => s.id === id)?.title || id;
 
@@ -82,6 +102,7 @@ export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
   }
   const joinSeat = (seatId: string) => postAction('join', { seatId });
   const leaveSeat = (seatId: string) => postAction('leave', { seatId });
+  const toggleMode = () => { if (room) postAction('set-mode', { mode: room.mode === 'plan' ? 'build' : 'plan' }); };
   function moveSeat(idx: number, dir: -1 | 1) {
     if (!room) return;
     const ids = [...room.participantSeatIds];
@@ -102,32 +123,42 @@ export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
     const text = input.trim();
     setInput('');
     setStreaming(true);
-    setLive(null);
-    setPendingEcho([{ speaker: '人类', content: text, timestamp: Date.now() }]);
+    // 人类发言立即上屏（仿对流：直接 push 进 feed）
+    setFeed(p => [...p, { speaker: '人类', content: text, isHuman: true, tools: [] }]);
     const abort = new AbortController();
     abortRef.current = abort;
-    let ls: LiveSeat | null = null;
-    const flush = () => setLive(ls ? { ...ls, tools: [...ls.tools] } : null);
+    let curLabel = '';
     try {
       await streamSSE(`/api/cyclone/workshop/${workshopId}/room/${roomId}/speak`, { message: text }, (ev) => {
-        if (ev.type === 'seat-start') { ls = { speaker: ev.speaker, text: '', tools: [], phase: '思考中...' }; flush(); }
-        else if (ev.type === 'token' && ls) { ls.text += ev.content; ls.phase = ''; flush(); }
-        else if (ev.type === 'tool-call' && ls) { ls.tools.push({ tool: ev.tool, args: ev.args, status: 'running' }); ls.phase = `调用 ${ev.tool}...`; flush(); }
-        else if (ev.type === 'tool-result' && ls) {
-          for (let i = ls.tools.length - 1; i >= 0; i--) { if (ls.tools[i].status === 'running') { ls.tools[i] = { ...ls.tools[i], result: ev.result, status: ev.ok ? 'success' : 'error' }; break; } }
-          ls.phase = ''; flush();
+        if (ev.type === 'seat-start') {
+          curLabel = ev.speaker;
+          setFeed(p => [...p, { speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: '思考中...', tools: [] }]);
+        } else if (ev.type === 'token') {
+          setFeed(p => p.map((m, i) => i === p.length - 1 && m.speaker === curLabel ? { ...m, content: m.content + ev.content, phase: '' } : m));
+        } else if (ev.type === 'tool-call') {
+          setFeed(p => p.map((m, i) => i === p.length - 1 && m.speaker === curLabel ? { ...m, tools: [...m.tools, { tool: ev.tool, args: ev.args, status: 'running' }], phase: `调用 ${ev.tool}...` } : m));
+        } else if (ev.type === 'tool-result') {
+          setFeed(p => p.map((m, i) => {
+            if (i !== p.length - 1 || m.speaker !== curLabel) return m;
+            const tools = [...m.tools];
+            for (let k = tools.length - 1; k >= 0; k--) { if (tools[k].status === 'running') { tools[k] = { ...tools[k], result: ev.result, status: ev.ok ? 'success' : 'error' }; break; } }
+            return { ...m, tools, phase: '' };
+          }));
+        } else if (ev.type === 'seat-done') {
+          // 定稿：保留在 feed 里，不消失（关键差异点）
+          setFeed(p => p.map((m, i) => i === p.length - 1 && m.speaker === ev.speaker ? { ...m, content: ev.content || m.content, streaming: false, phase: '' } : m));
+          curLabel = '';
+        } else if (ev.type === 'error') {
+          setFeed(p => [...p, { speaker: '系统', content: ev.message, isHuman: false, tools: [] }]);
         }
-        else if (ev.type === 'seat-done') { ls = null; setLive(null); }
-        else if (ev.type === 'error') { ls = { speaker: '系统', text: ev.message, tools: [], phase: '' }; flush(); }
       }, abort.signal);
     } catch (e) {
-      setLive({ speaker: '系统', text: `[请求失败] ${(e as Error).message}`, tools: [], phase: '' });
+      setFeed(p => [...p, { speaker: '系统', content: `[请求失败] ${(e as Error).message}`, isHuman: false, tools: [] }]);
     } finally {
       setStreaming(false);
       abortRef.current = null;
+      // 整轮结束：用服务端真相覆盖 feed（含 contact 等前端未捕获的差异）
       await reload(true);
-      setLive(null);
-      setPendingEcho([]);
     }
   }
 
@@ -152,6 +183,18 @@ export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
           <span className="conv__header-title" title="双击重命名" onDoubleClick={() => { setEditingTitle(true); setTitleDraft(room.title); }}># {room.title}</span>
         )}
         <span className="conv__header-id">{room.topic}</span>
+        <button
+          onClick={toggleMode}
+          title={room.mode === 'plan' ? 'plan 模式：只读 + 联络，不动文件。点击切回 build' : 'build 模式：可读写工作区。点击切到 plan'}
+          style={{
+            marginLeft: 'auto', padding: '2px 10px', fontSize: 'var(--text-xs)', fontWeight: 600,
+            borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid',
+            ...(room.mode === 'plan'
+              ? { background: 'var(--color-warning-subtle, #4a3a1a)', borderColor: 'var(--color-warning, #d4a017)', color: 'var(--color-warning, #d4a017)' }
+              : { background: 'var(--color-accent-subtle)', borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }),
+          }}>
+          {room.mode === 'plan' ? 'plan · 只读' : 'build · 可写'}
+        </button>
       </div>
 
       {/* Config bar：在场工位 */}
@@ -174,23 +217,31 @@ export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
         )}
       </div>
 
-      {/* Messages */}
+      {/* Messages（历史 + 本轮实时统一一个 feed，仿对流单数组模型，回复不消失） */}
       <div ref={scrollRef} className="chat__messages conv__messages" style={{ flex: 1, overflowY: 'auto' }}>
-        {room.publicMessages.map((m, i) => <RoomBubble key={i} msg={m} idx={i} />)}
-        {pendingEcho.map((m, i) => <RoomBubble key={`echo-${i}`} msg={m} idx={`e${i}`} />)}
-        {live && (
-          <div className="chat__message chat__message--assistant">
-            <div className="chat__avatar">{live.speaker.slice(0, 2)}</div>
-            <div className="chat__bubble">
-              <div className="conv__speaker-label">{live.speaker}</div>
-              {live.tools.map((t, ti) => (
-                <ToolCallMessage key={ti} toolCall={{ toolName: t.tool, params: t.args, result: t.result, status: t.status }} />
-              ))}
-              {live.phase && <div className="chat__streaming-phase">{live.phase}</div>}
-              {live.text && <div className="chat__content" style={{ whiteSpace: 'pre-wrap' }}>{live.text}▍</div>}
+        {feed.map((m, i) => {
+          if (m.isHuman) {
+            return (
+              <div key={i} className="chat__message chat__message--user">
+                <div className="chat__avatar">你</div>
+                <div className="chat__bubble"><div className="chat__content">{renderTextWithCode(m.content, `room-u-${i}`)}</div></div>
+              </div>
+            );
+          }
+          return (
+            <div key={i} className="chat__message chat__message--assistant">
+              <div className="chat__avatar">{m.speaker.slice(0, 2)}</div>
+              <div className="chat__bubble">
+                <div className="conv__speaker-label">{m.speaker}</div>
+                {m.tools.map((t, ti) => (
+                  <ToolCallMessage key={ti} toolCall={{ toolName: t.tool, params: t.args, result: t.result, status: t.status }} />
+                ))}
+                {m.phase && <div className="chat__streaming-phase">{m.phase}</div>}
+                {m.content && <div className="chat__content" style={{ whiteSpace: 'pre-wrap' }}>{renderTextWithCode(m.content, `room-s-${i}`)}{m.streaming ? '▍' : ''}</div>}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })}
       </div>
 
       {/* Input */}
@@ -211,31 +262,6 @@ export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
             </button>
           )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-/** 单条已落库群聊气泡 */
-function RoomBubble({ msg, idx }: { msg: RoomMsg; idx: number | string }) {
-  const isHuman = msg.speaker === '人类';
-  if (isHuman) {
-    return (
-      <div className="chat__message chat__message--user">
-        <div className="chat__avatar">你</div>
-        <div className="chat__bubble"><div className="chat__content">{renderTextWithCode(msg.content, `room-u-${idx}`)}</div></div>
-      </div>
-    );
-  }
-  return (
-    <div className="chat__message chat__message--assistant">
-      <div className="chat__avatar">{msg.speaker.slice(0, 2)}</div>
-      <div className="chat__bubble">
-        <div className="conv__speaker-label">{msg.speaker}</div>
-        {msg.toolCalls?.map((t, ti) => (
-          <ToolCallMessage key={ti} toolCall={{ toolName: t.tool, params: t.args, result: t.result, status: 'success' }} />
-        ))}
-        <div className="chat__content">{renderTextWithCode(msg.content, `room-s-${idx}`)}</div>
       </div>
     </div>
   );

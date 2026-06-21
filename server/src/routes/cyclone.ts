@@ -8,16 +8,19 @@
 
 import type { FastifyInstance } from 'fastify';
 import {
-  createWorkshop, loadWorkshop, listWorkshops, deleteWorkshop, renameWorkshop,
+  createWorkshop, loadWorkshop, listWorkshops, deleteWorkshop, renameWorkshop, setChair,
 } from '../engine/cyclone/workshop-store';
 import {
   addSeat, loadSeat, deleteSeat, updateSeatRole,
 } from '../engine/cyclone/seat-store';
 import {
-  createRoom, loadRoom, deleteRoom, joinRoom, leaveRoom, setRoomParticipants, renameRoom, tryAcquireRoomLock,
+  createRoom, loadRoom, deleteRoom, joinRoom, leaveRoom, setRoomParticipants, renameRoom, setRoomMode, tryAcquireRoomLock,
 } from '../engine/cyclone/room-store';
 import { chatSeat, resumeSeat, type SeatEvent } from '../engine/cyclone/seat-runner';
 import { speakInRoom, type RoomEvent } from '../engine/cyclone/room-runner';
+import { generateJoinSpeech } from '../engine/cyclone/seat-summary';
+import { generateSeatDuty } from '../engine/cyclone/seat-duty';
+import type { JoinBehavior } from '../engine/cyclone/types';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
 
 /** 活跃轮次 AbortController：`${workshopId}/${seatId}` 或 `${workshopId}/room/${roomId}` → ctrl */
@@ -28,8 +31,8 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
 
   // POST /api/cyclone/create —— 建工作室
   app.post('/create', async (req, reply) => {
-    const { title } = (req.body as any) || {};
-    const w = await createWorkshop(dataDir, { title });
+    const { title, chairAgentId } = (req.body as any) || {};
+    const w = await createWorkshop(dataDir, { title, chairAgentId });
     return reply.send(w);
   });
 
@@ -81,14 +84,30 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({ ok: true });
     }
 
+    if (action === 'set-chair') {
+      const w = await setChair(dataDir, workshopId, body?.chairAgentId || '');
+      if (!w) return reply.status(404).send({ error: '工作室不存在' });
+      return reply.send({ chairAgentId: w.chairAgentId });
+    }
+
     if (action === 'add-seat') {
       if (!body?.agentId) return reply.status(400).send({ error: '缺少 agentId' });
       const w = await loadWorkshop(dataDir, workshopId);
       if (!w) return reply.status(404).send({ error: '工作室不存在' });
       const seat = await addSeat(dataDir, workshopId, {
         agentId: body.agentId, title: body.title, rolePrompt: body.rolePrompt,
+        duty: body.duty, overrideAgentRole: body.overrideAgentRole,
       });
       return reply.send(seat);
+    }
+
+    // 无状态职责名片生成（创建工位前调用，不依赖已存工位）
+    if (action === 'gen-duty') {
+      if (!body?.agentId) return reply.status(400).send({ error: '缺少 agentId' });
+      const duty = await generateSeatDuty(dataDir, {
+        agentId: body.agentId, title: body.title || '工位', rolePrompt: body.rolePrompt,
+      });
+      return reply.send({ duty });
     }
 
     return reply.status(400).send({ error: `未知 action：${action}` });
@@ -109,6 +128,7 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     if (action === 'update-role') {
       const updated = await updateSeatRole(dataDir, workshopId, seatId, {
         title: body.title, rolePrompt: body.rolePrompt,
+        duty: body.duty, overrideAgentRole: body.overrideAgentRole,
       });
       if (!updated) return reply.status(404).send({ error: '工位不存在' });
       return reply.send(updated);
@@ -165,7 +185,7 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     const w = await loadWorkshop(dataDir, workshopId);
     if (!w) return reply.status(404).send({ error: '工作室不存在' });
     const room = await createRoom(dataDir, workshopId, {
-      title: body.title, topic: body.topic, participantSeatIds: body.participantSeatIds,
+      title: body.title, topic: body.topic, participantSeatIds: body.participantSeatIds, mode: body.mode,
     });
     return reply.send(room);
   });
@@ -217,6 +237,52 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       const room = await renameRoom(dataDir, workshopId, roomId, body.title);
       if (!room) return reply.status(404).send({ error: '群聊不存在' });
       return reply.send({ title: room.title });
+    }
+
+    if (action === 'set-mode') {
+      const room = await setRoomMode(dataDir, workshopId, roomId, body?.mode);
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
+      return reply.send({ mode: room.mode });
+    }
+
+    // 入会发言：对指定工位按各自 joinBehavior 依次生成开场白（SSE 流式，仿 speak 事件）
+    // body.intros: Array<{ seatId: string; behavior: 'summary'|'intro'|'none' }>
+    if (action === 'intro') {
+      const intros: Array<{ seatId: string; behavior: JoinBehavior }> = Array.isArray(body?.intros) ? body.intros : [];
+      const room = await loadRoom(dataDir, workshopId, roomId);
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
+      const release = tryAcquireRoomLock(workshopId, roomId);
+      if (!release) return reply.status(409).send({ error: '该群聊正在处理中，请稍后再试' });
+
+      reply.hijack();
+      initSSE(reply);
+      const stopHB = startHeartbeat(reply);
+      const abort = new AbortController();
+      activeAborts.set(lockKey, abort);
+      try {
+        for (const it of intros) {
+          if (abort.signal.aborted) break;
+          if (it.behavior === 'none') continue;
+          const seat = await loadSeat(dataDir, workshopId, it.seatId);
+          if (!seat) continue;
+          pushSSE(reply, { type: 'seat-start', speaker: seat.title });
+          const speech = await generateJoinSpeech(
+            dataDir, workshopId, room, it.seatId, it.behavior,
+            (chunk) => pushSSE(reply, { type: 'token', speaker: seat.title, content: chunk }),
+            abort.signal,
+          );
+          if (speech) pushSSE(reply, { type: 'seat-done', speaker: seat.title, content: speech });
+        }
+        pushSSE(reply, { type: 'done' });
+      } catch (e) {
+        pushSSE(reply, { type: 'error', message: (e as Error).message });
+      } finally {
+        activeAborts.delete(lockKey);
+        release();
+        stopHB();
+        endSSE(reply);
+      }
+      return;
     }
 
     if (action === 'abort') {
