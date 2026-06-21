@@ -15,7 +15,7 @@ import '../../../styles/components/convection.css';
 
 interface RoomToolCall { tool: string; args: Record<string, string>; result: string; }
 interface RoomMsg { speaker: string; content: string; timestamp: number; rawContent?: string; toolCalls?: RoomToolCall[]; }
-interface Room { id: string; title: string; topic: string; participantSeatIds: string[]; publicMessages: RoomMsg[]; }
+interface Room { id: string; title: string; topic: string; mode?: 'build' | 'plan'; participantSeatIds: string[]; publicMessages: RoomMsg[]; }
 interface SeatLite { id: string; title: string; }
 
 /** 统一渲染项：历史消息 + 本轮实时消息共用一个数组（仿对流单数组模型） */
@@ -102,6 +102,7 @@ export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
   }
   const joinSeat = (seatId: string) => postAction('join', { seatId });
   const leaveSeat = (seatId: string) => postAction('leave', { seatId });
+  const toggleMode = () => { if (room) postAction('set-mode', { mode: room.mode === 'plan' ? 'build' : 'plan' }); };
   function moveSeat(idx: number, dir: -1 | 1) {
     if (!room) return;
     const ids = [...room.participantSeatIds];
@@ -182,6 +183,18 @@ export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
           <span className="conv__header-title" title="双击重命名" onDoubleClick={() => { setEditingTitle(true); setTitleDraft(room.title); }}># {room.title}</span>
         )}
         <span className="conv__header-id">{room.topic}</span>
+        <button
+          onClick={toggleMode}
+          title={room.mode === 'plan' ? 'plan 模式：只读 + 联络，不动文件。点击切回 build' : 'build 模式：可读写工作区。点击切到 plan'}
+          style={{
+            marginLeft: 'auto', padding: '2px 10px', fontSize: 'var(--text-xs)', fontWeight: 600,
+            borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid',
+            ...(room.mode === 'plan'
+              ? { background: 'var(--color-warning-subtle, #4a3a1a)', borderColor: 'var(--color-warning, #d4a017)', color: 'var(--color-warning, #d4a017)' }
+              : { background: 'var(--color-accent-subtle)', borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }),
+          }}>
+          {room.mode === 'plan' ? 'plan · 只读' : 'build · 可写'}
+        </button>
       </div>
 
       {/* Config bar：在场工位 */}

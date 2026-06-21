@@ -10,6 +10,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { getAgents } from '../../../store/agent';
 import type { Agent } from '../../../types';
 import RoomPanel from './RoomPanel';
+import CreateRoomPanel from './CreateRoomPanel';
 import SeatChat from './SeatChat';
 
 interface WorkshopSummary {
@@ -29,8 +30,8 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   const [seats, setSeats] = useState<Seat[]>([]);
   const [activeSeatId, setActiveSeatId] = useState<string | null>(null);
   const [rooms, setRooms] = useState<RoomLite[]>([]);
-  /** 右侧视图：私聊某工位 or 进入某群聊 */
-  const [view, setView] = useState<{ kind: 'seat'; id: string } | { kind: 'room'; id: string } | null>(null);
+  /** 右侧视图：私聊某工位 / 进入某群聊 / 创建群聊配置面板 */
+  const [view, setView] = useState<{ kind: 'seat'; id: string } | { kind: 'room'; id: string } | { kind: 'create-room' } | null>(null);
 
   const refreshAgents = useCallback(async () => { try { setAgents(await getAgents()); } catch {} }, []);
   const refreshWorkshops = useCallback(async () => {
@@ -56,7 +57,12 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   async function createWorkshop() {
     const title = prompt('工作室名称', '新工作室');
     if (title === null) return;
-    const r = await fetch('/api/cyclone/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
+    let chairAgentId: string | undefined;
+    if (agents.length) {
+      const pick = prompt(`会长 agent（场外参谋，可空）。输入 id 或留空：\n${agents.map(a => `${a.id}  ${a.name}`).join('\n')}`, '');
+      chairAgentId = pick?.trim() || undefined;
+    }
+    const r = await fetch('/api/cyclone/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, chairAgentId }) });
     if (r.ok) { const w = await r.json(); await refreshWorkshops(); setActiveWid(w.id); }
   }
 
@@ -73,15 +79,31 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     if (r.ok) { await refreshWorkshops(); await loadWorkshop(activeWid); }
   }
 
-  async function createRoom() {
+  /** 创建群聊：建群 → 跑入会发言（SSE 流式落库）→ 进入。入会发言的可视化在 RoomPanel 进入后 reload 自然呈现。 */
+  async function handleCreateRoom(cfg: {
+    title: string; topic: string; mode: 'build' | 'plan';
+    participantSeatIds: string[];
+    intros: Array<{ seatId: string; behavior: 'summary' | 'intro' | 'none' }>;
+  }) {
     if (!activeWid) return;
-    const title = prompt('群聊名称', '新群聊');
-    if (title === null) return;
-    const topic = prompt('讨论话题', '自由讨论') || '自由讨论';
     const r = await fetch(`/api/cyclone/workshop/${activeWid}/create-room`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, topic }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: cfg.title, topic: cfg.topic, mode: cfg.mode, participantSeatIds: cfg.participantSeatIds }),
     });
-    if (r.ok) { const rm = await r.json(); await loadWorkshop(activeWid); setView({ kind: 'room', id: rm.id }); }
+    if (!r.ok) return;
+    const rm = await r.json();
+    // 跑入会发言（若有非 none 行为）。逐条流式落库，等整体结束再进入群聊。
+    const needIntro = cfg.intros.some(i => i.behavior !== 'none');
+    if (needIntro) {
+      try {
+        await fetch(`/api/cyclone/workshop/${activeWid}/room/${rm.id}/intro`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ intros: cfg.intros }),
+        });
+      } catch { /* 入会发言失败不阻断进入群聊 */ }
+    }
+    await loadWorkshop(activeWid);
+    setView({ kind: 'room', id: rm.id });
   }
 
   if (!active) return null;
@@ -114,7 +136,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
             ))}
             <div style={sectionHeadStyle}>
               <span style={sectionLabelStyle}>群聊</span>
-              <button onClick={createRoom} style={newBtnStyle} title="新建群聊">+</button>
+              <button onClick={() => setView({ kind: 'create-room' })} style={newBtnStyle} title="新建群聊">+</button>
             </div>
             {rooms.map(rm => (
               <div key={rm.id} onClick={() => setView({ kind: 'room', id: rm.id })}
@@ -126,12 +148,19 @@ export default function CyclonePage({ active }: { active?: boolean }) {
         )}
       </div>
 
-      {/* 右：私聊 or 群聊 */}
+      {/* 右：私聊 / 群聊 / 创建群聊 */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        {view?.kind === 'create-room' && activeWid && (
+          <CreateRoomPanel
+            seats={seats.map(s => ({ id: s.id, title: s.title }))}
+            onCreate={handleCreateRoom}
+            onCancel={() => setView(null)}
+          />
+        )}
         {view?.kind === 'room' && activeWid && (
           <RoomPanel workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} onChanged={() => loadWorkshop(activeWid)} />
         )}
-        {view?.kind !== 'room' && !activeSeat && <div style={{ opacity: .5, margin: 'auto' }}>选择或创建一个工位开始私聊，或进入群聊</div>}
+        {view?.kind !== 'room' && view?.kind !== 'create-room' && !activeSeat && <div style={{ opacity: .5, margin: 'auto' }}>选择或创建一个工位开始私聊，或进入群聊</div>}
         {view?.kind === 'seat' && activeSeat && activeWid && (
           <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id} onReloaded={() => loadWorkshop(activeWid)} />
         )}
