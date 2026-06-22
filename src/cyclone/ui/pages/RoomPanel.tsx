@@ -4,29 +4,21 @@
  * 布局：Header（标题双击重命名 + 话题）+ Config bar（在场工位 tag：↑↓调序 / ×移除 / + 添加）
  *       + Messages（对流式气泡，头像 + speaker label + 工具卡片）+ Input（chat__ 输入区）。
  * 发言模型：人发一句 → 在场工位串行响应（SSE 流式），仿对流 handleSpeak。
+ * 流式：运行态不在本组件，存于 CyclonePage 级 useRoomStreamRunners 注册表（按 roomId 索引）。
+ *       本组件只订阅自身 roomId、读 runner.roundFeed 缓冲渲染。切走/重挂不掐流、不丢内容。
  * 复用季风渲染原子：ToolCallMessage（工具卡片）+ renderTextWithCode（markdown）+ chat__/conv__ 全局 CSS。
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { streamUrl } from '../../../lib/apiBase';
 import { renderTextWithCode } from '../../../engine/markdown';
 import ToolCallMessage from '../../../components/chat/ToolCallMessage';
+import type { RoomStreamRunners, FeedMsg } from './useRoomStreamRunners';
 import '../../../styles/components/convection.css';
 
 interface RoomToolCall { tool: string; args: Record<string, string>; result: string; }
 interface RoomMsg { speaker: string; content: string; timestamp: number; rawContent?: string; toolCalls?: RoomToolCall[]; }
 interface Room { id: string; title: string; topic: string; mode?: 'build' | 'plan'; participantSeatIds: string[]; publicMessages: RoomMsg[]; }
 interface SeatLite { id: string; title: string; }
-
-/** 统一渲染项：历史消息 + 本轮实时消息共用一个数组（仿对流单数组模型） */
-interface FeedMsg {
-  speaker: string;
-  content: string;
-  isHuman: boolean;
-  streaming?: boolean;
-  phase?: string;
-  tools: { tool: string; args: Record<string, string>; result?: string; status: 'running' | 'success' | 'error' }[];
-}
 
 function publicToFeed(msgs: RoomMsg[]): FeedMsg[] {
   return msgs.map(m => ({
@@ -37,59 +29,53 @@ function publicToFeed(msgs: RoomMsg[]): FeedMsg[] {
   }));
 }
 
-async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal?: AbortSignal): Promise<void> {
-  const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
-  if (!res.ok) throw new Error(await res.text());
-  const reader = res.body?.getReader();
-  if (!reader) return;
-  const dec = new TextDecoder();
-  let buf = '';
-  while (true) {
-    if (signal?.aborted) { reader.cancel(); break; }
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() ?? '';
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t.startsWith('data:')) continue;
-      const p = t.slice(5).trim();
-      if (!p || p === '[DONE]') continue;
-      try { onEvent(JSON.parse(p)); } catch {}
-    }
-  }
-}
-
-export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
-  workshopId: string; roomId: string; seats: SeatLite[]; onChanged?: () => void;
+export default function RoomPanel({ workshopId, roomId, seats, runners, onChanged }: {
+  workshopId: string; roomId: string; seats: SeatLite[]; runners: RoomStreamRunners; onChanged?: () => void;
 }) {
   const [room, setRoom] = useState<Room | null>(null);
-  const [feed, setFeed] = useState<FeedMsg[]>([]);
+  const [history, setHistory] = useState<FeedMsg[]>([]);
   const [input, setInput] = useState('');
-  const [streaming, setStreaming] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
-  const abortRef = useRef<AbortController | null>(null);
+  /** 订阅 tick：runner 每次 notify 自增，触发本组件重渲染读取最新 roundFeed 缓冲 */
+  const [, forceTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
+
+  const runner = runners.getRunner(roomId);
+  const streaming = !!runner?.streaming;
+  // 即使 done 也继续显示 roundFeed，直到 reload 完成 + clearIfDone 删除 runner，避免终答闪空
+  const roundFeed = runner?.roundFeed ?? null;
 
   const reload = useCallback(async (notify = false) => {
     const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/status`);
     if (r.ok) {
       const data: Room = await r.json();
       setRoom(data);
-      setFeed(publicToFeed(data.publicMessages));
+      setHistory(publicToFeed(data.publicMessages));
       if (notify) onChangedRef.current?.();
     }
   }, [workshopId, roomId]);
 
-  useEffect(() => { reload(); }, [reload]);
+  // 挂载：订阅 runner 通知 + 首次拉历史
+  useEffect(() => {
+    const unsub = runners.subscribe(roomId, () => forceTick(t => t + 1));
+    reload();
+    return unsub;
+  }, [roomId, runners, reload]);
+
+  // runner 结束后：reload 落库历史（publicMessages），再清出 runner 释放 roundFeed，避免双源重影
+  const doneRoomId = runner?.done ? roomId : null;
+  useEffect(() => {
+    if (!doneRoomId) return;
+    (async () => { await reload(true); runners.clearIfDone(doneRoomId); forceTick(t => t + 1); })();
+  }, [doneRoomId, reload, runners]);
+
   useEffect(() => {
     const el = scrollRef.current;
     if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 150) el.scrollTop = el.scrollHeight;
-  }, [feed]);
+  }, [history, roundFeed, streaming]);
 
   const seatName = (id: string) => seats.find(s => s.id === id)?.title || id;
 
@@ -122,50 +108,12 @@ export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
     if (room.participantSeatIds.length === 0) { alert('群里还没有工位，先从右上角添加'); return; }
     const text = input.trim();
     setInput('');
-    setStreaming(true);
-    // 人类发言立即上屏（仿对流：直接 push 进 feed）
-    setFeed(p => [...p, { speaker: '人类', content: text, isHuman: true, tools: [] }]);
-    const abort = new AbortController();
-    abortRef.current = abort;
-    let curLabel = '';
-    try {
-      await streamSSE(`/api/cyclone/workshop/${workshopId}/room/${roomId}/speak`, { message: text }, (ev) => {
-        if (ev.type === 'seat-start') {
-          curLabel = ev.speaker;
-          setFeed(p => [...p, { speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: '思考中...', tools: [] }]);
-        } else if (ev.type === 'token') {
-          setFeed(p => p.map((m, i) => i === p.length - 1 && m.speaker === curLabel ? { ...m, content: m.content + ev.content, phase: '' } : m));
-        } else if (ev.type === 'tool-call') {
-          setFeed(p => p.map((m, i) => i === p.length - 1 && m.speaker === curLabel ? { ...m, tools: [...m.tools, { tool: ev.tool, args: ev.args, status: 'running' }], phase: `调用 ${ev.tool}...` } : m));
-        } else if (ev.type === 'tool-result') {
-          setFeed(p => p.map((m, i) => {
-            if (i !== p.length - 1 || m.speaker !== curLabel) return m;
-            const tools = [...m.tools];
-            for (let k = tools.length - 1; k >= 0; k--) { if (tools[k].status === 'running') { tools[k] = { ...tools[k], result: ev.result, status: ev.ok ? 'success' : 'error' }; break; } }
-            return { ...m, tools, phase: '' };
-          }));
-        } else if (ev.type === 'seat-done') {
-          // 定稿：保留在 feed 里，不消失（关键差异点）
-          setFeed(p => p.map((m, i) => i === p.length - 1 && m.speaker === ev.speaker ? { ...m, content: ev.content || m.content, streaming: false, phase: '' } : m));
-          curLabel = '';
-        } else if (ev.type === 'error') {
-          setFeed(p => [...p, { speaker: '系统', content: ev.message, isHuman: false, tools: [] }]);
-        }
-      }, abort.signal);
-    } catch (e) {
-      setFeed(p => [...p, { speaker: '系统', content: `[请求失败] ${(e as Error).message}`, isHuman: false, tools: [] }]);
-    } finally {
-      setStreaming(false);
-      abortRef.current = null;
-      // 整轮结束：用服务端真相覆盖 feed（含 contact 等前端未捕获的差异）
-      await reload(true);
-    }
+    // 流式运行态托管给注册表：切走房间不掐流、后台续跑、切回读 roundFeed 恢复
+    runners.startRound(workshopId, roomId, text);
   }
 
   function stop() {
-    abortRef.current?.abort();
-    fetch(streamUrl(`/api/cyclone/workshop/${workshopId}/room/${roomId}/abort`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
-    setStreaming(false);
+    runners.abortRoom(workshopId, roomId);
   }
 
   if (!room) return <div style={{ opacity: .5, margin: 'auto' }}>加载群聊…</div>;
@@ -197,51 +145,30 @@ export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
         </button>
       </div>
 
-      {/* Config bar：在场工位 */}
+      {/* Config bar：在场工位（流式中禁改，避免中途增删工位扰乱在跑的轮） */}
       <div className="conv__config">
         <span className="conv__config-label">在场:</span>
         {room.participantSeatIds.length === 0 && <span style={{ opacity: .5, fontSize: 'var(--text-xs)' }}>（空，从右侧添加工位）</span>}
         {room.participantSeatIds.map((id, idx) => (
           <span key={id} className="conv__tag">
-            <button onClick={() => moveSeat(idx, -1)} disabled={idx === 0} className="conv__tag-move">↑</button>
-            <button onClick={() => moveSeat(idx, 1)} disabled={idx === room.participantSeatIds.length - 1} className="conv__tag-move">↓</button>
+            <button onClick={() => moveSeat(idx, -1)} disabled={streaming || idx === 0} className="conv__tag-move">↑</button>
+            <button onClick={() => moveSeat(idx, 1)} disabled={streaming || idx === room.participantSeatIds.length - 1} className="conv__tag-move">↓</button>
             {seatName(id)}
-            <button onClick={() => leaveSeat(id)} className="conv__tag-remove">×</button>
+            <button onClick={() => leaveSeat(id)} disabled={streaming} className="conv__tag-remove">×</button>
           </span>
         ))}
         {candidates.length > 0 && (
-          <select value="" onChange={e => { if (e.target.value) joinSeat(e.target.value); }} className="conv__config-select">
+          <select value="" disabled={streaming} onChange={e => { if (e.target.value) joinSeat(e.target.value); }} className="conv__config-select">
             <option value="">+</option>
             {candidates.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
           </select>
         )}
       </div>
 
-      {/* Messages（历史 + 本轮实时统一一个 feed，仿对流单数组模型，回复不消失） */}
+      {/* Messages：已落库 history + 本轮 roundFeed（流式中 history 不含本轮；done 后 reload 带回、clearIfDone 清 roundFeed，无重影） */}
       <div ref={scrollRef} className="chat__messages conv__messages" style={{ flex: 1, overflowY: 'auto' }}>
-        {feed.map((m, i) => {
-          if (m.isHuman) {
-            return (
-              <div key={i} className="chat__message chat__message--user">
-                <div className="chat__avatar">你</div>
-                <div className="chat__bubble"><div className="chat__content">{renderTextWithCode(m.content, `room-u-${i}`)}</div></div>
-              </div>
-            );
-          }
-          return (
-            <div key={i} className="chat__message chat__message--assistant">
-              <div className="chat__avatar">{m.speaker.slice(0, 2)}</div>
-              <div className="chat__bubble">
-                <div className="conv__speaker-label">{m.speaker}</div>
-                {m.tools.map((t, ti) => (
-                  <ToolCallMessage key={ti} toolCall={{ toolName: t.tool, params: t.args, result: t.result, status: t.status }} />
-                ))}
-                {m.phase && <div className="chat__streaming-phase">{m.phase}</div>}
-                {m.content && <div className="chat__content" style={{ whiteSpace: 'pre-wrap' }}>{renderTextWithCode(m.content, `room-s-${i}`)}{m.streaming ? '▍' : ''}</div>}
-              </div>
-            </div>
-          );
-        })}
+        {history.map((m, i) => <FeedRow key={`h-${i}`} m={m} idx={i} prefix="h" />)}
+        {roundFeed?.map((m, i) => <FeedRow key={`r-${i}`} m={m} idx={i} prefix="r" />)}
       </div>
 
       {/* Input */}
@@ -262,6 +189,31 @@ export default function RoomPanel({ workshopId, roomId, seats, onChanged }: {
             </button>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** 单条群聊消息（人类气泡 / 工位气泡，历史 + 本轮实时共用） */
+function FeedRow({ m, idx, prefix }: { m: FeedMsg; idx: number; prefix: string }) {
+  if (m.isHuman) {
+    return (
+      <div className="chat__message chat__message--user">
+        <div className="chat__avatar">你</div>
+        <div className="chat__bubble"><div className="chat__content">{renderTextWithCode(m.content, `room-${prefix}u-${idx}`)}</div></div>
+      </div>
+    );
+  }
+  return (
+    <div className="chat__message chat__message--assistant">
+      <div className="chat__avatar">{m.speaker.slice(0, 2)}</div>
+      <div className="chat__bubble">
+        <div className="conv__speaker-label">{m.speaker}</div>
+        {m.tools.map((t, ti) => (
+          <ToolCallMessage key={ti} toolCall={{ toolName: t.tool, params: t.args, result: t.result, status: t.status }} />
+        ))}
+        {m.phase && <div className="chat__streaming-phase">{m.phase}</div>}
+        {m.content && <div className="chat__content" style={{ whiteSpace: 'pre-wrap' }}>{renderTextWithCode(m.content, `room-${prefix}s-${idx}`)}{m.streaming ? '▍' : ''}</div>}
       </div>
     </div>
   );
