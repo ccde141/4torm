@@ -45,7 +45,8 @@ export async function generateSeatDuty(
     dataDir,
     fullModelKey: agent.model,
     messages,
-    options: { temperature: agent.temperature, maxTokens: 120 },
+    // 给足额度：推理模型的思考过程也计入 completion_tokens，太小会把正文挤掉（只漏出半句）
+    options: { temperature: agent.temperature, maxTokens: 1000 },
     signal,
   });
 
