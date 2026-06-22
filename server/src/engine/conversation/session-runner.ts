@@ -283,8 +283,13 @@ export class SessionRunner {
     return { content: result.content, rawContent: result.rawContent };
   }
 
-  /** 执行普通工具（HTTP 调 /api/tools/exec） */
+  /** 执行普通工具（MCP 工具走 MCP client；其余 HTTP 调 /api/tools/exec） */
   private async execTool(tool: string, args: Record<string, string>): Promise<string> {
+    // MCP 工具：本地工具 HTTP 执行器不认 mcp: 前缀，必须直接走 MCP client（对齐 cyclone execToolUnified）
+    if (tool.startsWith('mcp:')) {
+      const { callMcpTool } = await import('../shared/mcp-manager');
+      return callMcpTool(tool, args);
+    }
     const url = (process.env.TOOL_BRIDGE_URL || 'http://localhost:3001').replace(/\/+$/, '') + '/api/tools/exec';
     const res = await fetch(url, {
       method: 'POST',

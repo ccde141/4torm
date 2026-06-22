@@ -13,7 +13,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ContextMessage, LLMOptions, NativeToolCall } from './types';
 import type { ToolDef } from './tool-defs-loader';
-import { toProviderTools, parseToolCalls, makeToolCallAccumulator } from './tool-bridge';
+import { toProviderToolsWithMap, parseToolCalls, restoreToolName, makeToolCallAccumulator } from './tool-bridge';
 
 interface Provider {
   id: string;
@@ -129,8 +129,10 @@ export interface LLMCallParams {
   tools?: ToolDef[];
 }
 
-/** 把 ContextMessage 映射成 provider 消息体（双模式：文本 / 原生）。 */
-function mapMessages(messages: ContextMessage[]): unknown[] {
+/** 把 ContextMessage 映射成 provider 消息体（双模式：文本 / 原生）。
+ * @param forwardMap original→sanitized 工具名映射，把历史 assistant.tool_calls 的名字
+ *                   净化成与当前请求 tools 一致的合法名（多轮一致性）。 */
+function mapMessages(messages: ContextMessage[], forwardMap: Map<string, string>): unknown[] {
   return messages.map(m => {
     // 原生：工具结果消息
     if (m.role === 'tool') {
@@ -144,7 +146,7 @@ function mapMessages(messages: ContextMessage[]): unknown[] {
         tool_calls: m.toolCalls.map(tc => ({
           id: tc.id,
           type: 'function',
-          function: { name: tc.name, arguments: tc.arguments },
+          function: { name: forwardMap.get(tc.name) ?? tc.name, arguments: tc.arguments },
         })),
       };
     }
@@ -169,23 +171,35 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
   };
   if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
 
+  // 原生模式：先净化工具名，得到 nameMap（sanitized→original）供回填反解。
+  // 同时反推 forward（original→sanitized），用于把历史 assistant.tool_calls 的名字
+  // 也净化一致，否则多轮请求里旧的 mcp:... 名会再次触发 400。
+  let nameMap = new Map<string, string>();
+  let toolsParam: unknown[] | undefined;
+  if (params.tools && params.tools.length > 0) {
+    const r = toProviderToolsWithMap(params.tools, 'openai');
+    toolsParam = r.tools;
+    nameMap = r.nameMap;
+  }
+  const forwardMap = new Map<string, string>();
+  for (const [sanitized, original] of nameMap) forwardMap.set(original, sanitized);
+
   const body: Record<string, unknown> = {
     model: options?.model ?? extractModelId(fullModelKey),
-    messages: mapMessages(messages),
+    messages: mapMessages(messages, forwardMap),
     temperature: options?.temperature ?? 0.7,
     max_tokens: options?.maxTokens ?? 4096,
     stream,
   };
-  // 原生模式：注入 tools 参数
-  if (params.tools && params.tools.length > 0) {
-    body.tools = toProviderTools(params.tools, 'openai');
+  if (toolsParam) {
+    body.tools = toolsParam;
     body.tool_choice = 'auto';
   }
   // 流式时请求 provider 在最后一个 chunk 返回 usage
   if (stream) {
     body.stream_options = { include_usage: true };
   }
-  return { url, headers, body };
+  return { url, headers, body, nameMap };
 }
 
 /** 可重试的 HTTP 状态码 */
@@ -245,7 +259,7 @@ export async function callLLM(params: LLMCallParams): Promise<LLMResult> {
 
 async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
   const useStream = typeof params.onChunk === 'function';
-  const { url, headers, body } = await buildRequest(params, useStream);
+  const { url, headers, body, nameMap } = await buildRequest(params, useStream);
   const bodyStr = JSON.stringify(body);
 
   let lastError: Error | null = null;
@@ -288,6 +302,8 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
       const rawContent = message?.content;
       // 原生模式：有 tool_calls 时 content 常为 null/空，属正常
       const toolCalls = params.tools ? parseToolCalls(message, 'openai') : [];
+      // 工具名反解（把净化名还原成原始 mcp:... ，react-loop 才能正确分发）
+      for (const tc of toolCalls) tc.name = restoreToolName(tc.name, nameMap);
       const content = typeof rawContent === 'string' ? rawContent : '';
       if (!content && toolCalls.length === 0) {
         // 文本模式下 content 必须有；原生模式下若既无 content 又无 tool_calls 才算异常
@@ -302,7 +318,7 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
     }
 
     // 流式：解析 OpenAI SSE 格式
-    return parseSSEStream(res, params.onChunk!, !!params.tools);
+    return parseSSEStream(res, params.onChunk!, !!params.tools, nameMap);
   }
 
   throw lastError ?? new Error('LLM 调用失败（重试耗尽）');
@@ -333,6 +349,7 @@ async function parseSSEStream(
   res: Response,
   onChunk: (chunk: string) => void,
   native: boolean,
+  nameMap: Map<string, string>,
 ): Promise<LLMResult> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error('LLM 流式响应无 body');
@@ -391,5 +408,7 @@ async function parseSSEStream(
   }
 
   const toolCalls = toolAcc && toolAcc.hasAny() ? toolAcc.finish() : undefined;
+  // 工具名反解（净化名 → 原始名），与非流式路径一致
+  if (toolCalls) for (const tc of toolCalls) tc.name = restoreToolName(tc.name, nameMap);
   return { content: full, finishReason, usage, toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined };
 }
