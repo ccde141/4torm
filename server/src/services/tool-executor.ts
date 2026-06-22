@@ -111,6 +111,16 @@ export async function executeTool(
   workspaceDirOverride?: string,
   sandboxLevelOverride?: 'strict' | 'relaxed' | 'unrestricted',
 ): Promise<string> {
+  // MCP 工具：本执行器只认本地工具/技能注册表，mcp: 前缀必须直接走 MCP client。
+  // 在此单点拦截，可一并修复所有入口（HTTP /api/tools/exec、各 sub-agent-runner、信风 node-runner）。
+  if (tool.startsWith('mcp:')) {
+    const { callMcpTool } = await import('../engine/shared/mcp-manager');
+    try {
+      return await callMcpTool(tool, args);
+    } catch (e) {
+      return `（MCP 工具调用失败：${tool}）${(e as Error).message}`;
+    }
+  }
   let toolDef = await findToolInRegistry(dataDir, tool);
   if (!toolDef) toolDef = await findToolInSkills(dataDir, tool);
   if (!toolDef) {
