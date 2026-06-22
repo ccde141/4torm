@@ -6,7 +6,7 @@
  * 群聊（Room）在 Phase 1 接入，此页先只做私聊。
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { getAgents } from '../../../store/agent';
 import type { Agent } from '../../../types';
 import RoomPanel from './RoomPanel';
@@ -14,6 +14,7 @@ import CreateRoomPanel from './CreateRoomPanel';
 import CreateWorkshopPanel from './CreateWorkshopPanel';
 import SeatPanel, { type SeatDraft } from './SeatPanel';
 import SeatChat from './SeatChat';
+import { useSeatStreamRunners } from './useSeatStreamRunners';
 
 interface WorkshopSummary {
   id: string; title: string; seatCount: number; roomCount: number;
@@ -58,6 +59,24 @@ export default function CyclonePage({ active }: { active?: boolean }) {
 
   useEffect(() => { if (!active) return; refreshAgents(); refreshWorkshops(); }, [active, refreshAgents, refreshWorkshops]);
   useEffect(() => { if (activeWid) loadWorkshop(activeWid); }, [activeWid, loadWorkshop]);
+
+  // 流式注册表：运行态从组件抽到此层（始终挂载），切工位不掐流、后台续跑、切回恢复
+  const activeWidRef = useRef(activeWid);
+  activeWidRef.current = activeWid;
+  const seatRunners = useSeatStreamRunners(useCallback(() => {
+    // 任一工位流结束 → 刷新侧栏 pending 标记
+    if (activeWidRef.current) loadWorkshop(activeWidRef.current);
+  }, [loadWorkshop]));
+
+  // 切走当前工位时把它的流转后台（不掐流）
+  const prevSeatRef = useRef<string | null>(null);
+  useEffect(() => {
+    const cur = view?.kind === 'seat' ? view.id : null;
+    if (prevSeatRef.current && prevSeatRef.current !== cur) {
+      seatRunners.background(prevSeatRef.current);
+    }
+    prevSeatRef.current = cur;
+  }, [view, seatRunners]);
 
   const activeSeat = view?.kind === 'seat' ? seats.find(s => s.id === view.id) || null : null;
 
@@ -111,6 +130,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   async function deleteSeat(seatId: string, title: string) {
     if (!activeWid) return;
     if (!confirm(`删除工位「${title}」？该工位的私聊会话将一并删除，不可恢复。`)) return;
+    seatRunners.kill(activeWid, seatId); // 流式中删除 → 掐流防僵尸
     const r = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/delete`, { method: 'POST' });
     if (!r.ok) return;
     if (view?.kind === 'seat' && view.id === seatId) setView(null);
@@ -214,7 +234,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
         )}
         {(view === null || (view.kind === 'seat' && !activeSeat)) && <div style={{ opacity: .5, margin: 'auto' }}>选择或创建一个工位开始私聊，或进入群聊</div>}
         {view?.kind === 'seat' && activeSeat && activeWid && (
-          <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id} onReloaded={() => loadWorkshop(activeWid)} />
+          <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id} runners={seatRunners} onReloaded={() => loadWorkshop(activeWid)} />
         )}
       </div>
     </div>
