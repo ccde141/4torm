@@ -15,6 +15,7 @@ import CreateWorkshopPanel from './CreateWorkshopPanel';
 import SeatPanel, { type SeatDraft } from './SeatPanel';
 import SeatChat from './SeatChat';
 import { useSeatStreamRunners } from './useSeatStreamRunners';
+import { useRoomStreamRunners } from './useRoomStreamRunners';
 
 interface WorkshopSummary {
   id: string; title: string; seatCount: number; roomCount: number;
@@ -65,6 +66,11 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   activeWidRef.current = activeWid;
   const seatRunners = useSeatStreamRunners(useCallback(() => {
     // 任一工位流结束 → 刷新侧栏 pending 标记
+    if (activeWidRef.current) loadWorkshop(activeWidRef.current);
+  }, [loadWorkshop]));
+
+  // 群聊流式注册表：同理，切走房间不掐流、后台续跑、切回读 roundFeed 恢复
+  const roomRunners = useRoomStreamRunners(useCallback(() => {
     if (activeWidRef.current) loadWorkshop(activeWidRef.current);
   }, [loadWorkshop]));
 
@@ -230,7 +236,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
           />
         )}
         {view?.kind === 'room' && activeWid && (
-          <RoomPanel workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} onChanged={() => loadWorkshop(activeWid)} />
+          <RoomPanel key={view.id} workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} runners={roomRunners} onChanged={() => loadWorkshop(activeWid)} />
         )}
         {(view === null || (view.kind === 'seat' && !activeSeat)) && <div style={{ opacity: .5, margin: 'auto' }}>选择或创建一个工位开始私聊，或进入群聊</div>}
         {view?.kind === 'seat' && activeSeat && activeWid && (
