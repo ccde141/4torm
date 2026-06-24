@@ -29,8 +29,6 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [messages, setMessagesRaw] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [dragOver, setDragOver] = useState(false);
-  const dragCounter = useRef(0);
   const [streaming, setStreaming] = useState(false);
   const [models, setModels] = useState<{ key: string; label: string }[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
@@ -40,7 +38,6 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   // 同步发送锁：streaming state 是异步的，挡不住"卡顿期间快速二次点击"，
   // 用 ref 在 handleSend 入口同步置位，从根上杜绝重复发送（两条消息 bug）
   const sendingRef = useRef(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const setMessages = useCallback((msgs: ChatMessage[]) => {
     messagesRef.current = msgs;
@@ -415,30 +412,6 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
 
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    dragCounter.current = 0;
-    setDragOver(false);
-    const files = e.dataTransfer.files;
-    if (files.length === 0) return;
-    const names: string[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      names.push((f as any).path || f.name);
-    }
-    const insertion = names.join(', ');
-    setInput(prev => {
-      const el = textareaRef.current;
-      if (!el) return prev + (prev ? ', ' : '') + insertion;
-      const start = el.selectionStart ?? prev.length;
-      const end = el.selectionEnd ?? prev.length;
-      const before = prev.slice(0, start);
-      const after = prev.slice(end);
-      const sep = before && !before.endsWith(' ') && !before.endsWith(',') ? ' ' : '';
-      return before + sep + insertion + after;
-    });
-  };
-
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       <div style={leftPanelStyle}>
@@ -528,27 +501,9 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               <div ref={messagesEndRef} />
             </div>
 
-            <div className="chat__input-area" style={{ position: 'relative' }}
-              onDragOver={e => { e.preventDefault(); }}
-              onDragEnter={e => { e.preventDefault(); dragCounter.current++; setDragOver(true); }}
-              onDragLeave={() => { dragCounter.current--; if (dragCounter.current === 0) setDragOver(false); }}
-              onDrop={handleDrop}
-            >
-              {dragOver && (
-                <div style={{
-                  position: 'absolute', inset: 0, zIndex: 10,
-                  background: 'var(--color-accent-subtle)', opacity: 0.92,
-                  border: '2px dashed var(--color-accent)',
-                  borderRadius: 'var(--radius-md)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  color: 'var(--color-accent)', fontSize: 'var(--text-sm)', fontWeight: 600,
-                  pointerEvents: 'none',
-                }}>
-                  拖入文件以插入路径
-                </div>
-              )}
+            <div className="chat__input-area">
               <div className="chat__input-wrapper">
-                <textarea ref={textareaRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} placeholder={streaming ? '等待回复中...' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} disabled={streaming} aria-label="输入消息" />
+                <textarea className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} placeholder={streaming ? '等待回复中...' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} disabled={streaming} aria-label="输入消息" />
                 {streaming ? (
                   <button className="chat__stop-btn" onClick={() => { if (activeSessionId) streamRunners.runners.current.get(activeSessionId)?.abort(); fetch(streamUrl('/api/conversation/abort'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); setStreaming(false); }} title="停止生成">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
