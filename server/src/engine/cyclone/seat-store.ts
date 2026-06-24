@@ -5,9 +5,8 @@
  * per-seat 锁：自写一份（按 seatId 互斥），不 import 对流的 tryAcquireSessionLock。
  */
 
-import fs from 'node:fs/promises';
 import type { SeatData, WorkshopData } from './types';
-import { seatFile, seatsDir, readJsonSafe, ensureDir, atomicWrite, genId } from './paths';
+import { seatFile, seatsDir, readJsonSafe, ensureDir, atomicWrite, removeStrict, genId } from './paths';
 import { loadWorkshop, saveWorkshop } from './workshop-store';
 
 /** 在工作室下新增工位（绑定 agent + 角色提示词），更新工作室 meta */
@@ -76,7 +75,7 @@ export async function saveSeat(
 export async function deleteSeat(
   dataDir: string, workshopId: string, seatId: string,
 ): Promise<void> {
-  try { await fs.rm(seatFile(dataDir, workshopId, seatId)); } catch {}
+  await removeStrict(seatFile(dataDir, workshopId, seatId));
   const w = await loadWorkshop(dataDir, workshopId);
   if (w) {
     w.seatIds = w.seatIds.filter(x => x !== seatId);

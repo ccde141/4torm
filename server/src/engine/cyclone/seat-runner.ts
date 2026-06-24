@@ -107,7 +107,10 @@ function makeToolCaller(opts: {
       if (tool === 'ask') {
         const question = args.question || '需要你的确认';
         let options: string[] | undefined;
-        if (args.options) { try { options = JSON.parse(args.options); } catch {} }
+        if (args.options) {
+          try { options = JSON.parse(args.options); }
+          catch (e) { console.warn('[cyclone] ask options 解析失败', args.options, e); }
+        }
         throw new SuspendSignal(question, options);
       }
       if (tool === 'delegate') {

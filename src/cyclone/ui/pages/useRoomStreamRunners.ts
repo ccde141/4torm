@@ -104,7 +104,7 @@ async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (
       if (!t.startsWith('data:')) continue;
       const p = t.slice(5).trim();
       if (!p || p === '[DONE]') continue;
-      try { onEvent(JSON.parse(p)); } catch {}
+      try { onEvent(JSON.parse(p)); } catch (e) { console.warn('[cyclone] 群聊 SSE 事件解析失败', p, e); }
     }
   }
 }

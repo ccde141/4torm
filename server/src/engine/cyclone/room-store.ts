@@ -5,9 +5,8 @@
  * per-room 锁：自写一份（按 roomId 互斥），不 import 对流/工位的锁。
  */
 
-import fs from 'node:fs/promises';
 import type { RoomData } from './types';
-import { roomFile, roomsDir, readJsonSafe, ensureDir, atomicWrite, genId } from './paths';
+import { roomFile, roomsDir, readJsonSafe, ensureDir, atomicWrite, removeStrict, genId } from './paths';
 import { loadWorkshop, saveWorkshop } from './workshop-store';
 import { loadSeat } from './seat-store';
 
@@ -28,6 +27,7 @@ export async function createRoom(
     mode: opts.mode || 'build',
     participantSeatIds: opts.participantSeatIds || [],
     publicMessages: [],
+    chairMessages: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -59,7 +59,7 @@ export async function saveRoom(
 export async function deleteRoom(
   dataDir: string, workshopId: string, roomId: string,
 ): Promise<void> {
-  try { await fs.rm(roomFile(dataDir, workshopId, roomId)); } catch {}
+  await removeStrict(roomFile(dataDir, workshopId, roomId));
   const w = await loadWorkshop(dataDir, workshopId);
   if (w) {
     w.roomIds = w.roomIds.filter(x => x !== roomId);

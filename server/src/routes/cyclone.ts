@@ -17,9 +17,8 @@ import {
   createRoom, loadRoom, deleteRoom, joinRoom, leaveRoom, setRoomParticipants, renameRoom, setRoomMode, tryAcquireRoomLock,
 } from '../engine/cyclone/room-store';
 import { chatSeat, resumeSeat, type SeatEvent } from '../engine/cyclone/seat-runner';
-import { chatChair, resumeChair } from '../engine/cyclone/chair-runner';
+import { chatChair } from '../engine/cyclone/chair-runner';
 import { speakInRoom, type RoomEvent } from '../engine/cyclone/room-runner';
-import { loadChair, tryAcquireChairLock } from '../engine/cyclone/chair-store';
 import { generateJoinSpeech } from '../engine/cyclone/seat-summary';
 import { generateSeatDuty } from '../engine/cyclone/seat-duty';
 import type { JoinBehavior } from '../engine/cyclone/types';
@@ -180,21 +179,23 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(400).send({ error: `未知 action：${action}` });
   });
 
-  // ALL /api/cyclone/workshop/:workshopId/chair/:action
-  app.all('/workshop/:workshopId/chair/:action', async (req, reply) => {
-    const { workshopId, action } = req.params as any;
+  // ALL /api/cyclone/workshop/:workshopId/room/:roomId/chair/:action
+  // 会长按会议（room）隔离：私聊落 room.chairMessages，只读本 room 会议快照，换会议不串台。
+  app.all('/workshop/:workshopId/room/:roomId/chair/:action', async (req, reply) => {
+    const { workshopId, roomId, action } = req.params as any;
     const body = (req.body as any) || {};
-    const lockKey = `${workshopId}/__chair__`;
+    // 与群聊发言共用 per-room 锁键，统一在 activeAborts 里登记
+    const lockKey = `${workshopId}/room/${roomId}`;
 
     if (action === 'status') {
       const w = await loadWorkshop(dataDir, workshopId);
       if (!w) return reply.status(404).send({ error: '工作室不存在' });
+      const room = await loadRoom(dataDir, workshopId, roomId);
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
       if (!w.chairAgentId) return reply.status(400).send({ error: '该工作室未指定会长' });
-      const chair = await loadChair(dataDir, workshopId);
       return reply.send({
         chairAgentId: w.chairAgentId,
-        messages: chair?.messages || [],
-        pending: chair?.pending || undefined,
+        messages: room.chairMessages || [],
       });
     }
 
@@ -205,9 +206,10 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({ ok: true });
     }
 
-    if (action === 'chat' || action === 'resume') {
-      const text = (body?.message ?? body?.answer ?? '').trim();
-      if (!text) return reply.status(400).send({ error: action === 'chat' ? '缺少 message' : '缺少 answer' });
+    // 会长是纯文本参谋，无挂起态 → 只有 chat，无 resume
+    if (action === 'chat') {
+      const text = (body?.message ?? '').trim();
+      if (!text) return reply.status(400).send({ error: '缺少 message' });
       const w = await loadWorkshop(dataDir, workshopId);
       if (!w) return reply.status(404).send({ error: '工作室不存在' });
       if (!w.chairAgentId) return reply.status(400).send({ error: '该工作室未指定会长' });
@@ -219,11 +221,7 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       activeAborts.set(lockKey, abort);
       const onEvent = (ev: SeatEvent) => { pushSSE(reply, ev); };
       try {
-        if (action === 'chat') {
-          await chatChair(dataDir, workshopId, text, onEvent, abort.signal);
-        } else {
-          await resumeChair(dataDir, workshopId, text, onEvent, abort.signal);
-        }
+        await chatChair(dataDir, workshopId, roomId, text, onEvent, abort.signal);
       } catch (e) {
         pushSSE(reply, { type: 'error', message: (e as Error).message });
       } finally {

@@ -95,7 +95,10 @@ export function contextToDisplay(stored: StoredMsg[]): DisplayMessage[] {
         }
         if (tc.name === 'ask') {
           let options: string[] | undefined;
-          if (args.options) { try { options = typeof args.options === 'string' ? JSON.parse(args.options) : args.options as string[]; } catch {} }
+          if (args.options) {
+            try { options = typeof args.options === 'string' ? JSON.parse(args.options) : args.options as string[]; }
+            catch (e) { console.warn('[cyclone] ask options 解析失败', args.options, e); }
+          }
           // result 即用户答案（resume 落库的 role:'tool' 配对）；undefined 表示仍挂起
           return { kind: 'ask', question: String(args.question ?? '需要你的确认'), options, answered: result !== undefined, reply: result };
         }

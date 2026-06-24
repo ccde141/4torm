@@ -47,17 +47,46 @@ export function roomsDir(dataDir: string, workshopId: string): string {
   return path.join(workshopDir(dataDir, workshopId), 'rooms');
 }
 
-/** 会长椅册文件：data/cyclone/{id}/chair.json */
-export function chairFile(dataDir: string, workshopId: string): string {
-  return path.join(workshopDir(dataDir, workshopId), 'chair.json');
-}
-
 // ── 底层 IO ──────────────────────────────────────────────────
 
-/** 安全读 JSON：文件不存在或损坏返回 null，不抛 */
+/**
+ * 安全读 JSON。区分三种情形，绝不把"坏了"悄悄当成"没有"：
+ * - 文件不存在（ENOENT）→ 返回 null（正常：未创建 / 已删除）
+ * - 文件存在但 JSON 损坏 → 隔离改名为 .corrupt-* + 告警，再返回 null（原文件保留可恢复，不静默蒸发）
+ * - 其它读失败（权限 / IO）→ 抛出（异常情形，要出声，别假装空）
+ * 顺带容忍 UTF-8 BOM —— 当初正是开头的 BOM 让 JSON.parse 抛错、房间凭空消失。
+ */
 export async function readJsonSafe<T>(file: string): Promise<T | null> {
-  try { return JSON.parse(await fs.readFile(file, 'utf-8')) as T; }
-  catch { return null; }
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, 'utf-8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    console.error(`[cyclone] 读取失败（非缺失，请检查权限/IO）：${file}`, e);
+    throw e;
+  }
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1); // 去 BOM
+  try {
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    const quarantine = `${file}.corrupt-${Date.now().toString(36)}`;
+    try { await fs.rename(file, quarantine); } catch { /* 隔离失败也别让读崩，下面照样告警 */ }
+    console.error(`[cyclone] JSON 损坏，已隔离为 ${quarantine}（原文件保留可恢复）：${(e as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * 删除文件/目录。不存在视作"删除目标已达成"（幂等，静默）；
+ * 其它失败（权限 / 占用）抛出，绝不静默吞掉 —— 否则用户以为删了，实体下次诈尸。
+ */
+export async function removeStrict(targetPath: string, opts?: { recursive?: boolean }): Promise<void> {
+  try {
+    await fs.rm(targetPath, { recursive: opts?.recursive ?? false, force: false });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw e;
+  }
 }
 
 /** 递归建目录 */

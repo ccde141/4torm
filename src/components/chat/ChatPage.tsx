@@ -275,8 +275,18 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       emit([...allMessages]);
       // 被删会话（弃用）跳过存盘，杜绝僵尸复活
       if (!(streamRunners.runners.current.get(sid)?.abandoned)) {
-        await saveSession({ ...session, messages: allMessages, title: session.titleManual ? session.title : autoTitle(allMessages), model: selectedModel }).catch(() => {});
-        refreshSessions(selectedAgent);
+        try {
+          await saveSession({ ...session, messages: allMessages, title: session.titleManual ? session.title : autoTitle(allMessages), model: selectedModel });
+          refreshSessions(selectedAgent);
+        } catch (saveError) {
+          console.error('[chat] 会话保存失败', saveError);
+          const saveErrMsg: ChatMessage = {
+            id: generateMessageId(), role: 'assistant',
+            content: `⚠️ 本轮回复已显示，但保存失败：${(saveError as Error).message}`,
+            timestamp: new Date().toISOString(), agentId: selectedAgent.id,
+          };
+          emit([...allMessages, saveErrMsg]);
+        }
       }
     } catch (e) {
       // 主动中断（停止/淘汰，跨 origin 抛 Failed to fetch）不写错误气泡
@@ -286,7 +296,11 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
         const withErr = [...buf, errMsg];
         emit(withErr);
         if (!(streamRunners.runners.current.get(sid)?.abandoned)) {
-          await saveSession({ ...session, messages: withErr, title: session.titleManual ? session.title : autoTitle(withErr), model: selectedModel }).catch(() => {});
+          try {
+            await saveSession({ ...session, messages: withErr, title: session.titleManual ? session.title : autoTitle(withErr), model: selectedModel });
+          } catch (saveError) {
+            console.error('[chat] 错误消息保存失败', saveError);
+          }
         }
       }
     } finally {

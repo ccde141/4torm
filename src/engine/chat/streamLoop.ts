@@ -139,8 +139,18 @@ export async function runStreamLoop(ctx: StreamCtx) {
 
   // 被删会话（弃用）跳过存盘，否则 saveSession 会把文件和索引重建出来 → 僵尸复活
   if (!ctx.isAbandoned?.()) {
-    await saveSessionFn({ ...session, messages: allMessages, title: getTitle(allMessages), model: selectedModel }).catch(() => {});
-    refreshSessions(agent);
+    try {
+      await saveSessionFn({ ...session, messages: allMessages, title: getTitle(allMessages), model: selectedModel });
+      refreshSessions(agent);
+    } catch (saveError) {
+      console.error('[chat] 会话保存失败', saveError);
+      const saveErrMsg: ChatMessage = {
+        id: generateMessageIdFn(), role: 'assistant',
+        content: `⚠️ 本轮回复已显示，但保存失败：${(saveError as Error).message}`,
+        timestamp: new Date().toISOString(), agentId: agent.id,
+      };
+      setMessages([...allMessages, saveErrMsg]);
+    }
   }
   ctx.onFinish?.();
 }

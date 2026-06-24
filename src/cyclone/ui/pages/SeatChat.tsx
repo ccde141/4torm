@@ -23,12 +23,15 @@ interface SeatStatus {
   pending?: { question: string; options?: string[] };
 }
 
-export default function SeatChat({ workshopId, seatId, runners, onReloaded }: {
+export default function SeatChat({ workshopId, seatId, runners, onReloaded, chairBase }: {
   workshopId: string; seatId: string; runners: SeatStreamRunners; onReloaded?: () => void;
+  /** 会长模式下覆盖端点前缀（如 /api/cyclone/workshop/{wid}/room/{rid}/chair）。普通工位不传。 */
+  chairBase?: string;
 }) {
   const [seat, setSeat] = useState<SeatStatus | null>(null);
   const [history, setHistory] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState('');
+  const [loadError, setLoadError] = useState<string | null>(null);
   /** 订阅 tick：runner 每次 notify 自增，触发本组件重渲染读取最新 live 缓冲 */
   const [, forceTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -42,12 +45,19 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded }: {
 
   /** 拉取工位/会长会话。notifyParent=true 时通知父级刷新侧栏 */
   const reload = useCallback(async (notifyParent = false) => {
-    const isChair = seatId === '__chair__';
+    const isChair = seatId.startsWith('__chair__');
     const url = isChair
-      ? `/api/cyclone/workshop/${workshopId}/chair/status`
+      ? `${chairBase}/status`
       : `/api/cyclone/workshop/${workshopId}/seat/${seatId}/status`;
     const r = await fetch(url);
-    if (!r.ok) return;
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      const msg = e?.error || `加载${isChair ? '会长' : '工位'}失败（HTTP ${r.status}）`;
+      console.error('[cyclone] 会话加载失败', msg);
+      setLoadError(msg);
+      return;
+    }
+    setLoadError(null);
     const raw = await r.json();
     const s: SeatStatus = isChair
       ? { id: '__chair__', title: `会长 / ${raw.chairAgentId}`, messages: raw.messages, pending: raw.pending }
@@ -55,7 +65,7 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded }: {
     setSeat(s);
     setHistory(contextToDisplay(s.messages));
     if (notifyParent) onReloadedRef.current?.();
-  }, [workshopId, seatId]);
+  }, [workshopId, seatId, chairBase]);
 
   // 挂载：标回前台 + 订阅 runner 通知 + 首次拉历史
   useEffect(() => {
@@ -93,10 +103,10 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded }: {
         blocks: [{ kind: 'ask', question: p.question, options: p.options, answered: true, reply: text }] };
       setHistory(h => [...h, optimisticUser!]);
     }
-    const isChair = seatId === '__chair__';
+    const isChair = seatId.startsWith('__chair__');
     runners.startStream({
       workshopId, seatId, action, text, optimisticUser,
-      pathOverride: isChair ? `/api/cyclone/workshop/${workshopId}/chair/${action}` : undefined,
+      pathOverride: isChair ? `${chairBase}/${action}` : undefined,
     });
   }
 
@@ -108,12 +118,15 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded }: {
   }
 
   function stop() {
-    const isChair = seatId === '__chair__';
+    const isChair = seatId.startsWith('__chair__');
     runners.abortSeat(workshopId, seatId,
-      isChair ? `/api/cyclone/workshop/${workshopId}/chair/abort` : undefined);
+      isChair ? `${chairBase}/abort` : undefined);
   }
 
-  if (!seat) return <div style={{ opacity: .5, margin: 'auto' }}>{seatId === '__chair__' ? '加载会长…' : '加载工位…'}</div>;
+  if (!seat) {
+    if (loadError) return <div style={{ opacity: .65, margin: 'auto', padding: 'var(--space-4)', textAlign: 'center', color: 'var(--color-danger)' }}>{loadError}</div>;
+    return <div style={{ opacity: .5, margin: 'auto' }}>{seatId.startsWith('__chair__') ? '加载会长…' : '加载工位…'}</div>;
+  }
   // 挂起态：流式结束后若 seat.pending 存在，渲染交互 AskCard；流式期间用 live.ask
   const pending = !streaming ? seat.pending : undefined;
   // 后台未落库的乐观用户气泡（切走再回时从 runner 恢复，history 里可能还没有）

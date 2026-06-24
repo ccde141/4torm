@@ -134,7 +134,7 @@ export interface AgentConfig {
 export interface NavItem {
   id: string;
   label: string;
-  icon: 'dashboard' | 'agents' | 'chat' | 'tools' | 'skills' | 'convection' | 'tradewind' | 'tide' | 'mcp' | 'settings';
+  icon: 'dashboard' | 'agents' | 'chat' | 'tools' | 'skills' | 'convection' | 'cyclone' | 'tradewind' | 'tide' | 'mcp' | 'settings';
   badge?: number;
 }
 

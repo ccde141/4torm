@@ -20,6 +20,11 @@ interface RoomMsg { speaker: string; content: string; timestamp: number; rawCont
 interface Room { id: string; title: string; topic: string; mode?: 'build' | 'plan'; participantSeatIds: string[]; publicMessages: RoomMsg[]; }
 interface SeatLite { id: string; title: string; }
 
+async function readErrorMessage(r: Response, fallback: string): Promise<string> {
+  const e = await r.json().catch(() => ({}));
+  return e?.error || `${fallback}（HTTP ${r.status}）`;
+}
+
 function publicToFeed(msgs: RoomMsg[]): FeedMsg[] {
   return msgs.map(m => ({
     speaker: m.speaker,
@@ -37,6 +42,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
   const [input, setInput] = useState('');
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  const [loadError, setLoadError] = useState<string | null>(null);
   /** 订阅 tick：runner 每次 notify 自增，触发本组件重渲染读取最新 roundFeed 缓冲 */
   const [, forceTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -50,12 +56,17 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
 
   const reload = useCallback(async (notify = false) => {
     const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/status`);
-    if (r.ok) {
-      const data: Room = await r.json();
-      setRoom(data);
-      setHistory(publicToFeed(data.publicMessages));
-      if (notify) onChangedRef.current?.();
+    if (!r.ok) {
+      const msg = await readErrorMessage(r, '加载群聊失败');
+      console.error('[cyclone] 群聊加载失败', msg);
+      setLoadError(msg);
+      return;
     }
+    setLoadError(null);
+    const data: Room = await r.json();
+    setRoom(data);
+    setHistory(publicToFeed(data.publicMessages));
+    if (notify) onChangedRef.current?.();
   }, [workshopId, roomId]);
 
   // 挂载：订阅 runner 通知 + 首次拉历史
@@ -80,27 +91,28 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
   const seatName = (id: string) => seats.find(s => s.id === id)?.title || id;
 
   // ── 工位管理（替代 prompt）──
-  async function postAction(action: string, body: Record<string, unknown>) {
-    await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/${action}`, {
+  async function postAction(action: string, body: Record<string, unknown>, fallback: string) {
+    const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/${action}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
+    if (!r.ok) { alert(await readErrorMessage(r, fallback)); return; }
     await reload(true);
   }
-  const joinSeat = (seatId: string) => postAction('join', { seatId });
-  const leaveSeat = (seatId: string) => postAction('leave', { seatId });
-  const toggleMode = () => { if (room) postAction('set-mode', { mode: room.mode === 'plan' ? 'build' : 'plan' }); };
+  const joinSeat = (seatId: string) => postAction('join', { seatId }, '添加工位进群失败');
+  const leaveSeat = (seatId: string) => postAction('leave', { seatId }, '移除工位失败');
+  const toggleMode = () => { if (room) postAction('set-mode', { mode: room.mode === 'plan' ? 'build' : 'plan' }, '切换群聊模式失败'); };
   function moveSeat(idx: number, dir: -1 | 1) {
     if (!room) return;
     const ids = [...room.participantSeatIds];
     const j = idx + dir;
     if (j < 0 || j >= ids.length) return;
     [ids[idx], ids[j]] = [ids[j], ids[idx]];
-    postAction('reorder', { seatIds: ids });
+    postAction('reorder', { seatIds: ids }, '调整工位顺序失败');
   }
   async function commitTitle() {
     setEditingTitle(false);
     const t = titleDraft.trim();
-    if (room && t && t !== room.title) await postAction('rename', { title: t });
+    if (room && t && t !== room.title) await postAction('rename', { title: t }, '重命名群聊失败');
   }
 
   async function speak() {
@@ -116,7 +128,10 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
     runners.abortRoom(workshopId, roomId);
   }
 
-  if (!room) return <div style={{ opacity: .5, margin: 'auto' }}>加载群聊…</div>;
+  if (!room) {
+    if (loadError) return <div style={{ opacity: .65, margin: 'auto', padding: 'var(--space-4)', textAlign: 'center', color: 'var(--color-danger)' }}>{loadError}</div>;
+    return <div style={{ opacity: .5, margin: 'auto' }}>加载群聊…</div>;
+  }
   const inRoom = new Set(room.participantSeatIds);
   const candidates = seats.filter(s => !inRoom.has(s.id));
 

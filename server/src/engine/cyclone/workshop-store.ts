@@ -4,11 +4,10 @@
  * 只 import shared/ 与本模块自身（paths/types），零交叉代码。
  */
 
-import fs from 'node:fs/promises';
 import type { WorkshopData, WorkshopSummary } from './types';
 import {
   workshopDir, workshopIndexFile, workshopMetaFile, workshopWorkspace, seatsDir,
-  readJsonSafe, ensureDir, atomicWrite, genId,
+  readJsonSafe, ensureDir, atomicWrite, removeStrict, genId,
 } from './paths';
 
 /** 创建工作室（建目录骨架 + 写 meta + 维护索引） */
@@ -66,7 +65,7 @@ export async function listWorkshops(dataDir: string): Promise<WorkshopSummary[]>
 
 /** 删除工作室（清整个目录 + 摘出索引） */
 export async function deleteWorkshop(dataDir: string, id: string): Promise<void> {
-  try { await fs.rm(workshopDir(dataDir, id), { recursive: true, force: true }); } catch {}
+  await removeStrict(workshopDir(dataDir, id), { recursive: true });
   const index = (await readJsonSafe<string[]>(workshopIndexFile(dataDir))) || [];
   await atomicWrite(workshopIndexFile(dataDir), JSON.stringify(index.filter(x => x !== id)));
 }
