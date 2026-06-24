@@ -40,11 +40,18 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded }: {
   const live = runner ? runner.live : null;
   const streaming = !!runner?.streaming;
 
-  /** 拉取工位会话。notifyParent=true 时通知父级刷新侧栏（发送完成后用，挂载时不通知） */
+  /** 拉取工位/会长会话。notifyParent=true 时通知父级刷新侧栏 */
   const reload = useCallback(async (notifyParent = false) => {
-    const r = await fetch(`/api/cyclone/workshop/${workshopId}/seat/${seatId}/status`);
+    const isChair = seatId === '__chair__';
+    const url = isChair
+      ? `/api/cyclone/workshop/${workshopId}/chair/status`
+      : `/api/cyclone/workshop/${workshopId}/seat/${seatId}/status`;
+    const r = await fetch(url);
     if (!r.ok) return;
-    const s: SeatStatus = await r.json();
+    const raw = await r.json();
+    const s: SeatStatus = isChair
+      ? { id: '__chair__', title: `会长 / ${raw.chairAgentId}`, messages: raw.messages, pending: raw.pending }
+      : raw;
     setSeat(s);
     setHistory(contextToDisplay(s.messages));
     if (notifyParent) onReloadedRef.current?.();
@@ -86,7 +93,11 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded }: {
         blocks: [{ kind: 'ask', question: p.question, options: p.options, answered: true, reply: text }] };
       setHistory(h => [...h, optimisticUser!]);
     }
-    runners.startStream({ workshopId, seatId, action, text, optimisticUser });
+    const isChair = seatId === '__chair__';
+    runners.startStream({
+      workshopId, seatId, action, text, optimisticUser,
+      pathOverride: isChair ? `/api/cyclone/workshop/${workshopId}/chair/${action}` : undefined,
+    });
   }
 
   function sendInput() {
@@ -97,10 +108,12 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded }: {
   }
 
   function stop() {
-    runners.abortSeat(workshopId, seatId);
+    const isChair = seatId === '__chair__';
+    runners.abortSeat(workshopId, seatId,
+      isChair ? `/api/cyclone/workshop/${workshopId}/chair/abort` : undefined);
   }
 
-  if (!seat) return <div style={{ opacity: .5, margin: 'auto' }}>加载工位…</div>;
+  if (!seat) return <div style={{ opacity: .5, margin: 'auto' }}>{seatId === '__chair__' ? '加载会长…' : '加载工位…'}</div>;
   // 挂起态：流式结束后若 seat.pending 存在，渲染交互 AskCard；流式期间用 live.ask
   const pending = !streaming ? seat.pending : undefined;
   // 后台未落库的乐观用户气泡（切走再回时从 runner 恢复，history 里可能还没有）

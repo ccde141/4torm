@@ -9,10 +9,13 @@
 import path from 'node:path';
 import type { LoadedAgent } from '../shared/agent-loader';
 import type { ToolDef } from '../shared/tool-defs-loader';
+import type { ContextMessage } from '../shared/types';
 import { buildSystemPrompt } from '../shared/prompt';
 import { buildSandboxSection } from '../shared/sandbox-prompt';
-import type { SeatData } from './types';
+import type { SeatData, WorkshopData } from './types';
 import { DEFAULT_DUTY } from './types';
+import { loadRoom } from './room-store';
+import { loadSeat } from './seat-store';
 
 /**
  * 组装"角色身份段"：agent 人设 + 工位岗位 + 职责名片。
@@ -89,6 +92,68 @@ export function buildSeatSystemPrompt(opts: {
   parts.push(`## 当前场景\n你是气旋工作室里的「${seat.title}」工位，正在与老板（人类）一对一私聊。这是执行工位——把交代的事做实、做完。需要用户决策或信息不足时用 ask 提问；可拆分的重活用 delegate 派给 SubAgent。完成后用自然语言给出结论。`);
 
   return parts.join('\n\n');
+}
+
+/**
+ * 构造会长私聊的 system prompt。
+ * 会长不占工位、不进群聊——但能俯瞰群聊记录和工位名册，给人当参谋。
+ * 不注入 contact 能力（会长不存在于 contact-registry）。
+ */
+export async function buildChairPrompt(
+  dataDir: string,
+  workshopId: string,
+  workshop: WorkshopData,
+  agent: LoadedAgent,
+  native: boolean,
+): Promise<{ systemMessage: ContextMessage; native: boolean }> {
+  const parts: string[] = [];
+
+  // 1. 身份段
+  parts.push(`你是工作室「${workshop.title}」的会长。你的职责是和人类单独对话，帮忙梳理思路、评估方案、协调资源。你不参与群聊讨论。`);
+
+  // 2. 群聊室一览
+  if (workshop.roomIds.length > 0) {
+    const roomLines: string[] = ['## 工作室群聊室一览'];
+    for (const rid of workshop.roomIds) {
+      const room = await loadRoom(dataDir, workshopId, rid);
+      if (!room) continue;
+      const count = room.participantSeatIds.length;
+      const mode = room.mode || 'build';
+      const recent = room.publicMessages.slice(-3);
+      const summary = recent.length > 0
+        ? recent.map(m => `  ${m.speaker}：${m.content.slice(0, 80)}${m.content.length > 80 ? '…' : ''}`).join('\n')
+        : '  尚无发言';
+      roomLines.push(`- #${room.title}（${mode}模式）：${count}人在场\n${summary}`);
+    }
+    if (roomLines.length > 1) parts.push(roomLines.join('\n'));
+  }
+
+  // 3. 工位名册
+  if (workshop.seatIds.length > 0) {
+    const seatLines: string[] = ['## 工作室工位'];
+    for (const sid of workshop.seatIds) {
+      const seat = await loadSeat(dataDir, workshopId, sid);
+      if (!seat) continue;
+      const duty = seat.duty || DEFAULT_DUTY;
+      seatLines.push(`- ${seat.title}（${duty}）[${seat.agentId}]`);
+    }
+    if (seatLines.length > 1) parts.push(seatLines.join('\n'));
+  }
+
+  // 4. 场景上下文
+  parts.push(`## 当前场景
+你是气旋工作室里的会长，正在与老板（人类）一对一私聊。你的视角比任何工位都广——你能看到群聊室里所有工位的讨论和工位名册。请基于这些全景信息，协助人类梳理思路、评估方案、协调资源。
+
+- 需要外部信息或执行操作时，调用工具
+- 需要人类决策时用 ask 提问
+- 可拆分的复杂活可用 delegate 派给 SubAgent
+- 完成后用自然语言给出结论`);
+
+  const systemMessage: ContextMessage = {
+    role: 'system',
+    content: parts.join('\n\n'),
+  };
+  return { systemMessage, native };
 }
 
 /**

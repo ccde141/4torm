@@ -34,9 +34,11 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   const [seats, setSeats] = useState<Seat[]>([]);
   const [activeSeatId, setActiveSeatId] = useState<string | null>(null);
   const [rooms, setRooms] = useState<RoomLite[]>([]);
-  /** 右侧视图：私聊某工位 / 进入某群聊 / 创建群聊 / 创建工作室 / 创建工位 / 编辑工位 */
+  const [chairAgentId, setChairAgentId] = useState<string | null>(null);
+  /** 右侧视图：私聊某工位 / 进入某群聊 / 会长私聊 / 创建群聊 / 创建工作室 / 创建工位 / 编辑工位 */
   const [view, setView] = useState<
     | { kind: 'seat'; id: string } | { kind: 'room'; id: string }
+    | { kind: 'chair' }
     | { kind: 'create-room' } | { kind: 'create-workshop' }
     | { kind: 'create-seat' } | { kind: 'edit-seat'; id: string; draft: SeatDraft }
     | null
@@ -52,9 +54,10 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     // 完整内容由 SeatChat/RoomPanel 选中时各自加载。
     const r = await fetch(`/api/cyclone/workshop/${wid}/summary`);
     if (!r.ok) return;
-    const sum: { id: string; title: string; seats: Seat[]; rooms: RoomLite[] } = await r.json();
+    const sum: { id: string; title: string; chairAgentId?: string; seats: Seat[]; rooms: RoomLite[] } = await r.json();
     setSeats(sum.seats);
     setRooms(sum.rooms);
+    setChairAgentId(sum.chairAgentId ?? null);
     setActiveSeatId(prev => (sum.seats.length && !sum.seats.some(s => s.id === prev)) ? sum.seats[0].id : prev);
   }, []);
 
@@ -74,14 +77,14 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     if (activeWidRef.current) loadWorkshop(activeWidRef.current);
   }, [loadWorkshop]));
 
-  // 切走当前工位时把它的流转后台（不掐流）
-  const prevSeatRef = useRef<string | null>(null);
+  // 切走当前工位/会长时把它的流转后台（不掐流）
+  const prevViewRef = useRef<string | null>(null);
   useEffect(() => {
-    const cur = view?.kind === 'seat' ? view.id : null;
-    if (prevSeatRef.current && prevSeatRef.current !== cur) {
-      seatRunners.background(prevSeatRef.current);
+    const cur = view?.kind === 'seat' ? view.id : (view?.kind === 'chair' ? '__chair__' : null);
+    if (prevViewRef.current && prevViewRef.current !== cur) {
+      seatRunners.background(prevViewRef.current);
     }
-    prevSeatRef.current = cur;
+    prevViewRef.current = cur;
   }, [view, seatRunners]);
 
   const activeSeat = view?.kind === 'seat' ? seats.find(s => s.id === view.id) || null : null;
@@ -93,6 +96,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
 
   async function deleteWorkshop(wid: string, title: string) {
     if (!confirm(`删除工作室「${title}」？工位、群聊及全部会话将一并删除，不可恢复。`)) return;
+    seatRunners.kill(wid, '__chair__');
     const r = await fetch(`/api/cyclone/workshop/${wid}/delete`, { method: 'POST' });
     if (!r.ok) return;
     if (activeWid === wid) { setActiveWid(null); setView(null); setSeats([]); setRooms([]); }
@@ -189,6 +193,17 @@ export default function CyclonePage({ active }: { active?: boolean }) {
         ))}
         {activeWid && (
           <>
+            {chairAgentId && (
+              <div style={sectionHeadStyle}>
+                <span style={sectionLabelStyle}>会长</span>
+              </div>
+            )}
+            {chairAgentId && (
+              <div onClick={() => setView({ kind: 'chair' })}
+                style={{ ...itemStyle, ...(view?.kind === 'chair' ? itemActiveStyle : null) }}>
+                会长 / {chairAgentId}
+              </div>
+            )}
             <div style={sectionHeadStyle}>
               <span style={sectionLabelStyle}>工位</span>
               <button onClick={() => setView({ kind: 'create-seat' })} style={newBtnStyle} title="添加工位">+</button>
@@ -241,6 +256,9 @@ export default function CyclonePage({ active }: { active?: boolean }) {
         {(view === null || (view.kind === 'seat' && !activeSeat)) && <div style={{ opacity: .5, margin: 'auto' }}>选择或创建一个工位开始私聊，或进入群聊</div>}
         {view?.kind === 'seat' && activeSeat && activeWid && (
           <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id} runners={seatRunners} onReloaded={() => loadWorkshop(activeWid)} />
+        )}
+        {view?.kind === 'chair' && activeWid && (
+          <SeatChat key="__chair__" workshopId={activeWid} seatId="__chair__" runners={seatRunners} onReloaded={() => loadWorkshop(activeWid)} />
         )}
       </div>
     </div>

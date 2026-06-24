@@ -17,7 +17,9 @@ import {
   createRoom, loadRoom, deleteRoom, joinRoom, leaveRoom, setRoomParticipants, renameRoom, setRoomMode, tryAcquireRoomLock,
 } from '../engine/cyclone/room-store';
 import { chatSeat, resumeSeat, type SeatEvent } from '../engine/cyclone/seat-runner';
+import { chatChair, resumeChair } from '../engine/cyclone/chair-runner';
 import { speakInRoom, type RoomEvent } from '../engine/cyclone/room-runner';
+import { loadChair, tryAcquireChairLock } from '../engine/cyclone/chair-store';
 import { generateJoinSpeech } from '../engine/cyclone/seat-summary';
 import { generateSeatDuty } from '../engine/cyclone/seat-duty';
 import type { JoinBehavior } from '../engine/cyclone/types';
@@ -67,7 +69,7 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
         })),
       ]);
       return reply.send({
-        id: w.id, title: w.title,
+        id: w.id, title: w.title, chairAgentId: w.chairAgentId,
         seats: seats.filter(Boolean),
         rooms: rooms.filter(Boolean),
       });
@@ -164,6 +166,63 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
           await chatSeat(dataDir, workshopId, seatId, text, onEvent, abort.signal);
         } else {
           await resumeSeat(dataDir, workshopId, seatId, text, onEvent, abort.signal);
+        }
+      } catch (e) {
+        pushSSE(reply, { type: 'error', message: (e as Error).message });
+      } finally {
+        activeAborts.delete(lockKey);
+        stopHB();
+        endSSE(reply);
+      }
+      return;
+    }
+
+    return reply.status(400).send({ error: `未知 action：${action}` });
+  });
+
+  // ALL /api/cyclone/workshop/:workshopId/chair/:action
+  app.all('/workshop/:workshopId/chair/:action', async (req, reply) => {
+    const { workshopId, action } = req.params as any;
+    const body = (req.body as any) || {};
+    const lockKey = `${workshopId}/__chair__`;
+
+    if (action === 'status') {
+      const w = await loadWorkshop(dataDir, workshopId);
+      if (!w) return reply.status(404).send({ error: '工作室不存在' });
+      if (!w.chairAgentId) return reply.status(400).send({ error: '该工作室未指定会长' });
+      const chair = await loadChair(dataDir, workshopId);
+      return reply.send({
+        chairAgentId: w.chairAgentId,
+        messages: chair?.messages || [],
+        pending: chair?.pending || undefined,
+      });
+    }
+
+    if (action === 'abort') {
+      const ctrl = activeAborts.get(lockKey);
+      if (!ctrl) return reply.status(409).send({ error: 'No active round' });
+      ctrl.abort();
+      return reply.send({ ok: true });
+    }
+
+    if (action === 'chat' || action === 'resume') {
+      const text = (body?.message ?? body?.answer ?? '').trim();
+      if (!text) return reply.status(400).send({ error: action === 'chat' ? '缺少 message' : '缺少 answer' });
+      const w = await loadWorkshop(dataDir, workshopId);
+      if (!w) return reply.status(404).send({ error: '工作室不存在' });
+      if (!w.chairAgentId) return reply.status(400).send({ error: '该工作室未指定会长' });
+
+      reply.hijack();
+      initSSE(reply);
+      const stopHB = startHeartbeat(reply);
+      const abort = new AbortController();
+      activeAborts.set(lockKey, abort);
+      const onEvent = (ev: SeatEvent) => { pushSSE(reply, ev); };
+      try {
+        if (action === 'chat') {
+          await chatChair(dataDir, workshopId, text, onEvent, abort.signal);
+        } else {
+          await resumeChair(dataDir, workshopId, text, onEvent, abort.signal);
         }
       } catch (e) {
         pushSSE(reply, { type: 'error', message: (e as Error).message });

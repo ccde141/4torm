@@ -47,6 +47,11 @@ export function roomsDir(dataDir: string, workshopId: string): string {
   return path.join(workshopDir(dataDir, workshopId), 'rooms');
 }
 
+/** 会长椅册文件：data/cyclone/{id}/chair.json */
+export function chairFile(dataDir: string, workshopId: string): string {
+  return path.join(workshopDir(dataDir, workshopId), 'chair.json');
+}
+
 // ── 底层 IO ──────────────────────────────────────────────────
 
 /** 安全读 JSON：文件不存在或损坏返回 null，不抛 */
