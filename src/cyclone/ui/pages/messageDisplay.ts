@@ -67,7 +67,7 @@ function stripTags(content: string): string {
 
 /**
  * 把存储的 ContextMessage[] 转成展示消息列表。
- * - 过滤 system
+ * - 普通 system 隐藏；压缩/重置摘要 system 转成可见归档摘要气泡
  * - assistant 的 toolCalls → 卡片块（delegate/contact/普通工具分流），结果从匹配 toolCallId 的 tool 消息取
  * - 普通文本作为气泡
  */
@@ -81,7 +81,14 @@ export function contextToDisplay(stored: StoredMsg[]): DisplayMessage[] {
   const out: DisplayMessage[] = [];
   let seq = 0;
   for (const m of stored) {
-    if (m.role === 'system' || m.role === 'tool') continue;
+    if (m.role === 'tool') continue;
+    if (m.role === 'system') {
+      const text = stripTags(m.content);
+      if (text.includes('重置前') || text.includes('摘要')) {
+        out.push({ id: `d${seq++}`, role: 'system', content: text });
+      }
+      continue;
+    }
     if (m.role === 'assistant') {
       const blocks: DisplayBlock[] = (m.toolCalls || []).map((tc): DisplayBlock => {
         const result = resultMap.get(tc.id);

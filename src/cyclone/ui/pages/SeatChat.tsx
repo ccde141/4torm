@@ -243,6 +243,14 @@ function DisplayRow({ msg }: { msg: DisplayMessage }) {
       </div>
     );
   }
+  if (msg.role === 'system') {
+    return (
+      <div className="chat__message chat__message--assistant chat__message--archive-summary">
+        <div className="chat__avatar">档</div>
+        <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div></div>
+      </div>
+    );
+  }
   return (
     <>
       {msg.blocks?.map((b, i) => <BlockRow key={`${msg.id}-b-${i}`} block={b} />)}

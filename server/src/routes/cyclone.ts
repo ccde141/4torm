@@ -46,7 +46,34 @@ function summaryMessages(messages: Array<{ role?: string; speaker?: string; cont
 async function buildCycloneSummary(subject: string, messages: Array<{ role: string; content: string }>): Promise<string> {
   const text = messages.slice(-60).map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
   if (!text.trim()) return '';
-  return `请将以下 ${subject} 对话压缩成可以继续工作的简短上下文摘要。只保留目标、决策、已完成、未完成、关键文件/实体、待确认问题。不要保留寒暄。\n\n${text}`;
+  return `你是一个工程对话压缩器。将以下 ${subject} 对话压缩为结构化工作摘要，供后续对话恢复上下文。
+
+## 输出格式
+按以下分区输出，用 ## 标题分隔。无内容的分区省略。
+
+## Goal
+1-2 句话描述当前任务目标或方向。
+
+## Constraints & Preferences
+用户明确表达的约束条件、偏好、风格要求。
+
+## Progress
+### Done
+已完成事项，- 开头逐条列出。必须保留：具体文件路径、函数名/变量名/类名、改动本质、commit hash（如提到）。
+
+### In Progress
+正在进行但未完成的事项。
+
+### Blocked
+被阻塞或待确认的事项，附原因。
+
+## Key Decisions
+重要技术决策和取舍（架构选择、方案对比结论、被否决的方案及原因）。
+
+## Next Steps
+对话中明确提到的后续计划。
+
+\n\n${text}`;
 }
 
 async function summarizeWithAgent(dataDir: string, agentId: string, subject: string, messages: Array<{ role: string; content: string }>): Promise<string> {

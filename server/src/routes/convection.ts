@@ -236,7 +236,7 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
               dataDir,
               fullModelKey: chairAgent.model,
               messages: [
-                { role: 'system', content: '你是会议主持人。请用 3-5 句话极简概括以下对话的当前状态：做了什么、达成了什么结论、还有什么待完成。直接输出，不加前缀。' },
+                { role: 'system', content: '你是一个工程对话压缩器。将以下群聊对话压缩为结构化工作摘要，供后续对话恢复上下文。\n\n## 输出格式\n按以下分区输出，用 ## 标题分隔。无内容的分区省略。\n\n## Goal\n1-2 句话描述当前任务目标或方向。\n\n## Constraints & Preferences\n用户明确表达的约束条件、偏好、风格要求。\n\n## Progress\n### Done\n已完成事项，- 开头逐条列出。必须保留：具体文件路径、函数名/变量名/类名、改动本质、commit hash（如提到）。\n\n### In Progress\n正在进行但未完成的事项。\n\n### Blocked\n被阻塞或待确认的事项，附原因。\n\n## Key Decisions\n重要技术决策和取舍（架构选择、方案对比结论、被否决的方案及原因）。\n\n## Next Steps\n对话中明确提到的后续计划。\n\n请直接输出，不加前缀说明。' },
                 { role: 'user', content: s.publicMessages.map(m => `[${m.speaker}] ${m.content}`).join('\n\n') },
               ],
               options: { temperature: 0.3 },

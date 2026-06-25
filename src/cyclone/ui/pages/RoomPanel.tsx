@@ -27,9 +27,10 @@ async function readErrorMessage(r: Response, fallback: string): Promise<string> 
 
 function publicToFeed(msgs: RoomMsg[]): FeedMsg[] {
   return msgs.map(m => ({
-    speaker: m.speaker,
+    speaker: m.speaker === 'system' ? '归档摘要' : m.speaker,
     content: m.content,
     isHuman: m.speaker === '人类',
+    isArchiveSummary: m.speaker === 'system' || m.content.includes('重置前的群聊摘要'),
     tools: (m.toolCalls || []).map(t => ({ tool: t.tool, args: t.args, result: t.result, status: 'success' as const })),
   }));
 }
@@ -246,8 +247,8 @@ function FeedRow({ m, idx, prefix }: { m: FeedMsg; idx: number; prefix: string }
     );
   }
   return (
-    <div className="chat__message chat__message--assistant">
-      <div className="chat__avatar">{m.speaker.slice(0, 2)}</div>
+    <div className={`chat__message chat__message--assistant${m.isArchiveSummary ? ' chat__message--archive-summary' : ''}`}>
+      <div className="chat__avatar">{m.isArchiveSummary ? '档' : m.speaker.slice(0, 2)}</div>
       <div className="chat__bubble">
         <div className="conv__speaker-label">{m.speaker}</div>
         {m.tools.map((t, ti) => (

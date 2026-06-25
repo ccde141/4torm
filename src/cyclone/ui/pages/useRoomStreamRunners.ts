@@ -25,6 +25,7 @@ export interface FeedMsg {
   speaker: string;
   content: string;
   isHuman: boolean;
+  isArchiveSummary?: boolean;
   streaming?: boolean;
   phase?: string;
   tools: FeedTool[];
