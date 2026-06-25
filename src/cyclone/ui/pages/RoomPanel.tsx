@@ -115,11 +115,22 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
     if (room && t && t !== room.title) await postAction('rename', { title: t }, '重命名群聊失败');
   }
 
+  async function resetRoomContext(mode: 'clear' | 'summary', scope: 'public' | 'both' = 'public') {
+    if (streaming) return;
+    const label = scope === 'both' ? '群聊与会长私聊' : '群聊公共上下文';
+    if (!confirm(`${mode === 'summary' ? '归档并摘要重置' : '归档并清空'}当前${label}？共享工作区文件不会被删除。`)) return;
+    await postAction('reset-context', { mode, scope }, '重置群聊上下文失败');
+  }
+
   async function speak() {
     if (!room || !input.trim() || streaming) return;
-    if (room.participantSeatIds.length === 0) { alert('群里还没有工位，先从右上角添加'); return; }
     const text = input.trim();
     setInput('');
+    if (text === '/reset' || text === '/reset clear') { await resetRoomContext('clear', 'public'); return; }
+    if (text === '/reset summary') { await resetRoomContext('summary', 'public'); return; }
+    if (text === '/reset all' || text === '/reset all clear') { await resetRoomContext('clear', 'both'); return; }
+    if (text === '/reset all summary') { await resetRoomContext('summary', 'both'); return; }
+    if (room.participantSeatIds.length === 0) { alert('群里还没有工位，先从右上角添加'); return; }
     // 流式运行态托管给注册表：切走房间不掐流、后台续跑、切回读 roundFeed 恢复
     runners.startRound(workshopId, roomId, text);
   }
@@ -204,10 +215,25 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
             </button>
           )}
         </div>
+        <div style={inputHintStyle}>
+          <span>快捷指令：</span>
+          <code>/reset</code>
+          <span>清空公共上下文</span>
+          <code>/reset summary</code>
+          <span>摘要重置公共上下文</span>
+          <code>/reset all</code>
+          <span>连同会长私聊一起清空</span>
+        </div>
       </div>
     </div>
   );
 }
+
+const inputHintStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--color-text-tertiary)',
+  paddingTop: 'var(--space-2)',
+};
 
 /** 单条群聊消息（人类气泡 / 工位气泡，历史 + 本轮实时共用） */
 function FeedRow({ m, idx, prefix }: { m: FeedMsg; idx: number; prefix: string }) {

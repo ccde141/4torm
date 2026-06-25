@@ -13,11 +13,11 @@ import '../../styles/components/sidebar.css';
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'agent', label: '控制台', icon: 'agents' },
-  { id: 'chat', label: '季风  对话', icon: 'chat' },
-  { id: 'convection', label: '对流  会议室', icon: 'convection' },
-  { id: 'cyclone', label: '气旋  工作室', icon: 'cyclone' },
-  { id: 'tradewind', label: '信风  工作流', icon: 'tradewind' },
-  { id: 'tide', label: '潮汐  自动化', icon: 'tide' },
+  { id: 'chat', label: '对话 · 季风', icon: 'chat' },
+  { id: 'convection', label: '会议室 · 对流', icon: 'convection' },
+  { id: 'cyclone', label: '工作室 · 气旋', icon: 'cyclone' },
+  { id: 'tradewind', label: '工作流 · 信风', icon: 'tradewind' },
+  { id: 'tide', label: '自动化 · 潮汐', icon: 'tide' },
 ];
 
 const CAPABILITY_ITEMS: NavItem[] = [
@@ -52,12 +52,11 @@ const ICONS: Record<string, React.FC<{ className?: string }>> = {
       <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
     </svg>
   ),
-  // 对流：上升与下沉的循环气流，呼应"多方持续交换"
+  // 对流：上下两条 U 形回路 + 路径末端 V 形箭头 = 对话在多方间持续循环交换
   convection: ({ className }) => (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M7 17V7m0 0L4 10m3-3l3 3" />
-      <path d="M17 7v10m0 0l3-3m-3 3l-3-3" />
-      <path d="M4 12h16" />
+      <path d="M6 6v7a5 5 0 0 0 5 5h0.5 l-3 -3 m3 3 l-3 3" />
+      <path d="M18 18v-7a5 5 0 0 0-5-5h-0.5 l3 -3 m-3 3 l3 3" />
     </svg>
   ),
   // 信风：三道平行流动弧线，呼应"风带 + 信件传递"的隐喻
@@ -68,10 +67,14 @@ const ICONS: Record<string, React.FC<{ className?: string }>> = {
       <path d="M3 18 Q 8 15, 13 18 T 19 18" />
     </svg>
   ),
-  // 气旋：螺旋气流，呼应"团队围绕一处旋转协作"
+  // 气旋：双交错椭圆轨道 — 群聊/私聊双轨围绕工作室核心旋转
   cyclone: ({ className }) => (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 12 m0 0 a3 3 0 1 1 -2.5 -2.9 a5.5 5.5 0 1 1 -4.2 6.8 a8 8 0 1 1 9.7 -9.4" />
+      <ellipse cx="12" cy="12" rx="9" ry="4" transform="rotate(-15 12 12)" />
+      <ellipse cx="12" cy="12" rx="9" ry="4" transform="rotate(55 12 12)" />
+      <circle cx="12" cy="12" r="2.5" />
+      <circle cx="20" cy="9.5" r="1.3" fill="currentColor" />
+      <circle cx="4" cy="14.5" r="1.3" fill="currentColor" />
     </svg>
   ),
   // 潮汐：波浪线 + 时钟指针，呼应"定时 + 海潮涨落"

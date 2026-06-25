@@ -7,6 +7,7 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { callLLM } from '../engine/shared/llm-bridge.js';
 import { loadAgent } from '../engine/shared/agent-loader.js';
 import { initSSE, pushSSE, endSSE } from '../utils/sse.js';
@@ -78,6 +79,24 @@ interface ChatSession {
 
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
   const dataDir = (app as any).dataDir as string;
+
+  // POST /api/chat/agent/:agentId/open-workspace —— 用系统文件管理器打开当前 Agent 的本地工作区
+  app.post('/agent/:agentId/open-workspace', async (req, reply) => {
+    const { agentId } = req.params as { agentId: string };
+    const agent = await loadAgent(dataDir, agentId);
+    if (!agent) return reply.status(404).send({ error: 'Agent 不存在' });
+    const workspace = agent.config?.workspace || `data/agents/${agentId}/.workspace/`;
+    const workspacePath = path.resolve(process.cwd(), workspace);
+    await fs.mkdir(workspacePath, { recursive: true });
+    if (process.platform === 'win32') {
+      spawn('explorer.exe', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
+    } else if (process.platform === 'darwin') {
+      spawn('open', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      spawn('xdg-open', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
+    }
+    return reply.send({ ok: true, path: workspacePath });
+  });
 
   // POST /api/chat/compact (SSE)
   app.post('/compact', async (req, reply) => {

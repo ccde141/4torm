@@ -5,8 +5,8 @@
  * per-room 锁：自写一份（按 roomId 互斥），不 import 对流/工位的锁。
  */
 
-import type { RoomData } from './types';
-import { roomFile, roomsDir, readJsonSafe, ensureDir, atomicWrite, removeStrict, genId } from './paths';
+import type { ContextMessage, RoomData, RoomMessage } from './types';
+import { roomFile, roomsDir, readJsonSafe, ensureDir, atomicWrite, removeStrict, genId, cycloneArchiveFile } from './paths';
 import { loadWorkshop, saveWorkshop } from './workshop-store';
 import { loadSeat } from './seat-store';
 
@@ -53,6 +53,65 @@ export async function saveRoom(
 ): Promise<void> {
   room.updatedAt = new Date().toISOString();
   await atomicWrite(roomFile(dataDir, workshopId, room.id), JSON.stringify(room, null, 2));
+}
+
+function archiveName(scope: string, id: string, seq: number): string {
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  return `${ts}-${scope}-${id}-${seq}.json`;
+}
+
+export async function resetRoomContext(
+  dataDir: string,
+  workshopId: string,
+  roomId: string,
+  opts: { scope: 'public' | 'chair' | 'both'; publicSummary?: string; chairSummary?: string },
+): Promise<{ room: RoomData | null; archivePath?: string; archivedPublicCount?: number; archivedChairCount?: number }> {
+  const room = await loadRoom(dataDir, workshopId, roomId);
+  if (!room) return { room: null };
+
+  const state = room.compactState || { disabled: false, archiveSeq: 0 };
+  const nextSeq = (state.archiveSeq || 0) + 1;
+  const originalPublicMessages = room.publicMessages || [];
+  const originalChairMessages = room.chairMessages || [];
+  const archivePath = cycloneArchiveFile(dataDir, workshopId, archiveName(`room-${opts.scope}`, roomId, nextSeq));
+  await ensureDir(archivePath.replace(/[\\/][^\\/]+$/, ''));
+  await atomicWrite(archivePath, JSON.stringify({
+    type: 'cyclone-room-context-reset',
+    version: 1,
+    createdAt: new Date().toISOString(),
+    workshopId,
+    roomId,
+    roomTitle: room.title,
+    roomTopic: room.topic,
+    roomMode: room.mode,
+    scope: opts.scope,
+    publicMessages: opts.scope === 'public' || opts.scope === 'both' ? originalPublicMessages : undefined,
+    chairMessages: opts.scope === 'chair' || opts.scope === 'both' ? originalChairMessages : undefined,
+    tokenUsage: room.tokenUsage || null,
+    chairTokenUsage: room.chairTokenUsage || null,
+    compactState: room.compactState || null,
+  }, null, 2));
+
+  if (opts.scope === 'public' || opts.scope === 'both') {
+    room.publicMessages = opts.publicSummary
+      ? [{ role: 'system', content: `以下是重置前的群聊摘要，请作为后续群聊上下文参考：\n\n${opts.publicSummary}` } as RoomMessage]
+      : [];
+    room.tokenUsage = undefined;
+  }
+  if (opts.scope === 'chair' || opts.scope === 'both') {
+    room.chairMessages = opts.chairSummary
+      ? [{ role: 'system', content: `以下是重置前的会长私聊摘要，请作为后续会长上下文参考：\n\n${opts.chairSummary}` } as ContextMessage]
+      : [];
+    room.chairTokenUsage = undefined;
+  }
+  room.compactState = { ...state, archiveSeq: nextSeq, lastCompactAt: new Date().toISOString() };
+  await saveRoom(dataDir, workshopId, room);
+  return {
+    room,
+    archivePath,
+    archivedPublicCount: opts.scope === 'public' || opts.scope === 'both' ? originalPublicMessages.length : 0,
+    archivedChairCount: opts.scope === 'chair' || opts.scope === 'both' ? originalChairMessages.length : 0,
+  };
 }
 
 /** 删除群聊（删文件 + 从工作室 meta 摘除；不动任何工位私聊会话） */

@@ -1,9 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { getAgents, setAgentStatus, getAgent, forceUnlock, getOfflineAgentIds } from '../../store/agent';
 import { LOCKED_STATUSES, LOCKED_STATUS_LABELS, SYSTEM_STATUSES, type LockedStatus } from '../../store/statuses';
-
-const STATUS_COLOR_MAP: Record<string, string> = {};
-for (const s of SYSTEM_STATUSES) STATUS_COLOR_MAP[s.id] = s.color;
 import { getAllModels } from '../../llm';
 import MessageItem from './MessageItem';
 import { useSessionList } from './useSessionList';
@@ -23,7 +20,31 @@ import '../../styles/components/chat.css';
 import '../../styles/components/session-list.css';
 import '../../styles/components/loading.css';
 
-export default function ChatPage({ active, preselectSession, onClearPreselect }: { active?: boolean; preselectSession?: string; onClearPreselect?: () => void }) {
+const STATUS_COLOR_MAP: Record<string, string> = {};
+for (const s of SYSTEM_STATUSES) STATUS_COLOR_MAP[s.id] = s.color;
+
+function AgentWorkspaceButton({ agent }: { agent: Agent | null }) {
+  async function openWorkspace() {
+    if (!agent) return;
+    const r = await fetch(`/api/chat/agent/${agent.id}/open-workspace`, { method: 'POST' });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      alert(e?.error || `打开工作区失败（HTTP ${r.status}）`);
+    }
+  }
+  return (
+    <button type="button" onClick={openWorkspace} disabled={!agent} className="chat__workspace-btn" title={agent ? '打开当前 Agent 的本地工作区' : '请先选择 Agent'}>
+      <span className="chat__workspace-btn-icon" aria-hidden="true">↗</span>
+      <span>工作区</span>
+    </button>
+  );
+}
+
+export default function ChatPage({ active, preselectSession, onClearPreselect }: {
+  active?: boolean;
+  preselectSession?: string;
+  onClearPreselect?: () => void;
+}) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [offlineIds, setOfflineIds] = useState<Set<string>>(new Set());
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
@@ -487,11 +508,14 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                 )}
                 <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' }}>{activeSessionId}</span>
               </div>
-              {models.length > 0 && (
-                <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={modelSelectStyle} aria-label="选择模型">
-                  {models.map(m => (<option key={m.key} value={m.key}>{m.label}</option>))}
-                </select>
-        )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                <AgentWorkspaceButton agent={selectedAgent} />
+                {models.length > 0 && (
+                  <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={modelSelectStyle} aria-label="选择模型">
+                    {models.map(m => (<option key={m.key} value={m.key}>{m.label}</option>))}
+                  </select>
+                )}
+              </div>
       </div>
 
             <div className="chat__messages" ref={messagesContainerRef}>

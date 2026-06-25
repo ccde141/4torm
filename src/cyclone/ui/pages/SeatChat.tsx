@@ -110,10 +110,33 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
     });
   }
 
+  async function resetContext(mode: 'clear' | 'summary') {
+    if (streaming) return;
+    const isChair = seatId.startsWith('__chair__');
+    const label = isChair ? '会长私聊' : '工位私聊';
+    if (!confirm(`${mode === 'summary' ? '归档并摘要重置' : '归档并清空'}当前${label}上下文？共享工作区文件不会被删除。`)) return;
+    const url = isChair
+      ? `${chairBase}/reset-context`
+      : `/api/cyclone/workshop/${workshopId}/seat/${seatId}/reset-context`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      alert(e?.error || `重置${label}上下文失败（HTTP ${r.status}）`);
+      return;
+    }
+    await reload(true);
+  }
+
   function sendInput() {
     const text = input.trim();
     if (!text) return;
     setInput('');
+    if (text === '/reset' || text === '/reset clear') { resetContext('clear'); return; }
+    if (text === '/reset summary') { resetContext('summary'); return; }
     run('chat', text);
   }
 
@@ -178,6 +201,13 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
             </button>
           )}
         </div>
+        <div style={inputHintStyle}>
+          <span>快捷指令：</span>
+          <code>/reset</code>
+          <span>清空</span>
+          <code>/reset summary</code>
+          <span>归档并保留摘要</span>
+        </div>
       </div>
     </div>
   );
@@ -196,6 +226,12 @@ function BlockRow({ block }: { block: DisplayBlock }) {
   }
   return <ContactCard data={{ target: block.target, message: block.message, reply: block.reply, status: block.status }} />;
 }
+
+const inputHintStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--color-text-tertiary)',
+  paddingTop: 'var(--space-2)',
+};
 
 /** 单条已落库展示消息 */
 function DisplayRow({ msg }: { msg: DisplayMessage }) {

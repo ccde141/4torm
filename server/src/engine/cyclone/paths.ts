@@ -47,6 +47,16 @@ export function roomsDir(dataDir: string, workshopId: string): string {
   return path.join(workshopDir(dataDir, workshopId), 'rooms');
 }
 
+/** 归档目录：data/cyclone/{id}/bak/ */
+export function workshopBakDir(dataDir: string, workshopId: string): string {
+  return path.join(workshopDir(dataDir, workshopId), 'bak');
+}
+
+/** 归档文件：data/cyclone/{id}/bak/{name} */
+export function cycloneArchiveFile(dataDir: string, workshopId: string, name: string): string {
+  return path.join(workshopBakDir(dataDir, workshopId), name);
+}
+
 // ── 底层 IO ──────────────────────────────────────────────────
 
 /**

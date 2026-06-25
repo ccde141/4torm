@@ -178,6 +178,11 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
     if (await postSessionAction(activeSession.id, 'reorder', { participantAgentIds: arr }, '调整发言顺序失败')) refreshSessions();
   };
 
+  const handleOpenWorkspace = async () => {
+    if (!activeId) return;
+    if (await postSessionAction(activeId, 'open-workspace', null, '打开会议工作区失败')) return;
+  };
+
   // 消息编辑
   const handleStartEdit = (idx: number, content: string) => {
     setEditingMsgIdx(idx);
@@ -381,6 +386,10 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
                 <span onDoubleClick={() => { setEditingTitle(activeSession.id); setEditValue(activeSession.title); }} className="conv__header-title" title="双击重命名">{activeSession.title}</span>
               )}
               <span className="conv__header-id">{activeSession.id}</span>
+              <button type="button" onClick={handleOpenWorkspace} className="conv__workspace-btn" title="打开当前会议的本地工作区">
+                <span className="conv__workspace-btn-icon" aria-hidden="true">↗</span>
+                <span>工作区</span>
+              </button>
               <span className="conv__header-tokens">{(() => { const t = activeSession.tokenUsage ? activeSession.tokenUsage.totalTokens : activeSession.tokenEstimate; return t >= 1000 ? `${(t / 1000).toFixed(1)}K` : t; })()} tokens</span>
             </div>
             {/* Config bar */}

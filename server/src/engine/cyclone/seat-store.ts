@@ -5,8 +5,8 @@
  * per-seat 锁：自写一份（按 seatId 互斥），不 import 对流的 tryAcquireSessionLock。
  */
 
-import type { SeatData, WorkshopData } from './types';
-import { seatFile, seatsDir, readJsonSafe, ensureDir, atomicWrite, removeStrict, genId } from './paths';
+import type { ContextMessage, SeatData, WorkshopData } from './types';
+import { seatFile, seatsDir, readJsonSafe, ensureDir, atomicWrite, removeStrict, genId, cycloneArchiveFile } from './paths';
 import { loadWorkshop, saveWorkshop } from './workshop-store';
 
 /** 在工作室下新增工位（绑定 agent + 角色提示词），更新工作室 meta */
@@ -69,6 +69,51 @@ export async function saveSeat(
 ): Promise<void> {
   seat.updatedAt = new Date().toISOString();
   await atomicWrite(seatFile(dataDir, workshopId, seat.id), JSON.stringify(seat, null, 2));
+}
+
+function archiveName(scope: string, id: string, seq: number): string {
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  return `${ts}-${scope}-${id}-${seq}.json`;
+}
+
+/** 归档并重置工位私聊上下文 */
+export async function resetSeatContext(
+  dataDir: string,
+  workshopId: string,
+  seatId: string,
+  opts: { summary?: string; forcePending?: boolean } = {},
+): Promise<{ seat: SeatData | null; archivePath?: string; archivedCount?: number }> {
+  const seat = await loadSeat(dataDir, workshopId, seatId);
+  if (!seat) return { seat: null };
+  if (seat.pending && !opts.forcePending) throw new Error('该工位存在挂起提问，请先回答或使用强制重置');
+
+  const state = seat.compactState || { disabled: false, archiveSeq: 0 };
+  const nextSeq = (state.archiveSeq || 0) + 1;
+  const originalMessages = seat.messages || [];
+  const archivePath = cycloneArchiveFile(dataDir, workshopId, archiveName('seat', seatId, nextSeq));
+  await ensureDir(archivePath.replace(/[\\/][^\\/]+$/, ''));
+  await atomicWrite(archivePath, JSON.stringify({
+    type: 'cyclone-seat-context-reset',
+    version: 1,
+    createdAt: new Date().toISOString(),
+    workshopId,
+    seatId,
+    seatTitle: seat.title,
+    mode: opts.summary ? 'summary' : 'clear',
+    messages: originalMessages,
+    pending: seat.pending || null,
+    tokenUsage: seat.tokenUsage || null,
+    compactState: seat.compactState || null,
+  }, null, 2));
+
+  seat.messages = opts.summary
+    ? [{ role: 'system', content: `以下是重置前的工位私聊摘要，请作为后续上下文参考：\n\n${opts.summary}` }]
+    : [];
+  seat.pending = undefined;
+  seat.tokenUsage = undefined;
+  seat.compactState = { ...state, archiveSeq: nextSeq, lastCompactAt: new Date().toISOString() };
+  await saveSeat(dataDir, workshopId, seat);
+  return { seat, archivePath, archivedCount: originalMessages.length };
 }
 
 /** 删除工位（删文件 + 从工作室 meta 摘除） */

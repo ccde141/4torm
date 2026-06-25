@@ -18,6 +18,7 @@ import { callLLM } from '../engine/shared/llm-bridge';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { lockAgent, unlockAgent, setPresence, clearPresence } from '../engine/shared/agent-lock';
 
 /** 活跃的轮次 AbortController：sessionId → AbortController */
@@ -261,6 +262,21 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
 
       await saveSession(dataDir, s);
       return reply.send({ ok: true, mode, archived: archiveFileName, summary: summaryContent || undefined });
+    }
+
+    if (action === 'open-workspace') {
+      const s = await loadSession(dataDir, sessionId);
+      if (!s) return reply.status(404).send({ error: '会议不存在' });
+      const workspacePath = sessionWorkspace(dataDir, sessionId);
+      await fs.mkdir(workspacePath, { recursive: true });
+      if (process.platform === 'win32') {
+        spawn('explorer.exe', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
+      } else if (process.platform === 'darwin') {
+        spawn('open', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
+      } else {
+        spawn('xdg-open', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
+      }
+      return reply.send({ ok: true, path: workspacePath });
     }
 
     return reply.status(400).send({ error: `未知 action：${action}` });

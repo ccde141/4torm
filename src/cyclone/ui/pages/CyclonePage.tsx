@@ -17,6 +17,7 @@ import SeatChat from './SeatChat';
 import ChairDrawer, { chairStreamKey } from './ChairDrawer';
 import { useSeatStreamRunners } from './useSeatStreamRunners';
 import { useRoomStreamRunners } from './useRoomStreamRunners';
+import '../../../styles/components/cyclone.css';
 
 interface WorkshopSummary {
   id: string; title: string; seatCount: number; roomCount: number;
@@ -136,6 +137,12 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     setView(null);
   }
 
+  async function openWorkshopWorkspace() {
+    if (!activeWid) return;
+    const r = await fetch(`/api/cyclone/workshop/${activeWid}/open-workspace`, { method: 'POST' });
+    if (!r.ok) { alert(await readErrorMessage(r, '打开公共工作区失败')); return; }
+  }
+
   async function deleteWorkshop(wid: string, title: string) {
     if (!confirm(`删除工作室「${title}」？工位、群聊及全部会话将一并删除，不可恢复。`)) return;
     // 删的是当前工作室 → 掐掉其各会议的会长流（仅当前工作室的 rooms 在内存里可知）
@@ -234,6 +241,12 @@ export default function CyclonePage({ active }: { active?: boolean }) {
             <button onClick={e => { e.stopPropagation(); deleteWorkshop(w.id, w.title); }} style={delBtnStyle} title="删除工作室">×</button>
           </div>
         ))}
+        {activeWid && (
+          <button type="button" onClick={openWorkshopWorkspace} className="cyclone__workspace-btn" title="打开当前工作室的公共工作区">
+            <span className="cyclone__workspace-btn-icon">↗</span>
+            <span>公共工作区</span>
+          </button>
+        )}
         {activeWid && (
           <>
             <div style={sectionHeadStyle}>
