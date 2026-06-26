@@ -47,6 +47,7 @@
   /* ─── 边框 ──────────────────────────────────────────── */
   --border-color:        rgba(255, 255, 255, 0.06);
   --border-color-hover:  rgba(255, 255, 255, 0.12);
+  --border-radius-xs:    4px;
   --border-radius-sm:    6px;
   --border-radius-md:    10px;
   --border-radius-lg:    16px;
@@ -136,7 +137,10 @@
   --color-border:             var(--border-color);
   --color-bg-hover:           var(--color-bg-tertiary);
   --color-text-quaternary:    #52525b;
+  --color-danger:             var(--color-error);
+  --color-danger-hover:       #c53030;
 
+  --radius-xs:                var(--border-radius-xs);
   --radius-sm:                var(--border-radius-sm);
   --radius-md:                var(--border-radius-md);
   --radius-lg:                var(--border-radius-lg);

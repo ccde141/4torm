@@ -159,7 +159,7 @@
 
 .skin-panel__color-input::-webkit-color-swatch {
   border: none;
-  border-radius: 4px;
+  border-radius: var(--border-radius-xs);
 }
 
 .skin-panel__color-value {

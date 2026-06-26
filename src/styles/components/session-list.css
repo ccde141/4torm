@@ -76,10 +76,10 @@
 }
 
 .session-item__unread {
-  background: var(--color-danger, #e53e3e);
+  background: var(--color-danger);
   color: #fff;
   padding: 0 6px;
-  border-radius: 10px;
+  border-radius: var(--border-radius-md);
   font-size: 10px;
   font-weight: var(--font-semibold);
   line-height: 18px;

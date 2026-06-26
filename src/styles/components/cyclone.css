@@ -9,7 +9,7 @@
   gap: var(--space-2);
   padding: 0 var(--space-3);
   border: 1px solid color-mix(in srgb, var(--color-accent) 46%, var(--border-color));
-  border-radius: 999px;
+  border-radius: var(--border-radius-full);
   background:
     linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.04)),
     radial-gradient(circle at 18% 20%, var(--color-accent-subtle) 0%, transparent 42%),
