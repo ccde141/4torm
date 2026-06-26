@@ -7,6 +7,8 @@
     "dev": "concurrently -n server,vite -c blue,green \"npm run dev:server\" \"npm run dev:vite\"",
     "dev:server": "cd server && npx tsx watch src/index.ts",
     "dev:vite": "vite",
+    "electron": "electron electron/main.cjs",
+    "electron:dev": "concurrently -k -n server,vite,shell -c blue,green,magenta \"npm run dev:server\" \"npm run dev:vite\" \"wait-on tcp:127.0.0.1:5173 && electron electron/main.cjs\"",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -31,12 +33,14 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.2.1",
+    "electron": "^42.5.0",
     "eslint": "^10.2.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.5.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",
-    "vite": "^8.0.10"
+    "vite": "^8.0.10",
+    "wait-on": "^9.0.10"
   }
 }
