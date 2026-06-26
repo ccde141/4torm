@@ -10,6 +10,7 @@ import { parseStructuredOutput } from '../../../engine/parser';
 import { renderTextWithCode } from '../../../engine/markdown';
 import StructuredMessage from '../../../components/chat/StructuredMessage';
 import { formatTimestamp } from '../../../utils/time';
+import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import '../../../styles/components/convection.css';
 import type { Agent } from '../../../types';
 
@@ -44,6 +45,9 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
   const abortRef = useRef<AbortController | null>(null);
   const cAbortRef = useRef<AbortController | null>(null);
   const convRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // 桌面端：拖入文件 → 路径进「主对话框（发言）」，绕开会长私聊栏（cInput）
+  useDroppedPathInput(setInput, inputRef, active);
   const [mainFlex, setMainFlex] = useState(() => {
     const saved = localStorage.getItem('conv_main_flex');
     return saved ? parseFloat(saved) : 2;
@@ -573,7 +577,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
             {/* Input */}
             <div className="chat__input-area">
               <div className="chat__input-wrapper">
-                <textarea className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder="发言...（Shift+Enter 换行）" disabled={busy} rows={1} />
+                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder="发言...（Shift+Enter 换行）" disabled={busy} rows={1} />
                 {busy ? (
                   <button className="chat__stop-btn" onClick={() => {
                     abortRef.current?.abort();

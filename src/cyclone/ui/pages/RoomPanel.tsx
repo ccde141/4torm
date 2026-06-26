@@ -13,6 +13,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { renderTextWithCode } from '../../../engine/markdown';
 import ToolCallMessage from '../../../components/chat/ToolCallMessage';
 import type { RoomStreamRunners, FeedMsg } from './useRoomStreamRunners';
+import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import '../../../styles/components/convection.css';
 
 interface RoomToolCall { tool: string; args: Record<string, string>; result: string; }
@@ -35,8 +36,8 @@ function publicToFeed(msgs: RoomMsg[]): FeedMsg[] {
   }));
 }
 
-export default function RoomPanel({ workshopId, roomId, seats, runners, onChanged }: {
-  workshopId: string; roomId: string; seats: SeatLite[]; runners: RoomStreamRunners; onChanged?: () => void;
+export default function RoomPanel({ workshopId, roomId, seats, runners, onChanged, active = true }: {
+  workshopId: string; roomId: string; seats: SeatLite[]; runners: RoomStreamRunners; onChanged?: () => void; active?: boolean;
 }) {
   const [room, setRoom] = useState<Room | null>(null);
   const [history, setHistory] = useState<FeedMsg[]>([]);
@@ -47,8 +48,11 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
   /** 订阅 tick：runner 每次 notify 自增，触发本组件重渲染读取最新 roundFeed 缓冲 */
   const [, forceTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
+  // 桌面端：拖入文件 → 路径进群聊主对话框（仅工作室页可见时）
+  useDroppedPathInput(setInput, inputRef, active);
 
   const runner = runners.getRunner(roomId);
   const streaming = !!runner?.streaming;
@@ -201,7 +205,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
       {/* Input */}
       <div className="chat__input-area">
         <div className="chat__input-wrapper">
-          <textarea className="chat__input" value={input}
+          <textarea ref={inputRef} className="chat__input" value={input}
             onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); speak(); } }}
             placeholder={streaming ? '工位讨论中…' : '在群里说点什么…（Enter 发送，Shift+Enter 换行）'}
