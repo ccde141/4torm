@@ -1,5 +1,6 @@
 {
-  "name": "agent-dashboard",
+  "name": "4torm",
+  "productName": "4torm",
   "private": true,
   "version": "0.0.0",
   "type": "module",
