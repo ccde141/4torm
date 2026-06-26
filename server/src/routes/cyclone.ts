@@ -7,24 +7,92 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import fs from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import {
   createWorkshop, loadWorkshop, listWorkshops, deleteWorkshop, renameWorkshop, setChair,
 } from '../engine/cyclone/workshop-store';
 import {
-  addSeat, loadSeat, deleteSeat, updateSeatRole,
+  addSeat, loadSeat, deleteSeat, updateSeatRole, resetSeatContext,
 } from '../engine/cyclone/seat-store';
 import {
-  createRoom, loadRoom, deleteRoom, joinRoom, leaveRoom, setRoomParticipants, renameRoom, setRoomMode, tryAcquireRoomLock,
+  createRoom, loadRoom, deleteRoom, joinRoom, leaveRoom, setRoomParticipants, renameRoom, setRoomMode, tryAcquireRoomLock, resetRoomContext,
 } from '../engine/cyclone/room-store';
 import { chatSeat, resumeSeat, type SeatEvent } from '../engine/cyclone/seat-runner';
+import { chatChair } from '../engine/cyclone/chair-runner';
 import { speakInRoom, type RoomEvent } from '../engine/cyclone/room-runner';
 import { generateJoinSpeech } from '../engine/cyclone/seat-summary';
 import { generateSeatDuty } from '../engine/cyclone/seat-duty';
 import type { JoinBehavior } from '../engine/cyclone/types';
+import { workshopWorkspace } from '../engine/cyclone/paths';
+import { loadAgent } from '../engine/shared/agent-loader';
+import { callLLM } from '../engine/shared/llm-bridge';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
 
 /** 活跃轮次 AbortController：`${workshopId}/${seatId}` 或 `${workshopId}/room/${roomId}` → ctrl */
 const activeAborts = new Map<string, AbortController>();
+
+function isActiveRound(workshopId: string, key: string): boolean {
+  return activeAborts.has(`${workshopId}/${key}`) || activeAborts.has(`${workshopId}/room/${key}`);
+}
+
+function summaryMessages(messages: Array<{ role?: string; speaker?: string; content?: string; isHuman?: boolean }>): Array<{ role: string; content: string }> {
+  return messages.map(m => ({
+    role: m.role || (m.isHuman ? 'user' : m.speaker || 'assistant'),
+    content: m.content || '',
+  })).filter(m => m.content.trim());
+}
+
+async function buildCycloneSummary(subject: string, messages: Array<{ role: string; content: string }>): Promise<string> {
+  const text = messages.slice(-60).map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+  if (!text.trim()) return '';
+  return `你是一个工程对话压缩器。将以下 ${subject} 对话压缩为结构化工作摘要，供后续对话恢复上下文。
+
+## 输出格式
+按以下分区输出，用 ## 标题分隔。无内容的分区省略。
+
+## Goal
+1-2 句话描述当前任务目标或方向。
+
+## Constraints & Preferences
+用户明确表达的约束条件、偏好、风格要求。
+
+## Progress
+### Done
+已完成事项，- 开头逐条列出。必须保留：具体文件路径、函数名/变量名/类名、改动本质、commit hash（如提到）。
+
+### In Progress
+正在进行但未完成的事项。
+
+### Blocked
+被阻塞或待确认的事项，附原因。
+
+## Key Decisions
+重要技术决策和取舍（架构选择、方案对比结论、被否决的方案及原因）。
+
+## Next Steps
+对话中明确提到的后续计划。
+
+\n\n${text}`;
+}
+
+async function summarizeWithAgent(dataDir: string, agentId: string, subject: string, messages: Array<{ role: string; content: string }>): Promise<string> {
+  const prompt = await buildCycloneSummary(subject, messages);
+  if (!prompt) return '';
+  const agent = await loadAgent(dataDir, agentId);
+  if (!agent) throw new Error('摘要 Agent 不存在');
+  if (!agent.model) throw new Error('摘要 Agent 未配置模型');
+  const result = await callLLM({
+    dataDir,
+    fullModelKey: agent.model,
+    messages: [
+      { role: 'system', content: '你是 4torm 气旋工作室的上下文压缩器。输出中文，精炼、可继续工作。' },
+      { role: 'user', content: prompt },
+    ],
+    options: { temperature: 0.2, maxTokens: 900 },
+  });
+  return result.content.trim();
+}
 
 export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
   const dataDir = (app as any).dataDir as string;
@@ -67,7 +135,7 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
         })),
       ]);
       return reply.send({
-        id: w.id, title: w.title,
+        id: w.id, title: w.title, chairAgentId: w.chairAgentId,
         seats: seats.filter(Boolean),
         rooms: rooms.filter(Boolean),
       });
@@ -82,6 +150,21 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     if (action === 'delete') {
       await deleteWorkshop(dataDir, workshopId);
       return reply.send({ ok: true });
+    }
+
+    if (action === 'open-workspace') {
+      const w = await loadWorkshop(dataDir, workshopId);
+      if (!w) return reply.status(404).send({ error: '工作室不存在' });
+      const workspacePath = workshopWorkspace(dataDir, workshopId);
+      await fs.mkdir(workspacePath, { recursive: true });
+      if (process.platform === 'win32') {
+        spawn('explorer.exe', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
+      } else if (process.platform === 'darwin') {
+        spawn('open', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
+      } else {
+        spawn('xdg-open', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
+      }
+      return reply.send({ ok: true, path: workspacePath });
     }
 
     if (action === 'set-chair') {
@@ -134,6 +217,25 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       return reply.send(updated);
     }
 
+    if (action === 'reset-context') {
+      if (activeAborts.has(lockKey)) return reply.status(409).send({ error: '该工位正在处理中，请稍后再重置上下文' });
+      const seat = await loadSeat(dataDir, workshopId, seatId);
+      if (!seat) return reply.status(404).send({ error: '工位不存在' });
+      let summary = '';
+      if (body?.mode === 'summary') {
+        summary = await summarizeWithAgent(dataDir, seat.agentId, `工位「${seat.title}」私聊`, summaryMessages(seat.messages || []));
+      }
+      try {
+        const result = await resetSeatContext(dataDir, workshopId, seatId, {
+          summary,
+          forcePending: !!body?.forcePending,
+        });
+        return reply.send({ ok: true, archivePath: result.archivePath, archivedCount: result.archivedCount, summary: !!summary });
+      } catch (e) {
+        return reply.status(409).send({ error: (e as Error).message });
+      }
+    }
+
     if (action === 'delete') {
       await deleteSeat(dataDir, workshopId, seatId);
       return reply.send({ ok: true });
@@ -165,6 +267,81 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
         } else {
           await resumeSeat(dataDir, workshopId, seatId, text, onEvent, abort.signal);
         }
+      } catch (e) {
+        pushSSE(reply, { type: 'error', message: (e as Error).message });
+      } finally {
+        activeAborts.delete(lockKey);
+        stopHB();
+        endSSE(reply);
+      }
+      return;
+    }
+
+    return reply.status(400).send({ error: `未知 action：${action}` });
+  });
+
+  // ALL /api/cyclone/workshop/:workshopId/room/:roomId/chair/:action
+  // 会长按会议（room）隔离：私聊落 room.chairMessages，只读本 room 会议快照，换会议不串台。
+  app.all('/workshop/:workshopId/room/:roomId/chair/:action', async (req, reply) => {
+    const { workshopId, roomId, action } = req.params as any;
+    const body = (req.body as any) || {};
+    // 与群聊发言共用 per-room 锁键，统一在 activeAborts 里登记
+    const lockKey = `${workshopId}/room/${roomId}`;
+
+    if (action === 'status') {
+      const w = await loadWorkshop(dataDir, workshopId);
+      if (!w) return reply.status(404).send({ error: '工作室不存在' });
+      const room = await loadRoom(dataDir, workshopId, roomId);
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
+      if (!w.chairAgentId) return reply.status(400).send({ error: '该工作室未指定会长' });
+      return reply.send({
+        chairAgentId: w.chairAgentId,
+        messages: room.chairMessages || [],
+      });
+    }
+
+    if (action === 'reset-context') {
+      if (activeAborts.has(lockKey)) return reply.status(409).send({ error: '会长正在处理中，请稍后再重置上下文' });
+      const w = await loadWorkshop(dataDir, workshopId);
+      if (!w) return reply.status(404).send({ error: '工作室不存在' });
+      if (!w.chairAgentId) return reply.status(400).send({ error: '该工作室未指定会长' });
+      const room = await loadRoom(dataDir, workshopId, roomId);
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
+      let chairSummary = '';
+      if (body?.mode === 'summary') {
+        chairSummary = await summarizeWithAgent(dataDir, w.chairAgentId, `群聊「${room.title}」会长私聊`, summaryMessages(room.chairMessages || []));
+      }
+      try {
+        const result = await resetRoomContext(dataDir, workshopId, roomId, { scope: 'chair', chairSummary });
+        return reply.send({ ok: true, archivePath: result.archivePath, archivedChairCount: result.archivedChairCount, summary: !!chairSummary });
+      } catch (e) {
+        return reply.status(409).send({ error: (e as Error).message });
+      }
+    }
+
+    if (action === 'abort') {
+      const ctrl = activeAborts.get(lockKey);
+      if (!ctrl) return reply.status(409).send({ error: 'No active round' });
+      ctrl.abort();
+      return reply.send({ ok: true });
+    }
+
+    // 会长是纯文本参谋，无挂起态 → 只有 chat，无 resume
+    if (action === 'chat') {
+      const text = (body?.message ?? '').trim();
+      if (!text) return reply.status(400).send({ error: '缺少 message' });
+      const w = await loadWorkshop(dataDir, workshopId);
+      if (!w) return reply.status(404).send({ error: '工作室不存在' });
+      if (!w.chairAgentId) return reply.status(400).send({ error: '该工作室未指定会长' });
+
+      reply.hijack();
+      initSSE(reply);
+      const stopHB = startHeartbeat(reply);
+      const abort = new AbortController();
+      activeAborts.set(lockKey, abort);
+      const onEvent = (ev: SeatEvent) => { pushSSE(reply, ev); };
+      try {
+        await chatChair(dataDir, workshopId, roomId, text, onEvent, abort.signal);
       } catch (e) {
         pushSSE(reply, { type: 'error', message: (e as Error).message });
       } finally {
@@ -243,6 +420,35 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       const room = await setRoomMode(dataDir, workshopId, roomId, body?.mode);
       if (!room) return reply.status(404).send({ error: '群聊不存在' });
       return reply.send({ mode: room.mode });
+    }
+
+    if (action === 'reset-context') {
+      if (activeAborts.has(lockKey)) return reply.status(409).send({ error: '该群聊正在处理中，请稍后再重置上下文' });
+      const room = await loadRoom(dataDir, workshopId, roomId);
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
+      const scope = body?.scope === 'chair' ? 'chair' : body?.scope === 'both' ? 'both' : 'public';
+      let publicSummary = '';
+      let chairSummary = '';
+      if (body?.mode === 'summary' || body?.mode === 'all-summary') {
+        const chairId = (await loadWorkshop(dataDir, workshopId))?.chairAgentId;
+        if (!chairId) return reply.status(400).send({ error: '摘要重置需要先设置会长 Agent' });
+        if (scope === 'public' || scope === 'both') {
+          publicSummary = await summarizeWithAgent(dataDir, chairId, `群聊「${room.title}」公共上下文`, summaryMessages(room.publicMessages || []));
+        }
+        if ((scope === 'chair' || scope === 'both') && room.chairMessages?.length) {
+          chairSummary = await summarizeWithAgent(dataDir, chairId, `群聊「${room.title}」会长私聊`, summaryMessages(room.chairMessages || []));
+        }
+      }
+      const release = tryAcquireRoomLock(workshopId, roomId);
+      if (!release) return reply.status(409).send({ error: '该群聊正在处理中，请稍后再试' });
+      try {
+        const result = await resetRoomContext(dataDir, workshopId, roomId, { scope, publicSummary, chairSummary });
+        return reply.send({ ok: true, archivePath: result.archivePath, archivedPublicCount: result.archivedPublicCount, archivedChairCount: result.archivedChairCount });
+      } catch (e) {
+        return reply.status(409).send({ error: (e as Error).message });
+      } finally {
+        release();
+      }
     }
 
     // 入会发言：对指定工位按各自 joinBehavior 依次生成开场白（SSE 流式，仿 speak 事件）

@@ -81,8 +81,32 @@ export function sessionWorkspace(dataDir: string, id: string): string {
 }
 
 async function readJsonSafe<T>(file: string): Promise<T | null> {
-  try { return JSON.parse(await fs.readFile(file, 'utf-8')) as T; }
-  catch { return null; }
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, 'utf-8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    console.error(`[convection] 读取失败（非缺失，请检查权限/IO）：${file}`, e);
+    throw e;
+  }
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  try {
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    const quarantine = `${file}.corrupt-${Date.now().toString(36)}`;
+    try { await fs.rename(file, quarantine); } catch { /* 隔离失败也别让读崩，下面照样告警 */ }
+    console.error(`[convection] JSON 损坏，已隔离为 ${quarantine}（原文件保留可恢复）：${(e as Error).message}`);
+    return null;
+  }
+}
+
+async function removeStrict(targetPath: string, opts?: { recursive?: boolean }): Promise<void> {
+  try {
+    await fs.rm(targetPath, { recursive: opts?.recursive ?? false, force: false });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw e;
+  }
 }
 
 async function ensureDir(dir: string): Promise<void> {
@@ -175,8 +199,8 @@ function estimateTokens(text: string): number {
 
 /** 删除会话 */
 export async function deleteSession(dataDir: string, id: string): Promise<void> {
-  try { await fs.rm(sessionFile(dataDir, id)); } catch {}
-  try { await fs.rm(path.join(sessionsDir(dataDir), id), { recursive: true, force: true }); } catch {}
+  await removeStrict(sessionFile(dataDir, id));
+  await removeStrict(path.join(sessionsDir(dataDir), id), { recursive: true });
   const index = (await readJsonSafe<string[]>(indexFile(dataDir))) || [];
   const filtered = index.filter(x => x !== id);
   await atomicWrite(indexFile(dataDir), JSON.stringify(filtered));

@@ -40,13 +40,13 @@ import './styles/index.css';
 
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   agent:     { title: '控制台', subtitle: 'Agent实例管理' },
-  chat:      { title: '季风', subtitle: '与Agent信息交互' },
+  chat:      { title: '对话 · 季风', subtitle: '与 Agent 信息交互' },
   tools:     { title: '工具', subtitle: '全局工具注册与管理' },
   skills:    { title: '技能', subtitle: '管理与安装 Agent 能力包' },
-  convection: { title: '对流', subtitle: '多 Agent 持续协作会话' },
-  cyclone:   { title: '气旋', subtitle: '团队工作室：工位私聊与协作' },
-  tradewind: { title: '信风', subtitle: '多 Agent 协作工作流' },
-  tide:      { title: '潮汐', subtitle: '定时自动化任务' },
+  convection: { title: '会议室 · 对流', subtitle: '多 Agent 持续协作会话' },
+  cyclone:   { title: '工作室 · 气旋', subtitle: '工位私聊与团队协作' },
+  tradewind: { title: '工作流 · 信风', subtitle: '多 Agent 协作工作流' },
+  tide:      { title: '自动化 · 潮汐', subtitle: '定时自动化任务' },
   model:     { title: '模型', subtitle: '模型提供商与 API 配置' },
   mcp:       { title: 'MCP', subtitle: '外部工具服务管理' },
 };

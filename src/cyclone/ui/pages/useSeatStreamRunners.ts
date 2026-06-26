@@ -118,7 +118,7 @@ async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (
       if (!t.startsWith('data:')) continue;
       const p = t.slice(5).trim();
       if (!p || p === '[DONE]') continue;
-      try { onEvent(JSON.parse(p)); } catch {}
+      try { onEvent(JSON.parse(p)); } catch (e) { console.warn('[cyclone] 工位 SSE 事件解析失败', p, e); }
     }
   }
 }
@@ -128,8 +128,9 @@ export interface StartStreamOpts {
   seatId: string;
   action: 'chat' | 'resume';
   text: string;
-  /** 乐观展示的用户气泡 / 已答 ask 回显 */
   optimisticUser: DisplayMessage | null;
+  /** 主席不走 /seat/ 端点，传此覆盖路径（如 /api/cyclone/workshop/${wid}/chair/${action}） */
+  pathOverride?: string;
 }
 
 /**
@@ -174,10 +175,10 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void) {
   }, []);
 
   /** 手动停止：abort 本地流 + 通知服务端 abort。 */
-  const abortSeat = useCallback((workshopId: string, seatId: string) => {
+  const abortSeat = useCallback((workshopId: string, seatId: string, pathOverride?: string) => {
     const r = runners.current.get(seatId);
     if (r) r.ctrl.abort();
-    fetch(streamUrl(`/api/cyclone/workshop/${workshopId}/seat/${seatId}/abort`), {
+    fetch(streamUrl(pathOverride ?? `/api/cyclone/workshop/${workshopId}/seat/${seatId}/abort`), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     }).catch(() => {});
   }, []);
@@ -215,10 +216,11 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void) {
     notify(seatId);
 
     const payloadKey = action === 'chat' ? 'message' : 'answer';
+    const path = opts.pathOverride ?? `/api/cyclone/workshop/${workshopId}/seat/${seatId}/${action}`;
     (async () => {
       try {
         await streamSSE(
-          `/api/cyclone/workshop/${workshopId}/seat/${seatId}/${action}`,
+          path,
           { [payloadKey]: text },
           (ev) => { applyEvent(ev, runner.live); notify(seatId); },
           ctrl.signal,

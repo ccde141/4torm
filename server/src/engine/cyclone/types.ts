@@ -137,6 +137,14 @@ export interface RoomData {
   participantSeatIds: string[];
   /** 公共消息历史 */
   publicMessages: RoomMessage[];
+  /**
+   * 会长私聊历史（对齐对流 SessionData：会长信息与群聊信息同文件、不同字段）。
+   * 会长是本会议的场外参谋——纯文本、零工具，只读本 room 的会议快照。
+   * 按 room 隔离，换会议不串台。
+   */
+  chairMessages?: ContextMessage[];
+  /** 会长私聊累计 token 用量 */
+  chairTokenUsage?: CycloneTokenUsage;
   tokenUsage?: CycloneTokenUsage;
   compactState?: CycloneCompactState;
   createdAt: string;

@@ -19,7 +19,10 @@ interface ConvMsg { speaker: string; content: string; streaming?: boolean; rawCo
 interface CMsg { role: string; content: string; streaming?: boolean; waitingInfo?: WaitingInfo; timestamp?: string }
 interface SessionSummary { id: string; title: string; chairAgentId: string; participantAgentIds: string[]; topic: string; messageCount: number; tokenEstimate: number; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number }; updatedAt: string }
 
-
+async function readErrorMessage(r: Response, fallback: string): Promise<string> {
+  const e = await r.json().catch(() => ({}));
+  return e?.error || `${fallback}（HTTP ${r.status}）`;
+}
 
 export default memo(function ConvectionPage({ active = true }: { active?: boolean }) {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -76,12 +79,12 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
     document.addEventListener('mouseup', onUp);
   }, [mainFlex]);
 
-  const refreshAgents = useCallback(async () => { try { setAgents(await getAgents()); } catch {} }, []);
+  const refreshAgents = useCallback(async () => { try { setAgents(await getAgents()); } catch (e) { console.error('[convection] 加载 agents 失败', e); } }, []);
   // 5s 轮询 agent（仅当前页面活跃时跑，避免切走后后台持续刷请求）
   useEffect(() => { if (!active) return; refreshAgents(); const t = setInterval(refreshAgents, 5000); return () => clearInterval(t); }, [refreshAgents, active]);
 
   const refreshSessions = useCallback(async () => {
-    try { const r = await fetch('/api/convection/list'); if (r.ok) setSessions(await r.json()); } catch {}
+    try { const r = await fetch('/api/convection/list'); if (r.ok) setSessions(await r.json()); else console.error(await readErrorMessage(r, '加载对流列表失败')); } catch (e) { console.error('[convection] 加载对流列表失败', e); }
   }, []);
   useEffect(() => { refreshSessions(); }, [refreshSessions]);
 
@@ -95,7 +98,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
     localStorage.setItem('convection_active_id', id);
     try {
       const r = await fetch(`/api/convection/session/${id}/status`);
-      if (!r.ok) return;
+      if (!r.ok) { alert(await readErrorMessage(r, '加载对流会话失败')); return; }
       const d = await r.json();
       setMsgs((d.publicMessages || []).map((m: any) => ({
         speaker: m.speaker,
@@ -104,7 +107,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
         toolCalls: m.toolCalls?.map((tc: any) => ({ tool: tc.tool, args: tc.args, result: tc.result, status: 'done' as const })) || undefined,
       })));
       setCMsgs(d.chairMessages || []);
-    } catch {}
+    } catch (e) { console.error('[convection] 加载对流会话失败', e); alert(`加载对流会话失败：${(e as Error).message}`); }
   }, [activeId]);
 
   // 恢复上次活跃会话
@@ -123,24 +126,33 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chairAgentId: chair.id, participantAgentIds: participants.map(a => a.id) }),
       });
-      if (!r.ok) return;
+      if (!r.ok) { alert(await readErrorMessage(r, '创建对流失败')); return; }
       const d = await r.json();
       await refreshSessions();
       loadSession(d.id);
-    } catch {}
+    } catch (e) { console.error('[convection] 创建对流失败', e); alert(`创建对流失败：${(e as Error).message}`); }
   };
+
+  async function postSessionAction(id: string, action: string, body: Record<string, unknown> | null, fallback: string): Promise<boolean> {
+    const r = await fetch(`/api/convection/session/${id}/${action}`, {
+      method: 'POST',
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!r.ok) { alert(await readErrorMessage(r, fallback)); return false; }
+    return true;
+  }
 
   // 重命名
   const handleRename = async (id: string, title: string) => {
     setEditingTitle(null);
     if (!title.trim()) return;
-    await fetch(`/api/convection/session/${id}/rename`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) });
-    refreshSessions();
+    if (await postSessionAction(id, 'rename', { title }, '重命名对流失败')) refreshSessions();
   };
 
   // 删除
   const handleDelete = async (id: string) => {
-    await fetch(`/api/convection/session/${id}/delete`, { method: 'POST' });
+    if (!(await postSessionAction(id, 'delete', null, '删除对流失败'))) return;
     if (activeId === id) { setActiveId(null); setMsgs([]); setCMsgs([]); }
     refreshSessions();
   };
@@ -148,26 +160,27 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
   // Agent 热配置
   const handleJoin = async (agentId: string) => {
     if (!activeId) return;
-    await fetch(`/api/convection/session/${activeId}/join`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId }) });
-    refreshSessions();
+    if (await postSessionAction(activeId, 'join', { agentId }, '加入 agent 失败')) refreshSessions();
   };
   const handleLeave = async (agentId: string) => {
     if (!activeId) return;
-    await fetch(`/api/convection/session/${activeId}/leave`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId }) });
-    refreshSessions();
+    if (await postSessionAction(activeId, 'leave', { agentId }, '移除 agent 失败')) refreshSessions();
   };
   const handleSetChair = async (agentId: string) => {
     if (!activeId) return;
-    await fetch(`/api/convection/session/${activeId}/set-chair`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId }) });
-    refreshSessions();
+    if (await postSessionAction(activeId, 'set-chair', { agentId }, '设置会长失败')) refreshSessions();
   };
   const handleReorder = async (fromIdx: number, toIdx: number) => {
     if (!activeSession) return;
     const arr = [...activeSession.participantAgentIds];
     const [item] = arr.splice(fromIdx, 1);
     arr.splice(toIdx, 0, item);
-    await fetch(`/api/convection/session/${activeId}/reorder`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ participantAgentIds: arr }) });
-    refreshSessions();
+    if (await postSessionAction(activeSession.id, 'reorder', { participantAgentIds: arr }, '调整发言顺序失败')) refreshSessions();
+  };
+
+  const handleOpenWorkspace = async () => {
+    if (!activeId) return;
+    if (await postSessionAction(activeId, 'open-workspace', null, '打开会议工作区失败')) return;
   };
 
   // 消息编辑
@@ -181,9 +194,13 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ index: editingMsgIdx, content: editMsgContent }),
     });
-    if (r.ok) setMsgs(p => p.map((m, i) => i === editingMsgIdx ? { ...m, content: editMsgContent, rawContent: undefined } : m));
-    setEditingMsgIdx(null);
-    setEditMsgContent('');
+    if (r.ok) {
+      setMsgs(p => p.map((m, i) => i === editingMsgIdx ? { ...m, content: editMsgContent, rawContent: undefined } : m));
+      setEditingMsgIdx(null);
+      setEditMsgContent('');
+    } else {
+      alert(await readErrorMessage(r, '编辑消息失败'));
+    }
   };
   const handleCancelEdit = () => { setEditingMsgIdx(null); setEditMsgContent(''); };
 
@@ -194,7 +211,11 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ index: idx }),
     });
-    if (r.ok) setMsgs(p => p.filter((_, i) => i !== idx));
+    if (r.ok) {
+      setMsgs(p => p.filter((_, i) => i !== idx));
+    } else {
+      alert(await readErrorMessage(r, '删除消息失败'));
+    }
   };
 
   useEffect(() => {
@@ -219,20 +240,21 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
       const mode = msg === '/reset summary' ? 'summary' : 'clean';
       setBusy(true);
       try {
-        await fetch(`/api/convection/session/${activeId}/reset-context`, {
+        const resetResp = await fetch(`/api/convection/session/${activeId}/reset-context`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ mode }),
         });
+        if (!resetResp.ok) { alert(await readErrorMessage(resetResp, '重置对流失败')); return; }
         refreshSessions();
         const r = await fetch(`/api/convection/session/${activeId}/status`);
         if (r.ok) {
           const fresh = await r.json();
           setMsgs(fresh.publicMessages?.map((m: any) => ({ speaker: m.speaker, content: m.content, streaming: false, toolCalls: [], timestamp: m.timestamp ? new Date(m.timestamp).toISOString() : new Date().toISOString() })) || []);
         } else {
-          setMsgs([]);
+          alert(await readErrorMessage(r, '重载对流会话失败'));
         }
-      } catch {}
+      } catch (e) { console.error('[convection] 重置对流失败', e); alert(`重置对流失败：${(e as Error).message}`); }
       setBusy(false);
       return;
     }
@@ -364,6 +386,10 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
                 <span onDoubleClick={() => { setEditingTitle(activeSession.id); setEditValue(activeSession.title); }} className="conv__header-title" title="双击重命名">{activeSession.title}</span>
               )}
               <span className="conv__header-id">{activeSession.id}</span>
+              <button type="button" onClick={handleOpenWorkspace} className="conv__workspace-btn" title="打开当前会议的本地工作区">
+                <span className="conv__workspace-btn-icon" aria-hidden="true">↗</span>
+                <span>工作区</span>
+              </button>
               <span className="conv__header-tokens">{(() => { const t = activeSession.tokenUsage ? activeSession.tokenUsage.totalTokens : activeSession.tokenEstimate; return t >= 1000 ? `${(t / 1000).toFixed(1)}K` : t; })()} tokens</span>
             </div>
             {/* Config bar */}
@@ -639,7 +665,8 @@ async function streamSSE(url: string, body: Record<string, unknown>, onEvent: (e
       if (!t.startsWith('data:')) continue;
       const p = t.slice(5).trim();
       if (!p || p === '[DONE]') continue;
-      try { const ev = JSON.parse(p); if (ev.type !== 'done') onEvent(ev); } catch {}
+      try { const ev = JSON.parse(p); if (ev.type !== 'done') onEvent(ev); }
+      catch (e) { console.warn('[convection] SSE 事件解析失败', p, e); }
     }
   }
 }

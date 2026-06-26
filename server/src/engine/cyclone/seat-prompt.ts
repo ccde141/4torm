@@ -9,10 +9,12 @@
 import path from 'node:path';
 import type { LoadedAgent } from '../shared/agent-loader';
 import type { ToolDef } from '../shared/tool-defs-loader';
+import type { ContextMessage } from '../shared/types';
 import { buildSystemPrompt } from '../shared/prompt';
 import { buildSandboxSection } from '../shared/sandbox-prompt';
-import type { SeatData } from './types';
+import type { SeatData, WorkshopData, RoomData } from './types';
 import { DEFAULT_DUTY } from './types';
+import { loadSeat } from './seat-store';
 
 /**
  * 组装"角色身份段"：agent 人设 + 工位岗位 + 职责名片。
@@ -89,6 +91,56 @@ export function buildSeatSystemPrompt(opts: {
   parts.push(`## 当前场景\n你是气旋工作室里的「${seat.title}」工位，正在与老板（人类）一对一私聊。这是执行工位——把交代的事做实、做完。需要用户决策或信息不足时用 ask 提问；可拆分的重活用 delegate 派给 SubAgent。完成后用自然语言给出结论。`);
 
   return parts.join('\n\n');
+}
+
+/**
+ * 构造会长私聊的 system prompt（按会议/room 隔离）。
+ * 会长是本会议的场外参谋：不占工位、不进群聊、零工具——只读本 room 的会议快照和在场工位名册，给人出主意。
+ * 对齐对流：会长只看「这一场会议」的快照，换会议即换上下文，不串台。
+ */
+export async function buildChairPrompt(
+  dataDir: string,
+  workshopId: string,
+  room: RoomData,
+  workshop: WorkshopData,
+  agent: LoadedAgent,
+): Promise<{ systemMessage: ContextMessage }> {
+  const parts: string[] = [];
+  const mode = room.mode || 'build';
+
+  // 1. 身份段
+  parts.push(`你是工作室「${workshop.title}」里群聊「${room.title}」的会长「${agent.name}」。你站在这场会议之外，专为这场会议当老板（人类）的私人参谋——帮他梳理思路、评估方案、判断走向。你不在群里发言。`);
+
+  // 2. 本会议快照（近 12 条公共发言）
+  const recent = room.publicMessages.slice(-12);
+  const snapshot = recent.length > 0
+    ? recent.map(m => `${m.speaker}：${m.content.slice(0, 200)}${m.content.length > 200 ? '…' : ''}`).join('\n')
+    : '（这场会议还没有人发言）';
+  parts.push(`## 本场会议快照\n群聊「${room.title}」 · ${mode}模式 · 话题：${room.topic}\n在场 ${room.participantSeatIds.length} 个工位。\n\n最近发言：\n${snapshot}`);
+
+  // 3. 在场工位名册
+  if (room.participantSeatIds.length > 0) {
+    const seatLines: string[] = ['## 在场工位'];
+    for (const sid of room.participantSeatIds) {
+      const seat = await loadSeat(dataDir, workshopId, sid);
+      if (!seat) continue;
+      const duty = seat.duty || DEFAULT_DUTY;
+      seatLines.push(`- ${seat.title}（${duty}）`);
+    }
+    if (seatLines.length > 1) parts.push(seatLines.join('\n'));
+  }
+
+  // 4. 场景上下文
+  parts.push(`## 当前场景
+你正在与老板（人类）一对一私聊，话题围绕上面这场会议。上面的会议快照和在场工位名册就是你能看到的全部信息——你看不到工作室里别的会议，也看不到工位的私聊。请基于这场会议的进展，协助人类梳理思路、评估方案、判断下一步。
+
+注意：你没有任何工具，也不能直接指挥工位干活。你只能基于已知信息用文字给出分析、判断和建议。需要工位执行的事，由人类自行去群聊或对应工位安排。`);
+
+  const systemMessage: ContextMessage = {
+    role: 'system',
+    content: parts.join('\n\n'),
+  };
+  return { systemMessage };
 }
 
 /**

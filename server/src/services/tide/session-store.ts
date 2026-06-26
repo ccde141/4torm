@@ -52,6 +52,52 @@ function taskSessionDir(dataDir: string, agentId: string, taskId: string, taskNa
   return path.join(tideRootDir(dataDir, agentId), taskDirName(taskName, taskId));
 }
 
+async function readJsonFile<T>(file: string, label: string): Promise<T | null> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, 'utf-8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    console.error(`[tide] ${label} 读取失败（非缺失，请检查权限/IO）：${file}`, e);
+    throw e;
+  }
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  try {
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    const quarantine = `${file}.corrupt-${Date.now().toString(36)}`;
+    try { await fs.rename(file, quarantine); } catch { /* 隔离失败也别让读崩，下面照样告警 */ }
+    console.error(`[tide] ${label} JSON 损坏，已隔离为 ${quarantine}（原文件保留可恢复）：${(e as Error).message}`);
+    return null;
+  }
+}
+
+async function readDirIfExists(dir: string, label: string): Promise<string[] | null> {
+  try { return await fs.readdir(dir); }
+  catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    console.error(`[tide] ${label} 读取目录失败（非缺失，请检查权限/IO）：${dir}`, e);
+    throw e;
+  }
+}
+
+async function statIfExists(targetPath: string, label: string): Promise<import('node:fs').Stats | null> {
+  try { return await fs.stat(targetPath); }
+  catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    console.error(`[tide] ${label} stat 失败（非缺失，请检查权限/IO）：${targetPath}`, e);
+    throw e;
+  }
+}
+
+async function removeStrict(targetPath: string, opts?: { recursive?: boolean }): Promise<void> {
+  try { await fs.rm(targetPath, { recursive: opts?.recursive ?? false, force: false }); }
+  catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw e;
+  }
+}
+
 // ── 旧结构迁移 ──────────────────────────────────────────────────
 
 /**
@@ -62,13 +108,13 @@ async function migrateOldSessions(
   dataDir: string, agentId: string, knownTaskId: string, knownTaskName: string,
 ): Promise<void> {
   const root = tideRootDir(dataDir, agentId);
-  let entries: string[];
-  try { entries = await fs.readdir(root); } catch { return; }
+  const entries = await readDirIfExists(root, '潮汐根目录');
+  if (!entries) return;
 
   for (const name of entries) {
     if (!name.endsWith('.json') || name === '_index.json') continue;
     const filePath = path.join(root, name);
-    const stat = await fs.stat(filePath).catch(() => null);
+    const stat = await statIfExists(filePath, '潮汐旧会话文件');
     if (!stat || !stat.isFile()) continue;
 
     const sid = name.replace(/\.json$/, '');
@@ -96,10 +142,11 @@ async function migrateOldSessions(
   // 搬移旧 bak 文件
   const oldBakDir = path.join(root, 'bak');
   try {
-    const bakFiles = await fs.readdir(oldBakDir);
+    const bakFiles = await readDirIfExists(oldBakDir, '潮汐旧 bak 目录');
+    if (!bakFiles) return;
     for (const name of bakFiles) {
       const filePath = path.join(oldBakDir, name);
-      const stat = await fs.stat(filePath).catch(() => null);
+      const stat = await statIfExists(filePath, '潮汐旧 bak 文件');
       if (!stat || !stat.isFile()) continue;
 
       const taskShort = name.split('-tide-')[1]?.split('-')[0] ?? '';
@@ -114,20 +161,20 @@ async function migrateOldSessions(
       try { await fs.rename(src, dst); } catch { await fs.copyFile(src, dst); await fs.unlink(src); }
     }
     // 尝试删除空的旧 bak 目录
-    const remaining = await fs.readdir(oldBakDir);
-    if (remaining.length === 0) await fs.rmdir(oldBakDir);
-  } catch {}
+    const remaining = await readDirIfExists(oldBakDir, '潮汐旧 bak 目录清理');
+    if (remaining && remaining.length === 0) await fs.rmdir(oldBakDir);
+  } catch (e) { console.warn('[tide] 旧 bak 迁移清理失败，已跳过', e); }
 
-  // 尝试删除旧的 _index.json
-  try { await fs.unlink(path.join(root, '_index.json')); } catch {}
+  // 尝试删除旧的 _index.json；缺失是预期，非缺失错误留证据但不阻断迁移
+  try { await removeStrict(path.join(root, '_index.json')); } catch (e) { console.warn('[tide] 旧 _index.json 清理失败，已跳过', e); }
 }
 
 // ── _index.json 辅助 ────────────────────────────────────────────
 
 async function updateIndex(dir: string, sessionId: string): Promise<void> {
   const indexFile = path.join(dir, '_index.json');
-  let index: string[] = [];
-  try { index = JSON.parse(await fs.readFile(indexFile, 'utf-8')); } catch {}
+  const existing = await readJsonFile<string[]>(indexFile, '潮汐会话索引');
+  const index = Array.isArray(existing) ? existing : [];
   if (!index.includes(sessionId)) {
     index.push(sessionId);
     await fs.writeFile(indexFile, JSON.stringify(index, null, 2), 'utf-8');
@@ -141,26 +188,24 @@ export async function readTideSession(
   dataDir: string, agentId: string, sessionId: string,
 ): Promise<TideSession | null> {
   const root = tideRootDir(dataDir, agentId);
-  let taskDirs: string[];
-  try { taskDirs = await fs.readdir(root); } catch { return null; }
+  const taskDirs = await readDirIfExists(root, '潮汐根目录');
+  if (!taskDirs) return null;
 
   for (const name of taskDirs) {
     if (name === 'bak') continue;
     const dirPath = path.join(root, name);
-    const stat = await fs.stat(dirPath).catch(() => null);
+    const stat = await statIfExists(dirPath, '潮汐任务目录');
     if (!stat || !stat.isDirectory()) continue;
 
     const file = path.join(dirPath, `${sessionId}.json`);
-    try {
-      return JSON.parse(await fs.readFile(file, 'utf-8'));
-    } catch {}
+    const session = await readJsonFile<TideSession>(file, '潮汐会话');
+    if (session) return session;
   }
 
   // 回退旧扁平结构
   const oldFile = path.join(root, `${sessionId}.json`);
-  try {
-    return JSON.parse(await fs.readFile(oldFile, 'utf-8'));
-  } catch {}
+  const oldSession = await readJsonFile<TideSession>(oldFile, '潮汐旧扁平会话');
+  if (oldSession) return oldSession;
 
   // 活跃会话不存在 → 扫所有任务子目录的 bak/，找最新的归档
   return readLatestBak(root, sessionId);
@@ -168,21 +213,21 @@ export async function readTideSession(
 
 /** 扫所有任务子目录的 bak/，找匹配 sessionId 的最新归档 */
 async function readLatestBak(root: string, sessionId: string): Promise<TideSession | null> {
-  let taskDirs: string[];
-  try { taskDirs = await fs.readdir(root); } catch { return null; }
+  const taskDirs = await readDirIfExists(root, '潮汐根目录 bak 查找');
+  if (!taskDirs) return null;
 
   type Candidate = { file: string; mtime: number };
   const candidates: Candidate[] = [];
 
   for (const name of taskDirs) {
     const bakDir = path.join(root, name, 'bak');
-    let bakFiles: string[];
-    try { bakFiles = await fs.readdir(bakDir); } catch { continue; }
+    const bakFiles = await readDirIfExists(bakDir, '潮汐任务 bak 目录');
+    if (!bakFiles) continue;
     // bak 文件名以 {sessionId} 开头，例如 agent-xxx-tide-tide-mpx-acc_2026年6月3日_1-5.json.bak.1
     for (const fname of bakFiles) {
       if (!fname.startsWith(sessionId)) continue;
       const full = path.join(bakDir, fname);
-      const stat = await fs.stat(full).catch(() => null);
+      const stat = await statIfExists(full, '潮汐 bak 文件');
       if (!stat) continue;
       candidates.push({ file: full, mtime: stat.mtimeMs });
     }
@@ -191,11 +236,7 @@ async function readLatestBak(root: string, sessionId: string): Promise<TideSessi
   if (candidates.length === 0) return null;
   // 取 mtime 最大的（最新归档）
   candidates.sort((a, b) => b.mtime - a.mtime);
-  try {
-    return JSON.parse(await fs.readFile(candidates[0].file, 'utf-8'));
-  } catch {
-    return null;
-  }
+  return readJsonFile<TideSession>(candidates[0].file, '潮汐 bak 会话');
 }
 
 /** 读季风会话（designated 模式）；不存在返回 null */
@@ -203,11 +244,7 @@ export async function readSeasonSession(
   dataDir: string, agentId: string, sessionId: string,
 ): Promise<TideSession | null> {
   const file = path.join(seasonDir(dataDir, agentId), `${sessionId}.json`);
-  try {
-    return JSON.parse(await fs.readFile(file, 'utf-8'));
-  } catch {
-    return null;
-  }
+  return readJsonFile<TideSession>(file, '季风指定会话');
 }
 
 // ── 写入 ────────────────────────────────────────────────────────
@@ -241,14 +278,14 @@ export async function deleteTideSession(
 ): Promise<boolean> {
   const dir = taskSessionDir(dataDir, agentId, taskId, taskName);
   const file = path.join(dir, `${sessionId}.json`);
-  try { await fs.unlink(file); } catch { return false; }
+  await removeStrict(file);
   // 从 _index.json 移除
   const indexFile = path.join(dir, '_index.json');
-  try {
-    const index: string[] = JSON.parse(await fs.readFile(indexFile, 'utf-8'));
+  const index = await readJsonFile<string[]>(indexFile, '潮汐会话索引');
+  if (Array.isArray(index)) {
     const updated = index.filter(id => id !== sessionId);
     await fs.writeFile(indexFile, JSON.stringify(updated, null, 2), 'utf-8');
-  } catch {}
+  }
   return true;
 }
 
@@ -257,45 +294,41 @@ export async function deleteTaskSessionDir(
   dataDir: string, agentId: string, taskId: string, taskName: string,
 ): Promise<void> {
   const dir = taskSessionDir(dataDir, agentId, taskId, taskName);
-  await fs.rm(dir, { recursive: true, force: true });
+  await removeStrict(dir, { recursive: true });
 }
 
 /** 列潮汐活跃会话列表（遍历所有任务子目录，仅摘要不含 messages） */
 export async function listTideSessions(dataDir: string, agentId: string): Promise<TideSession[]> {
   const root = tideRootDir(dataDir, agentId);
-  let taskDirs: string[];
-  try { taskDirs = await fs.readdir(root); } catch { return []; }
+  const taskDirs = await readDirIfExists(root, '潮汐根目录列表');
+  if (!taskDirs) return [];
 
   const results: TideSession[] = [];
 
   for (const name of taskDirs) {
     if (name === 'bak') continue;
     const dirPath = path.join(root, name);
-    const stat = await fs.stat(dirPath).catch(() => null);
+    const stat = await statIfExists(dirPath, '潮汐任务目录列表');
     if (!stat || !stat.isDirectory()) continue;
 
     const indexFile = path.join(dirPath, '_index.json');
-    let index: string[];
-    try { index = JSON.parse(await fs.readFile(indexFile, 'utf-8')); } catch { continue; }
+    const index = await readJsonFile<string[]>(indexFile, '潮汐任务会话索引');
+    if (!Array.isArray(index)) continue;
 
     for (const sid of index) {
-      try {
-        const raw = await fs.readFile(path.join(dirPath, `${sid}.json`), 'utf-8');
-        results.push(JSON.parse(raw));
-      } catch {}
+      const session = await readJsonFile<TideSession>(path.join(dirPath, `${sid}.json`), '潮汐会话列表项');
+      if (session) results.push(session);
     }
   }
 
   // 兼容旧扁平结构的 _index.json
-  try {
-    const oldIndex = JSON.parse(await fs.readFile(path.join(root, '_index.json'), 'utf-8'));
+  const oldIndex = await readJsonFile<string[]>(path.join(root, '_index.json'), '潮汐旧扁平索引');
+  if (Array.isArray(oldIndex)) {
     for (const sid of oldIndex) {
-      try {
-        const raw = await fs.readFile(path.join(root, `${sid}.json`), 'utf-8');
-        results.push(JSON.parse(raw));
-      } catch {}
+      const session = await readJsonFile<TideSession>(path.join(root, `${sid}.json`), '潮汐旧扁平会话列表项');
+      if (session) results.push(session);
     }
-  } catch {}
+  }
 
   return results.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }

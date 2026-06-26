@@ -23,12 +23,15 @@ interface SeatStatus {
   pending?: { question: string; options?: string[] };
 }
 
-export default function SeatChat({ workshopId, seatId, runners, onReloaded }: {
+export default function SeatChat({ workshopId, seatId, runners, onReloaded, chairBase }: {
   workshopId: string; seatId: string; runners: SeatStreamRunners; onReloaded?: () => void;
+  /** 会长模式下覆盖端点前缀（如 /api/cyclone/workshop/{wid}/room/{rid}/chair）。普通工位不传。 */
+  chairBase?: string;
 }) {
   const [seat, setSeat] = useState<SeatStatus | null>(null);
   const [history, setHistory] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState('');
+  const [loadError, setLoadError] = useState<string | null>(null);
   /** 订阅 tick：runner 每次 notify 自增，触发本组件重渲染读取最新 live 缓冲 */
   const [, forceTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -40,15 +43,29 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded }: {
   const live = runner ? runner.live : null;
   const streaming = !!runner?.streaming;
 
-  /** 拉取工位会话。notifyParent=true 时通知父级刷新侧栏（发送完成后用，挂载时不通知） */
+  /** 拉取工位/会长会话。notifyParent=true 时通知父级刷新侧栏 */
   const reload = useCallback(async (notifyParent = false) => {
-    const r = await fetch(`/api/cyclone/workshop/${workshopId}/seat/${seatId}/status`);
-    if (!r.ok) return;
-    const s: SeatStatus = await r.json();
+    const isChair = seatId.startsWith('__chair__');
+    const url = isChair
+      ? `${chairBase}/status`
+      : `/api/cyclone/workshop/${workshopId}/seat/${seatId}/status`;
+    const r = await fetch(url);
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      const msg = e?.error || `加载${isChair ? '会长' : '工位'}失败（HTTP ${r.status}）`;
+      console.error('[cyclone] 会话加载失败', msg);
+      setLoadError(msg);
+      return;
+    }
+    setLoadError(null);
+    const raw = await r.json();
+    const s: SeatStatus = isChair
+      ? { id: '__chair__', title: `会长 / ${raw.chairAgentId}`, messages: raw.messages, pending: raw.pending }
+      : raw;
     setSeat(s);
     setHistory(contextToDisplay(s.messages));
     if (notifyParent) onReloadedRef.current?.();
-  }, [workshopId, seatId]);
+  }, [workshopId, seatId, chairBase]);
 
   // 挂载：标回前台 + 订阅 runner 通知 + 首次拉历史
   useEffect(() => {
@@ -86,21 +103,53 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded }: {
         blocks: [{ kind: 'ask', question: p.question, options: p.options, answered: true, reply: text }] };
       setHistory(h => [...h, optimisticUser!]);
     }
-    runners.startStream({ workshopId, seatId, action, text, optimisticUser });
+    const isChair = seatId.startsWith('__chair__');
+    runners.startStream({
+      workshopId, seatId, action, text, optimisticUser,
+      pathOverride: isChair ? `${chairBase}/${action}` : undefined,
+    });
+  }
+
+  async function resetContext(mode: 'clear' | 'summary') {
+    if (streaming) return;
+    const isChair = seatId.startsWith('__chair__');
+    const label = isChair ? '会长私聊' : '工位私聊';
+    if (!confirm(`${mode === 'summary' ? '归档并摘要重置' : '归档并清空'}当前${label}上下文？共享工作区文件不会被删除。`)) return;
+    const url = isChair
+      ? `${chairBase}/reset-context`
+      : `/api/cyclone/workshop/${workshopId}/seat/${seatId}/reset-context`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      alert(e?.error || `重置${label}上下文失败（HTTP ${r.status}）`);
+      return;
+    }
+    await reload(true);
   }
 
   function sendInput() {
     const text = input.trim();
     if (!text) return;
     setInput('');
+    if (text === '/reset' || text === '/reset clear') { resetContext('clear'); return; }
+    if (text === '/reset summary') { resetContext('summary'); return; }
     run('chat', text);
   }
 
   function stop() {
-    runners.abortSeat(workshopId, seatId);
+    const isChair = seatId.startsWith('__chair__');
+    runners.abortSeat(workshopId, seatId,
+      isChair ? `${chairBase}/abort` : undefined);
   }
 
-  if (!seat) return <div style={{ opacity: .5, margin: 'auto' }}>加载工位…</div>;
+  if (!seat) {
+    if (loadError) return <div style={{ opacity: .65, margin: 'auto', padding: 'var(--space-4)', textAlign: 'center', color: 'var(--color-danger)' }}>{loadError}</div>;
+    return <div style={{ opacity: .5, margin: 'auto' }}>{seatId.startsWith('__chair__') ? '加载会长…' : '加载工位…'}</div>;
+  }
   // 挂起态：流式结束后若 seat.pending 存在，渲染交互 AskCard；流式期间用 live.ask
   const pending = !streaming ? seat.pending : undefined;
   // 后台未落库的乐观用户气泡（切走再回时从 runner 恢复，history 里可能还没有）
@@ -152,6 +201,13 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded }: {
             </button>
           )}
         </div>
+        <div style={inputHintStyle}>
+          <span>快捷指令：</span>
+          <code>/reset</code>
+          <span>清空</span>
+          <code>/reset summary</code>
+          <span>归档并保留摘要</span>
+        </div>
       </div>
     </div>
   );
@@ -171,12 +227,26 @@ function BlockRow({ block }: { block: DisplayBlock }) {
   return <ContactCard data={{ target: block.target, message: block.message, reply: block.reply, status: block.status }} />;
 }
 
+const inputHintStyle: React.CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  color: 'var(--color-text-tertiary)',
+  paddingTop: 'var(--space-2)',
+};
+
 /** 单条已落库展示消息 */
 function DisplayRow({ msg }: { msg: DisplayMessage }) {
   if (msg.role === 'user') {
     return (
       <div className="chat__message chat__message--user">
         <div className="chat__avatar">你</div>
+        <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div></div>
+      </div>
+    );
+  }
+  if (msg.role === 'system') {
+    return (
+      <div className="chat__message chat__message--assistant chat__message--archive-summary">
+        <div className="chat__avatar">档</div>
         <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div></div>
       </div>
     );

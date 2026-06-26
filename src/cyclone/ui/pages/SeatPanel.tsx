@@ -40,7 +40,13 @@ export default function SeatPanel({ mode, agents, workshopId, initial, onSubmit,
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agentId, title: title.trim() || '工位', rolePrompt }),
       });
-      if (r.ok) { const d = await r.json(); if (d.duty) setDuty(d.duty); }
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        alert(e?.error || `生成职责失败（HTTP ${r.status}）`);
+        return;
+      }
+      const d = await r.json();
+      if (d.duty) setDuty(d.duty);
     } finally {
       setGenning(false);
     }

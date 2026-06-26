@@ -118,8 +118,19 @@ export function useSessionList(
     setStreaming(false);
     setMessages([]);
     setSessions(prev => [s, ...prev]);
-    // 后台保存，不阻塞 UI
-    saveSession(s).catch(() => {});
+    // 后台保存，不阻塞 UI；失败时撤回乐观会话，避免用户以为已创建但磁盘没有
+    saveSession(s).catch((e) => {
+      console.error('[chat] 新会话保存失败', e);
+      setSessions(prev => prev.filter(p => p.id !== s.id));
+      setActiveSessionId(prev => {
+        if (prev === s.id) {
+          setMessages([]);
+          return null;
+        }
+        return prev;
+      });
+      alert(`新会话保存失败：${(e as Error).message}`);
+    });
   }, [selectedAgent, activeSessionId, setMessages, setStreaming, streamHooks]);
 
   const deleteSessionFn = useCallback((sessionId: string) => {
@@ -128,9 +139,13 @@ export function useSessionList(
     // 先同步从列表移除 + 清空当前会话视图，UI 立即响应。
     setSessions(prev => prev.filter(p => p.id !== sessionId));
     if (activeSessionId === sessionId) { setActiveSessionId(null); setMessages([]); }
-    // 后台删除文件，不阻塞 UI
-    deleteSession(sessionId).catch(() => {});
-  }, [activeSessionId, setMessages, streamHooks]);
+    // 后台删除文件，不阻塞 UI；失败时刷新列表并告警，避免"删了又诈尸"还没解释
+    deleteSession(sessionId).catch((e) => {
+      console.error('[chat] 会话删除失败', e);
+      if (selectedAgent) refreshSessions(selectedAgent);
+      alert(`删除会话失败：${(e as Error).message}`);
+    });
+  }, [activeSessionId, setMessages, streamHooks, selectedAgent, refreshSessions]);
 
   const compactSession = useCallback(async (session: ChatSession) => {
     if (!selectedAgent) return;

@@ -725,7 +725,7 @@
 .tw-meeting-panel__opening-banner {
   padding: var(--space-2) var(--space-4);
   background: rgba(245, 158, 11, 0.10);
-  color: #f59e0b;
+  color: var(--color-accent-secondary);
   font-size: var(--text-xs);
   border-bottom: 1px solid rgba(245, 158, 11, 0.20);
   letter-spacing: 0.02em;
@@ -1013,7 +1013,7 @@
   font-size: 12px;
 }
 .tw-meeting-tool__icon--running { color: var(--color-info); }
-.tw-meeting-tool__icon--done    { color: #4ade80; }
+.tw-meeting-tool__icon--done    { color: var(--status-online); }
 .tw-meeting-tool__icon--error   { color: var(--color-error); }
 
 .tw-meeting-tool__name {
@@ -1168,7 +1168,7 @@
 .tw-gate-panel {
   width: min(680px, 92vw);
   max-height: 85vh;
-  background: var(--color-bg-elevated, #1a1a1f);
+  background: var(--color-bg-elevated);
   border: 1px solid rgba(234, 179, 8, 0.4);
   border-radius: var(--border-radius-lg);
   box-shadow:
@@ -1192,7 +1192,7 @@
 .tw-gate-panel__title {
   font-size: var(--text-sm);
   font-weight: var(--font-semibold);
-  color: #fbbf24;
+  color: var(--color-warning);
 }
 .tw-gate-panel__close {
   background: none;
@@ -1270,7 +1270,7 @@
 .tw-gate-panel__btn--continue {
   background: rgba(234, 179, 8, 0.15);
   border-color: rgba(234, 179, 8, 0.5);
-  color: #fbbf24;
+  color: var(--color-warning);
 }
 .tw-gate-panel__btn--continue:not(:disabled):hover {
   background: rgba(234, 179, 8, 0.28);

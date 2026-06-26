@@ -921,7 +921,7 @@
   color: var(--color-error);
 }
 
- 
+
 /* ─── Human Gate 节点（暂停点） ─── */
 /* 普通矩形节点，金黄色边框，跟其他节点同构 */
 .tw-node--gate { border-color: rgba(234, 179, 8, 0.3); }

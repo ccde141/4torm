@@ -14,8 +14,10 @@ import CreateRoomPanel from './CreateRoomPanel';
 import CreateWorkshopPanel from './CreateWorkshopPanel';
 import SeatPanel, { type SeatDraft } from './SeatPanel';
 import SeatChat from './SeatChat';
+import ChairDrawer, { chairStreamKey } from './ChairDrawer';
 import { useSeatStreamRunners } from './useSeatStreamRunners';
 import { useRoomStreamRunners } from './useRoomStreamRunners';
+import '../../../styles/components/cyclone.css';
 
 interface WorkshopSummary {
   id: string; title: string; seatCount: number; roomCount: number;
@@ -27,13 +29,21 @@ interface Seat {
 }
 interface RoomLite { id: string; title: string; }
 
+async function readErrorMessage(r: Response, fallback: string): Promise<string> {
+  const e = await r.json().catch(() => ({}));
+  return e?.error || `${fallback}（HTTP ${r.status}）`;
+}
+
 export default function CyclonePage({ active }: { active?: boolean }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [workshops, setWorkshops] = useState<WorkshopSummary[]>([]);
   const [activeWid, setActiveWid] = useState<string | null>(null);
   const [seats, setSeats] = useState<Seat[]>([]);
-  const [activeSeatId, setActiveSeatId] = useState<string | null>(null);
+  const [, setActiveSeatId] = useState<string | null>(null);
   const [rooms, setRooms] = useState<RoomLite[]>([]);
+  const [chairAgentId, setChairAgentId] = useState<string | null>(null);
+  /** 会长私聊抽屉是否展开（常驻右侧，独立于主区 view） */
+  const [chairOpen, setChairOpen] = useState(false);
   /** 右侧视图：私聊某工位 / 进入某群聊 / 创建群聊 / 创建工作室 / 创建工位 / 编辑工位 */
   const [view, setView] = useState<
     | { kind: 'seat'; id: string } | { kind: 'room'; id: string }
@@ -41,20 +51,23 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     | { kind: 'create-seat' } | { kind: 'edit-seat'; id: string; draft: SeatDraft }
     | null
   >(null);
+  /** 当前正在查看的会议（room）id —— 会长私聊绑定到它，换会议即换会长上下文 */
+  const activeRoomId = view?.kind === 'room' ? view.id : null;
 
-  const refreshAgents = useCallback(async () => { try { setAgents(await getAgents()); } catch {} }, []);
+  const refreshAgents = useCallback(async () => { try { setAgents(await getAgents()); } catch (e) { console.error('[cyclone] 加载 agents 失败', e); } }, []);
   const refreshWorkshops = useCallback(async () => {
-    try { const r = await fetch('/api/cyclone/list'); if (r.ok) setWorkshops(await r.json()); } catch {}
+    try { const r = await fetch('/api/cyclone/list'); if (r.ok) setWorkshops(await r.json()); else console.error(await readErrorMessage(r, '加载工作室列表失败')); } catch (e) { console.error('[cyclone] 加载工作室列表失败', e); }
   }, []);
 
   const loadWorkshop = useCallback(async (wid: string) => {
     // 侧栏只取轻量摘要（一次请求，服务端并行读），不拉每个工位/群聊的完整会话。
     // 完整内容由 SeatChat/RoomPanel 选中时各自加载。
     const r = await fetch(`/api/cyclone/workshop/${wid}/summary`);
-    if (!r.ok) return;
-    const sum: { id: string; title: string; seats: Seat[]; rooms: RoomLite[] } = await r.json();
+    if (!r.ok) { console.error(await readErrorMessage(r, '加载工作室失败')); return; }
+    const sum: { id: string; title: string; chairAgentId?: string; seats: Seat[]; rooms: RoomLite[] } = await r.json();
     setSeats(sum.seats);
     setRooms(sum.rooms);
+    setChairAgentId(sum.chairAgentId ?? null);
     setActiveSeatId(prev => (sum.seats.length && !sum.seats.some(s => s.id === prev)) ? sum.seats[0].id : prev);
   }, []);
 
@@ -75,27 +88,68 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   }, [loadWorkshop]));
 
   // 切走当前工位时把它的流转后台（不掐流）
-  const prevSeatRef = useRef<string | null>(null);
+  const prevViewRef = useRef<string | null>(null);
   useEffect(() => {
     const cur = view?.kind === 'seat' ? view.id : null;
-    if (prevSeatRef.current && prevSeatRef.current !== cur) {
-      seatRunners.background(prevSeatRef.current);
+    if (prevViewRef.current && prevViewRef.current !== cur) {
+      seatRunners.background(prevViewRef.current);
     }
-    prevSeatRef.current = cur;
+    prevViewRef.current = cur;
   }, [view, seatRunners]);
+
+  // 会长抽屉收起 / 切会议 → 该会议的会长流转后台（不掐流，注册表续跑，切回恢复）
+  const prevChairRoomRef = useRef<string | null>(null);
+  useEffect(() => {
+    const cur = (chairOpen && activeRoomId) ? activeRoomId : null;
+    if (prevChairRoomRef.current && prevChairRoomRef.current !== cur) {
+      seatRunners.background(chairStreamKey(prevChairRoomRef.current));
+    }
+    prevChairRoomRef.current = cur;
+  }, [chairOpen, activeRoomId, seatRunners]);
+
+  // 切换工作室时关上会长抽屉（会长随会议而设）
+  const prevWidRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevWidRef.current && prevWidRef.current !== activeWid) setChairOpen(false);
+    prevWidRef.current = activeWid;
+  }, [activeWid]);
+
+  /** 设置 / 更换 / 清空会长（建后也能改，对齐对流配置栏） */
+  const setChair = useCallback(async (agentId: string) => {
+    if (!activeWid) return;
+    const r = await fetch(`/api/cyclone/workshop/${activeWid}/set-chair`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chairAgentId: agentId }),
+    });
+    if (!r.ok) { alert(await readErrorMessage(r, '设置会长失败')); return; }
+    setChairAgentId(agentId || null);
+    loadWorkshop(activeWid);
+  }, [activeWid, loadWorkshop]);
 
   const activeSeat = view?.kind === 'seat' ? seats.find(s => s.id === view.id) || null : null;
 
   async function handleCreateWorkshop(cfg: { title: string; chairAgentId?: string }) {
     const r = await fetch('/api/cyclone/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
-    if (r.ok) { const w = await r.json(); await refreshWorkshops(); setActiveWid(w.id); setView(null); }
+    if (!r.ok) { alert(await readErrorMessage(r, '创建工作室失败')); return; }
+    const w = await r.json();
+    await refreshWorkshops();
+    setActiveWid(w.id);
+    setView(null);
+  }
+
+  async function openWorkshopWorkspace() {
+    if (!activeWid) return;
+    const r = await fetch(`/api/cyclone/workshop/${activeWid}/open-workspace`, { method: 'POST' });
+    if (!r.ok) { alert(await readErrorMessage(r, '打开公共工作区失败')); return; }
   }
 
   async function deleteWorkshop(wid: string, title: string) {
     if (!confirm(`删除工作室「${title}」？工位、群聊及全部会话将一并删除，不可恢复。`)) return;
+    // 删的是当前工作室 → 掐掉其各会议的会长流（仅当前工作室的 rooms 在内存里可知）
+    if (activeWid === wid) rooms.forEach(rm => seatRunners.kill(wid, chairStreamKey(rm.id)));
     const r = await fetch(`/api/cyclone/workshop/${wid}/delete`, { method: 'POST' });
-    if (!r.ok) return;
-    if (activeWid === wid) { setActiveWid(null); setView(null); setSeats([]); setRooms([]); }
+    if (!r.ok) { alert(await readErrorMessage(r, '删除工作室失败')); return; }
+    if (activeWid === wid) { setActiveWid(null); setView(null); setSeats([]); setRooms([]); setChairOpen(false); }
     await refreshWorkshops();
   }
 
@@ -114,7 +168,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   async function openEditSeat(seatId: string) {
     if (!activeWid) return;
     const r = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/status`);
-    if (!r.ok) return;
+    if (!r.ok) { alert(await readErrorMessage(r, '加载工位设置失败')); return; }
     const s = await r.json();
     setView({ kind: 'edit-seat', id: seatId, draft: {
       agentId: s.agentId, title: s.title, rolePrompt: s.rolePrompt || '',
@@ -138,7 +192,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     if (!confirm(`删除工位「${title}」？该工位的私聊会话将一并删除，不可恢复。`)) return;
     seatRunners.kill(activeWid, seatId); // 流式中删除 → 掐流防僵尸
     const r = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/delete`, { method: 'POST' });
-    if (!r.ok) return;
+    if (!r.ok) { alert(await readErrorMessage(r, '删除工位失败')); return; }
     if (view?.kind === 'seat' && view.id === seatId) setView(null);
     await refreshWorkshops(); await loadWorkshop(activeWid);
   }
@@ -154,7 +208,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: cfg.title, topic: cfg.topic, mode: cfg.mode, participantSeatIds: cfg.participantSeatIds }),
     });
-    if (!r.ok) return;
+    if (!r.ok) { alert(await readErrorMessage(r, '创建群聊失败')); return; }
     const rm = await r.json();
     // 跑入会发言（若有非 none 行为）。逐条流式落库，等整体结束再进入群聊。
     const needIntro = cfg.intros.some(i => i.behavior !== 'none');
@@ -164,7 +218,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ intros: cfg.intros }),
         });
-      } catch { /* 入会发言失败不阻断进入群聊 */ }
+      } catch (e) { console.warn('[cyclone] 入会发言失败，已继续进入群聊', e); }
     }
     await loadWorkshop(activeWid);
     setView({ kind: 'room', id: rm.id });
@@ -187,6 +241,12 @@ export default function CyclonePage({ active }: { active?: boolean }) {
             <button onClick={e => { e.stopPropagation(); deleteWorkshop(w.id, w.title); }} style={delBtnStyle} title="删除工作室">×</button>
           </div>
         ))}
+        {activeWid && (
+          <button type="button" onClick={openWorkshopWorkspace} className="cyclone__workspace-btn" title="打开当前工作室的公共工作区">
+            <span className="cyclone__workspace-btn-icon">↗</span>
+            <span>公共工作区</span>
+          </button>
+        )}
         {activeWid && (
           <>
             <div style={sectionHeadStyle}>
@@ -243,6 +303,22 @@ export default function CyclonePage({ active }: { active?: boolean }) {
           <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id} runners={seatRunners} onReloaded={() => loadWorkshop(activeWid)} />
         )}
       </div>
+
+      {/* 右：会长私聊抽屉（可折叠；会长随会议而设，仅进入某群聊时出现，按 room 隔离不串台） */}
+      {activeWid && activeRoomId && (
+        <ChairDrawer
+          workshopId={activeWid}
+          roomId={activeRoomId}
+          roomTitle={rooms.find(r => r.id === activeRoomId)?.title}
+          chairAgentId={chairAgentId}
+          agents={agents}
+          runners={seatRunners}
+          open={chairOpen}
+          onToggle={() => setChairOpen(o => !o)}
+          onSetChair={setChair}
+          onReloaded={() => loadWorkshop(activeWid)}
+        />
+      )}
     </div>
   );
 }
