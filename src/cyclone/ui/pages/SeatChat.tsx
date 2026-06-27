@@ -237,6 +237,7 @@ const inputHintStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--color-text-tertiary)',
   paddingTop: 'var(--space-2)',
+  textShadow: 'var(--text-halo)',
 };
 
 /** 单条已落库展示消息 */

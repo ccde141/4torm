@@ -28,12 +28,15 @@ const leftPanelStyle: React.CSSProperties = {
   flexDirection: 'column',
   padding: 'var(--space-4)',
   overflowY: 'auto',
+  background: 'var(--glass-bg-strong)',
+  backdropFilter: 'blur(var(--glass-blur))',
+  WebkitBackdropFilter: 'blur(var(--glass-blur))',
 };
 
 const sectionLabel: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   fontWeight: 'var(--font-semibold)',
-  color: 'var(--color-text-tertiary)',
+  color: 'var(--color-text-secondary)',
   textTransform: 'uppercase',
   letterSpacing: '0.05em',
   marginBottom: 'var(--space-2)',
@@ -265,7 +268,7 @@ export default function TidePage({ active = true }: { active?: boolean }) {
           <TaskDetail task={selectedTask} runs={runs} onViewSession={handleViewSession} onDeleteSession={handleDeleteSession} onUpdated={(t) => { setSelectedTask(t); refresh(); }} />
         ) : (
           <div style={emptyCenter}>
-            <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-tertiary)' }}>
+            <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-tertiary)', textShadow: 'var(--text-halo)' }}>
               {selectedAgent ? '选择一个任务查看详情，或点击 + 新建' : '选择一个 Agent 开始'}
             </span>
           </div>
@@ -405,7 +408,7 @@ function TaskDetail({ task, runs, onViewSession, onDeleteSession, onUpdated }: {
 
       <div style={{ marginTop: 'var(--space-4)' }}>
         <div style={sectionLabel}>运行历史 ({runs.length})</div>
-        {runs.length === 0 && <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--text-xs)', padding: 'var(--space-3)' }}>暂无运行记录</div>}
+        {runs.length === 0 && <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--text-xs)', padding: 'var(--space-3)', textShadow: 'var(--text-halo)' }}>暂无运行记录</div>}
         {runs.map(r => (
           <div key={r.timestamp} style={runItem}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
@@ -496,7 +499,7 @@ function SessionView({ session, onClose }: { session: TideSession; onClose: () =
         <h2 style={{ fontSize: 'var(--text-lg)', margin: 0 }}>{session.title}</h2>
         <button onClick={onClose} style={{ ...actionBtnStyle }}>关闭</button>
       </div>
-      <div style={{ fontSize: '10px', color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-6)', textAlign: 'center' }}>
+      <div style={{ fontSize: '10px', color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-6)', textAlign: 'center', textShadow: 'var(--text-halo)' }}>
         {msgs.length} 条消息 · {session.model}
       </div>
        <div className="chat__messages">

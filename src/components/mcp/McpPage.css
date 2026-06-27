@@ -2,7 +2,13 @@
 
 .mcp-page {
   padding: 24px 32px;
-  max-width: 860px;
+  /* 与工具页对齐：单列列表统一 900 上限并居中 */
+  max-width: 900px;
+  margin: 0 auto;
+  /* 轻量灰底托起灰色解释文字，背景图仍透出 */
+  background: var(--glass-bg-soft);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
 }
 
 .mcp-page__header {
@@ -16,12 +22,15 @@
   font-size: var(--text-lg);
   font-weight: 600;
   margin: 0;
+  /* 浮在背景图上，加描边光晕 */
+  text-shadow: var(--text-halo);
 }
 
 .mcp-page__subtitle {
   font-size: var(--text-sm);
   color: var(--color-text-muted);
   margin: 4px 0 0;
+  text-shadow: var(--text-halo);
 }
 
 .mcp-page__subtitle code {
@@ -238,4 +247,5 @@
   padding: 48px 0;
   color: var(--color-text-muted);
   font-size: var(--text-sm);
+  text-shadow: var(--text-halo);
 }

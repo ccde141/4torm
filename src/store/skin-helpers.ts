@@ -31,6 +31,33 @@ export function toRgba(hex: string, alpha: number): string {
   return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
 }
 
+/** WCAG 相对亮度（sRGB 线性化），用于挑选与背景对比最高的前景 */
+function relLuminance(rgb: { r: number; g: number; b: number }): number {
+  const f = (c: number): number => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * f(rgb.r) + 0.7152 * f(rgb.g) + 0.0722 * f(rgb.b);
+}
+
+/** 深/浅前景候选（与 tokens 的 --color-text-inverse / --color-text-primary 对齐） */
+const ON_ACCENT_DARK = '#18181b';
+const ON_ACCENT_LIGHT = '#fafafa';
+
+/**
+ * 给定强调色，返回压在其上对比度更高的前景色（深或浅）。
+ * 用 WCAG 对比公式分别比深、浅候选，取胜者——亮强调色→深字，暗强调色→浅字。
+ */
+export function onAccentColor(hex: string): string {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return ON_ACCENT_DARK;
+  const L = relLuminance(rgb);
+  const Ld = relLuminance({ r: 0x18, g: 0x18, b: 0x1b });
+  const Ll = relLuminance({ r: 0xfa, g: 0xfa, b: 0xfa });
+  const contrast = (a: number, b: number): number => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  return contrast(L, Ld) >= contrast(L, Ll) ? ON_ACCENT_DARK : ON_ACCENT_LIGHT;
+}
+
 class StorageError extends Error {
   constructor(msg: string) { super(msg); this.name = 'StorageError'; }
 }

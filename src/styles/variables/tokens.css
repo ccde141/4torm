@@ -15,17 +15,23 @@
   --color-bg-tertiary:  #27272a;  /* zinc-800 */
   --color-bg-elevated:  #3f3f46;  /* zinc-700 */
 
-  /* 文字色 */
+  /* 文字色 —— 整体较暗界面下略提亮中性灰，保持 primary>secondary>tertiary 梯度。
+   * 压在背景图上的文字另靠 --text-halo 描边，不依赖此处压黑 */
   --color-text-primary:  #fafafa;  /* zinc-50 */
-  --color-text-secondary:#a1a1aa;  /* zinc-400 */
-  --color-text-tertiary: #71717a;  /* zinc-500 */
+  --color-text-secondary:#b1b1b8;  /* 由 zinc-400 提亮一档 */
+  --color-text-tertiary: #97979f;  /* 由 zinc-500 提亮一档 */
   --color-text-inverse:  #18181b;  /* zinc-900 */
-
-  /* 强调色 — 风暴蓝（主色调） */
+  /* 文字描边光晕 —— 给“浮在背景图上”的文字加一圈暗边：
+   * 浅色字保证深色图可读，暗描边保证亮色图可读，任意背景图都自带对比信封。
+   * 仅挂在无背板/软背板的页面根上（text-shadow 会向子级继承）。 */
+  --text-halo:           0 1px 3px rgba(0, 0, 0, 0.6);
+  --text-halo-strong:    0 1px 4px rgba(0, 0, 0, 0.75);
   --color-accent:        #3b82f6;  /* blue-500 */
   --color-accent-hover:  #2563eb;  /* blue-600 */
   --color-accent-subtle: rgba(59, 130, 246, 0.12);
   --color-accent-glow:   rgba(59, 130, 246, 0.25);
+  /* 压在强调色上的前景：按强调色亮度自适应深浅，运行时由 skin.ts 覆盖（此为默认强调色的兜底） */
+  --color-on-accent:     #18181b;
 
   /* 点缀色 — 琥珀（闪电/高亮点缀） */
   --color-accent-secondary:        #f59e0b;  /* amber-500 */
@@ -56,6 +62,11 @@
   /* ─── 玻璃质感（frosted glass） ────────────────────── */
   --glass-bg:           rgba(24, 24, 27, 0.50);
   --glass-bg-hover:     rgba(39, 39, 42, 0.60);
+  /* 文字密集的侧栏：与主导航玻璃一致，靠模糊而非压黑提升可读性（过黑会呆板） */
+  --glass-bg-strong:    rgba(24, 24, 27, 0.50);
+  /* 居中内容页的轻量底：很淡，仅托起灰色解释文字，背景图仍大面积透出。
+   * 较暗界面下微提 0.25→0.32（肉眼几乎无感），主力可读性交给 --text-halo */
+  --glass-bg-soft:      rgba(24, 24, 27, 0.32);
   --glass-border:       rgba(255, 255, 255, 0.08);
   --glass-border-hover: rgba(255, 255, 255, 0.14);
   --glass-blur:         16px;
@@ -136,7 +147,10 @@
   --color-text:               var(--color-text-primary);
   --color-border:             var(--border-color);
   --color-bg-hover:           var(--color-bg-tertiary);
-  --color-text-quaternary:    #52525b;
+  --color-text-quaternary:    #76767f;  /* 由 zinc-600 提亮一档 */
+  /* 之前被引用却从未定义（McpPage / chat compact），会回退成亮白；统一为可读次级灰 */
+  --color-text-muted:         var(--color-text-secondary);
+  --text-muted:               var(--color-text-secondary);
   --color-danger:             var(--color-error);
   --color-danger-hover:       #c53030;
 

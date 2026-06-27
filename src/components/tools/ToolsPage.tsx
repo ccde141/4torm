@@ -14,16 +14,16 @@ export default function ToolsPage() {
   const refresh = () => getTools().then(setTools);
 
   return (
-    <div style={{ padding: 'var(--space-6)', maxWidth: '900px', margin: '0 auto', height: '100%', overflowY: 'auto' }}>
+    <div style={{ padding: 'var(--space-6)', maxWidth: '900px', margin: '0 auto', height: '100%', overflowY: 'auto', background: 'var(--glass-bg-soft)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-6)' }}>
-        <div>
+        <div style={{ textShadow: 'var(--text-halo)' }}>
           <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-bold)', margin: '0 0 var(--space-1) 0' }}>全局工具注册表</h2>
-          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-tertiary)', margin: 0 }}>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', margin: 0 }}>
             注册一次，所有 Agent 共用。在 Agent 配置中勾选即可启用。
           </p>
         </div>
         {!adding && (
-          <button onClick={() => setAdding(true)} style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-accent)', color: 'var(--color-text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer', flexShrink: 0 }}>
+          <button onClick={() => setAdding(true)} style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer', flexShrink: 0 }}>
             + 注册工具
           </button>
         )}
@@ -36,16 +36,8 @@ export default function ToolsPage() {
         />
       )}
 
-      {editingName && (
-        <ToolForm
-          initial={tools.find(t => t.name === editingName)}
-          onSave={async (tool) => { await saveTools(tools.map(t => t.name === editingName ? tool : t)); setEditingName(null); refresh(); }}
-          onCancel={() => setEditingName(null)}
-        />
-      )}
-
       {tools.length === 0 && !adding && (
-        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)' }}>
+        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', textShadow: 'var(--text-halo)' }}>
           <p style={{ fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>还没有注册任何工具</p>
           <p style={{ fontSize: 'var(--text-xs)' }}>点击右上角「注册工具」开始，或系统会自动导入 4 个内置工具模板</p>
         </div>
@@ -53,10 +45,20 @@ export default function ToolsPage() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', marginTop: adding ? 'var(--space-4)' : 0 }}>
         {tools.map(t => (
-          <ToolCard key={t.name} tool={t} onEdit={() => setEditingName(t.name)} onDelete={async () => {
-            await saveTools(tools.filter(x => x.name !== t.name));
-            refresh();
-          }} />
+          // 编辑时在原位用表单替换卡片，避免表单跳到页面顶部、看起来「没反应」
+          t.name === editingName ? (
+            <ToolForm
+              key={t.name}
+              initial={t}
+              onSave={async (tool) => { await saveTools(tools.map(x => x.name === editingName ? tool : x)); setEditingName(null); refresh(); }}
+              onCancel={() => setEditingName(null)}
+            />
+          ) : (
+            <ToolCard key={t.name} tool={t} onEdit={() => setEditingName(t.name)} onDelete={async () => {
+              await saveTools(tools.filter(x => x.name !== t.name));
+              refresh();
+            }} />
+          )
         ))}
       </div>
     </div>
@@ -164,7 +166,7 @@ function ToolForm({ initial, onSave, onCancel }: {
             <button key={t} onClick={() => setExecutorType(t)} style={{
               ...tinyBtn, padding: 'var(--space-1) var(--space-3)',
               background: executorType === t ? 'var(--color-accent)' : 'var(--color-surface)',
-              color: executorType === t ? 'var(--color-text-inverse)' : 'var(--color-text-secondary)',
+              color: executorType === t ? 'var(--color-on-accent)' : 'var(--color-text-secondary)',
             }}>
               {{ builtin: '内置', template: '命令模板', custom: '自定义 JS' }[t]}
             </button>
@@ -224,7 +226,7 @@ function ToolForm({ initial, onSave, onCancel }: {
       </div>
 
       <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-4)', borderTop: '1px solid var(--border-color)', paddingTop: 'var(--space-4)' }}>
-        <button onClick={handleSave} style={{ padding: 'var(--space-2) var(--space-5)', background: 'var(--color-accent)', color: 'var(--color-text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer' }}>
+        <button onClick={handleSave} style={{ padding: 'var(--space-2) var(--space-5)', background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer' }}>
           {initial ? '保存修改' : '注册工具'}
         </button>
         <button onClick={onCancel} style={{ padding: 'var(--space-2) var(--space-5)', background: 'transparent', color: 'var(--color-text-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', cursor: 'pointer' }}>

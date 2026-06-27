@@ -48,17 +48,17 @@ export default function SettingsPage() {
   };
 
   return (
-    <div style={{ padding: 'var(--space-6)', maxWidth: '720px', margin: '0 auto' }}>
+    <div style={{ padding: 'var(--space-6)', maxWidth: '720px', margin: '0 auto', background: 'var(--glass-bg-soft)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)' }}>
-        <div>
+        <div style={{ textShadow: 'var(--text-halo)' }}>
           <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-bold)', margin: '0 0 var(--space-1) 0' }}>LLM 提供商设置</h2>
-          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-tertiary)', margin: 0 }}>添加多个提供商，模型自动同步到对话页面的选择清单</p>
-          <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', margin: 'var(--space-1) 0 0 0' }}>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', margin: 0 }}>添加多个提供商，模型自动同步到对话页面的选择清单</p>
+          <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', margin: 'var(--space-1) 0 0 0' }}>
             预设均为 OpenAI 兼容服务。使用 Anthropic 等非 OpenAI API，可部署 <a href="https://github.com/songquanpeng/one-api" target="_blank" style={{color: 'var(--color-accent)'}}>one-api</a> 或 <a href="https://github.com/BerriAI/litellm" target="_blank" style={{color: 'var(--color-accent)'}}>LiteLLM</a> 作为翻译层，填入其地址即可
           </p>
         </div>
         <div style={{ position: 'relative' }}>
-          <button onClick={() => setShowPresets(!showPresets)} style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-accent)', color: 'var(--color-text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer' }}>
+          <button onClick={() => setShowPresets(!showPresets)} style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer' }}>
             + 添加提供商 {showPresets ? '▲' : '▼'}
           </button>
           {showPresets && (
@@ -80,7 +80,7 @@ export default function SettingsPage() {
       </div>
 
       {providers.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)' }}>还没有配置提供商，点击「添加提供商」开始</div>
+        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textShadow: 'var(--text-halo)' }}>还没有配置提供商，点击「添加提供商」开始</div>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
@@ -262,14 +262,14 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
             <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
               <button onClick={() => setChecked(new Set(fetchedModels))} style={tinyBtnStyle}>全选</button>
               <button onClick={() => setChecked(new Set())} style={tinyBtnStyle}>清空</button>
-              <button onClick={handleConfirmModels} style={{ ...tinyBtnStyle, background: hasChange ? 'var(--color-accent)' : 'var(--color-surface)', color: hasChange ? 'var(--color-text-inverse)' : 'var(--color-text-tertiary)', border: `1px solid ${hasChange ? 'var(--color-accent)' : 'var(--border-color)'}` }}>确认选择</button>
+              <button onClick={handleConfirmModels} style={{ ...tinyBtnStyle, background: hasChange ? 'var(--color-accent)' : 'var(--color-surface)', color: hasChange ? 'var(--color-on-accent)' : 'var(--color-text-tertiary)', border: `1px solid ${hasChange ? 'var(--color-accent)' : 'var(--border-color)'}` }}>确认选择</button>
             </div>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
             {fetchedModels.map(m => {
               const sel = checked.has(m);
               return (
-                <button key={m} onClick={() => handleToggleModel(m)} style={{ ...modelTagStyle, background: sel ? 'var(--color-accent)' : 'var(--color-bg)', color: sel ? 'var(--color-text-inverse)' : 'var(--color-text)', border: `1px solid ${sel ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
+                <button key={m} onClick={() => handleToggleModel(m)} style={{ ...modelTagStyle, background: sel ? 'var(--color-accent)' : 'var(--color-bg)', color: sel ? 'var(--color-on-accent)' : 'var(--color-text)', border: `1px solid ${sel ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
                   {sel ? '✓ ' : ''}{m}
                 </button>
               );
@@ -316,7 +316,7 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
             placeholder="输入模型名称，如 nvidia/llama-3.1-nemotron-70b-instruct"
             style={{ ...inputStyle, flex: 1 }}
           />
-          <button onClick={handleAddModel} style={{ ...smallBtnStyle, background: 'var(--color-accent)', color: 'var(--color-text-inverse)', border: 'none', whiteSpace: 'nowrap' }}>添加</button>
+          <button onClick={handleAddModel} style={{ ...smallBtnStyle, background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none', whiteSpace: 'nowrap' }}>添加</button>
         </div>
       </div>
 

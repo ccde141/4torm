@@ -60,7 +60,7 @@
 .sidebar__brand-icon-placeholder {
   font-size: var(--text-2xs);
   font-weight: var(--font-bold);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
   line-height: 1;
   opacity: 0.55;
   letter-spacing: 0.02em;
@@ -180,7 +180,7 @@
 
 .sidebar__nav-item--active .sidebar__nav-badge {
   background: var(--color-accent);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
   border-color: transparent;
 }
 

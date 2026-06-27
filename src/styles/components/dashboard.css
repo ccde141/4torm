@@ -89,6 +89,8 @@
   transition: all var(--duration-fast) var(--ease-out-expo);
   font-family: inherit;
   border-color: var(--border-color);
+  /* 透明胶囊浮在背景图上 → 描边光晕保证亮图下也可读 */
+  text-shadow: var(--text-halo);
 }
 
 .dashboard__filter-btn:hover {
@@ -123,7 +125,7 @@
 .dashboard__create-btn {
   padding: var(--space-2) var(--space-4);
   background: var(--color-accent);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
   border: none;
   border-radius: var(--border-radius-md);
   font-size: var(--text-sm);

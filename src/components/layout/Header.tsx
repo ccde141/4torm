@@ -11,12 +11,26 @@ interface HeaderProps {
   onNavigate?: (page: string, sessionId?: string) => void;
 }
 
+type SearchType = 'agent' | 'session' | 'cyclone' | 'tradewind' | 'tide' | 'convection';
+
 interface SearchResult {
-  type: 'agent' | 'session';
+  type: SearchType;
   id: string;
   label: string;
   sublabel: string;
 }
+
+// 各结果类型 → 落地页面 id（季风会话另走 deep-link，见 handleResultClick）
+const TYPE_PAGE: Record<SearchType, string> = {
+  agent: 'agent', session: 'chat', cyclone: 'cyclone',
+  tradewind: 'tradewind', tide: 'tide', convection: 'convection',
+};
+
+// 结果右侧徽标文案
+const TYPE_BADGE: Record<SearchType, string> = {
+  agent: 'Agent', session: '季风', cyclone: '工作室',
+  tradewind: '工作流', tide: '潮汐', convection: '会议室',
+};
 
 const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps) {
   const [skinOpen, setSkinOpen] = useState(false);
@@ -38,17 +52,59 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
       return;
     }
     const lower = q.toLowerCase();
-    const [agents, sessions] = await Promise.all([getAgents(), getAllSessions()]);
+    // 单个数据源失败不应拖垮整次搜索，故各 fetch 独立 try/catch（getJson 返回 null 时跳过）
+    const getJson = async (url: string): Promise<any> => {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch { return null; }
+    };
+
+    const [agents, sessions, cyclones, tradewinds, tides, convections] = await Promise.all([
+      getAgents(),
+      getAllSessions(),
+      getJson('/api/cyclone/list'),
+      getJson('/api/tradewind/workflow/list'),
+      getJson('/api/tide/tasks'),
+      getJson('/api/convection/list'),
+    ]);
+
+    const hit = (...fields: (string | undefined)[]) =>
+      fields.some(f => f && f.toLowerCase().includes(lower));
 
     const agentResults: SearchResult[] = agents
-      .filter(a => a.name.toLowerCase().includes(lower) || a.role.toLowerCase().includes(lower) || a.description.toLowerCase().includes(lower))
+      .filter(a => hit(a.name, a.role, a.description))
       .map(a => ({ type: 'agent', id: a.id, label: a.name, sublabel: a.role }));
 
     const sessionResults: SearchResult[] = sessions
-      .filter(s => s.title.toLowerCase().includes(lower) || (s.agentName && s.agentName.toLowerCase().includes(lower)))
+      .filter(s => hit(s.title, s.agentName))
       .map(s => ({ type: 'session', id: s.id, label: s.title, sublabel: s.agentName || '' }));
 
-    setResults([...agentResults, ...sessionResults]);
+    // 工作室（气旋）：列表为 WorkshopSummary[]，按标题匹配
+    const cycloneResults: SearchResult[] = (Array.isArray(cyclones) ? cyclones : [])
+      .filter((w: any) => hit(w.title))
+      .map((w: any) => ({ type: 'cyclone', id: w.id, label: w.title || '未命名工作室', sublabel: `${w.seatCount ?? 0} 工位 · ${w.roomCount ?? 0} 群聊` }));
+
+    // 工作流（信风）：{ workflows: [{ workflowId, name, nodeCount }] }
+    const tradewindResults: SearchResult[] = (Array.isArray(tradewinds?.workflows) ? tradewinds.workflows : [])
+      .filter((w: any) => hit(w.name))
+      .map((w: any) => ({ type: 'tradewind', id: w.workflowId, label: w.name || '未命名工作流', sublabel: `${w.nodeCount ?? 0} 节点` }));
+
+    // 潮汐：TideTask[]，按任务名 + prompt 匹配
+    const tideResults: SearchResult[] = (Array.isArray(tides) ? tides : [])
+      .filter((t: any) => hit(t.name, t.prompt))
+      .map((t: any) => ({ type: 'tide', id: t.id, label: t.name || '未命名任务', sublabel: t.schedule || '' }));
+
+    // 会议室（对流）：ConvectionSessionSummary[]，按标题 + 议题匹配
+    const convectionResults: SearchResult[] = (Array.isArray(convections) ? convections : [])
+      .filter((c: any) => hit(c.title, c.topic))
+      .map((c: any) => ({ type: 'convection', id: c.id, label: c.title || '未命名会议', sublabel: c.topic || '' }));
+
+    setResults([
+      ...agentResults, ...sessionResults, ...cycloneResults,
+      ...tradewindResults, ...tideResults, ...convectionResults,
+    ]);
     setShowResults(true);
   }, []);
 
@@ -62,10 +118,11 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
   const handleResultClick = useCallback((r: SearchResult) => {
     setShowResults(false);
     setQuery('');
-    if (r.type === 'agent') {
-      onNavigate?.('agent');
-    } else {
+    // 季风会话支持 deep-link 到具体会话；其余功能页暂只跳转到页面（不支持条目级定位）
+    if (r.type === 'session') {
       onNavigate?.('chat', r.id);
+    } else {
+      onNavigate?.(TYPE_PAGE[r.type]);
     }
   }, [onNavigate]);
 
@@ -95,7 +152,7 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
           <input
             className="header__search-input"
             type="text"
-            placeholder="搜索 Agent、会话..."
+            placeholder="搜索 Agent、季风、工作室、潮汐…"
             aria-label="搜索"
             value={query}
             onChange={handleInputChange}
@@ -129,7 +186,7 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
                       <span className="header__search-item-label">{r.label}</span>
                       <span className="header__search-item-sublabel">{r.sublabel}</span>
                     </div>
-                    <span className="header__search-item-type">{r.type === 'agent' ? 'Agent' : '会话'}</span>
+                    <span className="header__search-item-type">{TYPE_BADGE[r.type]}</span>
                   </button>
                 ))
               )}
