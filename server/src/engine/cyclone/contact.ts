@@ -169,7 +169,8 @@ async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: 
       messages.push({ role: 'assistant', content: result.content });
     }
   }
-  seat.messages = messages.filter(m => m.role !== 'system');
+  // 仅剔除首条注入的 system prompt，保留历史中的压缩摘要 system 消息（同 driveSeat）
+  seat.messages = messages.filter((m, i) => !(i === 0 && m.role === 'system'));
   if (result.usage) {
     seat.tokenUsage = {
       promptTokens: result.usage.promptTokens,

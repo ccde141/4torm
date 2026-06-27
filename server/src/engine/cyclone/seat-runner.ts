@@ -198,8 +198,10 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
     }
   }
 
-  // messages 被循环原地追加了 assistant/tool 消息；剔除开头 system 后即新历史
-  seat.messages = messages.filter(m => m.role !== 'system');
+  // messages 被循环原地追加了 assistant/tool 消息；剔除开头注入的 system prompt 后即新历史。
+  // 注意：仅剔除首条注入的 system，保留历史中的压缩摘要 system 消息
+  // （/reset summary 落库的「重置前…摘要」气泡，否则下一轮对话后会被一并滤掉而消失）。
+  seat.messages = messages.filter((m, i) => !(i === 0 && m.role === 'system'));
   if (result.usage) {
     seat.tokenUsage = {
       promptTokens: result.usage.promptTokens,

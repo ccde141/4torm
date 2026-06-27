@@ -8,6 +8,7 @@ import { useMessageEditor } from './useMessageEditor';
 import { useStreamRunners } from './useStreamRunners';
 import { runStreamLoop } from '../../engine/chat/streamLoop';
 import { streamUrl } from '../../lib/apiBase';
+import { useDroppedPathInput } from '../../lib/useDroppedPathInput';
 import {
   getSession,
   saveSession,
@@ -55,6 +56,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   const [selectedModel, setSelectedModel] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<(() => void) | null>(null);
   // 同步发送锁：streaming state 是异步的，挡不住"卡顿期间快速二次点击"，
   // 用 ref 在 handleSend 入口同步置位，从根上杜绝重复发送（两条消息 bug）
@@ -81,6 +83,9 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   } = useSessionList(selectedAgent, selectedModel, models, setSelectedAgent, setMessages, setStreaming, setSelectedModel, streamRunners);
   // 同步 activeSessionId 到 ref 供 emit 读最新值（effect 中写，避免 render 期改 ref）
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
+
+  // 桌面端：拖入文件 → 把真实磁盘路径追加进输入框（仅当前可见对话生效）
+  useDroppedPathInput(setInput, inputRef, active !== false);
 
   const {
     editingMsgId, editContent, setEditContent,
@@ -541,7 +546,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
 
             <div className="chat__input-area">
               <div className="chat__input-wrapper">
-                <textarea className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} placeholder={streaming ? '等待回复中...' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} disabled={streaming} aria-label="输入消息" />
+                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} placeholder={streaming ? '等待回复中...' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} disabled={streaming} aria-label="输入消息" />
                 {streaming ? (
                   <button className="chat__stop-btn" onClick={() => { if (activeSessionId) streamRunners.runners.current.get(activeSessionId)?.abort(); fetch(streamUrl('/api/conversation/abort'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); setStreaming(false); }} title="停止生成">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>

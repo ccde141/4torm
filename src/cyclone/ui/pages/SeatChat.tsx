@@ -16,6 +16,7 @@ import AskCard from '../../../components/chat/AskCard';
 import ContactCard from './ContactCard';
 import { contextToDisplay, type DisplayMessage, type DisplayBlock } from './messageDisplay';
 import type { SeatStreamRunners } from './useSeatStreamRunners';
+import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 
 interface SeatStatus {
   id: string; title: string;
@@ -23,10 +24,12 @@ interface SeatStatus {
   pending?: { question: string; options?: string[] };
 }
 
-export default function SeatChat({ workshopId, seatId, runners, onReloaded, chairBase }: {
+export default function SeatChat({ workshopId, seatId, runners, onReloaded, chairBase, active = false }: {
   workshopId: string; seatId: string; runners: SeatStreamRunners; onReloaded?: () => void;
   /** 会长模式下覆盖端点前缀（如 /api/cyclone/workshop/{wid}/room/{rid}/chair）。普通工位不传。 */
   chairBase?: string;
+  /** 当前工作室页是否可见。仅用于桌面拖拽路径接收，会长实例（chairBase 存在）始终不接收。 */
+  active?: boolean;
 }) {
   const [seat, setSeat] = useState<SeatStatus | null>(null);
   const [history, setHistory] = useState<DisplayMessage[]>([]);
@@ -35,8 +38,11 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
   /** 订阅 tick：runner 每次 notify 自增，触发本组件重渲染读取最新 live 缓冲 */
   const [, forceTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const onReloadedRef = useRef(onReloaded);
   onReloadedRef.current = onReloaded;
+  // 桌面端：拖入文件 → 路径进工位主对话框；会长实例(chairBase)始终绕开
+  useDroppedPathInput(setInput, inputRef, active && !chairBase);
 
   const runner = runners.getRunner(seatId);
   // 即使 done 也继续显示 live，直到 reload 完成 + clearIfDone 删除 runner，避免终答闪空
@@ -183,7 +189,7 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
 
       <div className="chat__input-area">
         <div className="chat__input-wrapper">
-          <textarea className="chat__input"
+          <textarea ref={inputRef} className="chat__input"
             value={input}
             onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInput(); } }}

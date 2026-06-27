@@ -296,11 +296,11 @@ export default function CyclonePage({ active }: { active?: boolean }) {
           />
         )}
         {view?.kind === 'room' && activeWid && (
-          <RoomPanel key={view.id} workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} runners={roomRunners} onChanged={() => loadWorkshop(activeWid)} />
+          <RoomPanel key={view.id} workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} runners={roomRunners} onChanged={() => loadWorkshop(activeWid)} active={active} />
         )}
         {(view === null || (view.kind === 'seat' && !activeSeat)) && <div style={{ opacity: .5, margin: 'auto' }}>选择或创建一个工位开始私聊，或进入群聊</div>}
         {view?.kind === 'seat' && activeSeat && activeWid && (
-          <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id} runners={seatRunners} onReloaded={() => loadWorkshop(activeWid)} />
+          <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id} runners={seatRunners} onReloaded={() => loadWorkshop(activeWid)} active={active} />
         )}
       </div>
 
