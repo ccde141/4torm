@@ -242,7 +242,7 @@
   background: var(--color-accent);
   border: none;
   border-radius: var(--border-radius-md);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
   cursor: pointer;
   display: grid;
   place-items: center;
@@ -431,7 +431,7 @@
 
 .chat__edit-actions button:first-child {
   background: var(--color-accent);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
   border: none;
 }
 

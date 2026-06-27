@@ -118,7 +118,7 @@ export default function AskCard({ question, options, answered, reply, onReply }:
                   borderRadius: '6px',
                   border: 'none',
                   background: customInput.trim() ? 'var(--color-accent)' : 'var(--color-border)',
-                  color: customInput.trim() ? '#fff' : 'var(--color-text-tertiary)',
+                  color: customInput.trim() ? 'var(--color-on-accent)' : 'var(--color-text-tertiary)',
                   fontSize: 'var(--text-sm)',
                   cursor: customInput.trim() ? 'pointer' : 'default',
                 }}

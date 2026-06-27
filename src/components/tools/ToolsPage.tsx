@@ -23,7 +23,7 @@ export default function ToolsPage() {
           </p>
         </div>
         {!adding && (
-          <button onClick={() => setAdding(true)} style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-accent)', color: 'var(--color-text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer', flexShrink: 0 }}>
+          <button onClick={() => setAdding(true)} style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer', flexShrink: 0 }}>
             + 注册工具
           </button>
         )}
@@ -164,7 +164,7 @@ function ToolForm({ initial, onSave, onCancel }: {
             <button key={t} onClick={() => setExecutorType(t)} style={{
               ...tinyBtn, padding: 'var(--space-1) var(--space-3)',
               background: executorType === t ? 'var(--color-accent)' : 'var(--color-surface)',
-              color: executorType === t ? 'var(--color-text-inverse)' : 'var(--color-text-secondary)',
+              color: executorType === t ? 'var(--color-on-accent)' : 'var(--color-text-secondary)',
             }}>
               {{ builtin: '内置', template: '命令模板', custom: '自定义 JS' }[t]}
             </button>
@@ -224,7 +224,7 @@ function ToolForm({ initial, onSave, onCancel }: {
       </div>
 
       <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-4)', borderTop: '1px solid var(--border-color)', paddingTop: 'var(--space-4)' }}>
-        <button onClick={handleSave} style={{ padding: 'var(--space-2) var(--space-5)', background: 'var(--color-accent)', color: 'var(--color-text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer' }}>
+        <button onClick={handleSave} style={{ padding: 'var(--space-2) var(--space-5)', background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer' }}>
           {initial ? '保存修改' : '注册工具'}
         </button>
         <button onClick={onCancel} style={{ padding: 'var(--space-2) var(--space-5)', background: 'transparent', color: 'var(--color-text-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', cursor: 'pointer' }}>

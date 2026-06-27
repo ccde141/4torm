@@ -27,7 +27,7 @@ export default function ThinkingCard({ thinking, tools, finalAnswer, isStreaming
 
   return (
     <div className={`chat__message chat__message--assistant`}>
-      <div className="chat__avatar" style={{ background: 'var(--color-accent)', color: '#fff' }}>🤔</div>
+      <div className="chat__avatar" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>🤔</div>
       <div className="chat__bubble thinking-card">
         {thinking && (
           <div className="thinking-card__think">

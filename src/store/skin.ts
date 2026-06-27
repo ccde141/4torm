@@ -3,7 +3,7 @@
  */
 
 import { buildTextureBackground, getTextureDefaults, type TextureType } from '../utils/skin-textures';
-import { hexToRgb, darkenColor, toRgba, readJson, writeJson, uploadBinary, deleteFile, fileUrl } from './skin-helpers';
+import { hexToRgb, darkenColor, toRgba, onAccentColor, readJson, writeJson, uploadBinary, deleteFile, fileUrl } from './skin-helpers';
 import {
   CONTOUR_DEFAULTS,
   CONTOUR_RECOMMENDED,
@@ -97,6 +97,8 @@ function applyConfig(config: SkinConfig): void {
   root.style.setProperty('--color-accent-hover', darkenColor(primary, 35));
   root.style.setProperty('--color-accent-subtle', toRgba(primary, 0.12));
   root.style.setProperty('--color-accent-glow', toRgba(primary, 0.25));
+  // 压在强调色上的前景：按强调色亮度选深/浅，保证对比度（亮色→深字，暗色→浅字）
+  root.style.setProperty('--color-on-accent', onAccentColor(primary));
 
   const secondary = config.secondaryColor || DEFAULTS.secondaryColor;
   const rgb = hexToRgb(secondary);

@@ -189,7 +189,7 @@
 }
 .tw-chat-window__send {
   background: var(--color-accent);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
 }
 .tw-chat-window__send:hover:not(:disabled) {
   background: var(--color-accent-hover);
@@ -225,7 +225,7 @@
 .tw-chat-msg--user {
   align-self: flex-end;
   background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-hover) 100%);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
   border-bottom-right-radius: var(--border-radius-sm);
   box-shadow: 0 2px 12px var(--color-accent-glow);
 }
@@ -292,7 +292,7 @@
 }
 .tw-chat-avatar--user {
   background: var(--color-accent);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
 }
 .tw-chat-avatar--assistant {
   background: var(--glass-bg);
@@ -301,7 +301,7 @@
 }
 .tw-chat-avatar--tool {
   background: var(--color-accent);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
   font-size: 14px;
 }
 
@@ -315,7 +315,7 @@
 }
 .tw-chat-row--user .tw-chat-bubble {
   background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-hover) 100%);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
   border-bottom-right-radius: var(--border-radius-sm);
   box-shadow: 0 2px 12px var(--color-accent-glow);
 }

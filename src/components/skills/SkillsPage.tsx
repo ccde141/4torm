@@ -66,7 +66,7 @@ export default function SkillsPage() {
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           <button onClick={() => setShowCreate(!showCreate)}
-            style={{ padding: 'var(--space-2) var(--space-4)', background: showCreate ? 'var(--color-bg)' : 'var(--color-accent)', color: showCreate ? 'var(--color-text)' : 'var(--color-text-inverse)', border: showCreate ? '1px solid var(--border-color)' : 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', cursor: 'pointer' }}>
+            style={{ padding: 'var(--space-2) var(--space-4)', background: showCreate ? 'var(--color-bg)' : 'var(--color-accent)', color: showCreate ? 'var(--color-text)' : 'var(--color-on-accent)', border: showCreate ? '1px solid var(--border-color)' : 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', cursor: 'pointer' }}>
             {showCreate ? '关闭' : '+ 新建技能'}
           </button>
         </div>

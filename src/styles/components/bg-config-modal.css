@@ -140,5 +140,5 @@
 
 .bg-config-inline__btn--primary:hover {
   background: var(--color-accent);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
 }

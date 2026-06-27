@@ -162,7 +162,7 @@ export default function AgentConfigModal(props: Props) {
                         <button key={c} onClick={() => setNewLabelColor(c)} style={{ width: 16, height: 16, borderRadius: '50%', background: c, border: newLabelColor === c ? '2px solid #fff' : '1px solid transparent' }} />
                       ))}</div>
                       <input value={newLabelColor} onChange={e => setNewLabelColor(e.target.value)} style={{ ...inputStyle, width: '65px', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' }} />
-                      <button onClick={handleAddLabel} style={{ ...miniBtn, background: 'var(--color-accent)', color: 'var(--color-text-inverse)', border: 'none' }}>添加</button>
+                      <button onClick={handleAddLabel} style={{ ...miniBtn, background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none' }}>添加</button>
                     </div>
                   )}
                 </div>
@@ -202,7 +202,7 @@ export default function AgentConfigModal(props: Props) {
                       style={{
                         padding: 'var(--space-2) var(--space-3)',
                         background: sandboxLevel === opt.v ? 'var(--color-accent)' : 'transparent',
-                        color: sandboxLevel === opt.v ? 'var(--color-text-inverse)' : 'var(--color-text)',
+                        color: sandboxLevel === opt.v ? 'var(--color-on-accent)' : 'var(--color-text)',
                         border: '1px solid ' + (sandboxLevel === opt.v ? 'var(--color-accent)' : 'var(--border-color)'),
                         borderRadius: 'var(--border-radius-sm)',
                         fontSize: 'var(--text-sm)',
@@ -230,7 +230,7 @@ export default function AgentConfigModal(props: Props) {
                   const on = checkedSkills.has(s.id);
                   return (
                     <button key={s.id} onClick={() => { const next = new Set(checkedSkills); on ? next.delete(s.id) : next.add(s.id); setCheckedSkills(next); }}
-                      style={{ ...toolTagStyle, background: on ? 'var(--color-accent)' : 'var(--color-bg)', color: on ? 'var(--color-text-inverse)' : 'var(--color-text)', border: `1px solid ${on ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
+                      style={{ ...toolTagStyle, background: on ? 'var(--color-accent)' : 'var(--color-bg)', color: on ? 'var(--color-on-accent)' : 'var(--color-text)', border: `1px solid ${on ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
                       {on ? '✓ ' : ''}{s.name}{s.hasTools && <span style={{ fontSize: '10px', marginLeft: '2px' }}>🔧</span>}
                       <span style={{ fontSize: '10px', marginLeft: 'var(--space-1)', opacity: 0.6 }}>{s.category}</span>
                     </button>
@@ -275,7 +275,7 @@ export default function AgentConfigModal(props: Props) {
                     return (
                       <button key={t.name} onClick={() => { const next = new Set(checkedTools); on ? next.delete(t.name) : next.add(t.name); setCheckedTools(next); }}
                         title={t.description || t.name}
-                        style={{ ...toolTagStyle, background: on ? 'var(--color-accent)' : 'var(--color-bg)', color: on ? 'var(--color-text-inverse)' : 'var(--color-text)', border: `1px solid ${on ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
+                        style={{ ...toolTagStyle, background: on ? 'var(--color-accent)' : 'var(--color-bg)', color: on ? 'var(--color-on-accent)' : 'var(--color-text)', border: `1px solid ${on ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
                         {on ? '✓ ' : ''}{t.name}{t.dangerous && <span style={{ fontSize: '10px', marginLeft: '2px' }}>⚠</span>}
                       </button>
                     );
@@ -295,7 +295,7 @@ export default function AgentConfigModal(props: Props) {
                         <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600 }}>MCP: {serverName}</span>
                         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>{tools.length} 工具</span>
                         <button onClick={(e) => { e.stopPropagation(); const next = new Set(checkedTools); if (allSelected) { tools.forEach(t => next.delete(t.fullName)); } else { tools.forEach(t => next.add(t.fullName)); } setCheckedTools(next); }}
-                          style={{ ...toolTagStyle, background: allSelected ? 'var(--color-accent)' : 'var(--color-bg)', color: allSelected ? '#fff' : 'var(--color-text-tertiary)', border: `1px solid ${someSelected ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer', fontSize: '10px' }}>
+                          style={{ ...toolTagStyle, background: allSelected ? 'var(--color-accent)' : 'var(--color-bg)', color: allSelected ? 'var(--color-on-accent)' : 'var(--color-text-tertiary)', border: `1px solid ${someSelected ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer', fontSize: '10px' }}>
                           {allSelected ? '✓ 全选' : '全选'}
                         </button>
                       </div>

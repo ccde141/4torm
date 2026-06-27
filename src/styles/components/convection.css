@@ -37,7 +37,7 @@
   background: var(--color-accent);
   border: none;
   border-radius: var(--border-radius-sm);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
   cursor: pointer;
   display: grid;
   place-items: center;

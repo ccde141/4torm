@@ -26,6 +26,8 @@
   --color-accent-hover:  #2563eb;  /* blue-600 */
   --color-accent-subtle: rgba(59, 130, 246, 0.12);
   --color-accent-glow:   rgba(59, 130, 246, 0.25);
+  /* 压在强调色上的前景：按强调色亮度自适应深浅，运行时由 skin.ts 覆盖（此为默认强调色的兜底） */
+  --color-on-accent:     #18181b;
 
   /* 点缀色 — 琥珀（闪电/高亮点缀） */
   --color-accent-secondary:        #f59e0b;  /* amber-500 */

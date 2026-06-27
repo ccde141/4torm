@@ -13,7 +13,7 @@ export default function ToolCallMessage({ toolCall, actions, timestamp }: {
 
   return (
     <div className="chat__message chat__message--assistant chat__message--tool">
-      <div className="chat__avatar" style={{ background: 'var(--color-accent)', color: 'var(--color-text-inverse)' }}>🔧</div>
+      <div className="chat__avatar" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>🔧</div>
       <div className="chat__bubble" style={{ minWidth: '200px' }}>
         <button
           onClick={() => setExpanded(!expanded)}

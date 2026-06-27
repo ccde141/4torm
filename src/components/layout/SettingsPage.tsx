@@ -58,7 +58,7 @@ export default function SettingsPage() {
           </p>
         </div>
         <div style={{ position: 'relative' }}>
-          <button onClick={() => setShowPresets(!showPresets)} style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-accent)', color: 'var(--color-text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer' }}>
+          <button onClick={() => setShowPresets(!showPresets)} style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer' }}>
             + 添加提供商 {showPresets ? '▲' : '▼'}
           </button>
           {showPresets && (
@@ -262,14 +262,14 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
             <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
               <button onClick={() => setChecked(new Set(fetchedModels))} style={tinyBtnStyle}>全选</button>
               <button onClick={() => setChecked(new Set())} style={tinyBtnStyle}>清空</button>
-              <button onClick={handleConfirmModels} style={{ ...tinyBtnStyle, background: hasChange ? 'var(--color-accent)' : 'var(--color-surface)', color: hasChange ? 'var(--color-text-inverse)' : 'var(--color-text-tertiary)', border: `1px solid ${hasChange ? 'var(--color-accent)' : 'var(--border-color)'}` }}>确认选择</button>
+              <button onClick={handleConfirmModels} style={{ ...tinyBtnStyle, background: hasChange ? 'var(--color-accent)' : 'var(--color-surface)', color: hasChange ? 'var(--color-on-accent)' : 'var(--color-text-tertiary)', border: `1px solid ${hasChange ? 'var(--color-accent)' : 'var(--border-color)'}` }}>确认选择</button>
             </div>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
             {fetchedModels.map(m => {
               const sel = checked.has(m);
               return (
-                <button key={m} onClick={() => handleToggleModel(m)} style={{ ...modelTagStyle, background: sel ? 'var(--color-accent)' : 'var(--color-bg)', color: sel ? 'var(--color-text-inverse)' : 'var(--color-text)', border: `1px solid ${sel ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
+                <button key={m} onClick={() => handleToggleModel(m)} style={{ ...modelTagStyle, background: sel ? 'var(--color-accent)' : 'var(--color-bg)', color: sel ? 'var(--color-on-accent)' : 'var(--color-text)', border: `1px solid ${sel ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
                   {sel ? '✓ ' : ''}{m}
                 </button>
               );
@@ -316,7 +316,7 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
             placeholder="输入模型名称，如 nvidia/llama-3.1-nemotron-70b-instruct"
             style={{ ...inputStyle, flex: 1 }}
           />
-          <button onClick={handleAddModel} style={{ ...smallBtnStyle, background: 'var(--color-accent)', color: 'var(--color-text-inverse)', border: 'none', whiteSpace: 'nowrap' }}>添加</button>
+          <button onClick={handleAddModel} style={{ ...smallBtnStyle, background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none', whiteSpace: 'nowrap' }}>添加</button>
         </div>
       </div>
 
