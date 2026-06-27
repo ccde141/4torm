@@ -6,6 +6,7 @@
 
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { storageRoutes } from './routes/storage.js';
@@ -111,6 +112,23 @@ initMcpManager(DATA_DIR).catch(e => console.error('[MCP] init failed:', e.messag
 
 // 健康检查
 app.get('/api/health', async () => ({ status: 'ok', ts: Date.now() }));
+
+// 生产：托管前端构建产物 dist/（dev 由 Vite dev server 提供，本块不启用）。
+// 由 SERVE_STATIC=1 或 NODE_ENV=production 触发；Electron 打包后用此自托管，
+// 业务 /api、/skin 路由已先注册，优先级高于静态文件。
+const DIST_DIR = path.join(PROJECT_ROOT, 'dist');
+const SERVE_STATIC = process.env.SERVE_STATIC === '1' || process.env.NODE_ENV === 'production';
+if (SERVE_STATIC && fs.existsSync(DIST_DIR)) {
+  await app.register(fastifyStatic, { root: DIST_DIR, prefix: '/', wildcard: false });
+  // SPA 回退：非 /api、非 /skin 的 GET 未命中静态文件 → 返回 index.html（前端路由自处理）
+  app.setNotFoundHandler((req, reply) => {
+    if (req.method === 'GET' && !req.url.startsWith('/api') && !req.url.startsWith('/skin')) {
+      return reply.sendFile('index.html');
+    }
+    return reply.status(404).send({ error: 'Not Found' });
+  });
+  console.log(`[startup] 静态托管已启用：${DIST_DIR}`);
+}
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 

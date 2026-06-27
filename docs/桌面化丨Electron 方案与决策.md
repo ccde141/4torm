@@ -37,6 +37,17 @@
 2. `preload` + `contextBridge`：把"拖入文件的真实路径"安全暴露给前端（拖拽痛点的解法）。
 3. `electron-builder` 打包配置。
 
+### 实施进展（2026-06-27）
+- ✅ Electron dev 外壳 + 原生拖拽路径录入（季风/对流/工作室）。
+- ✅ 应用图标（风暴 logo）+ 更名 4torm（`app.setName` / `setAppUserModelId` / package name）。
+- ✅ **生产自托管**：`server` 接入 `@fastify/static`，`SERVE_STATIC=1`（或 `NODE_ENV=production`）时托管 `dist/` 并对非 `/api`·`/skin` 的 GET 做 SPA 回退到 `index.html`。`/api`·`/skin` 路由优先级更高，不受影响。
+  - 验证脚本：`npm run start:prod`（仅服务端自托管，浏览器访问 `:3001`）。
+  - Electron 生产：`app.isPackaged` 或 `ELECTRON_PROD=1` 时主进程 `spawn` 该服务、轮询 `/api/health` 起来后再开窗，退出时掐子进程。预览：`npm run electron:prod`。
+- ⏳ **剩余打包工作**（需 GUI/安装包环境验证，本地无头环境难验证）：
+  1. `electron-builder` 配置（appId、`extraResources` 随附 `server/` 源码+`node_modules`、接 `build/icon.ico`）。
+  2. 服务端入口由 `tsx` 直跑改为 `esbuild` 预打包成单文件（去运行时 tsx 依赖、加速冷启）。
+  3. **数据目录迁移**：当前 `DATA_DIR = PROJECT_ROOT/data`，打包后该路径只读，需改用 `app.getPath('userData')`；注意 cyclone 工作区 `path.resolve(dataDir,'..')` 的沙箱根也要随之调整。
+
 安全：renderer 关 `nodeIntegration`，仅通过 preload + contextBridge 暴露白名单能力。
 
 > 注：HTTP-on-localhost 对 Electron 是**完全合法的长期架构**，很多桌面应用就这么做。不一定非要迁 IPC。
