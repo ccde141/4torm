@@ -36,14 +36,6 @@ export default function ToolsPage() {
         />
       )}
 
-      {editingName && (
-        <ToolForm
-          initial={tools.find(t => t.name === editingName)}
-          onSave={async (tool) => { await saveTools(tools.map(t => t.name === editingName ? tool : t)); setEditingName(null); refresh(); }}
-          onCancel={() => setEditingName(null)}
-        />
-      )}
-
       {tools.length === 0 && !adding && (
         <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)' }}>
           <p style={{ fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>还没有注册任何工具</p>
@@ -53,10 +45,20 @@ export default function ToolsPage() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', marginTop: adding ? 'var(--space-4)' : 0 }}>
         {tools.map(t => (
-          <ToolCard key={t.name} tool={t} onEdit={() => setEditingName(t.name)} onDelete={async () => {
-            await saveTools(tools.filter(x => x.name !== t.name));
-            refresh();
-          }} />
+          // 编辑时在原位用表单替换卡片，避免表单跳到页面顶部、看起来「没反应」
+          t.name === editingName ? (
+            <ToolForm
+              key={t.name}
+              initial={t}
+              onSave={async (tool) => { await saveTools(tools.map(x => x.name === editingName ? tool : x)); setEditingName(null); refresh(); }}
+              onCancel={() => setEditingName(null)}
+            />
+          ) : (
+            <ToolCard key={t.name} tool={t} onEdit={() => setEditingName(t.name)} onDelete={async () => {
+              await saveTools(tools.filter(x => x.name !== t.name));
+              refresh();
+            }} />
+          )
         ))}
       </div>
     </div>
