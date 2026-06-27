@@ -28,12 +28,15 @@ const leftPanelStyle: React.CSSProperties = {
   flexDirection: 'column',
   padding: 'var(--space-4)',
   overflowY: 'auto',
+  background: 'var(--glass-bg-strong)',
+  backdropFilter: 'blur(var(--glass-blur))',
+  WebkitBackdropFilter: 'blur(var(--glass-blur))',
 };
 
 const sectionLabel: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   fontWeight: 'var(--font-semibold)',
-  color: 'var(--color-text-tertiary)',
+  color: 'var(--color-text-secondary)',
   textTransform: 'uppercase',
   letterSpacing: '0.05em',
   marginBottom: 'var(--space-2)',

@@ -58,6 +58,8 @@
   /* ─── 玻璃质感（frosted glass） ────────────────────── */
   --glass-bg:           rgba(24, 24, 27, 0.50);
   --glass-bg-hover:     rgba(39, 39, 42, 0.60);
+  /* 文字密集的侧栏：与主导航玻璃一致，靠模糊而非压黑提升可读性（过黑会呆板） */
+  --glass-bg-strong:    rgba(24, 24, 27, 0.50);
   --glass-border:       rgba(255, 255, 255, 0.08);
   --glass-border-hover: rgba(255, 255, 255, 0.14);
   --glass-blur:         16px;
@@ -139,6 +141,9 @@
   --color-border:             var(--border-color);
   --color-bg-hover:           var(--color-bg-tertiary);
   --color-text-quaternary:    #52525b;
+  /* 之前被引用却从未定义（McpPage / chat compact），会回退成亮白；统一为可读次级灰 */
+  --color-text-muted:         var(--color-text-secondary);
+  --text-muted:               var(--color-text-secondary);
   --color-danger:             var(--color-error);
   --color-danger-hover:       #c53030;
 
