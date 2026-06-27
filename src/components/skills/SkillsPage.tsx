@@ -107,7 +107,7 @@ export default function SkillsPage() {
 
       <div className="skills-grid" style={{ marginTop: showCreate ? 'var(--space-6)' : 0 }}>
         {skills.length === 0 && (
-          <div style={{ padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center', gridColumn: '1 / -1' }}>
+          <div style={{ padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center', gridColumn: '1 / -1', textShadow: 'var(--text-halo)' }}>
             暂无技能。<br />
             <span style={{ fontSize: 'var(--text-xs)' }}>小白模式：等待系统推送预置技能<br />开发者模式：点击「新建技能」手动创建<br />Agent 自注册：Agent 通过 write_file 自动创建</span>
           </div>

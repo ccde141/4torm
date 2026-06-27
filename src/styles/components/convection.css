@@ -139,6 +139,8 @@
   display: flex;
   flex-direction: column;
   min-width: 300px;
+  /* 整个主面板无背板、直接浮在背景图上 → 文字统一加描边光晕 */
+  text-shadow: var(--text-halo);
 }
 
 /* ─── Resizer Handle ─────────────────────────────────── */

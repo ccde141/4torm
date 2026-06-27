@@ -856,6 +856,8 @@
   cursor: text;
   border-bottom: 1px solid transparent;
   transition: border-color var(--duration-fast);
+  /* 标题浮在无背板的对话头部、直接压背景图 → 描边光晕 */
+  text-shadow: var(--text-halo);
 }
 
 .chat__title:hover {
@@ -902,6 +904,8 @@
   cursor: pointer;
   padding: 2px 8px;
   border-radius: var(--border-radius-xs);
+  /* 整行直接浮在背景图上、无背板 → 描边光晕 */
+  text-shadow: var(--text-halo);
   transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo);
 }
 
@@ -940,7 +944,10 @@
   color: var(--color-text-tertiary);
   margin-top: var(--space-1);
   user-select: none;
-  opacity: 0.6;
+  /* 原 opacity:0.6 叠在中灰上、又只有 10px，亮图下几乎消失；
+   * 改为轻度淡化 + 描边光晕，保持次要感的同时任意背景都可读 */
+  opacity: 0.8;
+  text-shadow: var(--text-halo);
 }
 .chat__message--user .chat__timestamp {
   text-align: right;

@@ -179,7 +179,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
       {/* Config bar：在场工位（流式中禁改，避免中途增删工位扰乱在跑的轮） */}
       <div className="conv__config">
         <span className="conv__config-label">在场:</span>
-        {room.participantSeatIds.length === 0 && <span style={{ opacity: .5, fontSize: 'var(--text-xs)' }}>（空，从右侧添加工位）</span>}
+        {room.participantSeatIds.length === 0 && <span style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--text-xs)', textShadow: 'var(--text-halo)' }}>（空，从右侧添加工位）</span>}
         {room.participantSeatIds.map((id, idx) => (
           <span key={id} className="conv__tag">
             <button onClick={() => moveSeat(idx, -1)} disabled={streaming || idx === 0} className="conv__tag-move">↑</button>

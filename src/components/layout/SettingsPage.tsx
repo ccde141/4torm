@@ -48,12 +48,12 @@ export default function SettingsPage() {
   };
 
   return (
-    <div style={{ padding: 'var(--space-6)', maxWidth: '720px', margin: '0 auto' }}>
+    <div style={{ padding: 'var(--space-6)', maxWidth: '720px', margin: '0 auto', background: 'var(--glass-bg-soft)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)' }}>
-        <div>
+        <div style={{ textShadow: 'var(--text-halo)' }}>
           <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-bold)', margin: '0 0 var(--space-1) 0' }}>LLM 提供商设置</h2>
-          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-tertiary)', margin: 0 }}>添加多个提供商，模型自动同步到对话页面的选择清单</p>
-          <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', margin: 'var(--space-1) 0 0 0' }}>
+          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', margin: 0 }}>添加多个提供商，模型自动同步到对话页面的选择清单</p>
+          <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', margin: 'var(--space-1) 0 0 0' }}>
             预设均为 OpenAI 兼容服务。使用 Anthropic 等非 OpenAI API，可部署 <a href="https://github.com/songquanpeng/one-api" target="_blank" style={{color: 'var(--color-accent)'}}>one-api</a> 或 <a href="https://github.com/BerriAI/litellm" target="_blank" style={{color: 'var(--color-accent)'}}>LiteLLM</a> 作为翻译层，填入其地址即可
           </p>
         </div>
@@ -80,7 +80,7 @@ export default function SettingsPage() {
       </div>
 
       {providers.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)' }}>还没有配置提供商，点击「添加提供商」开始</div>
+        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textShadow: 'var(--text-halo)' }}>还没有配置提供商，点击「添加提供商」开始</div>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>

@@ -14,9 +14,9 @@ export default function ToolsPage() {
   const refresh = () => getTools().then(setTools);
 
   return (
-    <div style={{ padding: 'var(--space-6)', maxWidth: '900px', margin: '0 auto', height: '100%', overflowY: 'auto' }}>
+    <div style={{ padding: 'var(--space-6)', maxWidth: '900px', margin: '0 auto', height: '100%', overflowY: 'auto', background: 'var(--glass-bg-soft)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-6)' }}>
-        <div>
+        <div style={{ textShadow: 'var(--text-halo)' }}>
           <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-bold)', margin: '0 0 var(--space-1) 0' }}>全局工具注册表</h2>
           <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', margin: 0 }}>
             注册一次，所有 Agent 共用。在 Agent 配置中勾选即可启用。
@@ -37,7 +37,7 @@ export default function ToolsPage() {
       )}
 
       {tools.length === 0 && !adding && (
-        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)' }}>
+        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', textShadow: 'var(--text-halo)' }}>
           <p style={{ fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>还没有注册任何工具</p>
           <p style={{ fontSize: 'var(--text-xs)' }}>点击右上角「注册工具」开始，或系统会自动导入 4 个内置工具模板</p>
         </div>
