@@ -32,6 +32,8 @@ interface SeatRunner {
   ctrl: AbortController;
   /** 流式中删工位 → 标记弃用（这里仅前端语义，服务端 abort 已发） */
   abandoned: boolean;
+  /** 用户手动「停止」→ true。done-effect 据此「退回队列入框」而非续发。 */
+  userStopped: boolean;
   /** 转入后台的时刻；0 = 前台正在看，永不淘汰 */
   backgroundedAt: number;
 }
@@ -136,9 +138,16 @@ export interface StartStreamOpts {
 /**
  * @param onSeatFinished 任一工位流结束后回调（CyclonePage 级稳定引用，用于刷新侧栏 pending 标记）
  */
+/** 排队消息上限（与 QueuedChips MAX_QUEUE 一致）。 */
+const MAX_QUEUE = 3;
+
 export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void) {
   const runners = useRef(new Map<string, SeatRunner>());
   const listeners = useRef(new Map<string, Set<() => void>>());
+  /** seatId → 待发消息队列。独立于 runner，clearIfDone 删 runner 后仍存活，跨重挂保留。 */
+  const queues = useRef(new Map<string, string[]>());
+  /** seatId → 输入框草稿。同样独立存活，切走/重挂不丢未发文本（仅内存，硬退出不留）。 */
+  const drafts = useRef(new Map<string, string>());
 
   const notify = useCallback((seatId: string) => {
     listeners.current.get(seatId)?.forEach(cb => cb());
@@ -153,6 +162,49 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void) {
   }, []);
 
   const getRunner = useCallback((seatId: string): SeatRunner | undefined => runners.current.get(seatId), []);
+
+  // ── 消息队列：运行期发送先入队，本轮结束后由 SeatChat done-effect 逐条出队 ──
+  /** 当前队列（只读快照引用；chips 渲染用）。 */
+  const getQueue = useCallback((seatId: string): string[] => queues.current.get(seatId) ?? [], []);
+  /** 入队一条；满（≥MAX_QUEUE）返回 false。 */
+  const enqueue = useCallback((seatId: string, text: string): boolean => {
+    let q = queues.current.get(seatId);
+    if (!q) { q = []; queues.current.set(seatId, q); }
+    if (q.length >= MAX_QUEUE) return false;
+    q.push(text);
+    notify(seatId);
+    return true;
+  }, [notify]);
+  /** 出队队首；空返回 null。 */
+  const dequeue = useCallback((seatId: string): string | null => {
+    const q = queues.current.get(seatId);
+    if (!q || q.length === 0) return null;
+    const next = q.shift()!;
+    if (q.length === 0) queues.current.delete(seatId);
+    notify(seatId);
+    return next;
+  }, [notify]);
+  /** 撤掉队列中第 index 条。 */
+  const removeQueued = useCallback((seatId: string, index: number) => {
+    const q = queues.current.get(seatId);
+    if (!q || index < 0 || index >= q.length) return;
+    q.splice(index, 1);
+    if (q.length === 0) queues.current.delete(seatId);
+    notify(seatId);
+  }, [notify]);
+  /** 取出全部排队项并清空（用户「停止」时退回输入框）。 */
+  const takeAllQueued = useCallback((seatId: string): string[] => {
+    const q = queues.current.get(seatId) ?? [];
+    queues.current.delete(seatId);
+    if (q.length) notify(seatId);
+    return q;
+  }, [notify]);
+
+  // ── 输入框草稿：切走/重挂保留未发文本（内存级） ──
+  const getDraft = useCallback((seatId: string): string => drafts.current.get(seatId) ?? '', []);
+  const setDraft = useCallback((seatId: string, text: string) => {
+    if (text) drafts.current.set(seatId, text); else drafts.current.delete(seatId);
+  }, []);
 
   /** 后台流超额淘汰最老的（abort 触发服务端落库）。 */
   const evictIfNeeded = useCallback(() => {
@@ -177,7 +229,7 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void) {
   /** 手动停止：abort 本地流 + 通知服务端 abort。 */
   const abortSeat = useCallback((workshopId: string, seatId: string, pathOverride?: string) => {
     const r = runners.current.get(seatId);
-    if (r) r.ctrl.abort();
+    if (r) { r.userStopped = true; r.ctrl.abort(); }
     fetch(streamUrl(pathOverride ?? `/api/cyclone/workshop/${workshopId}/seat/${seatId}/abort`), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     }).catch(() => {});
@@ -188,6 +240,8 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void) {
     const r = runners.current.get(seatId);
     if (!r) return;
     r.abandoned = true;
+    queues.current.delete(seatId);   // 删工位连带清掉其排队 / 草稿
+    drafts.current.delete(seatId);
     abortSeat(workshopId, seatId);
   }, [abortSeat]);
 
@@ -210,6 +264,7 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void) {
       done: false,
       ctrl,
       abandoned: false,
+      userStopped: false,
       backgroundedAt: 0,
     };
     runners.current.set(seatId, runner);
@@ -236,7 +291,8 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void) {
     })();
   }, [notify, onSeatFinished]);
 
-  return { subscribe, getRunner, startStream, background, foreground, abortSeat, kill, clearIfDone };
+  return { subscribe, getRunner, startStream, background, foreground, abortSeat, kill, clearIfDone,
+    getQueue, enqueue, dequeue, removeQueued, takeAllQueued, getDraft, setDraft };
 }
 
 export type SeatStreamRunners = ReturnType<typeof useSeatStreamRunners>;

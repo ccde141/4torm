@@ -38,6 +38,7 @@ export default function AgentConfigModal(props: Props) {
   const [model, setModel] = useState(agent?.model ?? '');
   const [label, setLabel] = useState(agent?.label ?? '');
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [allModels, setAllModels] = useState<{ key: string; label: string }[]>([]);
   const [allTools, setAllTools] = useState<ToolDef[]>([]);
   const [checkedTools, setCheckedTools] = useState<Set<string>>(new Set(agent?.config?.tools ?? []));
@@ -90,16 +91,23 @@ export default function AgentConfigModal(props: Props) {
   }, []);
 
   const handleSave = async () => {
+    if (saving || saved) return;
     const config: AgentConfig = { masterPrompt: '', rolePrompt, temperature: temperature || undefined, tools: [...checkedTools], skills: [...checkedSkills], workspace: workspace || undefined, sandboxLevel };
-    if (isCreate) {
-      await createAgent({ name: name || '新 Agent', role, description, model, config, label: label || undefined });
-    } else {
-      const a = agent as Agent;
-      await updateAgentConfig(a.id, config, model);
-      const { updateAgent } = await import('../../store/agent');
-      await updateAgent(a.id, { name, role, description, label: label || undefined });
+    setSaving(true);
+    try {
+      if (isCreate) {
+        await createAgent({ name: name || '新 Agent', role, description, model, config, label: label || undefined });
+      } else {
+        const a = agent as Agent;
+        await updateAgentConfig(a.id, config, model);
+        const { updateAgent } = await import('../../store/agent');
+        await updateAgent(a.id, { name, role, description, label: label || undefined });
+      }
+    } catch {
+      setSaving(false);   // 失败：恢复，允许重试
+      return;
     }
-    setSaved(true);
+    setSaved(true);       // 成功：转「✓ 已保存」并在关闭前保持禁用
     props.onSave();
     setTimeout(props.onClose, 600);
   };
@@ -334,8 +342,8 @@ export default function AgentConfigModal(props: Props) {
         </div>
 
         <div className="config-modal-footer">
-          <button className="config-btn config-btn-cancel" onClick={close}>取消</button>
-          <button className={`config-btn config-btn-save ${saved ? 'config-btn-done' : ''}`} onClick={handleSave}>{saved ? '✓ 已保存' : isCreate ? '创建 Agent' : '保存配置'}</button>
+          <button className="config-btn config-btn-cancel" onClick={close} disabled={saving}>取消</button>
+          <button className={`config-btn config-btn-save ${saved ? 'config-btn-done' : ''}`} onClick={handleSave} disabled={saving || saved}>{saved ? '✓ 已保存' : saving ? '保存中…' : isCreate ? '创建 Agent' : '保存配置'}</button>
         </div>
       </div>
     </div>

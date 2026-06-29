@@ -11,14 +11,19 @@ export interface ToolDef {
  * 注意：路径相关说明已迁移至 sandbox-prompt.ts buildSandboxSection。
  * 本段仅描述「能力」本身，不再提及「路径」「工作区位置」。
  */
-function buildSelfManagementSection(): string {
+export function buildSelfManagementSection(): string {
   return `
-## 能力扩展（创建工具与技能）
+## 能力扩展（工具 / 技能 / MCP）
 
-你有能力为自己创建新工具和新技能。详细参考文档位于项目根目录的 docs/ 下。
+你可以查看框架内已注册的能力，也能为自己创建新工具和新技能。详细指南在 \`docs/extend/\` 下。
+
+### 查看当前已注册的能力
+- 工具：读 \`data/tools/registry.json\`（定义）；执行器在 \`data/tools/executors/*.js\`
+- 技能：用 list_directory 列 \`data/skills/\`；各技能正文在 \`data/skills/{名称}/SKILL.md\`
+- MCP：读 \`data/mcp/servers.json\`；其工具以 \`mcp:服务名:工具名\` 注入，用 \`mcp:服务名:*\` 通配引用
 
 ### 创建新工具（Tool）
-详细参考 \`docs/tools-reference.md\`，简要步骤：
+详细参考 \`docs/extend/tools.md\`，简要步骤：
 1. 用 list_directory 探索项目结构，确认 \`data/tools/\` 目录存在
 2. 读取 \`data/tools/registry.json\` 查看已有工具定义（JSON 数组）
 3. 创建执行器文件 \`data/tools/executors/{tool名称}.js\`：
@@ -29,11 +34,14 @@ function buildSelfManagementSection(): string {
 5. 新工具在下次 \`<action tool="工具名">\` 调用时自动可用，无需重启
 
 ### 创建新技能（Skill）
-详细参考 \`docs/skills-reference.md\`，简要步骤：
+详细参考 \`docs/extend/skills.md\`，简要步骤：
 1. 创建目录 \`data/skills/{技能名称}/\`
 2. 创建 \`config.json\` + \`SKILL.md\`
 3. 可选: \`tools.json\` + \`executors/\` 目录
 4. 新技能自动被系统发现，无需重启
+
+### 接入 MCP 外部服务
+详细参考 \`docs/extend/mcp.md\`。在 \`data/mcp/servers.json\` 追加一项（name/command/args/env），连上后其工具以 \`mcp:服务名:*\` 提供。
 
 ### 重要提示
 - 创建 executor 文件前先读取一个已有的执行器（如 \`data/tools/executors/read_file.js\`）作为模板

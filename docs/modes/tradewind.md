@@ -13,6 +13,7 @@
 | **Entry** | 入口节点,定义工作流输入内容 |
 | **Agent** | 工作 Agent,执行 ReAct 循环完成任务 |
 | **Meeting** | 会议室,多个 Agent 圆桌讨论 + 会长纪要 |
+| **暂停点 Human Gate** | 人工审查节点:流程执行到此暂停等待你放行;可将信封打回上游重做(rework) |
 | **Output** | 输出节点,收集上游结果并汇总输出 |
 | **Note** | 编译期静态注入,追加到下游 Agent 的 system prompt |
 
@@ -91,7 +92,7 @@ Agent 进入 ReAct 循环:
 
 ### Sub-Agent 派发
 
-Agent 节点内 Agent 可类似季风般调用 `spawn_sub_agents` 派发子 Agent 执行并行子任务。每个子 Agent 独立 ReAct 循环,结果汇总到母 Agent。
+Agent 节点内 Agent 可类似季风般调用 `delegate` 派发子 Agent 执行子任务。每个子 Agent 独立 ReAct 循环,结果汇总到母 Agent。
 
 ## Meeting 节点详情
 

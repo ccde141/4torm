@@ -6,6 +6,7 @@ import MessageItem from './MessageItem';
 import { useSessionList } from './useSessionList';
 import { useMessageEditor } from './useMessageEditor';
 import { useStreamRunners } from './useStreamRunners';
+import QueuedChips, { MAX_QUEUE } from './QueuedChips';
 import { runStreamLoop } from '../../engine/chat/streamLoop';
 import { streamUrl } from '../../lib/apiBase';
 import { useDroppedPathInput } from '../../lib/useDroppedPathInput';
@@ -52,6 +53,8 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   const [messages, setMessagesRaw] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
+  /** 队列变更后强制重渲染 chips（队列存于注册表 ref，不自动触发渲染） */
+  const [, bumpQueue] = useState(0);
   const [models, setModels] = useState<{ key: string; label: string }[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -330,21 +333,30 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
         }
       }
     } finally {
+      const stopped = streamRunners.runners.current.get(sid)?.userStopped ?? false;
       streamRunners.finalize(sid);
       setAgentStatus(selectedAgent.id, 'idle');
+      afterFinish(sid, stopped);
     }
   };
 
-  const handleSend = async () => {
-    const cmd = input.trim();
+  const handleSend = async (textArg?: string) => {
+    const fromQueue = typeof textArg === 'string';   // 出队续发：文本显式传入，不读输入框
+    const text = (textArg ?? input).trim();
+    const cmd = text;
 
-    if (!input.trim() || !selectedAgent || streaming) return;
+    if (!text || !selectedAgent) return;
+    // 运行期交互发送 → 入队，不打断当前流（drain 调用 fromQueue=true 时跳过，直接发）
+    if (!fromQueue && streaming) {
+      if (activeSessionId && streamRunners.enqueue(activeSessionId, text)) { setInput(''); bumpQueue(t => t + 1); }
+      return;
+    }
     // 同步锁：入口立即置位，挡住 await 期间（getAgent/getSession 读大文件慢）的二次点击
     if (sendingRef.current) return;
     sendingRef.current = true;
     if (cmd === '/compact') {
       sendingRef.current = false;
-      setInput('');
+      if (!fromQueue) setInput('');
       if (!activeSessionId) return;
       const session = await getSession(activeSessionId);
       if (!session) return;
@@ -355,11 +367,11 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     // 立即上屏：在任何 await 之前同步完成，按下发送的瞬间消息就显示、输入框就清空。
     // （之前 setMessages 被前面的 await getAgent 挡住，连接堵车时要等 1~2s 才上屏，
     //  造成"按了没反应"的错觉 → 用户二次点击 → 双发。）
-    const userMsg: ChatMessage = { id: generateMessageId(), role: 'user', content: input.trim(), timestamp: new Date().toISOString(), agentId: selectedAgent.id };
+    const userMsg: ChatMessage = { id: generateMessageId(), role: 'user', content: text, timestamp: new Date().toISOString(), agentId: selectedAgent.id };
     console.log(`[${userMsg.timestamp}] 人类 → ${selectedAgent.name}: ${userMsg.content.slice(0, 80)}`);
     const updatedMessages = [...messagesRef.current, userMsg];
     setMessages(updatedMessages);
-    setInput('');
+    if (!fromQueue) setInput('');   // 出队续发不动当前正在输入的草稿
     setStreaming(true);
     setAgentStatus(selectedAgent.id, 'busy');
 
@@ -444,11 +456,27 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       abortController,
       isAbandoned: () => streamRunners.runners.current.get(sid2)?.abandoned ?? false,
       onFinish: () => {
+        const stopped = streamRunners.runners.current.get(sid2)?.userStopped ?? false;
         streamRunners.finalize(sid2);
         setAgentStatus(selectedAgent.id, 'idle');
+        afterFinish(sid2, stopped);
       },
     });
   };
+
+  /** 本轮流结束后：用户停止 → 退回队列入框；自然结束 → 出队续发下一条。 */
+  const afterFinish = (sid: string, stopped: boolean) => {
+    if (stopped) {
+      const items = streamRunners.takeAllQueued(sid);
+      if (items.length) setInput(prev => [...items, prev].filter(s => s.trim()).join('\n'));
+    } else {
+      const next = streamRunners.dequeue(sid);
+      if (next != null) handleSend(next);   // 逐条续发
+    }
+    bumpQueue(t => t + 1);
+  };
+
+  const queue = activeSessionId ? streamRunners.getQueue(activeSessionId) : [];
 
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
 
@@ -545,14 +573,20 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             </div>
 
             <div className="chat__input-area">
+              <QueuedChips items={queue} onRemove={i => { if (activeSessionId) { streamRunners.removeQueued(activeSessionId, i); bumpQueue(t => t + 1); } }} />
               <div className="chat__input-wrapper">
-                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} placeholder={streaming ? '等待回复中...' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} disabled={streaming} aria-label="输入消息" />
+                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} placeholder={streaming ? '回复中…（可继续输入，发送将排队）' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} aria-label="输入消息" />
                 {streaming ? (
-                  <button className="chat__stop-btn" onClick={() => { if (activeSessionId) streamRunners.runners.current.get(activeSessionId)?.abort(); fetch(streamUrl('/api/conversation/abort'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); setStreaming(false); }} title="停止生成">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
-                  </button>
+                  <>
+                    <button className="chat__send-btn" onClick={() => handleSend()} disabled={!input.trim() || queue.length >= MAX_QUEUE} title={queue.length >= MAX_QUEUE ? '队列已满（最多 3 条）' : '加入队列'}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
+                    </button>
+                    <button className="chat__stop-btn" onClick={() => { if (activeSessionId) { const r = streamRunners.runners.current.get(activeSessionId); if (r) r.userStopped = true; r?.abort(); } fetch(streamUrl('/api/conversation/abort'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); setStreaming(false); }} title="停止生成">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+                    </button>
+                  </>
                 ) : (
-                  <button className="chat__send-btn" onClick={handleSend} disabled={!input.trim() || streaming}>
+                  <button className="chat__send-btn" onClick={() => handleSend()} disabled={!input.trim()}>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
                   </button>
                 )}

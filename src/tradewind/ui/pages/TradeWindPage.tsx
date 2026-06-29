@@ -55,10 +55,9 @@ export default function TradeWindPage() {
           return;
         }
       }
-      // 没有可恢复的工作流，自动新建
+      // 没有可恢复的工作流，开一张空白画布（仅内存，不落盘；加了节点保存/运行时才创建目录）
       const newId = `wf-${Date.now().toString(36)}`;
       store.loadGraph({ nodes: [], edges: [] }, newId);
-      await store.save();
     };
     init();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -118,13 +117,15 @@ export default function TradeWindPage() {
     return () => clearInterval(timer);
   }, [store.workflowId, store]);
 
-  const handleRun = useCallback(() => {
+  const handleRun = useCallback(async () => {
     const graph = store.getGraph();
     const errors = validateGraph(graph);
     if (errors.length > 0) {
       alert('工作流校验未通过：\n\n' + errors.join('\n'));
       return;
     }
+    // 运行前先保存：确保后端工作流目录 / workspace 已创建（新建后未手动保存也能直接跑）
+    await store.save();
     execution.start(graph, store.workflowId);
   }, [store, execution]);
 
@@ -137,11 +138,10 @@ export default function TradeWindPage() {
     setSaveTime(Date.now());
   }, [store]);
 
-  const handleNew = useCallback(async () => {
+  const handleNew = useCallback(() => {
     const newId = `wf-${Date.now().toString(36)}`;
     store.loadGraph({ nodes: [], edges: [] }, newId);
-    // 立即持久化，确保后端创建文件夹 + workspace
-    await store.save();
+    // 不立即落盘：空工作流无内容，等加了节点保存/运行时才创建目录（避免 0 节点幽灵 + 列表噪声）
   }, [store]);
 
   const handleDelete = useCallback(async (id: string) => {

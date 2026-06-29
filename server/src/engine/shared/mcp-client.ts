@@ -56,6 +56,8 @@ export class McpStdioClient extends EventEmitter {
   private buffer = '';
   private _connected = false;
   private _tools: McpToolDef[] = [];
+  /** 标记本次退出是否为用户/管理器主动断开（用于区分崩溃，决定要不要自动重连） */
+  private _intentional = false;
 
   constructor(private config: McpServerConfig) {
     super();
@@ -68,6 +70,7 @@ export class McpStdioClient extends EventEmitter {
   /** 启动子进程并完成 MCP 握手 */
   async connect(): Promise<void> {
     if (this._connected) return;
+    this._intentional = false;
 
     const env = { ...process.env, ...this.config.env };
     this.proc = spawn(this.config.command, this.config.args || [], {
@@ -84,7 +87,13 @@ export class McpStdioClient extends EventEmitter {
     this.proc.on('exit', (code) => {
       this._connected = false;
       this.rejectAll(new Error(`MCP server ${this.config.name} exited with code ${code}`));
-      this.emit('disconnected', code);
+      this.emit('disconnected', { code, intentional: this._intentional });
+    });
+    this.proc.on('error', (err) => {
+      // spawn 本身失败（命令不存在等）
+      this._connected = false;
+      this.rejectAll(new Error(`MCP server ${this.config.name} spawn error: ${err.message}`));
+      this.emit('disconnected', { code: null, intentional: this._intentional });
     });
 
     // 等待进程就绪（给 100ms 让 stdio 建立）
@@ -131,8 +140,9 @@ export class McpStdioClient extends EventEmitter {
     return typeof result === 'string' ? result : JSON.stringify(result);
   }
 
-  /** 断开连接 */
+  /** 断开连接（主动）。标记 intentional，使管理器不会对其自动重连。 */
   disconnect(): void {
+    this._intentional = true;
     if (this.proc) {
       try { this.proc.kill(); } catch {}
       this.proc = null;

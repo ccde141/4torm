@@ -9,6 +9,7 @@ import { getAgents } from '../../../store/agent';
 import { parseStructuredOutput } from '../../../engine/parser';
 import { renderTextWithCode } from '../../../engine/markdown';
 import StructuredMessage from '../../../components/chat/StructuredMessage';
+import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { formatTimestamp } from '../../../utils/time';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import '../../../styles/components/convection.css';
@@ -44,6 +45,26 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
   const cRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const cAbortRef = useRef<AbortController | null>(null);
+  // 主对话框消息队列：运行期发送先入队（按 activeId 索引），本轮结束后由 busy 落定 effect 出队
+  const queueRef = useRef(new Map<string, string[]>());
+  const stoppedRef = useRef(false);   // 用户手动「停止」→ 退回队列入框而非续发
+  const prevBusyRef = useRef(false);
+  const speakRef = useRef<(t?: string) => void>(() => {});
+  const [, bumpQueue] = useState(0);
+  const enqueueMsg = (sid: string, text: string): boolean => {
+    let q = queueRef.current.get(sid);
+    if (!q) { q = []; queueRef.current.set(sid, q); }
+    if (q.length >= MAX_QUEUE) return false;
+    q.push(text); bumpQueue(t => t + 1); return true;
+  };
+  const removeQueuedMsg = (sid: string, i: number) => {
+    const q = queueRef.current.get(sid);
+    if (!q || i < 0 || i >= q.length) return;
+    q.splice(i, 1);
+    if (!q.length) queueRef.current.delete(sid);
+    bumpQueue(t => t + 1);
+  };
+  const queue = activeId ? (queueRef.current.get(activeId) ?? []) : [];
   const convRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // 桌面端：拖入文件 → 路径进「主对话框（发言）」，绕开会长私聊栏（cInput）
@@ -235,9 +256,15 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
     }
   }, [cMsgs]);
 
-  const handleSpeak = useCallback(async () => {
-    if (!input.trim() || busy || !activeId) return;
-    const msg = input.trim(); setInput('');
+  const handleSpeak = useCallback(async (textArg?: string) => {
+    const fromQueue = typeof textArg === 'string';   // 出队续发：文本显式传入，不读输入框
+    const msg = (textArg ?? input).trim();
+    if (!msg || !activeId) return;
+    if (!fromQueue && busy) {                          // 运行期：入队，不打断当前轮
+      if (enqueueMsg(activeId, msg)) setInput('');
+      return;
+    }
+    if (!fromQueue) setInput('');
 
     // 指令拦截
     if (msg === '/reset' || msg === '/reset summary') {
@@ -317,6 +344,30 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
       }
     } finally { abortRef.current = null; setBusy(false); refreshSessions(); }
   }, [input, busy, activeId, refreshSessions]);
+
+  // 始终持有最新 handleSpeak，供 busy 落定 effect 调用（避开闭包里过期的 busy）
+  speakRef.current = handleSpeak;
+
+  // 本轮 busy 落定（true→false）后：用户停止 → 退回队列入框；自然结束 → 出队续发下一条
+  useEffect(() => {
+    if (prevBusyRef.current && !busy && activeId) {
+      const q = queueRef.current.get(activeId) ?? [];
+      if (stoppedRef.current) {
+        stoppedRef.current = false;
+        if (q.length) {
+          queueRef.current.delete(activeId);
+          setInput(prev => [...q, prev].filter(s => s.trim()).join('\n'));
+          bumpQueue(t => t + 1);
+        }
+      } else if (q.length) {
+        const next = q.shift()!;
+        if (!q.length) queueRef.current.delete(activeId);
+        bumpQueue(t => t + 1);
+        speakRef.current(next);
+      }
+    }
+    prevBusyRef.current = busy;
+  }, [busy, activeId]);
 
   const handleChair = useCallback(async () => {
     if (!cInput.trim() || cBusy || !activeId) return;
@@ -576,17 +627,24 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
             </div>
             {/* Input */}
             <div className="chat__input-area">
+              <QueuedChips items={queue} onRemove={i => { if (activeId) removeQueuedMsg(activeId, i); }} />
               <div className="chat__input-wrapper">
-                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder="发言...（Shift+Enter 换行）" disabled={busy} rows={1} />
+                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder={busy ? '发言中…（可继续输入，发送将排队）' : '发言...（Shift+Enter 换行）'} rows={1} />
                 {busy ? (
-                  <button className="chat__stop-btn" onClick={() => {
-                    abortRef.current?.abort();
-                    if (activeId) fetch(`/api/convection/session/${activeId}/abort`, { method: 'POST' }).catch(() => {});
-                  }} title="停止生成">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
-                  </button>
+                  <>
+                    <button className="chat__send-btn" onClick={() => handleSpeak()} disabled={!input.trim() || queue.length >= MAX_QUEUE} title={queue.length >= MAX_QUEUE ? '队列已满（最多 3 条）' : '加入队列'}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
+                    </button>
+                    <button className="chat__stop-btn" onClick={() => {
+                      stoppedRef.current = true;
+                      abortRef.current?.abort();
+                      if (activeId) fetch(`/api/convection/session/${activeId}/abort`, { method: 'POST' }).catch(() => {});
+                    }} title="停止生成">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+                    </button>
+                  </>
                 ) : (
-                  <button className="chat__send-btn" onClick={handleSpeak} disabled={!input.trim()}>
+                  <button className="chat__send-btn" onClick={() => handleSpeak()} disabled={!input.trim()}>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
                   </button>
                 )}

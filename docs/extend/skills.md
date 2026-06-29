@@ -151,13 +151,13 @@ Skill 可通过 `tools.json` 和 `executors/` 目录携带专属工具。
 
 ### 提示词加载 — `use_skill` 按需注入
 
-Skill 的提示词通过内置 `use_skill` 工具按需加载。Agent 被分配 Skill 后**不会**自动注入 SKILL.md 到系统提示词,而是由 Agent 自行判断何时需要并主动调用 `use_skill("技能名")`。
+Skill 的提示词通过内置 `use_skill` 工具按需加载。Agent 被分配 Skill 后**不会**自动注入 SKILL.md 到系统提示词,而是由 Agent 自行判断何时需要并主动调用(ReAct 里走 JSON 参数:`<action tool="use_skill">{"skill":"技能名"}</action>`)。
 
 - **省 Token** —— Skill 指令仅在调用时以 `<result>` 形式出现,`/compact` 后可压缩,不永久占用上下文
 - **按需触发** —— 与任务无关的 Skill 不会被加载
 - **复用机制** —— 所有协作模式共用同一套 `use_skill` 执行器
 
-执行器路径:`data/tools/executors/use_skill.js` —— 读取 `data/skills/{name}/SKILL.md` 并返回内容。**安全检查**:仅接受纯字母数字的 skillId(`/`、`\`、`..` 均被拦截),防止路径遍历。
+执行器路径:`data/tools/executors/use_skill.js` —— 读取 `data/skills/{name}/SKILL.md` 并返回内容。**安全检查**:拦截技能名中的 `/`、`\`、`..`(防路径遍历);连字符等普通字符放行(故 `code-review` 这类名称可用)。
 
 **动态描述**:Agent 被分配技能后,`use_skill` 工具的 description 自动更新为「加载技能指令。当前可用技能: code-review, web-search」,Agent 从工具列表即可获知可加载哪些技能。
 

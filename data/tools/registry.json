@@ -1,7 +1,7 @@
 [
   {
     "name": "read_file",
-    "description": "读取文件内容，返回全文",
+    "description": "读取文件内容。默认从头读，最多 800 行（超长单行会做字符截断防溢出）；超出会提示剩余行数。大文件优先用 search_content 定位后，再用 offset/limit 按需读取片段，不必每次读全文。",
     "category": "io",
     "dangerous": false,
     "executorType": "builtin",
@@ -12,6 +12,14 @@
         "filePath": {
           "type": "string",
           "description": "相对于工作区根目录的文件路径"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "起始行号（1-based，默认 1）。配合上次返回的「继续读取」提示翻页。"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "本次最多读取的行数（默认 800）。只需局部内容时设小一点，避免读入整文件。"
         }
       },
       "required": [
@@ -60,11 +68,15 @@
         },
         "oldString": {
           "type": "string",
-          "description": "要被替换的原文本（必须精确匹配）"
+          "description": "要被替换的原文本（必须精确匹配，含空格/缩进/换行）。须在文件中唯一，否则报错——请包含足够上下文。"
         },
         "newString": {
           "type": "string",
           "description": "替换后的新文本"
+        },
+        "replaceAll": {
+          "type": "boolean",
+          "description": "（可选）oldString 出现多次时，置 true 才会全部替换；否则多次匹配将报错。默认 false。"
         }
       },
       "required": [
@@ -76,7 +88,7 @@
   },
   {
     "name": "list_directory",
-    "description": "列出目录中的所有文件和子目录",
+    "description": "列出目录内容（目录在前、文件带大小，最多 300 项）",
     "category": "io",
     "dangerous": false,
     "executorType": "builtin",
@@ -105,6 +117,10 @@
         "command": {
           "type": "string",
           "description": "要执行的 shell 命令"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "（可选）超时毫秒数，默认 120000（2 分钟），上限 600000。install/build/test 等耗时命令可调大。"
         }
       },
       "required": [

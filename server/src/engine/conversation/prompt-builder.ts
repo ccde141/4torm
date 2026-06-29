@@ -16,6 +16,7 @@
 import type { ToolDef } from '../shared/tool-defs-loader';
 import { buildSandboxSection, type SandboxLevel } from '../shared/sandbox-prompt';
 import { buildWorkflowToolsSection } from '../shared/workflow-builder';
+import { buildSelfManagementSection } from '../shared/prompt';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -167,6 +168,9 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
 
   // 8. 工作流搭建假工具
   parts.push(buildWorkflowToolsSection());
+
+  // 8.5 能力扩展（查看 / 创建工具、技能、MCP）— 与对流/气旋/信风共用 shared 单一来源
+  parts.push(buildSelfManagementSection());
 
   // 9. 记忆注入
   if (opts.userMessage && MEMORY_TRIGGERS.test(opts.userMessage)) {

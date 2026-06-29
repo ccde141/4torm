@@ -15,7 +15,7 @@ export interface ToolDef {
   name: string;                           // 唯一标识,LLM 在 <action tool="name"> 中引用
   description: string;                    // LLM 可见的工具描述
   category: 'io' | 'system' | 'custom';   // 分类(仅 UI 展示用)
-  dangerous: boolean;                     // 危险工具需权限确认(write/edit/run)
+  dangerous: boolean;                     // 标记危险工具(write/edit/run/delete);受沙箱级别与气旋 plan 模式约束
   parameters: Record<string, unknown>;    // JSON Schema 对象, 含 type/properties/required
   executorType: 'builtin' | 'template' | 'custom';  // 执行方式
   executorFile?: string;                  // 执行器文件名(不含 .js), builtin/custom 必填
@@ -52,7 +52,6 @@ data/
       run_command.js
       webfetch.js
       use_skill.js         ← 按需加载 Skill 提示词
-    permissions.json       ← { [agentId]: { [toolName]: "always" | "ask" } }
 ```
 
 ## 内置工具
@@ -61,11 +60,11 @@ data/
 
 | 名称 | 分类 | 危险 | 说明 |
 |------|------|------|------|
-| `read_file` | io | ❌ | 读取文件全文 |
+| `read_file` | io | ❌ | 读取文件(默认最多 800 行,支持 offset/limit;超长单行截断) |
 | `write_file` | io | ✅ | 创建或覆盖文件 |
 | `edit_file` | io | ✅ | 精确替换文本 |
 | `list_directory` | io | ❌ | 列出目录内容 |
-| `run_command` | system | ✅ | 执行 shell 命令(cwd = 项目根,自动 `chcp 65001` UTF-8) |
+| `run_command` | system | ✅ | 执行 shell 命令(cwd 按沙箱级别,默认超时 120s 可传 timeout,返回退出码,自动 `chcp 65001` UTF-8) |
 | `webfetch` | system | ❌ | HTTP GET 获取文本 |
 | `use_skill` | system | ❌ | 按需加载指定 Skill 的专业提示词 |
 | `delete_file` | io | ✅ | 删除文件或目录(沙箱校验,目录默认递归) |
@@ -96,21 +95,13 @@ data/
 ```javascript
 // data/tools/executors/my_tool.js
 import { readFileSync } from 'fs'
-import { resolve } from 'path'
-
-// 推荐模式:支持 data/ 前缀和相对路径两种写法
-function resolvePath(fp, workspaceDir, projectDir) {
-  if (fp.replace(/\\/g, '/').startsWith('data/')) {
-    return resolve(projectDir, fp)
-  }
-  return resolve(workspaceDir, fp)
-}
+import { resolvePath } from './_resolve.js'   // 共享路径解析 + 沙箱校验(签名为 resolvePath(fp, ctx))
 
 export default async function (args, ctx) {
   // args: Record<string, string> — 工具调用时传入的参数字典
-  // ctx:  { dataDir, workspaceDir, projectDir }
+  // ctx:  { dataDir, workspaceDir, projectDir, sandboxLevel }
   const fp = args.filePath || args.file_path
-  return readFileSync(resolvePath(fp, ctx.workspaceDir, ctx.projectDir), 'utf-8')
+  return readFileSync(resolvePath(fp, ctx), 'utf-8')   // resolvePath 内部按 ctx.sandboxLevel 校验越权
 }
 ```
 
@@ -132,7 +123,7 @@ export default async function (args, ctx) {
 }
 ```
 
-执行流程(`server/src/services/tool-executor.ts`):遍历 `args` 把 `{{key}}` 替换为实际值 → `execSync(cmd, { cwd, timeout })` → 返回 stdout / stderr。
+执行流程(`server/src/services/tool-executor.ts`):遍历 `args` 把 `{{key}}` 替换为实际值 → `execSync` 执行(cwd 按沙箱级别,固定 15s 超时)→ 返回 stdout / stderr。
 
 ### custom(自定义)
 
@@ -145,6 +136,7 @@ export default async function (args, ctx) {
   dataDir: string;       // 指向 data/ 目录
   workspaceDir: string;  // Agent 的工作区目录(agents/{id}/.workspace)
   projectDir: string;    // 项目根目录
+  sandboxLevel: 'strict' | 'relaxed' | 'unrestricted';  // 沙箱级别,resolvePath / run_command 据此约束可达范围
 }
 ```
 
@@ -153,9 +145,9 @@ export default async function (args, ctx) {
 | 工具 | 基准路径 | 说明 |
 |------|----------|------|
 | `read_file` / `write_file` / `edit_file` / `list_directory` | `workspaceDir`(默认)或 `projectDir`(路径以 `data/` 开头时) | 支持 `data/skills/xxx` 和 `../../../skills/xxx` 两种写法 |
-| `run_command` | `projectDir`(项目根) | 可直接传 `python data/skills/xxx/scripts/xxx.py` |
+| `run_command` | `strict` 用 `workspaceDir`,否则 `projectDir` | 可直接传 `python data/skills/xxx/scripts/xxx.py` |
 | `webfetch` | N/A | 不涉及文件系统 |
-| `use_skill` | `dataDir` | 仅接受纯字母数字的技能名 |
+| `use_skill` | `dataDir` | 技能名,拦截含 `..` / `/` / `\` 的名称 |
 
 ## Agent → 工具分配
 
@@ -168,17 +160,9 @@ export default async function (args, ctx) {
 
 服务端在 Agent 执行前由 `loadAgentToolDefs()`(`server/src/engine/shared/tool-defs-loader.ts`)装配工具集:读 `registry.json` 命中配置的工具,再合并该 Agent 各 skill 的 `tools.json`(按名称去重),并注入 MCP 工具。所有协作模式共用这一套装配逻辑。
 
-## 工具权限系统
+## 危险工具
 
-| 等级 | 行为 |
-|------|------|
-| `always` | 自动允许,不弹窗 |
-| `ask` | 每次调用前弹出确认对话框 |
-| `never` | 跳过不执行 |
-
-- 存储:`data/tools/permissions.json` — `{ [agentId]: { [toolName]: "always" | "ask" } }`
-- 危险工具列表 `DANGEROUS_TOOLS = ['write_file', 'edit_file', 'run_command']`(`src/api/tools-executor.ts`)
-- 自动化(潮汐 / 沙盒)执行时危险工具检查被**跳过**(全自动允许)
+`write_file` / `edit_file` / `delete_file` / `run_command` 在 `registry.json` 里标记 `dangerous: true`。其约束来自**沙箱级别**与**气旋 `plan` 房间**(只读模式自动滤掉危险工具),详见[安全与隔离](../architecture/security)。早期逐 Agent 的 always / ask / never 权限弹窗机制已移除。
 
 ## 工具执行完整流程
 
@@ -218,8 +202,6 @@ Agent 执行
 | 工具列表读取 | `GET` | `/api/storage/read?path=tools/registry.json` |
 | 工具注册表写入 | `PUT` | `/api/storage/write?path=tools/registry.json` |
 | 工具执行 | `POST` | `/api/tools/exec`(`{ tool, args, agentId }`) |
-| 权限读取 | `GET` | `/api/tools/permissions?agentId=xxx` |
-| 权限写入 | `PUT` | `/api/tools/permissions?agentId=xxx` |
 
 ## 快速上手示例
 

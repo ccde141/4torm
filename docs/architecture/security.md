@@ -14,35 +14,35 @@ Agent 文件操作受沙箱限制,按级别约束可访问路径:
 
 在 Agent 配置中按需选择。执行器拿到的 `ctx`(`workspaceDir` / `projectDir` / `dataDir`)配合沙箱级别决定文件操作的合法范围。
 
-## 工具权限
+## 危险工具约束
 
-危险工具(写文件、改文件、执行命令)可逐 Agent 配置:
+写 / 改 / 删文件、执行命令在注册表里标记为危险工具(`dangerous: true`)。它们的约束来自:
 
-| 等级 | 行为 |
-|------|------|
-| `always` | 自动允许,不弹窗 |
-| `ask` | 每次调用前弹出确认对话框 |
-| `never` | 跳过不执行 |
+- **沙箱级别** —— 决定可访问的路径范围(见上)
+- **气旋 `plan` 房间** —— 只放行只读工具,自动滤掉危险工具
+- `run_command` 内置危险命令黑名单(`rm -rf`、`shutdown`、`mkfs` 等)+ 超时上限
 
-- 危险工具列表:`DANGEROUS_TOOLS = ['write_file', 'edit_file', 'run_command']`
-- 存储:`data/tools/permissions.json`
-- 注意:自动化(潮汐 / 沙盒)执行时危险工具检查被**跳过**(全自动允许)——给无人值守任务配 Agent 时要留意这点
+> 早期「逐 Agent always / ask / never」弹窗权限机制已移除,危险工具不再有单独的二次确认弹窗。
 
 ## 敏感数据隔离
 
-以下文件含密钥或本地敏感配置,均在 `.gitignore` 中,不入仓库:
+`data/` 下绝大多数运行时数据都在 `.gitignore` 中、不入仓库,含密钥的尤其敏感:
 
 - `data/providers.json` —— LLM 提供商 API key
-- `data/mcp/servers.json` —— MCP 服务器配置
-- `data/cyclone/` —— 工作室会话与工作区
+- `data/mcp/servers.json` —— MCP 配置(可能含密钥)
+- `data/agents/`、`data/cyclone/`、`data/convection/sessions/`、`data/tradewind/`、`data/tide/` —— Agent 注册表与各模式的会话、工作区、运行记录
 
-## Agent 互斥锁
+> 完整清单见[数据目录](./data-layout)页。
 
-`agent-lock` 防止同一 Agent 被多个任务 / 会话同时驱动导致状态污染:
+## Agent 并发控制
 
-- 内存级互斥,非阻塞,占不到立即拒绝
-- 气旋的工位与会长各用独立锁(工位锁 vs `__chair__` 锁),互不冲突
-- 潮汐任务遇到 Agent 被占用时排队等待,解锁后投递
+防止同一 Agent 被多处同时驱动导致状态(工作区 / 记忆)污染,有两层:
+
+- **按-Agent 串行队列** —— 季风 / 对流 / 气旋等交互入口经一个按 Agent 的 FIFO 队列,同一 Agent 被多个区块同时驱动时**静默排队、依次执行**(而非报错),带重入检测避免自我死锁
+- **busy 短锁** —— Agent 实际产出期间上锁,防止重入
+- **潮汐**任务遇 Agent 被占用时按"最新覆盖"方式排队,空出后投递
+
+> 这是"真有人这么用"时的兜底:不推荐把同一 Agent 同时挂多个区块,但即便如此也会顺序跑完、不丢状态。
 
 ## LLM 并发限制
 

@@ -20,7 +20,7 @@
 │  引擎层: conversation · convection · cyclone ·            │
 │          tradewind · services/tide                        │
 │                                                           │
-│  共享层: llm-bridge · agent-lock · tool-executor ·        │
+│  共享层: llm-bridge · agent-queue · agent-lock ·          │
 │          tool-defs-loader · mcp-manager · prompt          │
 └────────────────────────┬────────────────────────────────┘
                          │
@@ -48,7 +48,7 @@
 
 - **季风** 是基础——所有模式的 Agent 执行都复用 `SessionRunner` + ReAct 循环
 - **对流** 是季风的多人版——多个 Agent 共享公共上下文,串行发言,会长私聊参谋
-- **气旋** 是常驻工作室——工位私聊(季风式延续性)+ 群聊房间(对流式讨论)+ 会长俯瞰,共享工作区
+- **气旋** 是常驻工作室——工位私聊(季风式延续性)+ 群聊房间(对流式讨论)+ 会长参谋,共享工作区
 - **信风** 是编排层——通过 DAG 定义 Agent 间的数据流转顺序,信封流转
 - **潮汐** 是时间驱动层——复用季风的执行能力,加上调度器和滚动归档
 
@@ -56,8 +56,9 @@
 
 | 组件 | 职责 | 位置 |
 |------|------|------|
-| `llm-bridge` | 统一的 LLM 调用层(流式 / 非流式,token 统计) | `server/src/engine/shared/` |
-| `agent-lock` | Agent 互斥锁,防止同一 Agent 被并发驱动 | `server/src/engine/shared/` |
+| `llm-bridge` | 统一的 LLM 调用层(流式 / 非流式,token 统计;全局 3 路并发信号量) | `server/src/engine/shared/` |
+| `agent-queue` | 按-Agent 串行队列(withAgentTurn):同一 Agent 被多处驱动时排队依次执行 | `server/src/engine/shared/` |
+| `agent-lock` | Agent busy 短锁(产出期防重入) | `server/src/engine/shared/` |
 | `tool-executor` | 工具执行派发(注册表查找 → 执行器加载 → 沙箱校验) | `server/src/services/` |
 | `tool-defs-loader` | 工具装配(registry + skill + MCP 合并去重) | `server/src/engine/shared/` |
 | `mcp-manager` | MCP 服务器连接与工具注入 | `server/src/engine/shared/` |
@@ -91,7 +92,7 @@
 ├── server/                       ← 服务端 (Fastify 5 + TypeScript)
 │   └── src/
 │       ├── engine/
-│       │   ├── shared/           ← 共享层(llm-bridge, agent-lock, tool-executor, mcp-manager)
+│       │   ├── shared/           ← 共享层(llm-bridge, agent-queue, agent-lock, tool-defs-loader, mcp-manager)
 │       │   ├── conversation/     ← 季风对话引擎(SessionRunner + ReAct)
 │       │   ├── convection/       ← 对流会议引擎
 │       │   ├── cyclone/          ← 气旋工作室引擎(seat / room / chair / contact runner)

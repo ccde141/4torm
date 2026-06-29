@@ -14,6 +14,7 @@
 
 import { useRef, useCallback } from 'react';
 import { streamUrl } from '../../../lib/apiBase';
+import { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 
 export interface FeedTool {
   tool: string; args: Record<string, string>; result?: string;
@@ -41,6 +42,8 @@ interface RoomRunner {
   done: boolean;
   ctrl: AbortController;
   abandoned: boolean;
+  /** 用户手动「停止」→ true。done-effect 据此「退回队列入框」而非续发。 */
+  userStopped: boolean;
 }
 
 /** 把一个 RoomEvent 应用到 roundFeed（流式累积逻辑，从 RoomPanel.speak 内联处理抽出）。 */
@@ -116,9 +119,49 @@ async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (
 export function useRoomStreamRunners(onRoomFinished: (roomId: string) => void) {
   const runners = useRef(new Map<string, RoomRunner>());
   const listeners = useRef(new Map<string, Set<() => void>>());
+  /** roomId → 待发消息队列 / 输入框草稿。独立于 runner，clearIfDone 后仍存活，跨重挂保留。 */
+  const queues = useRef(new Map<string, string[]>());
+  const drafts = useRef(new Map<string, string>());
 
   const notify = useCallback((roomId: string) => {
     listeners.current.get(roomId)?.forEach(cb => cb());
+  }, []);
+
+  // ── 消息队列：运行期发送先入队，本轮结束后由 RoomPanel done-effect 出队 ──
+  const getQueue = useCallback((roomId: string): string[] => queues.current.get(roomId) ?? [], []);
+  const enqueue = useCallback((roomId: string, text: string): boolean => {
+    let q = queues.current.get(roomId);
+    if (!q) { q = []; queues.current.set(roomId, q); }
+    if (q.length >= MAX_QUEUE) return false;
+    q.push(text);
+    notify(roomId);
+    return true;
+  }, [notify]);
+  const dequeue = useCallback((roomId: string): string | null => {
+    const q = queues.current.get(roomId);
+    if (!q || q.length === 0) return null;
+    const next = q.shift()!;
+    if (q.length === 0) queues.current.delete(roomId);
+    notify(roomId);
+    return next;
+  }, [notify]);
+  const removeQueued = useCallback((roomId: string, index: number) => {
+    const q = queues.current.get(roomId);
+    if (!q || index < 0 || index >= q.length) return;
+    q.splice(index, 1);
+    if (q.length === 0) queues.current.delete(roomId);
+    notify(roomId);
+  }, [notify]);
+  const takeAllQueued = useCallback((roomId: string): string[] => {
+    const q = queues.current.get(roomId) ?? [];
+    queues.current.delete(roomId);
+    if (q.length) notify(roomId);
+    return q;
+  }, [notify]);
+  // 输入框草稿（内存级，切走/重挂保留）
+  const getDraft = useCallback((roomId: string): string => drafts.current.get(roomId) ?? '', []);
+  const setDraft = useCallback((roomId: string, text: string) => {
+    if (text) drafts.current.set(roomId, text); else drafts.current.delete(roomId);
   }, []);
 
   /** RoomPanel 挂载即订阅自身 roomId；listeners 独立于 runner 存活。 */
@@ -134,7 +177,7 @@ export function useRoomStreamRunners(onRoomFinished: (roomId: string) => void) {
   /** 手动停止：abort 本地流 + 通知服务端 abort。 */
   const abortRoom = useCallback((workshopId: string, roomId: string) => {
     const r = runners.current.get(roomId);
-    if (r) r.ctrl.abort();
+    if (r) { r.userStopped = true; r.ctrl.abort(); }
     fetch(streamUrl(`/api/cyclone/workshop/${workshopId}/room/${roomId}/abort`), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     }).catch(() => {});
@@ -143,6 +186,8 @@ export function useRoomStreamRunners(onRoomFinished: (roomId: string) => void) {
   /** 删群：标弃用 + 掐流 + 通知服务端 abort。 */
   const kill = useCallback((workshopId: string, roomId: string) => {
     const r = runners.current.get(roomId);
+    queues.current.delete(roomId);   // 删群连带清掉其排队 / 草稿
+    drafts.current.delete(roomId);
     if (!r) return;
     r.abandoned = true;
     abortRoom(workshopId, roomId);
@@ -167,6 +212,7 @@ export function useRoomStreamRunners(onRoomFinished: (roomId: string) => void) {
       done: false,
       ctrl,
       abandoned: false,
+      userStopped: false,
     };
     runners.current.set(roomId, runner);
     notify(roomId);
@@ -192,7 +238,8 @@ export function useRoomStreamRunners(onRoomFinished: (roomId: string) => void) {
     })();
   }, [notify, onRoomFinished]);
 
-  return { subscribe, getRunner, startRound, abortRoom, kill, clearIfDone };
+  return { subscribe, getRunner, startRound, abortRoom, kill, clearIfDone,
+    getQueue, enqueue, dequeue, removeQueued, takeAllQueued, getDraft, setDraft };
 }
 
 export type RoomStreamRunners = ReturnType<typeof useRoomStreamRunners>;

@@ -19,10 +19,10 @@ data/
 │
 ├── cyclone/                       ← 气旋工作室(gitignore)
 │   └── {workshopId}/
-│       ├── workshop.json          ← 工作室元数据(含 chairAgentId)
-│       ├── chair.json             ← 会长私聊会话
+│       ├── meta.json             ← 工作室元数据(含会长 Agent 设置)
+│       ├── workspace/             ← 共享工作区(所有工位 / 房间共用)
 │       ├── seats/                 ← 各工位(私聊记忆 + 角色覆盖 + 职责)
-│       └── rooms/                 ← 各群聊房间(公共消息流 + 参与工位 + 模式)
+│       └── rooms/                 ← 各群聊房间(公共消息流 + 参与工位 + 模式 + 会长对话)
 │
 ├── tradewind/
 │   ├── workflows/                 ← 工作流定义({id}/graph.json + meta.json)
@@ -35,8 +35,7 @@ data/
 │
 ├── tools/
 │   ├── registry.json              ← 工具定义注册表(ToolDef[])
-│   ├── executors/                 ← 工具执行器(.js)
-│   └── permissions.json           ← 工具权限({agentId}:{toolName}:级别)
+│   └── executors/                 ← 工具执行器(.js)
 │
 ├── skills/
 │   └── {skillId}/
@@ -53,12 +52,17 @@ data/
 
 ## 不入仓库的目录
 
-以下涉及敏感信息或纯本地状态,均在 `.gitignore` 中:
+`data/` 下**绝大多数运行时状态都不入仓库**(敏感信息或纯本地数据);仓库里保留的主要是「定义类」资源(工具 / 技能定义、模板)。主要被 `.gitignore` 忽略的:
 
 | 路径 | 原因 |
 |------|------|
-| `data/providers.json` | 含 API key |
-| `data/mcp/servers.json` | MCP 服务器配置 |
+| `data/providers.json` | 含 LLM API key |
+| `data/mcp/servers.json` | MCP 配置(可能含密钥) |
+| `data/agents/` | Agent 注册表 / 会话 / 工作区(含 role-prompt.md、config.json、MEMORY.md) |
 | `data/cyclone/` | 工作室 / 工位 / 群聊会话 + 共享工作区 |
+| `data/convection/sessions/` | 对流会议会话 |
+| `data/tradewind/workflows/`、`data/tradewind/runs/` | 工作流定义与运行归档 |
+| `data/tide/tasks.json`、`data/tide/runs/` | 潮汐任务与运行记录 |
+| `data/skin-config.json` | 本地皮肤配置 |
 
 > Agent 的角色提示词以 `role-prompt.md` 为运行时真理来源;`config.json` 存模型、工具、技能、沙箱级别等。改 Agent 行为就是改这两个文件——UI 配置面板本质上也是在写它们。

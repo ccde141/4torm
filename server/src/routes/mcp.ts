@@ -13,7 +13,7 @@ import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { McpServerConfig } from '../engine/shared/mcp-client';
-import { getMcpStatus, getMcpToolDefs, initMcpManager, shutdownMcpManager } from '../engine/shared/mcp-manager';
+import { getMcpStatus, getMcpToolDefs, reconnectServer, disconnectServer } from '../engine/shared/mcp-manager';
 
 export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   const dataDir = (app as any).dataDir as string;
@@ -66,9 +66,9 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
     };
     configs.push(newCfg);
     await writeConfigs(configs);
-    // 如果 enabled 则立即连接
+    // 如果 enabled 则只连接这一个（不影响其他 server）
     if (newCfg.enabled) {
-      await reloadMcp(dataDir);
+      await reconnectServer(dataDir, newCfg.name);
     }
     return reply.send({ ok: true, config: newCfg });
   });
@@ -83,7 +83,7 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: '未找到' });
     }
     await writeConfigs(filtered);
-    await reloadMcp(dataDir);
+    disconnectServer(name); // 只断这一个
     return reply.send({ ok: true });
   });
 
@@ -98,13 +98,23 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
     if (!target) return reply.status(404).send({ error: '未找到' });
     target.enabled = enabled;
     await writeConfigs(configs);
-    await reloadMcp(dataDir);
+    // 只动这一个：启用→连接，停用→断开
+    if (enabled) await reconnectServer(dataDir, name);
+    else disconnectServer(name);
     return reply.send({ ok: true, enabled });
   });
 
-  // POST /api/mcp/reconnect
+  // POST /api/mcp/reconnect — 传 name 只重连该 server；不传则逐个重连所有 enabled（非全量核爆）
   app.post('/reconnect', async (req, reply) => {
-    await reloadMcp(dataDir);
+    const { name } = (req.body || {}) as { name?: string };
+    if (name) {
+      await reconnectServer(dataDir, name);
+    } else {
+      const configs = await readConfigs();
+      for (const cfg of configs) {
+        if (cfg.enabled && cfg.transport === 'stdio') await reconnectServer(dataDir, cfg.name);
+      }
+    }
     return reply.send({ ok: true });
   });
 
@@ -128,10 +138,4 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
     }
     return reply.send({ groups, servers: statuses });
   });
-}
-
-/** 重载 MCP（关闭所有 → 重新初始化） */
-async function reloadMcp(dataDir: string): Promise<void> {
-  shutdownMcpManager();
-  await initMcpManager(dataDir);
 }

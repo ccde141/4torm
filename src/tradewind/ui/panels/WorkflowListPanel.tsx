@@ -35,7 +35,9 @@ export function WorkflowListPanel({
       const res = await fetch('/api/tradewind/workflow/list');
       if (res.ok) {
         const data = await res.json() as { workflows: WorkflowItem[] };
-        setWorkflows(data.workflows);
+        // 只列有内容的工作流：0 节点的（新建未编辑、历史遗留的 untitled 等）不展示，
+        // 避免目录里堆一堆空幽灵。文件不删，仅不显示。
+        setWorkflows(data.workflows.filter(wf => wf.nodeCount > 0));
       }
     } finally {
       setLoading(false);

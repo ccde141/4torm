@@ -203,6 +203,9 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
 
   const save = useCallback(async (name?: string) => {
     const graph = getGraph();
+    // 空工作流（0 节点）不落盘：新建/自动保存若把空图写盘，会在目录里堆出一堆 0 节点幽灵条目。
+    // 空工作流无内容可丢，等真正加了节点（运行/保存时）才创建目录。
+    if (graph.nodes.length === 0) return;
     await fetch('/api/tradewind/workflow/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

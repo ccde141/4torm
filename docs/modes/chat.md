@@ -31,7 +31,8 @@ Agent 可在对话中调用 `delegate` 工具派生子 Agent:
 <action tool="delegate">
 {
   "task": "分析 src/ 目录下的代码结构",
-  "context": "项目是一个 React 应用"
+  "context": "项目是一个 React 应用",
+  "systemPrompt": "你是代码分析专家,聚焦目录结构与模块职责"
 }
 </action>
 ```

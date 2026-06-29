@@ -14,6 +14,7 @@ import ToolCallMessage from '../../../components/chat/ToolCallMessage';
 import DelegateCard from '../../../components/chat/DelegateCard';
 import AskCard from '../../../components/chat/AskCard';
 import ContactCard from './ContactCard';
+import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { contextToDisplay, type DisplayMessage, type DisplayBlock } from './messageDisplay';
 import type { SeatStreamRunners } from './useSeatStreamRunners';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
@@ -33,7 +34,8 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
 }) {
   const [seat, setSeat] = useState<SeatStatus | null>(null);
   const [history, setHistory] = useState<DisplayMessage[]>([]);
-  const [input, setInput] = useState('');
+  // 草稿初值取自注册表：切走/重挂回来未发文本还在（内存级，硬退出不留）
+  const [input, setInputRaw] = useState(() => runners.getDraft(seatId));
   const [loadError, setLoadError] = useState<string | null>(null);
   /** 订阅 tick：runner 每次 notify 自增，触发本组件重渲染读取最新 live 缓冲 */
   const [, forceTick] = useState(0);
@@ -41,6 +43,14 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const onReloadedRef = useRef(onReloaded);
   onReloadedRef.current = onReloaded;
+  // 写穿草稿：每次改动同步进注册表，组件卸载/重挂不丢
+  const setInput = useCallback((v: string | ((p: string) => string)) => {
+    setInputRaw(prev => {
+      const next = typeof v === 'function' ? v(prev) : v;
+      runners.setDraft(seatId, next);
+      return next;
+    });
+  }, [runners, seatId]);
   // 桌面端：拖入文件 → 路径进工位主对话框；会长实例(chairBase)始终绕开
   useDroppedPathInput(setInput, inputRef, active && !chairBase);
 
@@ -48,6 +58,7 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
   // 即使 done 也继续显示 live，直到 reload 完成 + clearIfDone 删除 runner，避免终答闪空
   const live = runner ? runner.live : null;
   const streaming = !!runner?.streaming;
+  const queue = runners.getQueue(seatId);
 
   /** 拉取工位/会长会话。notifyParent=true 时通知父级刷新侧栏 */
   const reload = useCallback(async (notifyParent = false) => {
@@ -85,7 +96,23 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
   const doneSeatId = runner?.done ? seatId : null;
   useEffect(() => {
     if (!doneSeatId) return;
-    (async () => { await reload(true); runners.clearIfDone(doneSeatId); forceTick(t => t + 1); })();
+    const wasStopped = !!runners.getRunner(doneSeatId)?.userStopped;
+    (async () => {
+      await reload(true);
+      runners.clearIfDone(doneSeatId);   // runner 删除后 streaming 归零，下条可发
+      if (wasStopped) {
+        // 用户「停止」：不续发，把排队项 + 当前草稿合并退回输入框，交回用户
+        const items = runners.takeAllQueued(doneSeatId);
+        if (items.length) {
+          const merged = [...items, runners.getDraft(doneSeatId)].filter(s => s.trim()).join('\n');
+          setInput(merged);
+        }
+      } else {
+        const next = runners.dequeue(doneSeatId);
+        if (next != null) dispatchText(next);  // 自然结束：逐条出队续发
+      }
+      forceTick(t => t + 1);
+    })();
   }, [doneSeatId, reload, runners]);
 
   // 粘性底部：仅当用户已在底部 150px 内才自动跟随（对齐季风）
@@ -98,7 +125,8 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
 
   /** 统一发送：chat（新消息）/ resume（回答挂起的 ask） */
   function run(action: 'chat' | 'resume', text: string) {
-    if (streaming) return;
+    // 读 registry 实时态而非组件闭包 streaming —— 出队续发时本轮 runner 已被 clearIfDone 删除，可继续
+    if (runners.getRunner(seatId)?.streaming) return;
     let optimisticUser: DisplayMessage | null = null;
     if (action === 'chat') {
       optimisticUser = { id: `u${Date.now()}`, role: 'user', content: text };
@@ -137,13 +165,22 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
     await reload(true);
   }
 
-  function sendInput() {
-    const text = input.trim();
-    if (!text) return;
-    setInput('');
+  /** 实际派发一条文本：slash 指令优先，否则发起 chat 流。出队续发与即时发送共用。 */
+  function dispatchText(text: string) {
     if (text === '/reset' || text === '/reset clear') { resetContext('clear'); return; }
     if (text === '/reset summary') { resetContext('summary'); return; }
     run('chat', text);
+  }
+
+  function sendInput() {
+    const text = input.trim();
+    if (!text) return;
+    if (streaming) {                       // 运行期：入队，不打断当前流
+      if (runners.enqueue(seatId, text)) setInput('');
+      return;
+    }
+    setInput('');
+    dispatchText(text);
   }
 
   function stop() {
@@ -188,19 +225,26 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
       </div>
 
       <div className="chat__input-area">
+        <QueuedChips items={queue} onRemove={i => runners.removeQueued(seatId, i)} />
         <div className="chat__input-wrapper">
           <textarea ref={inputRef} className="chat__input"
             value={input}
             onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInput(); } }}
-            placeholder={streaming ? '工位思考中…' : (pending ? '也可在上方卡片回答，或在此自由输入…（Enter 发送，Shift+Enter 换行）' : '对工位说点什么…（Enter 发送，Shift+Enter 换行）')}
+            placeholder={streaming ? '工位思考中…（可继续输入，发送将排队）' : (pending ? '也可在上方卡片回答，或在此自由输入…（Enter 发送，Shift+Enter 换行）' : '对工位说点什么…（Enter 发送，Shift+Enter 换行）')}
             rows={1}
-            disabled={streaming}
             aria-label="对工位发送消息" />
           {streaming ? (
-            <button className="chat__stop-btn" onClick={stop} title="停止生成">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
-            </button>
+            <>
+              <button className="chat__send-btn" onClick={sendInput}
+                disabled={!input.trim() || queue.length >= MAX_QUEUE}
+                title={queue.length >= MAX_QUEUE ? '队列已满（最多 3 条）' : '加入队列'}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
+              </button>
+              <button className="chat__stop-btn" onClick={stop} title="停止生成">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+              </button>
+            </>
           ) : (
             <button className="chat__send-btn" onClick={sendInput} disabled={!input.trim()} title={pending ? '回答' : '发送'}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>

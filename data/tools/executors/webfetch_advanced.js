@@ -15,7 +15,8 @@ export default async function (args, ctx) {
         .replace(/<[^>]+>/g, ' ')
         .replace(/\s{2,}/g, '\n')
         .trim();
-      return `[Playwright 未安装，仅返回静态 HTML 文本。如需完整动态渲染内容，请运行 npm install 安装 Playwright]\n\n${text.slice(0, 8000)}`;
+      const trunc = text.length > 8000 ? `\n\n...[内容过长，仅返回前 8000 字符，共 ${text.length} 字符]` : '';
+      return `[Playwright 未安装，仅返回静态 HTML 文本。如需完整动态渲染内容，请运行 npm install 安装 Playwright]\n\n${text.slice(0, 8000)}${trunc}`;
     } catch (e) {
       throw new Error(`抓取失败: ${(e).message}`);
     }
@@ -47,8 +48,10 @@ export default async function (args, ctx) {
 
     const title = await page.title();
     const header = title && !text.startsWith(title) ? `## ${title}\n\n` : '';
-    const body = (header + text.trim()).slice(0, 16000);
-    return body || '(页面无可见文本内容)';
+    const full = header + text.trim();
+    const body = full.slice(0, 16000);
+    const trunc = full.length > 16000 ? `\n\n...[内容过长，仅返回前 16000 字符，共 ${full.length} 字符]` : '';
+    return (body + trunc) || '(页面无可见文本内容)';
   } finally {
     await browser.close().catch(() => {});
   }
