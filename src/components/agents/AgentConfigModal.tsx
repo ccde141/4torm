@@ -153,7 +153,7 @@ export default function AgentConfigModal(props: Props) {
                       <option value="">无标签</option>
                       {allLabels.map(l => (<option key={l.id} value={l.id}>{l.label}</option>))}
                     </select>
-                    <button onClick={() => setShowAddLabel(!showAddLabel)} title="新建标签" style={miniBtn}>+</button>
+                    <button onClick={() => setShowAddLabel(!showAddLabel)} title="新建标签" className="icon-add-btn icon-add-btn--sm">+</button>
                   </div>
                   {showAddLabel && (
                     <div style={{ marginTop: 'var(--space-2)', padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>

@@ -51,14 +51,6 @@ const agentBtn: React.CSSProperties = {
   textAlign: 'left',
 };
 
-const addBtn: React.CSSProperties = {
-  width: '24px', height: '24px',
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
-  background: 'transparent', border: '1px solid var(--color-border)',
-  borderRadius: 'var(--border-radius-sm)',
-  color: 'var(--color-text-secondary)', cursor: 'pointer', fontSize: '14px',
-};
-
 const emptyCenter: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   height: '100%',
@@ -212,7 +204,7 @@ export default function TidePage({ active = true }: { active?: boolean }) {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={sectionLabel}>任务 ({tasks.length})</div>
-          <button onClick={() => { setShowForm(true); setViewingSession(null); setSelectedTask(null); }} style={addBtn}>+</button>
+          <button onClick={() => { setShowForm(true); setViewingSession(null); setSelectedTask(null); }} className="icon-add-btn icon-add-btn--sm">+</button>
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', marginTop: 'var(--space-2)' }}>

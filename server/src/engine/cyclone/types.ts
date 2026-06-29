@@ -18,6 +18,8 @@
  */
 
 import type { ContextMessage } from '../shared/types';
+// 本模块作为气旋类型的入口，转出 ContextMessage 供 store 等同目录模块复用
+export type { ContextMessage };
 
 /** 工位职责名片默认值（空 duty 兜底，借信风 DEFAULT_ROLE 同款语义） */
 export const DEFAULT_DUTY = '补位协作者，可处理任意交办事务。专业事务请交给对应专业工位。';
@@ -33,6 +35,8 @@ export interface CycloneTokenUsage {
 export interface CycloneCompactState {
   disabled: boolean;
   archiveSeq: number;
+  /** 上次压缩/重置时间（ISO 字符串） */
+  lastCompactAt?: string;
 }
 
 /**

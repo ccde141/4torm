@@ -94,7 +94,7 @@ export async function resetRoomContext(
 
   if (opts.scope === 'public' || opts.scope === 'both') {
     room.publicMessages = opts.publicSummary
-      ? [{ role: 'system', content: `以下是重置前的群聊摘要，请作为后续群聊上下文参考：\n\n${opts.publicSummary}` } as RoomMessage]
+      ? [{ speaker: '系统', content: `以下是重置前的群聊摘要，请作为后续群聊上下文参考：\n\n${opts.publicSummary}`, timestamp: Date.now() }]
       : [];
     room.tokenUsage = undefined;
   }

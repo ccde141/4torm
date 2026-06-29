@@ -85,7 +85,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     const { agentId } = req.params as { agentId: string };
     const agent = await loadAgent(dataDir, agentId);
     if (!agent) return reply.status(404).send({ error: 'Agent 不存在' });
-    const workspace = agent.config?.workspace || `data/agents/${agentId}/.workspace/`;
+    const workspace = agent.workspace || `data/agents/${agentId}/.workspace/`;
     const workspacePath = path.resolve(process.cwd(), workspace);
     await fs.mkdir(workspacePath, { recursive: true });
     if (process.platform === 'win32') {

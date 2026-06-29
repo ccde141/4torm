@@ -87,6 +87,8 @@ export class SessionRunner {
 
   isBusy(): boolean { return this.busy; }
   isSuspended(): boolean { return this.suspended; }
+  /** 绑定的 Agent id（供按-Agent 串行队列取 key） */
+  getAgentId(): string { return this.opts.agentId; }
 
   /** 中止当前执行 */
   abort(): void {

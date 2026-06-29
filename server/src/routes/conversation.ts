@@ -16,6 +16,7 @@ import { loadAgent } from '../engine/shared/agent-loader';
 import { loadAgentToolDefs } from '../engine/shared/tool-defs-loader';
 import { buildConversationSystemPrompt } from '../engine/conversation/prompt-builder';
 import { resolveNativeMode } from '../engine/shared/llm-bridge';
+import { withAgentTurn } from '../engine/shared/agent-queue';
 import type { ContextMessage } from '../engine/shared/types';
 
 // ── 活跃 runner 注册表（内存级） ─────────────────────────────────
@@ -135,8 +136,12 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       pushSSE(raw, { type: 'notice', message: '⚠️ 该模型配置为强制原生工具调用（native），但探测显示其可能不支持。如遇工具调用异常，请在「模型提供商设置」中改为 auto 或 text 模式。' });
     }
 
-    runner.chat(systemPrompt, chatMessages, (ev) => {
+    // 按 Agent 串行：同一 Agent 被多个会话/功能区同时驱动时，自动排队依次执行，
+    // 避免并发读写同一 workspace/MEMORY.md。排队等待时推送一次提示。
+    withAgentTurn(body.agentId!, () => runner.chat(systemPrompt, chatMessages, (ev) => {
       try { pushSSE(raw, ev); } catch { runner.abort(); }
+    }), {
+      onWait: () => { try { pushSSE(raw, { type: 'notice', message: '该 Agent 正被其他会话占用，已排队，轮到即自动开始…' }); } catch {} },
     }).then(() => {
       try { raw.end(); } catch {}
       // 非挂起（ask 等 reply）才清出注册表，否则 /reply 找不到 runner。
@@ -192,8 +197,11 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     const raw = reply.raw;
     initSSE(raw, req.headers.origin);
 
-    runner.resume(body.answer, (ev) => {
+    // 同 /chat：恢复执行也走按-Agent 串行队列
+    withAgentTurn(runner.getAgentId(), () => runner.resume(body.answer!, (ev) => {
       try { pushSSE(raw, ev); } catch { runner.abort(); }
+    }), {
+      onWait: () => { try { pushSSE(raw, { type: 'notice', message: '该 Agent 正被其他会话占用，已排队，轮到即自动开始…' }); } catch {} },
     }).then(() => {
       try { raw.end(); } catch {}
       // resume 后可能再次挂起（嵌套 ask）；非挂起才清出注册表

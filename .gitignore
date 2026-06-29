@@ -96,6 +96,10 @@ data/*.db-wal
 # ���˲ݸ�
 docs/old/
 
+# VitePress 文档站构建产物与缓存
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
 .commit-msg.tmp
 
 # 开发内部设计文档（不入库，仅本地参考）

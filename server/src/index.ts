@@ -113,6 +113,21 @@ initMcpManager(DATA_DIR).catch(e => console.error('[MCP] init failed:', e.messag
 // 健康检查
 app.get('/api/health', async () => ({ status: 'ok', ts: Date.now() }));
 
+// 文档站（VitePress 构建产物）自托管在 /docs/。
+// dev：Fastify 在 :3001，前端经 Vite 代理 /docs → 此处；prod：与应用同进程托管。
+// 应用内「文档」按钮统一指向 /docs/，dev/prod 无需区分。需先跑过 npm run docs:build。
+const DOCS_DIST = path.join(PROJECT_ROOT, 'docs', '.vitepress', 'dist');
+if (fs.existsSync(DOCS_DIST)) {
+  await app.register(fastifyStatic, {
+    root: DOCS_DIST,
+    prefix: '/docs/',
+    decorateReply: false, // 避免与下方应用静态托管的 reply.sendFile 装饰冲突
+  });
+  console.log(`[startup] 文档托管已启用：/docs/ → ${DOCS_DIST}`);
+} else {
+  console.log('[startup] 未发现文档构建产物（docs/.vitepress/dist），/docs 未挂载。先跑 npm run docs:build');
+}
+
 // 生产：托管前端构建产物 dist/（dev 由 Vite dev server 提供，本块不启用）。
 // 由 SERVE_STATIC=1 或 NODE_ENV=production 触发；Electron 打包后用此自托管，
 // 业务 /api、/skin 路由已先注册，优先级高于静态文件。
@@ -122,7 +137,7 @@ if (SERVE_STATIC && fs.existsSync(DIST_DIR)) {
   await app.register(fastifyStatic, { root: DIST_DIR, prefix: '/', wildcard: false });
   // SPA 回退：非 /api、非 /skin 的 GET 未命中静态文件 → 返回 index.html（前端路由自处理）
   app.setNotFoundHandler((req, reply) => {
-    if (req.method === 'GET' && !req.url.startsWith('/api') && !req.url.startsWith('/skin')) {
+    if (req.method === 'GET' && !req.url.startsWith('/api') && !req.url.startsWith('/skin') && !req.url.startsWith('/docs')) {
       return reply.sendFile('index.html');
     }
     return reply.status(404).send({ error: 'Not Found' });

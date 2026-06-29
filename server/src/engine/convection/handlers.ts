@@ -12,6 +12,7 @@ import type { ContextMessage } from '../shared/types';
 import type { ConvectionSessionData } from './session';
 import { saveSession, sessionWorkspace } from './session';
 import { callLLM, resolveNativeMode, type TokenUsage } from '../shared/llm-bridge';
+import { withAgentTurn } from '../shared/agent-queue';
 import { loadAgent, type LoadedAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs, type ToolDef } from '../shared/tool-defs-loader';
 import { buildSystemPrompt } from '../shared/prompt';
@@ -159,49 +160,51 @@ export async function handleSpeak(
 
     let result: { cleanContent: string; rawContent: string; toolCalls: ToolCallRecord[]; usage?: TokenUsage };
 
-    if (nativeDecision.native) {
-      // 原生模式：adapter 注入共享 runReActLoopNative
-      const { messages, agent: loadedAgent, toolDefs } = await buildAgentMessages(dataDir, session, agentId, true);
-      result = await runConvectionReActNative({
-        dataDir,
-        model: loadedAgent.model,
-        temperature: loadedAgent.temperature,
-        agentId,
-        sessionId: session.id,
-        label: loadedAgent.name,
-        messages,
-        toolDefs,
-        onEvent: onEvent ? (ev) => {
-          if (ev.type === 'token') onEvent({ type: 'token', label: ev.label, chunk: ev.chunk! });
-          else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', label: ev.label, tool: ev.tool!, args: ev.args! });
-          else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', label: ev.label, tool: ev.tool!, result: ev.result! });
-          else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
-          else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
-        } : undefined,
-        signal,
-      });
-    } else {
-      // 文本协议模式：现有 runConvectionReAct
-      const { messages, agent: loadedAgent } = await buildAgentMessages(dataDir, session, agentId, false);
-      const textResult = await runConvectionReAct({
-        dataDir,
-        model: loadedAgent.model,
-        temperature: loadedAgent.temperature,
-        agentId,
-        sessionId: session.id,
-        label: loadedAgent.name,
-        messages,
-        onEvent: onEvent ? (ev) => {
-          if (ev.type === 'token') onEvent({ type: 'token', label: ev.label, chunk: ev.chunk! });
-          else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', label: ev.label, tool: ev.tool!, args: ev.args! });
-          else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', label: ev.label, tool: ev.tool!, result: ev.result! });
-          else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
-          else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
-        } : undefined,
-        signal,
-      });
-      result = textResult;
-    }
+    // 按-Agent 串行：该参与者若正被其他会话/功能区占用，排队等其空出再发言
+    result = await withAgentTurn(agentId, async () => {
+      if (nativeDecision.native) {
+        // 原生模式：adapter 注入共享 runReActLoopNative
+        const { messages, agent: loadedAgent, toolDefs } = await buildAgentMessages(dataDir, session, agentId, true);
+        return await runConvectionReActNative({
+          dataDir,
+          model: loadedAgent.model,
+          temperature: loadedAgent.temperature,
+          agentId,
+          sessionId: session.id,
+          label: loadedAgent.name,
+          messages,
+          toolDefs,
+          onEvent: onEvent ? (ev) => {
+            if (ev.type === 'token') onEvent({ type: 'token', label: ev.label, chunk: ev.chunk! });
+            else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', label: ev.label, tool: ev.tool!, args: ev.args! });
+            else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', label: ev.label, tool: ev.tool!, result: ev.result! });
+            else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
+            else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
+          } : undefined,
+          signal,
+        });
+      } else {
+        // 文本协议模式：现有 runConvectionReAct
+        const { messages, agent: loadedAgent } = await buildAgentMessages(dataDir, session, agentId, false);
+        return await runConvectionReAct({
+          dataDir,
+          model: loadedAgent.model,
+          temperature: loadedAgent.temperature,
+          agentId,
+          sessionId: session.id,
+          label: loadedAgent.name,
+          messages,
+          onEvent: onEvent ? (ev) => {
+            if (ev.type === 'token') onEvent({ type: 'token', label: ev.label, chunk: ev.chunk! });
+            else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', label: ev.label, tool: ev.tool!, args: ev.args! });
+            else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', label: ev.label, tool: ev.tool!, result: ev.result! });
+            else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
+            else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
+          } : undefined,
+          signal,
+        });
+      }
+    }, { onWait: () => onEvent?.({ type: 'notice', message: `${agent.name} 正被其他会话占用，已排队…` }) });
 
     // abort 时保留已流式产出的有效内容
     const aborted = signal?.aborted;

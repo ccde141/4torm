@@ -16,6 +16,7 @@ import { resolveNativeMode } from '../shared/llm-bridge';
 import { loadAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execToolUnified } from '../shared/exec-tool';
+import { withAgentTurn } from '../shared/agent-queue';
 import { runReActLoop, runReActLoopNative, type ToolCaller } from './react-loop';
 import { buildSeatRoomSystemPrompt } from './seat-prompt';
 import { buildSeatVirtualToolDefs } from './virtual-tools';
@@ -144,7 +145,8 @@ export async function speakInRoom(
       continue;
     }
     onEvent({ type: 'seat-start', speaker: seat.title });
-    const r = await runSeatInRoom(dataDir, workshopId, room, seat, signal, onEvent);
+    // 按-Agent 串行：该工位绑定的 agent 若正被其他工位/会话占用，排队等其空出（静默）
+    const r = await withAgentTurn(seat.agentId, () => runSeatInRoom(dataDir, workshopId, room, seat, signal, onEvent));
     if (!r) continue;
     const content = r.content;
     if (content && !content.startsWith('[中止]') && !content.startsWith('[错误]')) {

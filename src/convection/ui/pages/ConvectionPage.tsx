@@ -352,7 +352,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
       <div className="conv__sidebar">
         <div className="conv__sidebar-header">
           <span className="conv__sidebar-title">会话</span>
-          <button onClick={handleNew} className="conv__new-btn">+</button>
+          <button onClick={handleNew} className="icon-add-btn">+</button>
         </div>
         <div className="conv__sessions">
           {sessions.map(s => {

@@ -5,6 +5,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "predev": "npm run docs:build",
     "dev": "concurrently -n server,vite -c blue,green \"npm run dev:server\" \"npm run dev:vite\"",
     "dev:server": "cd server && npx tsx watch src/index.ts",
     "dev:vite": "vite",
@@ -12,9 +13,12 @@
     "electron:dev": "concurrently -k -n server,vite,shell -c blue,green,magenta \"npm run dev:server\" \"npm run dev:vite\" \"wait-on tcp:127.0.0.1:5173 && electron electron/main.cjs\"",
     "start:prod": "cd server && cross-env SERVE_STATIC=1 NODE_ENV=production npx tsx src/index.ts",
     "electron:prod": "cross-env ELECTRON_PROD=1 electron electron/main.cjs",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && vitepress build docs",
     "lint": "eslint .",
     "preview": "vite preview",
+    "docs:dev": "vitepress dev docs --port 5174 --strictPort",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs --port 5174 --strictPort",
     "_comment_postinstall": "已禁用自动下载 Chromium：下载常卡在解压阶段。需要时手动跑 npx playwright install chromium，或把下面的 key 改回 postinstall 即可恢复",
     "_postinstall_disabled": "npx playwright install chromium"
   },
@@ -45,6 +49,7 @@
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",
     "vite": "^8.0.10",
+    "vitepress": "^1.6.4",
     "wait-on": "^9.0.10"
   }
 }

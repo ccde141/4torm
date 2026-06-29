@@ -18,8 +18,6 @@ export interface SystemStatusDef {
 export const SYSTEM_STATUSES: SystemStatusDef[] = [
   { id: 'idle',       label: '空闲',   color: '#4ade80' },
   { id: 'busy',       label: '工作中', color: '#fbbf24' },
-  { id: 'tradewind',  label: '信风中', color: '#3b82f6' },
-  { id: 'convection', label: '对流中', color: '#f472b6' },
   { id: 'offline',    label: '离线',   color: '#ef4444' },
 ];
 

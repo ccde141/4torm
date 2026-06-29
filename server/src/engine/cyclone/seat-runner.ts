@@ -16,6 +16,7 @@ import { callLLM, resolveNativeMode, type TokenUsage } from '../shared/llm-bridg
 import { loadAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execToolUnified } from '../shared/exec-tool';
+import { withAgentTurn } from '../shared/agent-queue';
 import {
   runReActLoop,
   runReActLoopNative,
@@ -262,7 +263,8 @@ export async function chatSeat(
     };
     seat.messages.push({ role: 'user', content: humanMessage });
     const messages: ContextMessage[] = [system, ...seat.messages];
-    return await driveSeat({ dataDir, workshopId, seat, messages, native, toolDefs, agent, contactTargets, signal, onEvent });
+    // 按-Agent 串行：同一 agent 绑在多个工位/功能区时排队依次执行（静默）
+    return await withAgentTurn(seat.agentId, () => driveSeat({ dataDir, workshopId, seat, messages, native, toolDefs, agent, contactTargets, signal, onEvent }));
   } finally {
     release();
   }
@@ -293,7 +295,7 @@ export async function resumeSeat(
       content: buildSeatSystemPrompt({ dataDir, seat, agent, toolDefs, native: pending.native, wsRelPath: wsRelPath(dataDir, workshopId) }),
     };
     const messages: ContextMessage[] = [system, ...seat.messages];
-    return await driveSeat({ dataDir, workshopId, seat, messages, native: pending.native, toolDefs, agent, contactTargets, signal, onEvent });
+    return await withAgentTurn(seat.agentId, () => driveSeat({ dataDir, workshopId, seat, messages, native: pending.native, toolDefs, agent, contactTargets, signal, onEvent }));
   } finally {
     release();
   }

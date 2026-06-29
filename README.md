@@ -275,23 +275,29 @@ npm run build && npm run electron:prod
 │   ├── mcp/                      ← MCP 服务器配置（servers.json，gitignore）
 │   ├── tradewind/                ← 工作流定义 + 运行归档
 │   └── tide/                     ← 潮汐任务 + 运行记录
-└── docs/                         ← 操作文档（各模块详细引导）
+└── docs/                         ← 文档站（VitePress：开始/五种模式/扩展开发/架构）
 ```
 
 ## 文档
 
-详细操作指南在 `docs/` 目录下：
+完整文档是 `docs/` 下的 **VitePress 站点**,已内置进应用——顶栏「使用文档」按钮直达,由 Fastify 以 `/docs/` 路径自托管(`base: '/docs/'`)。`npm run dev` 前会自动 `docs:build`(`predev` 钩子),`npm run build` 也包含一次 `vitepress build`,无需手动构建即可在应用内查看。
 
-- **总览** → `overview` — 平台定位、多模式架构、数据目录、快速上手
-- **季风对话** → `chat-guide` — 创建 Agent、对话、委托、会话管理
-- **对流会议** → `convection-guide` — 创建会话、发言、会长私聊、动态管理
-- **信风工作流** → `tradewind-guide` — 画布编排、节点配置、运行、会议室
-- **潮汐自动化** → `tide-guide` — 任务创建、调度、自循环、归档策略
-- **工具制作** → `tools-reference` — ToolDef 接口、执行器编写
-- **技能制作** → `skills-reference` — SKILL.md 编写、专属工具、加载机制
-- **桌面化** → `Electron 方案与决策` — 桌面外壳架构、原生拖拽、生产自托管取舍
+单独写/调文档时：
 
-> 气旋工作室与会长私聊通道的设计说明散见于 `docs/` 内对应任务书；用户向导文档待补。
+```bash
+npm run docs:dev          # 独立预览(:5174，与应用 Vite 的 :5173 错开)
+npm run docs:build        # 构建静态站点 → docs/.vitepress/dist
+npm run docs:preview      # 预览已构建产物(:5174)
+```
+
+站点结构：
+
+- **开始** — 介绍与设计哲学 / 快速开始 / 核心概念
+- **五种模式** — 季风对话 / 对流会议 / 气旋工作室 / 信风工作流 / 潮汐自动化
+- **扩展开发** — 工具制作 / 技能制作 / MCP 接入
+- **架构** — 总体架构 / 数据目录 / 安全与隔离 / 桌面化 Electron
+
+> 气旋工作室(含工位私聊、群聊房间、会长私聊)已有完整用户向引导,见「五种模式 → 气旋」。
 
 ## 安全
 

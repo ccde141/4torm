@@ -35,25 +35,8 @@
   color: var(--color-text-primary);
 }
 
-.conv__new-btn {
-  width: 28px;
-  height: 28px;
-  background: var(--color-accent);
-  border: none;
-  border-radius: var(--border-radius-sm);
-  color: var(--color-on-accent);
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  font-size: var(--text-lg);
-  font-weight: var(--font-bold);
-  transition: all var(--duration-fast) var(--ease-out-expo);
-}
-
-.conv__new-btn:hover {
-  background: var(--color-accent-hover);
-  transform: scale(1.08);
-}
+/* 「新建会话」按钮已统一为全局 .icon-add-btn（中性配色 + 此处原有的放大动效），
+   原 .conv__new-btn（主色实底）已退役。 */
 
 .conv__sessions {
   flex: 1;

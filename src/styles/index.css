@@ -110,6 +110,39 @@ body::before {
 .text-mono      { font-family: var(--font-mono); }
 .text-truncate  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* 统一的「+」图标按钮（季风/对流/气旋/潮汐等各功能区共用）。
+ * 中性配色——不跟随主色；hover 动效取自对流原 .conv__new-btn 的手感：放大 + 过渡。 */
+.icon-add-btn {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-sm);
+  font-size: var(--text-lg);
+  font-weight: var(--font-bold);
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.icon-add-btn:hover {
+  border-color: var(--border-color-hover);
+  color: var(--color-text-primary);
+  background: var(--color-bg-elevated);
+  transform: scale(1.08);
+}
+.icon-add-btn:active {
+  transform: scale(0.94);
+}
+/* 紧凑尺寸（侧栏小标题旁的 +，如气旋/潮汐） */
+.icon-add-btn--sm {
+  width: 24px;
+  height: 24px;
+}
+
 /* ─── Entrance Animations ───────────────────────────────── */
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(8px); }

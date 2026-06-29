@@ -36,7 +36,10 @@
   place-items: center;
   overflow: hidden;
   flex-shrink: 0;
-  transition: transform var(--duration-normal) var(--ease-out-back), box-shadow var(--duration-normal) var(--ease-out-expo);
+  border: 1px solid transparent;
+  transition: transform var(--duration-normal) var(--ease-out-back),
+    box-shadow var(--duration-normal) var(--ease-out-expo),
+    border-color var(--duration-normal) var(--ease-out-expo);
 }
 
 .sidebar__brand-icon:has(.sidebar__brand-logo) {
@@ -44,9 +47,11 @@
   box-shadow: none;
 }
 
+/* hover：边缘提亮 + 轻微放大，做出按钮感（不依赖白底图，配合透明 svg） */
 .sidebar__brand-icon:hover {
-  transform: scale(1.1);
-  box-shadow: 0 0 20px var(--color-accent-glow);
+  transform: scale(1.08);
+  border-color: var(--border-color-hover);
+  box-shadow: 0 0 14px var(--color-accent-glow);
 }
 
 .sidebar__brand-icon svg,

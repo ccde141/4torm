@@ -232,7 +232,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
       <div style={leftPanelStyle}>
         <div style={sectionHeadStyle}>
           <span style={sectionLabelStyle}>工作室</span>
-          <button onClick={() => setView({ kind: 'create-workshop' })} style={newBtnStyle} title="新建工作室">+</button>
+          <button onClick={() => setView({ kind: 'create-workshop' })} className="icon-add-btn icon-add-btn--sm" title="新建工作室">+</button>
         </div>
         {workshops.map(w => (
           <div key={w.id} onClick={() => setActiveWid(w.id)}
@@ -251,7 +251,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
           <>
             <div style={sectionHeadStyle}>
               <span style={sectionLabelStyle}>工位</span>
-              <button onClick={() => setView({ kind: 'create-seat' })} style={newBtnStyle} title="添加工位">+</button>
+              <button onClick={() => setView({ kind: 'create-seat' })} className="icon-add-btn icon-add-btn--sm" title="添加工位">+</button>
             </div>
             {seats.map(s => (
               <div key={s.id} onClick={() => { setActiveSeatId(s.id); setView({ kind: 'seat', id: s.id }); }}
@@ -263,7 +263,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
             ))}
             <div style={sectionHeadStyle}>
               <span style={sectionLabelStyle}>群聊</span>
-              <button onClick={() => setView({ kind: 'create-room' })} style={newBtnStyle} title="新建群聊">+</button>
+              <button onClick={() => setView({ kind: 'create-room' })} className="icon-add-btn icon-add-btn--sm" title="新建群聊">+</button>
             </div>
             {rooms.map(rm => (
               <div key={rm.id} onClick={() => setView({ kind: 'room', id: rm.id })}
@@ -326,7 +326,6 @@ export default function CyclonePage({ active }: { active?: boolean }) {
 const leftPanelStyle: React.CSSProperties = { width: '240px', borderRight: '1px solid var(--border-color)', padding: 'var(--space-4)', overflowY: 'auto', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '2px', background: 'var(--glass-bg-strong)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))' };
 const sectionHeadStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'var(--space-3)', marginBottom: 'var(--space-1)' };
 const sectionLabelStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-secondary)' };
-const newBtnStyle: React.CSSProperties = { width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-surface)', color: 'var(--color-text-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-md)', cursor: 'pointer', lineHeight: 1, flexShrink: 0 };
 const itemStyle: React.CSSProperties = { padding: 'var(--space-2) var(--space-3)', cursor: 'pointer', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', border: '1px solid transparent', transition: 'all var(--duration-fast) var(--ease-out-expo)' };
 const itemActiveStyle: React.CSSProperties = { background: 'var(--color-accent-subtle)', borderColor: 'var(--color-accent)', color: 'var(--color-accent)', fontWeight: 600 };
 const delBtnStyle: React.CSSProperties = { width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: 'var(--color-text-tertiary)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-md)', cursor: 'pointer', lineHeight: 1, flexShrink: 0, padding: 0 };

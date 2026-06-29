@@ -8,7 +8,7 @@
 import type { FastifyInstance } from 'fastify';
 import {
   createSession, loadSession, saveSession, listSessions,
-  deleteSession, renameSession, tryAcquireSessionLock, isAgentInAnySession,
+  deleteSession, renameSession, tryAcquireSessionLock,
   sessionWorkspace,
 } from '../engine/convection/session';
 import { handleSpeak, handleChair } from '../engine/convection/handlers';
@@ -19,7 +19,6 @@ import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { lockAgent, unlockAgent, setPresence, clearPresence } from '../engine/shared/agent-lock';
 
 /** 活跃的轮次 AbortController：sessionId → AbortController */
 const activeAborts = new Map<string, AbortController>();
@@ -33,10 +32,6 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
     const { chairAgentId, participantAgentIds, topic, title } = body || {};
     if (!chairAgentId || !Array.isArray(participantAgentIds) || !participantAgentIds.length) {
       return reply.status(400).send({ error: '缺少 chairAgentId 或 participantAgentIds' });
-    }
-    const allIds = [chairAgentId, ...participantAgentIds];
-    for (const id of allIds) {
-      await setPresence(dataDir, id, 'convection');
     }
     const session = await createSession(dataDir, { chairAgentId, participantAgentIds, topic, title });
     return reply.send(session);
@@ -132,7 +127,6 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
       if (!s.participantAgentIds.includes(body.agentId)) {
         s.participantAgentIds.push(body.agentId);
         await saveSession(dataDir, s);
-        await setPresence(dataDir, body.agentId, 'convection');
       }
       return reply.send({ participantAgentIds: s.participantAgentIds });
     }
@@ -143,10 +137,6 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
       if (!body?.agentId) return reply.status(400).send({ error: '缺少 agentId' });
       s.participantAgentIds = s.participantAgentIds.filter((x: string) => x !== body.agentId);
       await saveSession(dataDir, s);
-      const stillIn = await isAgentInAnySession(dataDir, body.agentId, sessionId);
-      if (!stillIn) {
-        await clearPresence(dataDir, body.agentId, 'convection');
-      }
       return reply.send({ participantAgentIds: s.participantAgentIds });
     }
 
@@ -169,13 +159,6 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (action === 'delete') {
-      const s = await loadSession(dataDir, sessionId);
-      if (s) {
-        for (const id of [s.chairAgentId, ...s.participantAgentIds]) {
-          const stillIn = await isAgentInAnySession(dataDir, id, sessionId);
-          if (!stillIn) await clearPresence(dataDir, id, 'convection');
-        }
-      }
       await deleteSession(dataDir, sessionId);
       return reply.send({ ok: true });
     }

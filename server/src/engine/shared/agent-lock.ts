@@ -1,12 +1,11 @@
 /**
- * 后端侧 Agent 状态管理工具。
+ * 后端侧 Agent 互斥锁工具。
  *
- * 双字段模型：
- *   status — 长期归属标记（idle/convection/tradewind/offline），非互斥展示用
- *   busy   — 短暂互斥锁（LLM 流式输出期间），唯一互斥
+ *   busy — 短暂互斥锁（LLM 流式输出期间），唯一互斥字段。
  *
  * lockAgent/unlockAgent 仅操作 busy 字段。
- * setPresence/clearPresence 仅操作 status 字段（不互斥）。
+ * （旧的 status 归属标记 convection/tradewind 已废弃，不再写入；
+ *   启动自愈会把残留的非 idle/offline 归属态归一化回 idle。）
  */
 
 import fs from 'node:fs/promises';
@@ -85,31 +84,6 @@ export async function unlockAgent(
   fireUnlockHooks(agentId);
 }
 
-// ── 归属标记（非互斥）───────────────────────────────────────────
-
-/** 设置 agent 的长期归属标记（convection/tradewind）。不互斥，不阻止 lockAgent。 */
-export async function setPresence(
-  dataDir: string, agentId: string, status: string,
-): Promise<void> {
-  const reg = await readRegistry(dataDir);
-  const agent = reg[agentId];
-  if (!agent) return;
-  agent.status = status;
-  await writeRegistry(dataDir, reg);
-}
-
-/** 清除 agent 归属标记，回到 idle。仅当前 status 匹配时才清除。 */
-export async function clearPresence(
-  dataDir: string, agentId: string, expectedStatus: string,
-): Promise<void> {
-  const reg = await readRegistry(dataDir);
-  const agent = reg[agentId];
-  if (!agent) return;
-  if (agent.status !== expectedStatus) return; // 被别的模块改了，不覆盖
-  agent.status = 'idle';
-  await writeRegistry(dataDir, reg);
-}
-
 // ── 强制解锁 ────────────────────────────────────────────────────
 
 export async function forceUnlock(dataDir: string, agentId: string): Promise<void> {
@@ -126,7 +100,7 @@ export async function forceUnlock(dataDir: string, agentId: string): Promise<voi
 /**
  * 启动自愈：扫描 registry，释放 busy 残留。
  * busy 是内存态（LLM 流式输出），重启后不可能残留有效上下文。
- * convection/tradewind 是持久化归属，需要检查 session 文件。
+ * 同时把残留的旧归属态（convection/tradewind 等非 idle/offline）归一化回 idle。
  */
 export async function healAgentLocks(dataDir: string): Promise<string[]> {
   const released: string[] = [];
@@ -138,18 +112,10 @@ export async function healAgentLocks(dataDir: string): Promise<string[]> {
       agent.busy = false;
       released.push(`${agentId} (busy)`);
     }
-    // convection 归属：检查是否仍在活跃 session 中
-    if (agent.status === 'convection') {
-      const alive = await isAgentInConvectionSession(dataDir, agentId);
-      if (!alive) {
-        agent.status = 'idle';
-        released.push(`${agentId} (convection/orphan)`);
-      }
-    }
-    // tradewind 归属：重启后无活跃执行，清理
-    if (agent.status === 'tradewind') {
+    // 归一化残留的旧归属态（convection/tradewind 已废弃）
+    if (agent.status && agent.status !== 'idle' && agent.status !== 'offline') {
+      released.push(`${agentId} (status:${agent.status}→idle)`);
       agent.status = 'idle';
-      released.push(`${agentId} (tradewind)`);
     }
   }
 
@@ -158,24 +124,4 @@ export async function healAgentLocks(dataDir: string): Promise<string[]> {
   }
 
   return released;
-}
-
-async function isAgentInConvectionSession(dataDir: string, agentId: string): Promise<boolean> {
-  const indexFile = path.join(dataDir, 'convection', 'sessions', '_index.json');
-  let index: string[];
-  try {
-    index = JSON.parse(await fs.readFile(indexFile, 'utf-8'));
-  } catch {
-    return false;
-  }
-  for (const sid of index) {
-    const file = path.join(dataDir, 'convection', 'sessions', `${sid}.json`);
-    try {
-      const raw = await fs.readFile(file, 'utf-8');
-      const session = JSON.parse(raw);
-      if (session.chairAgentId === agentId) return true;
-      if (Array.isArray(session.participantAgentIds) && session.participantAgentIds.includes(agentId)) return true;
-    } catch { continue; }
-  }
-  return false;
 }

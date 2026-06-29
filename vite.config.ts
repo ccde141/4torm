@@ -28,6 +28,11 @@ export default defineConfig({
         target: 'http://localhost:3001',
         changeOrigin: true,
       },
+      // 文档站由 Fastify 自托管在 /docs/;开发态经此代理,使应用内「文档」按钮在 dev/prod 都指向 /docs/
+      '/docs': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
     },
   },
   plugins: [

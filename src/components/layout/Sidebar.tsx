@@ -126,7 +126,7 @@ const Sidebar = memo(function Sidebar({ activePage, onNavigate }: SidebarProps) 
       {/* Brand */}
       <div className="sidebar__brand">
         <div className="sidebar__brand-icon">
-          <img className="sidebar__brand-logo" src="/4TORM.png" alt="4torm" />
+          <img className="sidebar__brand-logo" src="/favicon.svg" alt="4torm" />
         </div>
         <span className="sidebar__brand-text">4TORM</span>
       </div>
