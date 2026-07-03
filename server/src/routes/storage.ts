@@ -27,6 +27,9 @@ function mimeFromExt(filePath: string): string {
 }
 
 export async function storageRoutes(app: FastifyInstance): Promise<void> {
+  // 注：本文件里 (req.query as any).path、req.body、(app as any).dataDir 的 as any 均为 Fastify
+  // HTTP / 装饰器边界的**有意转型**——请求载荷在校验前没有静态类型。安全性不靠类型，而靠
+  // resolveSafePath 统一做路径越界防护（见每个 handler）。非"类型随意"。
   const dataDir = (app as any).dataDir as string;
 
   // GET /api/storage/read?path=xxx
@@ -69,9 +72,16 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
     // Fastify 自动解析 JSON body 为对象，需要 stringify 回 string
     const raw = req.body;
     const body = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
-    const tmp = resolved + '.tmp';
-    await fs.writeFile(tmp, body, 'utf-8');
-    await fs.rename(tmp, resolved);
+    // 唯一临时名 + 原子 rename：并发写同一文件（如会话队列多次保存 _index.json）不能共用
+    // 同一个 .tmp，否则两次写交错后 rename 出「短内容盖长文件、尾部残留旧字节」的损坏 JSON。
+    const tmp = `${resolved}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    try {
+      await fs.writeFile(tmp, body, 'utf-8');
+      await fs.rename(tmp, resolved);
+    } catch (e) {
+      await fs.rm(tmp, { force: true }).catch(() => {});
+      throw e;
+    }
     return reply.send({ ok: true });
   });
 

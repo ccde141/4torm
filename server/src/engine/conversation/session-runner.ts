@@ -24,15 +24,39 @@ import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execListAgents, execCreateWorkflow } from '../shared/workflow-builder';
 import { execListWorkflows, execUpdateWorkflow } from '../shared/workflow-editor';
 import { buildVirtualToolDefs } from './virtual-tools';
+import { execCreateAutomation, execUpdateAutomation, execListAutomations } from '../shared/automation-builder';
+import { execTaskBoard, taskboardFile } from '../shared/taskboard';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+
+// 一次文件改动记录：executor（edit_file/write_file）算好 unified diff 经 meta.diff 回传
+type FileChange = { path: string; kind: 'edit' | 'write'; text: string; add: number; del: number };
+
+/** 汇总本轮所有文件改动为一份可读的 code-review 报告（按文件分组，保留改动顺序）。 */
+function renderReviewChanges(ledger: FileChange[]): string {
+  if (!ledger.length) return '本轮尚无文件改动可复查。';
+  const byPath = new Map<string, { add: number; del: number; texts: string[] }>();
+  for (const d of ledger) {
+    const e = byPath.get(d.path) ?? { add: 0, del: 0, texts: [] };
+    e.add += d.add; e.del += d.del;
+    if (d.text) e.texts.push(d.text);
+    byPath.set(d.path, e);
+  }
+  let totalAdd = 0, totalDel = 0;
+  const blocks: string[] = [];
+  for (const [p, e] of byPath) {
+    totalAdd += e.add; totalDel += e.del;
+    blocks.push(`### ${p}  (+${e.add} / -${e.del})\n${e.texts.join('\n')}`);
+  }
+  return `本轮改动 ${byPath.size} 个文件，共 +${totalAdd} / -${totalDel} 行：\n\n${blocks.join('\n\n')}`;
+}
 
 // ── SSE 事件类型（推送给前端） ────────────────────────────────────
 
 export type ConversationEvent =
   | { type: 'token'; content: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string; ok: boolean }
+  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
   | { type: 'delegate-start'; task: string; delegateId: string }
   | { type: 'delegate-token'; delegateId: string; content: string }
   | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
@@ -58,6 +82,8 @@ export interface SessionRunnerOpts {
   workspace: string;
   /** 沙箱级别（用于 sub-agent 继承） */
   sandboxLevel: 'strict' | 'relaxed' | 'unrestricted';
+  /** 会话 ID：task_board 假工具据此按会话落盘任务板 */
+  sessionId?: string;
   signal?: AbortSignal;
   /**
    * 假工具拦截器（通用扩展点）。
@@ -160,10 +186,15 @@ export class SessionRunner {
     const { dataDir, model, temperature } = this.opts;
     const signal = this.abortController!.signal;
 
+    // 本轮文件改动 ledger：edit_file/write_file 经 meta.diff 回传，供 review_changes 汇总回看。
+    // 仅内存、仅本次运行（一个用户回合内的多次编辑），不落盘、不跨回合。
+    const changeLedger: FileChange[] = [];
+
     const toolDefs = await loadAgentToolDefs(dataDir, this.opts.toolNames, this.opts.skillIds);
     // 原生模式：把虚拟工具（ask/delegate/list_agents/create_workflow）也作为 schema
     // 注入 tools 参数，否则模型在原生通道看不见它们。执行端 toolCaller 按 name 拦截不变。
-    const nativeToolDefs = [...toolDefs, ...buildVirtualToolDefs(true)];
+    // create_automation 仅在可交互会话（有 sessionId）注入：潮汐无人值守运行不给，避免自我繁殖。
+    const nativeToolDefs = [...toolDefs, ...buildVirtualToolDefs(true, !!this.opts.sessionId)];
 
     const llm: LLMCaller = {
       async call(msgs, _options, onChunk, sig, tools) {
@@ -194,6 +225,14 @@ export class SessionRunner {
         if (tool === 'delegate') {
           return await this.execDelegate(args, onEvent);
         }
+        // task_board 假工具：服务端 inline 落盘，meta 走 UI 侧通道刷新置顶面板
+        if (tool === 'task_board') {
+          onEvent({ type: 'tool-call', tool, args });
+          const bf = this.opts.sessionId ? taskboardFile(dataDir, this.opts.agentId, this.opts.sessionId) : null;
+          const { result, meta } = execTaskBoard(bf, args);
+          onEvent({ type: 'tool-result', tool, result, ok: true, meta });
+          return result;
+        }
         // 工作流搭建假工具
         if (tool === 'list_agents') {
           onEvent({ type: 'tool-call', tool, args });
@@ -221,11 +260,43 @@ export class SessionRunner {
           onEvent({ type: 'tool-result', tool, result, ok });
           return result;
         }
+        // create/update_automation：AI 增改潮汐任务（enabled 恒由人控制），信息卡展示；写盘走专用工具+控制面保护
+        if (tool === 'create_automation' || tool === 'update_automation') {
+          onEvent({ type: 'tool-call', tool, args });
+          if (!this.opts.sessionId) {
+            // 无人值守（潮汐运行）无 sessionId：禁止自建/自改，避免自我繁殖
+            const result = '操作失败：当前不在可交互会话中，潮汐任务须人工在潮汐页管理，禁止在此上下文自建/自改。';
+            onEvent({ type: 'tool-result', tool, result, ok: false });
+            return result;
+          }
+          const { result, pending } = tool === 'create_automation'
+            ? await execCreateAutomation(dataDir, this.opts.agentId, args)
+            : await execUpdateAutomation(dataDir, this.opts.agentId, args);
+          onEvent({ type: 'tool-result', tool, result, ok: !result.startsWith('操作失败'), meta: pending ? { pendingAutomation: pending } : undefined });
+          return result;
+        }
+        if (tool === 'list_automations') {
+          onEvent({ type: 'tool-call', tool, args });
+          const result = await execListAutomations(dataDir);
+          onEvent({ type: 'tool-result', tool, result, ok: true });
+          return result;
+        }
+        // review_changes 假工具：汇总本轮 ledger 里的文件改动 diff，供自我 code review
+        if (tool === 'review_changes') {
+          onEvent({ type: 'tool-call', tool, args });
+          const result = renderReviewChanges(changeLedger);
+          onEvent({ type: 'tool-result', tool, result, ok: true });
+          return result;
+        }
         // 直接执行工具，无二次确认
         onEvent({ type: 'tool-call', tool, args });
         try {
-          const result = await this.execTool(tool, args);
-          onEvent({ type: 'tool-result', tool, result, ok: true });
+          let meta: unknown;
+          const result = await this.execTool(tool, args, (m) => { meta = m; });
+          // 收集文件改动 diff（edit_file/write_file 经 meta.diff 回传）→ review_changes 汇总
+          const diff = (meta as { diff?: FileChange } | undefined)?.diff;
+          if (diff?.path) changeLedger.push(diff);
+          onEvent({ type: 'tool-result', tool, result, ok: true, meta });
           return result;
         } catch (e) {
           const err = `工具执行失败: ${(e as Error).message}`;
@@ -286,7 +357,7 @@ export class SessionRunner {
   }
 
   /** 执行普通工具（MCP 工具走 MCP client；其余 HTTP 调 /api/tools/exec） */
-  private async execTool(tool: string, args: Record<string, string>): Promise<string> {
+  private async execTool(tool: string, args: Record<string, string>, onMeta?: (meta: unknown) => void): Promise<string> {
     // MCP 工具：本地工具 HTTP 执行器不认 mcp: 前缀，必须直接走 MCP client（对齐 cyclone execToolUnified）
     if (tool.startsWith('mcp:')) {
       const { callMcpTool } = await import('../shared/mcp-manager');
@@ -309,8 +380,9 @@ export class SessionRunner {
       const text = await res.text().catch(() => '');
       throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
     }
-    const data = await res.json() as { result?: string; error?: string };
+    const data = await res.json() as { result?: string; error?: string; meta?: unknown };
     if (data.error) throw new Error(data.error);
+    if (data.meta !== undefined && data.meta !== null) onMeta?.(data.meta);
     return data.result ?? '';
   }
 

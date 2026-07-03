@@ -14,6 +14,7 @@ import { streamUrl } from '../../lib/apiBase';
 import type { ChatMessage, Agent } from '../../types';
 import type { ChatSession } from '../../store/chat';
 import type { ToolDef } from '../../store/tools';
+import type { TaskBoard } from '../../utils/taskboard';
 
 export type StreamCtx = {
   session: ChatSession;
@@ -34,6 +35,8 @@ export type StreamCtx = {
   isAbandoned?: () => boolean;
   /** 流彻底结束（自然/abort/淘汰/错误）后回调，用于清理 runner 注册表 */
   onFinish?: () => void;
+  /** task_board 工具通过 meta 侧通道回传的最新任务板（null = 已清空），用于即时刷新置顶面板 */
+  onTaskboard?: (board: TaskBoard | null) => void;
 };
 
 export async function runStreamLoop(ctx: StreamCtx) {
@@ -105,6 +108,11 @@ export async function runStreamLoop(ctx: StreamCtx) {
 
         let ev: any;
         try { ev = JSON.parse(json); } catch { continue; }
+
+        // task_board 的 meta 侧通道：结构化任务板即时上屏（不进 LLM 上下文）
+        if (ev.type === 'tool-result' && ev.meta && 'taskboard' in ev.meta) {
+          ctx.onTaskboard?.(ev.meta.taskboard);
+        }
 
         await handleSSEEvent(ev, {
           assistantMsgId, allMessages, streamContent,

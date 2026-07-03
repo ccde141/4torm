@@ -12,6 +12,8 @@ import type { ToolDef } from '../shared/tool-defs-loader';
 import type { ContextMessage } from '../shared/types';
 import { buildSystemPrompt } from '../shared/prompt';
 import { buildSandboxSection } from '../shared/sandbox-prompt';
+import { buildTaskBoardSection, readTaskboard } from '../shared/taskboard';
+import { seatTaskboardFile } from './paths';
 import type { SeatData, WorkshopData, RoomData } from './types';
 import { DEFAULT_DUTY } from './types';
 import { loadSeat } from './seat-store';
@@ -60,13 +62,14 @@ ${list}`;
  */
 export function buildSeatSystemPrompt(opts: {
   dataDir: string;
+  workshopId: string;
   seat: SeatData;
   agent: LoadedAgent;
   toolDefs: ToolDef[];
   native: boolean;
   wsRelPath: string;
 }): string {
-  const { dataDir, seat, agent, toolDefs, native, wsRelPath } = opts;
+  const { dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath } = opts;
   const projectDir = path.resolve(dataDir, '..');
   const wsAbs = path.resolve(projectDir, wsRelPath);
   const parts: string[] = [];
@@ -89,6 +92,9 @@ export function buildSeatSystemPrompt(opts: {
 
   // 5. 场景上下文（工位=执行工位，干实事）
   parts.push(`## 当前场景\n你是气旋工作室里的「${seat.title}」工位，正在与老板（人类）一对一私聊。这是执行工位——把交代的事做实、做完。需要用户决策或信息不足时用 ask 提问；可拆分的重活用 delegate 派给 SubAgent。完成后用自然语言给出结论。`);
+
+  // 6. 任务板假工具：始终描述用法；已有板子时附当前状态（与季风一致）
+  parts.push(`## 任务板\n\n${buildTaskBoardSection(readTaskboard(seatTaskboardFile(dataDir, workshopId, seat.id)))}`);
 
   return parts.join('\n\n');
 }

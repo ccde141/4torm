@@ -122,11 +122,15 @@
   --ease-collapse:   cubic-bezier(0.4, 0, 0.2, 1);
   /* 流畅曲线（hover、focus、scale） */
   --ease-smooth:     cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  /* 企宣级强减速：慢起快铺再从容收尾，侧板/抽屉展开的高级质感（Material 3 emphasized decelerate） */
+  --ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
 
   --duration-fast:   150ms;
   --duration-normal: 250ms;
   --duration-slow:   400ms;
   --duration-spring: 520ms;
+  /* 企宣侧板展开时长（够长才铺得出减速尾巴） */
+  --duration-emphasized: 480ms;
 
   /* ─── 背景纹理（默认无，设置 URL 即可叠加） ────────── */
   --texture: none;

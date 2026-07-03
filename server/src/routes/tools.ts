@@ -19,10 +19,12 @@ export async function toolRoutes(app: FastifyInstance): Promise<void> {
     }
     const { tool, args, agentId, workspaceDirOverride, sandboxLevelOverride } = body;
     try {
+      let meta: unknown;
       const result = await executeTool(
         dataDir, tool, args || {}, agentId || '', workspaceDirOverride, sandboxLevelOverride,
+        (m) => { meta = m; },
       );
-      return reply.send({ result });
+      return reply.send({ result, meta });
     } catch (e) {
       return reply.status(500).send({ error: (e as Error).message });
     }

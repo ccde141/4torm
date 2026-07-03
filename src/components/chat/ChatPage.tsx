@@ -7,6 +7,8 @@ import { useSessionList } from './useSessionList';
 import { useMessageEditor } from './useMessageEditor';
 import { useStreamRunners } from './useStreamRunners';
 import QueuedChips, { MAX_QUEUE } from './QueuedChips';
+import TaskBoardDrawer, { RAIL_W } from './TaskBoardDrawer';
+import { loadTaskboard, saveTaskboard, type TaskBoard } from '../../utils/taskboard';
 import { runStreamLoop } from '../../engine/chat/streamLoop';
 import { streamUrl } from '../../lib/apiBase';
 import { useDroppedPathInput } from '../../lib/useDroppedPathInput';
@@ -57,6 +59,11 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   const [, bumpQueue] = useState(0);
   const [models, setModels] = useState<{ key: string; label: string }[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
+  const [taskboard, setTaskboard] = useState<TaskBoard | null>(null);
+  const [taskboardOpen, setTaskboardOpen] = useState(() => { try { return localStorage.getItem('taskboard.open') === '1'; } catch { return false; } });
+  const [taskboardUnseen, setTaskboardUnseen] = useState(false);
+  const taskboardOpenRef = useRef(taskboardOpen);
+  useEffect(() => { taskboardOpenRef.current = taskboardOpen; }, [taskboardOpen]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -86,6 +93,37 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   } = useSessionList(selectedAgent, selectedModel, models, setSelectedAgent, setMessages, setStreaming, setSelectedModel, streamRunners);
   // 同步 activeSessionId 到 ref 供 emit 读最新值（effect 中写，避免 render 期改 ref）
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
+
+  // 切会话时载入该会话的任务板（后端 task_board 假工具落盘的同一文件）；切换不算“更新”，不发光
+  useEffect(() => {
+    setTaskboardUnseen(false);
+    if (!activeSessionId) { setTaskboard(null); return; }
+    let alive = true;
+    loadTaskboard(activeSessionId).then(b => { if (alive) setTaskboard(b); });
+    return () => { alive = false; };
+  }, [activeSessionId]);
+
+  // agent 通过 meta 侧通道更新板子：刷新内容；若抽屉收起则点亮“未看”发光提醒
+  const applyAgentTaskboard = useCallback((b: TaskBoard | null) => {
+    setTaskboard(b);
+    if (!taskboardOpenRef.current && b?.tasks.length) setTaskboardUnseen(true);
+  }, []);
+
+  const toggleTaskboard = useCallback(() => {
+    setTaskboardOpen(v => {
+      const next = !v;
+      try { localStorage.setItem('taskboard.open', next ? '1' : '0'); } catch { /* ignore */ }
+      if (next) setTaskboardUnseen(false); // 打开即清除未看提醒
+      return next;
+    });
+  }, []);
+
+  // 用户在抽屉上编辑（改状态/标题/增删/清空）→ 整块回写文件 + 本地即时更新
+  const handleTaskboardChange = useCallback((next: TaskBoard | null) => {
+    setTaskboard(next);
+    const sid = activeSessionIdRef.current;
+    if (sid) saveTaskboard(sid, next).catch(e => console.error('[taskboard] 保存失败', e));
+  }, []);
 
   // 桌面端：拖入文件 → 把真实磁盘路径追加进输入框（仅当前可见对话生效）
   useDroppedPathInput(setInput, inputRef, active !== false);
@@ -249,9 +287,20 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             allMessages.splice(idx, 0, toolMsg);
             emit([...allMessages]);
           } else if (ev.type === 'tool-result') {
+            // task_board 侧通道：结构化任务板即时刷新抽屉（收起时发光提醒）
+            if ((ev as any).meta && 'taskboard' in (ev as any).meta) applyAgentTaskboard((ev as any).meta.taskboard);
+            // ev.meta.before = 覆盖写入的旧内容（侧通道，未经 LLM），存进 toolCall.diff 供 diff 卡片渲染
+            const before = (ev as any).meta?.before;
+            // ev.meta.pendingAutomation = AI 自建潮汐草稿，存进 toolCall 供确认卡渲染
+            const pendingAutomation = (ev as any).meta?.pendingAutomation;
             for (let i = allMessages.length - 1; i >= 0; i--) {
               if (allMessages[i].toolCall && (allMessages[i].toolCall as any).status === 'running') {
-                allMessages[i] = { ...allMessages[i], toolCall: { ...allMessages[i].toolCall!, result: ev.result, status: ev.ok ? 'success' : 'error' } };
+                allMessages[i] = { ...allMessages[i], toolCall: {
+                  ...allMessages[i].toolCall!,
+                  result: ev.result, status: ev.ok ? 'success' : 'error',
+                  ...(typeof before === 'string' ? { diff: { before } } : {}),
+                  ...(pendingAutomation ? { pendingAutomation } : {}),
+                } };
                 break;
               }
             }
@@ -455,6 +504,8 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       saveSessionFn: saveSession, refreshSessions, autoTitleFn: autoTitle, generateMessageIdFn: generateMessageId,
       abortController,
       isAbandoned: () => streamRunners.runners.current.get(sid2)?.abandoned ?? false,
+      // 仅当仍是当前激活会话才刷面板（后台会话的任务板变更下次切入时由载入 effect 拉取）
+      onTaskboard: (b) => { if (activeSessionIdRef.current === sid2) applyAgentTaskboard(b); },
       onFinish: () => {
         const stopped = streamRunners.runners.current.get(sid2)?.userStopped ?? false;
         streamRunners.finalize(sid2);
@@ -524,7 +575,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
         {!selectedAgent && <div style={{ padding: 'var(--space-4)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center', textShadow: 'var(--text-halo)' }}>选择一个 Agent 开始对话</div>}
       </div>
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
         {!activeSessionId ? (
           <div style={emptyStyle}>
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.3"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /></svg>
@@ -541,7 +592,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                 )}
                 <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', textShadow: 'var(--text-halo)' }}>{activeSessionId}</span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginRight: '30px' }}>
                 <AgentWorkspaceButton agent={selectedAgent} />
                 {models.length > 0 && (
                   <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={modelSelectStyle} aria-label="选择模型">
@@ -551,7 +602,9 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               </div>
       </div>
 
-            <div className="chat__messages" ref={messagesContainerRef}>
+            {/* 收起态：让出竖条宽度，滚动条落在竖条左侧可点可拖；展开态：抽屉浮层覆盖，无需让位 */}
+            <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginRight: taskboardOpen ? 0 : RAIL_W }}>
+            <div className="chat__messages" ref={messagesContainerRef} style={{ paddingRight: taskboardOpen ? 'calc(var(--space-6) + 30px)' : 'var(--space-6)' }}>
               {messages.filter(msg => msg.toolCall || msg.content.trim()).map(msg => (
                 <div key={msg.id}>
                   <MessageItem
@@ -570,6 +623,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               ))}
               {streaming && <div className="chat__message chat__message--assistant"><div className="chat__avatar">AI</div><div className="chat__bubble"><div className="loading-spinner" /></div></div>}
               <div ref={messagesEndRef} />
+            </div>
             </div>
 
             <div className="chat__input-area">
@@ -595,6 +649,8 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                 <span>/compact 压缩上下文</span>
               </div>
             </div>
+            {/* 任务板挂在整列层（非消息区内），竖条/抽屉贯穿全高：上过标题栏、下达输入栏，与气旋/对流会长同构 */}
+            <TaskBoardDrawer board={taskboard} onChange={handleTaskboardChange} expanded={taskboardOpen} onToggle={toggleTaskboard} glow={taskboardUnseen} />
           </>
         )}
       </div>

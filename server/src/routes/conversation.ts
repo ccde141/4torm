@@ -90,6 +90,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       skillIds: agent.skills || [],
       workspace: agent.workspace,
       sandboxLevel: agent.sandboxLevel,
+      sessionId: body.sessionId,
       native: nativeDecision.native,
     };
 
@@ -113,6 +114,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       skillIds: opts.skillIds,
       dataDir,
       agentId: agent.id,
+      sessionId: body.sessionId,
       userMessage: lastUserMsg?.content,
       native: nativeDecision.native,
     });

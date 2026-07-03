@@ -51,6 +51,7 @@ export interface ToolCallRecord {
   tool: string;
   args: Record<string, string>;
   result: string;
+  meta?: unknown;
 }
 
 /** LLM 调用抽象——调用方注入具体实现 */
@@ -65,14 +66,14 @@ export interface LLMCaller {
 
 /** 工具调用抽象——调用方注入具体实现 */
 export interface ToolCaller {
-  call(tool: string, args: Record<string, string>): Promise<string>;
+  call(tool: string, args: Record<string, string>, onMeta?: (meta: unknown) => void): Promise<string>;
 }
 
 /** ReAct 循环事件（流式推送用） */
 export type ReActStreamEvent =
   | { type: 'token'; chunk: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string }
+  | { type: 'tool-result'; tool: string; result: string; meta?: unknown }
   | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | { type: 'error'; message: string };
 
@@ -326,8 +327,9 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
         : null;
 
       let result: string;
+      let meta: unknown;
       try {
-        result = await tools.call(action.tool, action.args);
+        result = await tools.call(action.tool, action.args, (m) => { meta = m; });
       } catch (e) {
         result = `错误：${(e as Error).message}`;
       } finally {
@@ -335,8 +337,8 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
       }
 
       resultBlocks.push(`<result tool="${action.tool}">${trimToolResult(result)}</result>`);
-      allToolCalls.push({ tool: action.tool, args: action.args, result });
-      onEvent?.({ type: 'tool-result', tool: action.tool, result });
+      allToolCalls.push({ tool: action.tool, args: action.args, result, meta });
+      onEvent?.({ type: 'tool-result', tool: action.tool, result, meta });
     }
 
     // E: delegate nudge — 连续多轮工具调用且未用 delegate 时提醒一次

@@ -16,7 +16,7 @@ export default async function (args, ctx) {
   const target = args.filePath || args.dirPath
   if (!target) throw new Error('缺少 filePath 或 dirPath 参数')
 
-  const resolved = resolvePath(target, ctx)
+  const resolved = resolvePath(target, ctx, { write: true })
   const isDir = statSync(resolved, { throwIfNoEntry: false })?.isDirectory()
   const recursive = args.recursive !== false
 

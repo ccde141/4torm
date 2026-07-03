@@ -77,6 +77,15 @@ export interface ToolCall {
   result?: string;
   durationMs?: number;
   status: 'pending' | 'success' | 'error' | 'running';
+  /** UI 侧通道元数据：覆盖写入时的旧内容，用于渲染真实 diff（不进 LLM 上下文） */
+  diff?: { before?: string };
+  /** UI 侧通道：AI 增改潮汐任务的信息卡数据（服务端按真实字段生成；启用仍在潮汐页由人操作） */
+  pendingAutomation?: {
+    mode: 'created' | 'updated';
+    taskId: string; name: string; schedule: string; repeatCount: number; perpetual: boolean;
+    selfLoop: boolean; windowN: number; enabled: boolean; agentName: string; sandboxLevel: string;
+    canWriteFiles: boolean; promptPreview: string;
+  };
   /** delegate 子步骤 */
   steps?: Array<{ type: 'tool' | 'thought'; tool?: string; args?: Record<string, string>; result?: string; ok?: boolean; text?: string }>;
 }

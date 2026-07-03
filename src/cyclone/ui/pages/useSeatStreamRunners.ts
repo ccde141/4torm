@@ -13,12 +13,15 @@
 import { useRef, useCallback } from 'react';
 import { streamUrl } from '../../../lib/apiBase';
 import type { DisplayBlock, DisplayMessage } from './messageDisplay';
+import type { TaskBoard } from '../../../utils/taskboard';
 
 export interface Live {
   blocks: DisplayBlock[];
   text: string;
   phase: string;
   ask?: { question: string; options?: string[] };
+  /** task_board 假工具通过 meta 侧通道回传的最新任务板（undefined=本轮未更新，null=已清空） */
+  taskboard?: TaskBoard | null;
 }
 
 /** 单条工位流的运行态。归属 seatId，不归属当前界面。 */
@@ -53,6 +56,8 @@ function applyEvent(ev: any, ls: Live): void {
       ls.blocks.push({ kind: 'tool', tool: ev.tool, args: ev.args, status: 'running' });
       ls.phase = `正在调用 ${ev.tool}...`; break;
     case 'tool-result': {
+      // task_board 侧通道：结构化任务板即时刷新抽屉（不进 LLM 上下文）
+      if (ev.meta && 'taskboard' in ev.meta) ls.taskboard = ev.meta.taskboard;
       for (let i = ls.blocks.length - 1; i >= 0; i--) {
         const b = ls.blocks[i];
         if (b.kind === 'tool' && b.status === 'running') { ls.blocks[i] = { ...b, result: ev.result, status: ev.ok ? 'success' : 'error' }; break; }

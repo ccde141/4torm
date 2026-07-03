@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ChatMessage } from '../../../types';
+import FileDiffCard, { parseFileEdit } from './FileDiffCard';
 
 /**
  * ToolCallMessage — 信风工具调用卡片
@@ -11,6 +12,11 @@ export default function ToolCallMessage({ toolCall }: {
   toolCall: NonNullable<ChatMessage['toolCall']>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const fileEdit = parseFileEdit(toolCall);
+
+  if (fileEdit) {
+    return <FileDiffCard toolCall={toolCall} edit={fileEdit} />;
+  }
 
   const resultLines = (toolCall.result || '').split('\n');
   const summary = resultLines.length > 1

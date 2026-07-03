@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from 'fs'
 import { resolvePath } from './_resolve.js'
+import { unifiedDiff } from './_diff.js'
 
 export default async function (args, ctx) {
   const fp = args.filePath || args.file_path
@@ -8,7 +9,7 @@ export default async function (args, ctx) {
   const replaceAll = args.replaceAll === true || args.replace_all === true
   if (!fp || !oldStr) throw new Error('缺少必要参数')
 
-  const resolved = resolvePath(fp, ctx)
+  const resolved = resolvePath(fp, ctx, { write: true })
   const content = readFileSync(resolved, 'utf-8')
 
   const count = content.split(oldStr).length - 1
@@ -21,6 +22,12 @@ export default async function (args, ctx) {
 
   // split/join 替换：count===1 时正好替换那一处，replaceAll 时全替；
   // 同时避开 String.replace 把 newString 里的 $&/$1 当特殊模式处理的坑。
-  writeFileSync(resolved, content.split(oldStr).join(newStr), 'utf-8')
-  return replaceAll && count > 1 ? `编辑成功（替换 ${count} 处）: ${fp}` : `编辑成功: ${fp}`
+  const after = content.split(oldStr).join(newStr)
+  writeFileSync(resolved, after, 'utf-8')
+
+  const base = replaceAll && count > 1 ? `编辑成功（替换 ${count} 处）: ${fp}` : `编辑成功: ${fp}`
+  // 原生 diff 内联给 LLM：改完即结构化看清改了什么；meta.diff 供 review_changes 汇总
+  const d = unifiedDiff(content, after, fp)
+  const result = d.text ? `${base}\n${d.text}` : base
+  return { result, meta: { diff: { path: fp, kind: 'edit', text: d.text, add: d.add, del: d.del } } }
 }

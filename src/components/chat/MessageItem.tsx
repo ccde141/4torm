@@ -14,6 +14,7 @@ import StructuredMessage from './StructuredMessage';
 import ToolCallMessage from './ToolCallMessage';
 import DelegateCard from './DelegateCard';
 import AskCard from './AskCard';
+import AutomationDraftCard from './AutomationDraftCard';
 import { parseStructuredOutput } from '../../engine/parser';
 import { renderTextWithCode } from '../../engine/markdown';
 import { formatTimestamp } from '../../utils/time';
@@ -77,6 +78,10 @@ function MessageItemInner({
   }
 
   if (msg.toolCall) {
+    // 潮汐任务信息卡（create/update 成功时带 pendingAutomation；失败则退回普通工具卡）
+    if ((msg.toolCall.toolName === 'create_automation' || msg.toolCall.toolName === 'update_automation') && msg.toolCall.pendingAutomation) {
+      return <AutomationDraftCard pending={msg.toolCall.pendingAutomation} timestamp={formatTimestamp(msg.timestamp)} />;
+    }
     return msg.toolCall.toolName === 'delegate' ? (
       <DelegateCard
         toolCall={msg.toolCall}

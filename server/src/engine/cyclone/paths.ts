@@ -37,6 +37,11 @@ export function seatsDir(dataDir: string, workshopId: string): string {
   return path.join(workshopDir(dataDir, workshopId), 'seats');
 }
 
+/** 工位任务板：data/cyclone/{id}/seats/{seatId}.taskboard.json（与工位数据同目录） */
+export function seatTaskboardFile(dataDir: string, workshopId: string, seatId: string): string {
+  return path.join(workshopDir(dataDir, workshopId), 'seats', `${seatId}.taskboard.json`);
+}
+
 /** 群聊文件：data/cyclone/{id}/rooms/{roomId}.json */
 export function roomFile(dataDir: string, workshopId: string, roomId: string): string {
   return path.join(workshopDir(dataDir, workshopId), 'rooms', `${roomId}.json`);

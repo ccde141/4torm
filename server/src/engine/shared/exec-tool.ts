@@ -19,10 +19,12 @@ export interface ExecToolOpts {
   workspaceDir?: string;
   sandboxLevel?: string;
   signal?: AbortSignal;
+  /** UI 侧通道：接收执行器回传的展示元数据（如覆盖写入旧内容），不影响 LLM 结果字符串 */
+  onMeta?: (meta: unknown) => void;
 }
 
 export async function execToolUnified(opts: ExecToolOpts): Promise<string> {
-  const { tool, args, agentId, workspaceDir, sandboxLevel, signal } = opts;
+  const { tool, args, agentId, workspaceDir, sandboxLevel, signal, onMeta } = opts;
 
   // MCP 工具：直接走 MCP client
   if (tool.startsWith('mcp:')) {
@@ -47,7 +49,8 @@ export async function execToolUnified(opts: ExecToolOpts): Promise<string> {
     throw new Error(`tool-bridge error (${res.status}): ${text}`);
   }
 
-  const data = await res.json() as { result?: string; error?: string };
+  const data = await res.json() as { result?: string; error?: string; meta?: unknown };
   if (data.error) throw new Error(data.error);
+  if (data.meta !== undefined && data.meta !== null) onMeta?.(data.meta);
   return data.result ?? '';
 }

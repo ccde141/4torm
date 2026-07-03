@@ -30,7 +30,21 @@ export interface SeatVirtualToolOpts {
  */
 export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDef[] {
   const { allowAsk = true, allowDelegate = true, contactTargets = [] } = opts;
-  const defs: ToolDef[] = [];
+  const defs: ToolDef[] = [
+    {
+      name: 'task_board',
+      description: '维护本工位的任务板（用户可见的结构化进度清单）。多步骤任务先写出拆解，每当开始或完成一项就整块覆盖更新，让用户实时看到进度。单步问答不必建板。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', description: 'set=整体覆盖写入 / get=读取当前板子 / clear=清空' },
+          goal: { type: 'string', description: '（set 时）本工位当前总目标，一句话' },
+          tasks: { type: 'array', description: '（set 时）完整任务列表，覆盖式写入，须含所有任务的最新状态。每项为对象 { title, status: todo|doing|done|blocked, note? }' },
+        },
+        required: ['action'],
+      },
+    },
+  ];
 
   if (allowAsk) {
     defs.push({

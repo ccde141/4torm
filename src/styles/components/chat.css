@@ -1087,3 +1087,68 @@
 @keyframes chat-spin {
   to { transform: rotate(360deg); }
 }
+
+/* 任务板凸出标签：agent 更新且未看时向左外扩光晕（外围提醒，不喧宾夺主）。
+   先脉冲 3 下抓注意，随后 border 保持强调色 + 常亮浅光晕，直到用户打开（清除 glow 类）。 */
+@keyframes taskboard-glow {
+  0%, 100% { box-shadow: -2px 0 0 0 transparent; }
+  50%      { box-shadow: -5px 0 16px 0 var(--color-accent-glow); }
+}
+.taskboard-rail--glow {
+  animation: taskboard-glow 1.4s var(--ease-smooth) 3;
+  border-color: var(--color-accent) !important;
+  background: var(--color-accent-subtle) !important;
+  box-shadow: -3px 0 10px 0 var(--color-accent-glow);
+}
+
+/* 收起标签 hover：提亮 + accent 描边 + 光晕，向界面其它玻璃按钮看齐 */
+.taskboard-rail {
+  transition: background var(--duration-fast) var(--ease-out-expo),
+              border-color var(--duration-fast) var(--ease-out-expo),
+              box-shadow var(--duration-fast) var(--ease-out-expo);
+}
+.taskboard-rail:hover {
+  background: var(--glass-bg-hover) !important;
+  border-color: var(--color-accent) !important;
+  box-shadow: -4px 0 16px -4px var(--color-accent-glow);
+}
+
+/* 抽屉头部带标签操作按钮：hover 提亮 + accent 描边 */
+.taskboard-act {
+  transition: background var(--duration-fast) var(--ease-out-expo),
+              border-color var(--duration-fast) var(--ease-out-expo),
+              color var(--duration-fast) var(--ease-out-expo);
+}
+.taskboard-act:hover {
+  background: var(--glass-bg-hover);
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+/* 清空是破坏性操作：hover 才转红，避免静息态喧宾夺主 */
+.taskboard-act--danger:hover {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+/* 展开抽屉：从右缘企宣级减速滑入（悬浮在消息上，不挤占会话）。
+   位移 + 极轻缩放，强减速曲线铺出从容的收尾，避免生硬直插。 */
+@keyframes taskboard-slide-in {
+  from { opacity: 0; transform: translateX(30px) scale(0.985); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+/* 内容比外壳晚一拍浮起，形成分层的「铺开」质感 */
+@keyframes taskboard-content-in {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.taskboard-drawer {
+  animation: taskboard-slide-in var(--duration-emphasized) var(--ease-emphasized);
+  transform-origin: right center;
+  will-change: transform, opacity;
+}
+.taskboard-drawer > * {
+  animation: taskboard-content-in var(--duration-slow) var(--ease-out-expo) both;
+}
+.taskboard-drawer > *:nth-child(2) { animation-delay: 70ms; }
+.taskboard-drawer > *:nth-child(3) { animation-delay: 120ms; }
+.taskboard-drawer > *:nth-child(4) { animation-delay: 160ms; }

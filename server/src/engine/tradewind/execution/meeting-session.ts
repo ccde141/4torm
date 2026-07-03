@@ -19,7 +19,7 @@ export interface MeetingMessage {
   content: string;
   timestamp: number;
   rawContent?: string;
-  toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }>;
+  toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>;
   /** 入会摘要流式过程中为 true；定稿后为 false / undefined */
   streaming?: boolean;
 }

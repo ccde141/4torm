@@ -33,6 +33,10 @@ export interface McpToolDef {
   };
 }
 
+// JSON-RPC over stdio 的 wire 结构。以下 params/result/data 用 any 是**有意的边界类型**：
+// 载荷形状由对端 MCP server 决定，编译期无从静态得知；正确性靠运行时结构校验保证
+// （见 handleMessage 的 id/error 分支、callTool 里的 Array.isArray(result.content)），
+// 而非类型系统。请勿据此判定"类型随意"。
 interface JsonRpcRequest {
   jsonrpc: '2.0';
   id: number;

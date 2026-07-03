@@ -36,7 +36,7 @@ type StreamEvent =
   | { type: 'connected'; busy: boolean }
   | { type: 'token'; content: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string; ok: boolean }
+  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: { before?: string } }
   | { type: 'delegate-start'; task: string; delegateId: string }
   | { type: 'delegate-token'; delegateId: string; content: string }
   | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
@@ -135,9 +135,15 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
         case 'tool-result':
           setMessages(prev => {
             const msgs = [...prev];
+            const before = ev.meta?.before;
             for (let i = msgs.length - 1; i >= 0; i--) {
               if (msgs[i].toolCall && msgs[i].toolCall!.status === 'pending') {
-                msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, result: ev.result, status: ev.ok ? 'success' : 'error' } };
+                msgs[i] = { ...msgs[i], toolCall: {
+                  ...msgs[i].toolCall!,
+                  result: ev.result,
+                  status: ev.ok ? 'success' : 'error',
+                  ...(typeof before === 'string' ? { diff: { before } } : {}),
+                } };
                 break;
               }
             }

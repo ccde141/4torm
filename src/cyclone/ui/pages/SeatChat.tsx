@@ -15,6 +15,8 @@ import DelegateCard from '../../../components/chat/DelegateCard';
 import AskCard from '../../../components/chat/AskCard';
 import ContactCard from './ContactCard';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
+import TaskBoardDrawer, { RAIL_W } from '../../../components/chat/TaskBoardDrawer';
+import { loadSeatTaskboard, saveSeatTaskboard, type TaskBoard } from '../../../utils/taskboard';
 import { contextToDisplay, type DisplayMessage, type DisplayBlock } from './messageDisplay';
 import type { SeatStreamRunners } from './useSeatStreamRunners';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
@@ -59,6 +61,40 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
   const live = runner ? runner.live : null;
   const streaming = !!runner?.streaming;
   const queue = runners.getQueue(seatId);
+  const isChair = seatId.startsWith('__chair__');
+
+  // ── 任务板（工位=会话，与季风同构；会长无工具，不挂板） ──
+  const [board, setBoard] = useState<TaskBoard | null>(null);
+  const [tbOpen, setTbOpen] = useState(() => { try { return localStorage.getItem('cyclone.taskboard.open') === '1'; } catch { return false; } });
+  const [tbUnseen, setTbUnseen] = useState(false);
+  const tbOpenRef = useRef(tbOpen);
+  useEffect(() => { tbOpenRef.current = tbOpen; }, [tbOpen]);
+  // 切工位时载入该工位的任务板（后端 task_board 落盘的同一文件）
+  useEffect(() => {
+    setTbUnseen(false);
+    if (isChair) { setBoard(null); return; }
+    let alive = true;
+    loadSeatTaskboard(workshopId, seatId).then(b => { if (alive) setBoard(b); });
+    return () => { alive = false; };
+  }, [workshopId, seatId, isChair]);
+  // agent 通过 meta 侧通道更新板子（applyEvent 写进 live.taskboard）→ 刷新 + 收起时点亮未看
+  const liveBoard = live?.taskboard;
+  useEffect(() => {
+    if (liveBoard !== undefined) {
+      setBoard(liveBoard);
+      if (!tbOpenRef.current && liveBoard?.tasks.length) setTbUnseen(true);
+    }
+  }, [liveBoard]);
+  const toggleTb = useCallback(() => setTbOpen(o => {
+    const n = !o;
+    try { localStorage.setItem('cyclone.taskboard.open', n ? '1' : '0'); } catch { /* ignore */ }
+    if (n) setTbUnseen(false);
+    return n;
+  }), []);
+  const onTbChange = useCallback((next: TaskBoard | null) => {
+    setBoard(next);
+    saveSeatTaskboard(workshopId, seatId, next).catch(e => console.error('[cyclone] 任务板保存失败', e));
+  }, [workshopId, seatId]);
 
   /** 拉取工位/会长会话。notifyParent=true 时通知父级刷新侧栏 */
   const reload = useCallback(async (notifyParent = false) => {
@@ -200,8 +236,10 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
     ? runner.pendingUser : null;
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div className="chat__messages" ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+      {/* 有任务板且收起时：让出竖条宽度，滚动条落在竖条左侧可点可拖；展开态抽屉浮层覆盖，无需让位 */}
+      <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginRight: (!isChair && !tbOpen) ? RAIL_W : 0 }}>
+      <div className="chat__messages" ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)', ...(!isChair && tbOpen ? { paddingRight: 'calc(var(--space-4) + 30px)' } : {}) }}>
         {history.map(m => <DisplayRow key={m.id} msg={m} />)}
         {optimistic && <DisplayRow key={optimistic.id} msg={optimistic} />}
         {live && (
@@ -222,6 +260,7 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
         {pending && (
           <AskCard question={pending.question} options={pending.options} answered={false} onReply={(a) => run('resume', a)} />
         )}
+      </div>
       </div>
 
       <div className="chat__input-area">
@@ -259,6 +298,8 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
           <span>归档并保留摘要</span>
         </div>
       </div>
+      {/* 任务板挂在整列层：竖条/抽屉贯穿全高，输入栏 z-index 高于抽屉→展开也不挡发送按钮（与季风同构） */}
+      {!isChair && <TaskBoardDrawer board={board} onChange={onTbChange} expanded={tbOpen} onToggle={toggleTb} glow={tbUnseen} />}
     </div>
   );
 }

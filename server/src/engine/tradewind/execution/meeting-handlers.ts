@@ -57,11 +57,11 @@ export type MeetingStreamEvent =
   | { type: 'agent-start'; label: string }
   | { type: 'token'; label: string; chunk: string }
   | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; label: string; tool: string; result: string }
+  | { type: 'tool-result'; label: string; tool: string; result: string; meta?: unknown }
   | { type: 'heartbeat'; label: string; phase: string; elapsed: number }
   | { type: 'contact-start'; label: string; target: string }
   | { type: 'contact-done'; label: string; target: string; result: string; ok: boolean }
-  | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }> }
+  | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }> }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-done'; content: string }
   | { type: 'minutes-done'; content: string }
@@ -82,9 +82,10 @@ async function execTool(
   agentId: string,
   workspace: string,
   signal?: AbortSignal,
+  onMeta?: (meta: unknown) => void,
 ): Promise<string> {
   const { execToolUnified } = await import('../../shared/exec-tool');
-  return execToolUnified({ tool, args, agentId, workspaceDir: workspace, signal });
+  return execToolUnified({ tool, args, agentId, workspaceDir: workspace, signal, onMeta });
 }
 
 /**
@@ -220,7 +221,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       // 为避免 text 路径下重复事件，emitToolEvents 仅在 native 路径下为 true。
       const emitToolEvents = nativeDecision.native;
       const toolCaller: ToolCaller | undefined = toolDefs.length > 0 || nativeDecision.native ? {
-        async call(tool, args) {
+        async call(tool, args, onMeta) {
           // contact 假工具：联络 agent 节点（自带 contact-start/contact-done 事件，不发 tool-* 事件）
           if (tool === 'contact') {
             const target = args.target || '';
@@ -233,8 +234,12 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           // 普通工具
           if (emitToolEvents) onEvent?.({ type: 'tool-call', label, tool, args });
           try {
-            const result = await execTool(tool, args, participant.agentId, workspace, signal);
-            if (emitToolEvents) onEvent?.({ type: 'tool-result', label, tool, result });
+            let meta: unknown;
+            const result = await execTool(tool, args, participant.agentId, workspace, signal, (m) => {
+              meta = m;
+              onMeta?.(m);
+            });
+            if (emitToolEvents) onEvent?.({ type: 'tool-result', label, tool, result, meta });
             return result;
           } catch (e) {
             const err = `错误：${(e as Error).message}`;
@@ -245,7 +250,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       } : undefined;
 
       // 双路径分流执行
-      let result: { content: string; rawContent: string; toolCalls: Array<{ tool: string; args: Record<string, string>; result: string }>; lastPromptTokens?: number };
+      let result: { content: string; rawContent: string; toolCalls: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>; lastPromptTokens?: number };
 
       if (nativeDecision.native) {
         // ── native 路径 ──
@@ -303,7 +308,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
             }
             if (ev.type === 'heartbeat') onEvent?.({ type: 'heartbeat', label, phase: ev.phase, elapsed: ev.elapsed });
             if (ev.type === 'tool-call') onEvent?.({ type: 'tool-call', label, tool: ev.tool, args: ev.args });
-            if (ev.type === 'tool-result') onEvent?.({ type: 'tool-result', label, tool: ev.tool, result: ev.result });
+            if (ev.type === 'tool-result') onEvent?.({ type: 'tool-result', label, tool: ev.tool, result: ev.result, meta: ev.meta });
           },
           signal,
         });

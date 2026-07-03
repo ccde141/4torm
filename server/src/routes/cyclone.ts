@@ -95,6 +95,9 @@ async function summarizeWithAgent(dataDir: string, agentId: string, subject: str
 }
 
 export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
+  // 注：本文件里 req.params / req.body / (app as any).dataDir 的 as any 均为 Fastify HTTP /
+  // 装饰器边界的**有意转型**——请求载荷在校验前无静态类型，各 handler 内用显式判空 / 取默认
+  // 值兜底（如 `body?.title?.trim()`、`body?.agentId`）。非"类型随意"。
   const dataDir = (app as any).dataDir as string;
 
   // POST /api/cyclone/create —— 建工作室
@@ -109,6 +112,7 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(await listWorkshops(dataDir));
   });
 
+  // ── 工作室级：CRUD / 侧栏摘要 / 设会长 / 建工位 / 职责名片 ──────────────
   // ALL /api/cyclone/workshop/:workshopId/:action
   app.all('/workshop/:workshopId/:action', async (req, reply) => {
     const { workshopId, action } = req.params as any;
@@ -196,6 +200,7 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(400).send({ error: `未知 action：${action}` });
   });
 
+  // ── 工位级：状态 / 改角色 / 重置上下文 / 私聊(chat·resume, SSE 流式) ──────
   // ALL /api/cyclone/workshop/:workshopId/seat/:seatId/:action
   app.all('/workshop/:workshopId/seat/:seatId/:action', async (req, reply) => {
     const { workshopId, seatId, action } = req.params as any;
@@ -280,6 +285,7 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(400).send({ error: `未知 action：${action}` });
   });
 
+  // ── 会长级：按会议(room)隔离的私聊参谋(chat, SSE 流式) ────────────────────
   // ALL /api/cyclone/workshop/:workshopId/room/:roomId/chair/:action
   // 会长按会议（room）隔离：私聊落 room.chairMessages，只读本 room 会议快照，换会议不串台。
   app.all('/workshop/:workshopId/room/:roomId/chair/:action', async (req, reply) => {
@@ -367,6 +373,7 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(room);
   });
 
+  // ── 群聊级：成员管理 / 改名·模式 / 重置上下文 / 入会发言·串行发言(SSE 流式) ──
   // ALL /api/cyclone/workshop/:workshopId/room/:roomId/:action
   app.all('/workshop/:workshopId/room/:roomId/:action', async (req, reply) => {
     const { workshopId, roomId, action } = req.params as any;

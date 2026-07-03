@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ChatMessage } from '../../types';
 import { formatTimestamp } from '../../utils/time';
+import FileDiffCard, { parseFileEdit } from './FileDiffCard';
 
 export default function ToolCallMessage({ toolCall, actions, timestamp }: {
   toolCall: NonNullable<ChatMessage['toolCall']>;
@@ -8,6 +9,13 @@ export default function ToolCallMessage({ toolCall, actions, timestamp }: {
   timestamp?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
+
+  // 文件改动类工具（edit_file / write_file）渲染成 diff 卡片，直观展示 AI 改了什么
+  const fileEdit = parseFileEdit(toolCall);
+  if (fileEdit) {
+    return <FileDiffCard toolCall={toolCall} edit={fileEdit} actions={actions} timestamp={timestamp} />;
+  }
+
   const resultLines = (toolCall.result || '').split('\n');
   const summary = resultLines.length > 1 ? `${resultLines.length} 行` : (resultLines[0]?.slice(0, 60) || '无输出');
 

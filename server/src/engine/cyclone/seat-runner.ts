@@ -28,6 +28,8 @@ import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { buildSeatSystemPrompt } from './seat-prompt';
 import { workshopWorkspace } from './paths';
 import { loadSeat, saveSeat, tryAcquireSeatLock } from './seat-store';
+import { seatTaskboardFile } from './paths';
+import { execTaskBoard } from '../shared/taskboard';
 import { execContact } from './contact';
 import { listOtherSeats } from './contact-registry';
 import type { SeatData } from './types';
@@ -37,7 +39,7 @@ import path from 'node:path';
 export type SeatEvent =
   | { type: 'token'; content: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string; ok: boolean }
+  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
   | { type: 'delegate-start'; task: string; delegateId: string }
   | { type: 'delegate-token'; delegateId: string; content: string }
   | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
@@ -116,6 +118,13 @@ function makeToolCaller(opts: {
       }
       if (tool === 'delegate') {
         return execDelegate(dataDir, agentId, sandboxLevel, args, signal, onEvent);
+      }
+      // task_board 假工具：服务端 inline 落盘（工位目录），meta 走 UI 侧通道刷新任务板抽屉
+      if (tool === 'task_board') {
+        onEvent({ type: 'tool-call', tool, args });
+        const { result, meta } = execTaskBoard(seatTaskboardFile(dataDir, workshopId, seatId), args);
+        onEvent({ type: 'tool-result', tool, result, ok: true, meta });
+        return result;
       }
       if (tool === 'contact') {
         const contactId = `ct-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -259,7 +268,7 @@ export async function chatSeat(
     if (seat.pending) throw new Error('工位处于挂起状态，请先回复其提问（resume）');
     const system: ContextMessage = {
       role: 'system',
-      content: buildSeatSystemPrompt({ dataDir, seat, agent, toolDefs, native, wsRelPath: wsRelPath(dataDir, workshopId) }),
+      content: buildSeatSystemPrompt({ dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath: wsRelPath(dataDir, workshopId) }),
     };
     seat.messages.push({ role: 'user', content: humanMessage });
     const messages: ContextMessage[] = [system, ...seat.messages];
@@ -292,7 +301,7 @@ export async function resumeSeat(
     // resume 用挂起时的 native 模式，保证 prompt 协议段与循环模式一致
     const system: ContextMessage = {
       role: 'system',
-      content: buildSeatSystemPrompt({ dataDir, seat, agent, toolDefs, native: pending.native, wsRelPath: wsRelPath(dataDir, workshopId) }),
+      content: buildSeatSystemPrompt({ dataDir, workshopId, seat, agent, toolDefs, native: pending.native, wsRelPath: wsRelPath(dataDir, workshopId) }),
     };
     const messages: ContextMessage[] = [system, ...seat.messages];
     return await withAgentTurn(seat.agentId, () => driveSeat({ dataDir, workshopId, seat, messages, native: pending.native, toolDefs, agent, contactTargets, signal, onEvent }));

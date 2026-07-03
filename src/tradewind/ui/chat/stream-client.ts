@@ -10,7 +10,7 @@
 export type ChatStreamEvent =
   | { type: 'token'; content: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string; ok: boolean }
+  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: { before?: string } }
   | { type: 'delegate-start'; task: string; delegateId: string }
   | { type: 'delegate-token'; delegateId: string; content: string }
   | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }

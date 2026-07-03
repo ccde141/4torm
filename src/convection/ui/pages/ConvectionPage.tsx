@@ -69,40 +69,13 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // 桌面端：拖入文件 → 路径进「主对话框（发言）」，绕开会长私聊栏（cInput）
   useDroppedPathInput(setInput, inputRef, active);
-  const [mainFlex, setMainFlex] = useState(() => {
-    const saved = localStorage.getItem('conv_main_flex');
-    return saved ? parseFloat(saved) : 2;
-  });
-
-  // 拖拽分界线逻辑
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const container = convRef.current;
-    if (!container) return;
-    const sidebar = container.querySelector('.conv__sidebar') as HTMLElement;
-    const sidebarWidth = sidebar?.offsetWidth ?? 220;
-    const startX = e.clientX;
-    const totalWidth = container.offsetWidth - sidebarWidth;
-    const startMainFlex = mainFlex;
-
-    const onMove = (ev: MouseEvent) => {
-      const dx = ev.clientX - startX;
-      const mainPx = (startMainFlex / (startMainFlex + 1)) * totalWidth + dx;
-      const ratio = Math.max(0.5, Math.min(5, mainPx / (totalWidth - mainPx)));
-      setMainFlex(ratio);
-    };
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      setMainFlex(prev => { localStorage.setItem('conv_main_flex', String(prev)); return prev; });
-    };
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }, [mainFlex]);
+  // 会长私聊改为悬浮侧板：默认收起（与气旋/任务板一致），状态持久化
+  const [chairOpen, setChairOpen] = useState(() => { try { return localStorage.getItem('conv.chairOpen') === '1'; } catch { return false; } });
+  const toggleChair = useCallback(() => setChairOpen(o => {
+    const next = !o;
+    try { localStorage.setItem('conv.chairOpen', next ? '1' : '0'); } catch { /* ignore */ }
+    return next;
+  }), []);
 
   const refreshAgents = useCallback(async () => { try { setAgents(await getAgents()); } catch (e) { console.error('[convection] 加载 agents 失败', e); } }, []);
   // 5s 轮询 agent（仅当前页面活跃时跑，避免切走后后台持续刷请求）
@@ -430,7 +403,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
       </div>
 
       {/* Middle: chat */}
-      <div className="conv__main" style={{ flex: mainFlex }}>
+      <div className="conv__main" style={{ flex: 1 }}>
         {activeSession ? (
           <>
             {/* Header: title + session ID */}
@@ -660,14 +633,19 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
         )}
       </div>
 
-      {/* Resizer handle */}
-      <div className="conv__resizer" onMouseDown={handleDragStart} />
-
-      {/* Right: chair private */}
-      <div className="conv__chair" style={{ flex: 1 }}>
+      {/* Right: chair private — 悬浮侧板（收起为细标签，展开浮出盖在群聊上，不挤占布局） */}
+      <div style={chairWrapStyle}>
+        <button onClick={toggleChair} title="展开会长私聊" aria-hidden={chairOpen} tabIndex={chairOpen ? -1 : 0} style={{ ...chairTabStyle, opacity: chairOpen ? 0 : 1, pointerEvents: chairOpen ? 'none' : 'auto' }}>
+          <span style={{ fontSize: '13px' }}>🗣️</span>
+          <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontWeight: 'var(--font-semibold)' }}>会长 · 私聊</span>
+          <span style={{ writingMode: 'vertical-rl', fontSize: '10px', color: 'var(--color-accent)', marginTop: 'auto' }}>展开‹</span>
+        </button>
+        <div aria-hidden={!chairOpen} className="conv__chair-panel" style={{ ...chairPanelStyle, opacity: chairOpen ? 1 : 0, transform: chairOpen ? 'translateX(0) scale(1)' : 'translateX(30px) scale(0.985)', pointerEvents: chairOpen ? 'auto' : 'none' }}>
         <div className="conv__chair-header">
           <span className="conv__chair-name">{activeSession ? getName(activeSession.chairAgentId) : '会长'}</span>
           <span className="conv__chair-label">私聊</span>
+          <div style={{ flex: 1 }} />
+          <button onClick={toggleChair} title="收起" style={chairCollapseBtnStyle}>×</button>
         </div>
         <div ref={cRef} className="conv__chair-messages">
           {cMsgs.map((m, i) => (
@@ -703,6 +681,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
             )}
           </div>
         </div>
+        </div>
       </div>
     </div>
   );
@@ -732,3 +711,35 @@ async function streamSSE(url: string, body: Record<string, unknown>, onEvent: (e
     }
   }
 }
+
+// ── 会长悬浮侧板样式（与气旋 ChairDrawer / 季风任务板统一：玻璃 + 企宣缓动滑入） ──
+const CHAIR_TAB_W = 34;
+const CHAIR_PANEL_W = 360;
+/** 外壳：只占细标签宽度，展开面板绝对定位悬浮在其左侧，不撑宽布局 */
+const chairWrapStyle: React.CSSProperties = { position: 'relative', flexShrink: 0, height: '100%', width: CHAIR_TAB_W };
+/** 收起态竖标签：玻璃质感 + 圆角左缘 */
+const chairTabStyle: React.CSSProperties = {
+  position: 'absolute', top: 0, right: 0, bottom: 0, width: CHAIR_TAB_W, zIndex: 4,
+  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start',
+  gap: 'var(--space-2)', padding: 'var(--space-3) 0',
+  background: 'var(--glass-bg-strong)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))',
+  color: 'var(--color-text-secondary)', cursor: 'pointer',
+  border: '1px solid var(--glass-border)', borderRight: 'none',
+  borderTopLeftRadius: 'var(--radius-md)', borderBottomLeftRadius: 'var(--radius-md)',
+  boxShadow: '-4px 0 16px -10px rgba(0,0,0,0.35)',
+  transition: 'opacity var(--duration-normal) var(--ease-out-expo)',
+};
+/** 展开态面板：右锚定悬浮盖在群聊上，企宣级强减速滑入（位移 + 极轻缩放） */
+const chairPanelStyle: React.CSSProperties = {
+  position: 'absolute', top: 0, right: 0, height: '100%', width: CHAIR_PANEL_W, zIndex: 20,
+  display: 'flex', flexDirection: 'column', minWidth: 0, transformOrigin: 'right center',
+  background: 'var(--glass-bg-strong)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))',
+  borderLeft: '1px solid var(--glass-border)',
+  boxShadow: '-8px 0 28px -12px rgba(0,0,0,0.45)',
+  transition: 'opacity var(--duration-normal) var(--ease-out-expo), transform var(--duration-emphasized) var(--ease-emphasized)',
+};
+const chairCollapseBtnStyle: React.CSSProperties = {
+  width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+  background: 'transparent', color: 'var(--color-text-tertiary)', border: 'none',
+  borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-md)', cursor: 'pointer', lineHeight: 1, flexShrink: 0,
+};

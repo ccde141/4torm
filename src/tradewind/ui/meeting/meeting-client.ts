@@ -14,6 +14,8 @@ export interface ToolStep {
   args: Record<string, string>;
   result?: string;
   status?: ToolStepStatus;
+  diff?: { before?: string };
+  meta?: { before?: string };
 }
 
 export interface MeetingMessage {
@@ -52,7 +54,7 @@ export type MeetingBroadcastEvent =
   | { type: 'agent-start'; label: string }
   | { type: 'token'; label: string; chunk: string }
   | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; label: string; tool: string; result: string }
+  | { type: 'tool-result'; label: string; tool: string; result: string; meta?: { before?: string } }
   | { type: 'heartbeat'; label: string; phase?: string; elapsed?: number }
   | { type: 'contact-start'; label: string; target: string }
   | { type: 'contact-done'; label: string; target: string; result: string; ok: boolean }

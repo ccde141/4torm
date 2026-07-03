@@ -17,6 +17,7 @@ import type { ToolDef } from '../shared/tool-defs-loader';
 import { buildSandboxSection, type SandboxLevel } from '../shared/sandbox-prompt';
 import { buildWorkflowToolsSection } from '../shared/workflow-builder';
 import { buildSelfManagementSection } from '../shared/prompt';
+import { buildTaskBoardSection, readTaskboard, taskboardFile } from '../shared/taskboard';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -100,6 +101,8 @@ export interface PromptBuildOpts {
   skillIds: string[];
   dataDir: string;
   agentId: string;
+  /** 会话 ID：用于读取本会话的任务板并注入当前进度 */
+  sessionId?: string;
   /** 用户消息内容（用于判断是否触发记忆注入） */
   userMessage?: string;
   /**
@@ -180,6 +183,12 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
       if (mem.trim()) parts.push(`\n\n## 历史记忆\n${mem.trim()}`);
     } catch { /* 文件不存在 */ }
   }
+
+  // 10. 任务板假工具：始终描述用法（与 ask/delegate 同级）；已有板子时附当前状态（放最后，最贴近用户轮次）
+  const board = opts.sessionId
+    ? readTaskboard(taskboardFile(opts.dataDir, opts.agentId, opts.sessionId))
+    : null;
+  parts.push(`## 任务板\n\n${buildTaskBoardSection(board)}`);
 
   return parts.join('\n\n');
 }

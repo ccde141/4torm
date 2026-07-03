@@ -11,6 +11,7 @@ import { memo, useState } from 'react';
 import type { MeetingMessage, ToolStep } from './meeting-client';
 import { parseStructuredContent } from '../chat/parser';
 import { renderTextWithCode } from '../../../engine/markdown';
+import { lineDiff, diffStat, type DiffLine } from '../../../utils/diff';
 
 interface Props {
   msg: MeetingMessage;
@@ -102,24 +103,70 @@ function formatBytes(n: number): string {
   return n >= 1024 ? `${(n / 1024).toFixed(1)}KB` : `${n}B`;
 }
 
+function getFileEdit(step: ToolStep): { path: string; before: string; after: string } | null {
+  const args = step.args || {};
+  const str = (v: unknown) => (v == null ? '' : String(v));
+  const path = str(args.filePath || args.file_path || args.path);
+
+  if (step.tool === 'edit_file') {
+    return { path, before: str(args.oldString || args.old_str || args.oldStr), after: str(args.newString || args.new_str || args.newStr) };
+  }
+  if (step.tool === 'write_file') {
+    return { path, before: str(step.diff?.before), after: str(args.content) };
+  }
+  return null;
+}
+
+function DiffRows({ lines }: { lines: DiffLine[] }) {
+  return (
+    <div style={{ overflow: 'auto', maxHeight: 320, border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--color-bg)' }}>
+      {lines.slice(0, 400).map((line, index) => {
+        const bg = line.type === 'add' ? 'rgba(46,160,67,0.14)' : line.type === 'del' ? 'rgba(248,81,73,0.14)' : 'transparent';
+        const edge = line.type === 'add' ? '#2ea043' : line.type === 'del' ? '#f85149' : 'transparent';
+        const sign = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ';
+        return (
+          <div key={index} style={{ display: 'flex', background: bg, borderLeft: `2px solid ${edge}`, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', lineHeight: 1.5 }}>
+            <span style={{ width: '1.2em', flexShrink: 0, textAlign: 'center', color: 'var(--color-text-tertiary)' }}>{sign}</span>
+            <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', paddingRight: 'var(--space-2)' }}>{line.text || ' '}</span>
+          </div>
+        );
+      })}
+      {lines.length > 400 && <div style={{ padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>... {lines.length - 400} lines hidden</div>}
+    </div>
+  );
+}
+
 const ToolBubble = memo(function ToolBubble({ step }: { step: ToolStep }) {
   const [open, setOpen] = useState(false);
   const status = step.status || 'done';
   const icon = status === 'running' ? '⏳' : status === 'error' ? '❌' : '✅';
+  const edit = getFileEdit(step);
+  const lines = edit ? lineDiff(edit.before, edit.after) : [];
+  const stat = edit ? diffStat(lines) : { add: 0, del: 0 };
   return (
     <div className={`tw-meeting-tool tw-meeting-tool--${status}`}>
       <button className="tw-meeting-tool__header" onClick={() => setOpen(o => !o)} aria-expanded={open}>
         <span className="tw-meeting-tool__arrow">{open ? '▼' : '▶'}</span>
         <span className={`tw-meeting-tool__icon tw-meeting-tool__icon--${status}`}>{icon}</span>
         <span className="tw-meeting-tool__name">{step.tool}</span>
+        {edit?.path && <span className="tw-meeting-tool__path">{edit.path}</span>}
+        {stat.add > 0 && <span style={{ color: '#2ea043', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>+{stat.add}</span>}
+        {stat.del > 0 && <span style={{ color: '#f85149', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>-{stat.del}</span>}
         {status === 'running' && <span className="tw-meeting-tool__spinner" />}
       </button>
       {open && (
         <div className="tw-meeting-tool__detail">
-          <div className="tw-meeting-tool__section">
-            <span className="tw-meeting-tool__label">参数</span>
-            <pre>{JSON.stringify(step.args, null, 2)}</pre>
-          </div>
+          {edit ? (
+            <div className="tw-meeting-tool__section">
+              <span className="tw-meeting-tool__label">Diff</span>
+              <DiffRows lines={lines} />
+            </div>
+          ) : (
+            <div className="tw-meeting-tool__section">
+              <span className="tw-meeting-tool__label">参数</span>
+              <pre>{JSON.stringify(step.args, null, 2)}</pre>
+            </div>
+          )}
           {step.result !== undefined && (
             <div className="tw-meeting-tool__section">
               <span className="tw-meeting-tool__label">结果</span>

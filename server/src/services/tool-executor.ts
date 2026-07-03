@@ -110,6 +110,9 @@ export async function executeTool(
   agentId: string,
   workspaceDirOverride?: string,
   sandboxLevelOverride?: 'strict' | 'relaxed' | 'unrestricted',
+  // UI 侧通道：执行器可返回 { result, meta } 携带展示用元数据（如覆盖写入的旧内容）。
+  // meta 仅通过此回调外溢给调用方转发前端，绝不进入 LLM 结果字符串。不传则丢弃 meta。
+  onMeta?: (meta: unknown) => void,
 ): Promise<string> {
   // MCP 工具：本执行器只认本地工具/技能注册表，mcp: 前缀必须直接走 MCP client。
   // 在此单点拦截，可一并修复所有入口（HTTP /api/tools/exec、各 sub-agent-runner、信风 node-runner）。
@@ -193,7 +196,13 @@ export async function executeTool(
         if (typeof fn !== 'function') {
           throw new Error(`执行器未导出 default 函数: ${filePath}`);
         }
-        return await fn(args, ctx);
+        const out = await fn(args, ctx);
+        // 执行器可返回 { result, meta }：meta 走 onMeta 侧通道，LLM 只拿到 result 字符串
+        if (out && typeof out === 'object' && 'result' in out) {
+          onMeta?.((out as { meta?: unknown }).meta);
+          return String((out as { result: unknown }).result ?? '');
+        }
+        return out;
       } catch (e) {
         lastError = e;
       }

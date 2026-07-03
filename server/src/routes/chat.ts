@@ -74,6 +74,8 @@ interface ChatSession {
   rolePrompt?: string;
   createdAt: string;
   updatedAt: string;
+  /** 真实 API 统计的当前上下文体积（promptTokens 即上一轮实际发送量） */
+  tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   [key: string]: unknown;
 }
 
@@ -128,7 +130,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     const compressStart = lastMarkerIdx + 1;
     const tail = msgs.slice(compressStart);
 
-    // 估算 tail 区间的 token 数（中文 0.6/字，英文 0.3/字）
+    // 压缩闸门优先用真实 API 统计（promptTokens 即上一轮实际发送量，含 system/工具定义/工具调用）。
+    // 没有真实值时才退回字符估算——且必须把 toolCall（参数+结果）算进去，否则会严重低估
+    //（工具调用数据往往是上下文大头，只数 content 会漏掉一大半，导致 27k 上下文被判成不足 8000）。
     const estimateTokens = (text: string): number => {
       let total = 0;
       for (const ch of text) {
@@ -140,10 +144,18 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       }
       return Math.ceil(total);
     };
-    const tailTokens = tail.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+    const estimateMsg = (m: ChatMessage): number => {
+      let t = estimateTokens(m.content || '');
+      if (m.toolCall) t += estimateTokens(JSON.stringify(m.toolCall));
+      return t;
+    };
+    const realTokens = session.tokenUsage?.promptTokens;
+    const ctxTokens = realTokens && realTokens > 0
+      ? realTokens
+      : tail.reduce((sum, m) => sum + estimateMsg(m), 0);
 
-    if (tailTokens < 8000) {
-      return reply.status(400).send({ error: `当前上下文约 ${tailTokens} token，不足 8000，无需压缩` });
+    if (ctxTokens < 8000) {
+      return reply.status(400).send({ error: `当前上下文约 ${ctxTokens} token，不足 8000，无需压缩` });
     }
 
     const keep = tail.slice(-4);

@@ -42,8 +42,8 @@ export default function ChairDrawer({
   const chairName = chairAgentId ? (agents.find(a => a.id === chairAgentId)?.name ?? chairAgentId) : '';
 
   return (
-    <div style={{ ...wrapperStyle, width: open ? PANEL_W : TAB_W }}>
-      {/* 收起态竖条 tab：展开时淡出并让出点击 */}
+    <div style={wrapperStyle}>
+      {/* 收起态竖条 tab：常驻细标签，展开时淡出并让出点击 */}
       <button
         onClick={onToggle}
         title="展开会长私聊"
@@ -51,18 +51,19 @@ export default function ChairDrawer({
         tabIndex={open ? -1 : 0}
         style={{ ...tabStyle, opacity: open ? 0 : 1, pointerEvents: open ? 'none' : 'auto' }}
       >
-        <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.15em' }}>会长 · 参谋</span>
+        <span style={{ fontSize: '13px' }}>🗣️</span>
+        <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontWeight: 'var(--font-semibold)' }}>会长 · 参谋</span>
+        <span style={{ writingMode: 'vertical-rl', fontSize: '10px', color: 'var(--color-accent)', marginTop: 'auto' }}>展开‹</span>
       </button>
 
-      {/* 展开态面板：右锚定固定宽度，随外壳揭开 + 淡入 + 轻微回弹滑入 */}
+      {/* 展开态面板：悬浮浮出（绝对定位向左盖在群聊上，不挤占布局），企宣级减速滑入 */}
       <div
         aria-hidden={!open}
         style={{
           ...panelStyle,
           opacity: open ? 1 : 0,
-          transform: open ? 'translateX(0)' : `translateX(16px)`,
+          transform: open ? 'translateX(0) scale(1)' : 'translateX(30px) scale(0.985)',
           pointerEvents: open ? 'auto' : 'none',
-          boxShadow: open ? '-8px 0 24px -12px rgba(0,0,0,0.35)' : 'none',
         }}
       >
         <div style={headerStyle}>
@@ -107,30 +108,34 @@ export default function ChairDrawer({
   );
 }
 
-/** 外壳：宽度在 TAB_W↔PANEL_W 间用 ease-out-expo 平滑伸缩，overflow 裁掉未揭开的面板 */
+/** 外壳：固定为细标签宽度，只占 TAB_W；展开面板绝对定位悬浮在它左侧，不撑宽布局 */
 const wrapperStyle: React.CSSProperties = {
   position: 'relative',
   flexShrink: 0,
   height: '100%',
-  overflow: 'hidden',
-  borderLeft: '1px solid var(--border-color)',
-  background: 'var(--color-bg)',
-  transition: 'width var(--duration-slow) var(--ease-out-expo)',
+  width: TAB_W,
 };
-/** 收起态竖条 tab：绝对定位贴右缘，不参与外壳宽度 */
+/** 收起态竖条 tab：绝对贴右缘，玻璃质感 + 圆角左缘，与季风任务板标签统一 */
 const tabStyle: React.CSSProperties = {
-  position: 'absolute', top: 0, right: 0, bottom: 0, width: TAB_W,
-  background: 'var(--color-surface)', color: 'var(--color-text-secondary)',
-  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-  fontSize: 'var(--text-sm)', border: 'none',
-  transition: 'opacity var(--duration-normal) var(--ease-out-expo)',
+  position: 'absolute', top: 0, right: 0, bottom: 0, width: TAB_W, zIndex: 4,
+  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start',
+  gap: 'var(--space-2)', padding: 'var(--space-3) 0',
+  background: 'var(--glass-bg-strong)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))',
+  color: 'var(--color-text-secondary)', cursor: 'pointer',
+  border: '1px solid var(--glass-border)', borderRight: 'none',
+  borderTopLeftRadius: 'var(--radius-md)', borderBottomLeftRadius: 'var(--radius-md)',
+  boxShadow: '-4px 0 16px -10px rgba(0,0,0,0.35)',
+  transition: 'opacity var(--duration-normal) var(--ease-out-expo), background var(--duration-fast) var(--ease-out-expo)',
 };
-/** 展开态面板：右锚定固定宽度，淡入用 expo、滑入用 back（轻微回弹的「弹出」感） */
+/** 展开态面板：右锚定固定宽度、悬浮盖在群聊上；企宣级强减速滑入（位移 + 极轻缩放） */
 const panelStyle: React.CSSProperties = {
-  position: 'absolute', top: 0, right: 0, height: '100%', width: PANEL_W,
+  position: 'absolute', top: 0, right: 0, height: '100%', width: PANEL_W, zIndex: 20,
   display: 'flex', flexDirection: 'column', minWidth: 0,
-  background: 'var(--color-bg)',
-  transition: 'opacity var(--duration-normal) var(--ease-out-expo), transform var(--duration-spring) var(--ease-out-back)',
+  transformOrigin: 'right center',
+  background: 'var(--glass-bg-strong)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))',
+  borderLeft: '1px solid var(--glass-border)',
+  boxShadow: '-8px 0 28px -12px rgba(0,0,0,0.45)',
+  transition: 'opacity var(--duration-normal) var(--ease-out-expo), transform var(--duration-emphasized) var(--ease-emphasized)',
 };
 const headerStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 'var(--space-2)',

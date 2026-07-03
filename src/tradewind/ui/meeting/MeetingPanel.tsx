@@ -214,7 +214,12 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         stream.pendingTools = stream.pendingTools.map(t => {
           if (!matched && t.tool === ev.tool && t.status === 'running') {
             matched = true;
-            return { ...t, result: ev.result, status: 'done' };
+            return {
+              ...t,
+              result: ev.result,
+              status: 'done',
+              ...(typeof ev.meta?.before === 'string' ? { diff: { before: ev.meta.before } } : {}),
+            };
           }
           return t;
         });
@@ -246,7 +251,13 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
           const doneLabel = stream.currentLabel;
           const finalTools = stream.pendingTools.length > 0
             ? stream.pendingTools.map(t => t.status === 'running' ? { ...t, status: 'done' as const } : t)
-            : (ev.toolCalls && ev.toolCalls.length > 0 ? ev.toolCalls.map(t => ({ ...t, status: 'done' as const })) : undefined);
+            : (ev.toolCalls && ev.toolCalls.length > 0
+                ? ev.toolCalls.map(t => ({
+                    ...t,
+                    status: 'done' as const,
+                    ...(typeof (t as any).meta?.before === 'string' ? { diff: { before: (t as any).meta.before } } : {}),
+                  }))
+                : undefined);
           const doneContent = ev.content;
           const doneRaw = stream.streamContent || ev.rawContent || ev.content;
           // 直接定位目标消息（不依赖 streamRef，避免 React batch 时序问题）

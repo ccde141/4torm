@@ -49,7 +49,7 @@ export interface QueuedMessage {
 export type NodeRunnerEvent = (
   | { type: 'token'; content: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string; ok: boolean }
+  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
   | { type: 'delegate-start'; task: string; delegateId: string }
   | { type: 'delegate-token'; delegateId: string; content: string }
   | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
@@ -315,8 +315,9 @@ export class NodeRunner {
         }
         emit({ type: 'tool-call', tool, args });
         try {
-          const result = await this.execTool(tool, args);
-          emit({ type: 'tool-result', tool, result, ok: true });
+          let meta: unknown;
+          const result = await this.execTool(tool, args, (m) => { meta = m; });
+          emit({ type: 'tool-result', tool, result, ok: true, meta });
           return result;
         } catch (e) {
           const err = `工具执行失败: ${(e as Error).message}`;
@@ -370,7 +371,7 @@ export class NodeRunner {
   }
 
   /** 执行普通工具 */
-  private async execTool(tool: string, args: Record<string, string>): Promise<string> {
+  private async execTool(tool: string, args: Record<string, string>, onMeta?: (meta: unknown) => void): Promise<string> {
     const url = (process.env.TOOL_BRIDGE_URL || 'http://localhost:3001').replace(/\/+$/, '') + '/api/tools/exec';
     const res = await fetch(url, {
       method: 'POST',
@@ -387,8 +388,9 @@ export class NodeRunner {
       const text = await res.text().catch(() => '');
       throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
     }
-    const data = await res.json() as { result?: string; error?: string };
+    const data = await res.json() as { result?: string; error?: string; meta?: unknown };
     if (data.error) throw new Error(data.error);
+    if (data.meta !== undefined && data.meta !== null) onMeta?.(data.meta);
     return data.result ?? '';
   }
 }

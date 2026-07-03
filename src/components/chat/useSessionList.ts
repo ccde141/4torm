@@ -162,6 +162,12 @@ export function useSessionList(
     const msgsWithTemp = [...session.messages, tempMsg];
     setMessages(msgsWithTemp);
 
+    // 非阻塞提示：把临时气泡改写成结果文案，绝不用 alert()——alert 会同步冻住整个渲染进程，
+    // 表现为压缩返回后输入框打不了字、关掉弹窗才恢复。气泡是临时态，不落盘，刷新即消失。
+    const notice = (text: string) => setMessages(
+      msgsWithTemp.map(m => (m.id === tempId ? { ...m, content: text } : m)),
+    );
+
     try {
       const res = await fetch(streamUrl('/api/chat/compact'), {
         method: 'POST',
@@ -175,9 +181,7 @@ export function useSessionList(
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({ error: '请求失败' }));
-        // 移除临时气泡
-        setMessages(session.messages);
-        alert(`压缩失败: ${data.error || res.statusText}`);
+        notice(`⚠️ ${data.error || res.statusText}`);
         return;
       }
 
@@ -230,8 +234,7 @@ export function useSessionList(
               }
             } else if (evt.type === 'error') {
               receivedDone = true;
-              setMessages(session.messages);
-              alert(`压缩失败: ${evt.error}`);
+              notice(`⚠️ 压缩失败：${evt.error}`);
             }
           } catch { /* 非 JSON 行忽略 */ }
         }
@@ -248,8 +251,7 @@ export function useSessionList(
         }
       }
     } catch (e) {
-      setMessages(session.messages);
-      alert(`压缩失败: ${(e as Error).message}`);
+      notice(`⚠️ 压缩失败：${(e as Error).message}`);
     }
   }, [selectedAgent, selectedModel, setMessages]);
 

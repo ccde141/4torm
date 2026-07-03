@@ -9,10 +9,11 @@
  * 前端业务代码 / fetch / 流式接口均无需改动。
  */
 
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, nativeImage } = require('electron');
 const { spawn } = require('node:child_process');
 const http = require('node:http');
 const path = require('node:path');
+const fs = require('node:fs');
 
 // 生产模式：打包后必走；未打包时由 ELECTRON_PROD=1 触发生产预览（自托管 dist/）
 const isProd = app.isPackaged || process.env.ELECTRON_PROD === '1';
@@ -30,6 +31,11 @@ const ICON_PATH = path.join(
   __dirname, '..', 'build',
   process.platform === 'win32' ? 'icon.ico' : 'icon.png',
 );
+// 用 nativeImage 显式加载（比传字符串路径更稳：文件缺失/格式问题不会静默退回默认）。
+// 注意：未打包 dev 下 Windows 任务栏图标由 electron.exe 决定，此举主要钉死窗口标题栏图标；
+// 任务栏/开始菜单要稳定用本图标，须 electron-builder 打包把图标嵌进 exe。
+const APP_ICON = fs.existsSync(ICON_PATH) ? nativeImage.createFromPath(ICON_PATH) : undefined;
+if (!APP_ICON || APP_ICON.isEmpty()) console.warn('[electron] 应用图标加载失败或为空：', ICON_PATH);
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -81,7 +87,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 600,
     title: '4torm',
-    icon: ICON_PATH,
+    icon: APP_ICON,
     backgroundColor: '#0f172a', // 与 --color-bg-primary 一致，避免白屏闪烁
     show: false,
     webPreferences: {
@@ -92,7 +98,10 @@ function createWindow() {
     },
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.once('ready-to-show', () => {
+    if (APP_ICON && !APP_ICON.isEmpty()) mainWindow?.setIcon(APP_ICON); // 再钉一次，稳住窗口图标
+    mainWindow?.show();
+  });
 
   // 外部链接交给系统浏览器，不在应用内打开
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
