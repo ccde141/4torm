@@ -12,6 +12,8 @@
  */
 
 export type TextureType = 'none' | 'grid' | 'custom';
+/** 可独立开关、可共存的底纹图层种类（多选模型） */
+export type TextureLayer = 'grid' | 'custom';
 
 /** 把 SVG 字符串转成 data URL（不用 btoa，直接 URL 编码兼容中文） */
 function svgToDataUrl(svg: string): string {
@@ -35,6 +37,11 @@ function gridSvg(): string {
 /** 把任意 data URL（含 image/png 等）包装成 CSS url() */
 function rawDataUrl(dataUrl: string): string {
   return `url("${dataUrl}")`;
+}
+
+/** 网格图层的 background-image 值（供「自定义图 + 网格」叠加时单独取用） */
+export function gridBackgroundUrl(): string {
+  return svgToDataUrl(gridSvg());
 }
 
 /**

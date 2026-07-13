@@ -4,6 +4,7 @@
  * 端点：
  *   GET  /api/mcp/list      — 列出所有 MCP server 配置 + 连接状态
  *   POST /api/mcp/add       — 添加新 MCP server
+ *   POST /api/mcp/update    — 编辑现有 server 的 command/args/env
  *   POST /api/mcp/remove    — 移除 MCP server
  *   POST /api/mcp/toggle    — 启用/禁用
  *   POST /api/mcp/reconnect — 重新连接指定 server
@@ -12,6 +13,7 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { atomicWriteFile } from '../engine/shared/atomic-io';
 import type { McpServerConfig } from '../engine/shared/mcp-client';
 import { getMcpStatus, getMcpToolDefs, reconnectServer, disconnectServer } from '../engine/shared/mcp-manager';
 
@@ -30,7 +32,7 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
 
   async function writeConfigs(configs: McpServerConfig[]): Promise<void> {
     await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, JSON.stringify(configs, null, 2));
+    await atomicWriteFile(configPath, JSON.stringify(configs, null, 2));
   }
 
   // GET /api/mcp/list
@@ -63,6 +65,7 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
       command: body.command,
       args: body.args || [],
       env: body.env || {},
+      ...(body.autoWorkspaces ? { autoWorkspaces: true } : {}),
     };
     configs.push(newCfg);
     await writeConfigs(configs);
@@ -71,6 +74,26 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
       await reconnectServer(dataDir, newCfg.name);
     }
     return reply.send({ ok: true, config: newCfg });
+  });
+
+  // POST /api/mcp/update — 编辑现有 server 的 command/args/env（name 为定位键，不可改）
+  app.post('/update', async (req, reply) => {
+    const body = req.body as Partial<McpServerConfig> & { name: string };
+    if (!body.name || !body.command) {
+      return reply.status(400).send({ error: '缺少 name 或 command' });
+    }
+    const configs = await readConfigs();
+    const target = configs.find(c => c.name === body.name);
+    if (!target) return reply.status(404).send({ error: `未找到：${body.name}` });
+    target.command = body.command;
+    target.args = body.args || [];
+    target.env = body.env || {};
+    if (body.autoWorkspaces) target.autoWorkspaces = true;
+    else delete target.autoWorkspaces;
+    await writeConfigs(configs);
+    // 改了启动参数 → 若启用则重连使新配置生效
+    if (target.enabled) await reconnectServer(dataDir, target.name);
+    return reply.send({ ok: true, config: target });
   });
 
   // POST /api/mcp/remove

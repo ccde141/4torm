@@ -23,6 +23,7 @@ import { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
 import ErrorBoundary from './components/layout/ErrorBoundary';
+import { ConfirmProvider } from './components/common/ConfirmDialog';
 import DashboardPage from './components/agents/DashboardPage';
 import ChatPage from './components/chat/ChatPage';
 import SettingsPage from './components/layout/SettingsPage';
@@ -36,6 +37,7 @@ import { McpPage } from './components/mcp/McpPage';
 import ContourBackground from './components/layout/ContourBackground';
 import WindBackground from './components/layout/WindBackground';
 import { getSkinConfig, loadSkinConfig, subscribeSkin, type SkinConfig } from './store/skin';
+import { freezeBackground } from './components/layout/bgFreeze';
 import './styles/index.css';
 
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
@@ -55,17 +57,17 @@ function PageContent({ page, preselectSession, onClearPreselect }: { page: strin
   const containerRef = useRef<HTMLDivElement>(null);
   const prevPageRef = useRef(page);
 
-  // page 变化时，对新激活的面板重触发 animation
+  // page 变化时：先冻住背景 canvas（消除玻璃层每帧重采样），再对新激活面板
+  // 重播进场动画。用 rAF 重启动画，避免同步读 offsetWidth 触发强制重排。
   useEffect(() => {
     if (page === prevPageRef.current) return;
     prevPageRef.current = page;
-    const container = containerRef.current;
-    if (!container) return;
-    const active = container.querySelector(`.page-panel[data-page="${page}"]`) as HTMLElement | null;
+    freezeBackground(); // 覆盖进场时长，动画期间背景静止 → 玻璃层不再逐帧重采样
+    const active = containerRef.current?.querySelector(`.page-panel[data-page="${page}"]`) as HTMLElement | null;
     if (!active) return;
     active.classList.remove('page-panel--enter');
-    void active.offsetWidth; // force reflow
-    active.classList.add('page-panel--enter');
+    const id = requestAnimationFrame(() => active.classList.add('page-panel--enter'));
+    return () => cancelAnimationFrame(id);
   }, [page]);
 
   const show = (p: string): React.CSSProperties => ({
@@ -113,6 +115,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
+      <ConfirmProvider>
       {bgType === 'contour' && contourParams && (
         <ContourBackground params={contourParams} />
       )}
@@ -128,6 +131,7 @@ export default function App() {
           </div>
         </div>
       </div>
+      </ConfirmProvider>
     </ErrorBoundary>
   );
 }

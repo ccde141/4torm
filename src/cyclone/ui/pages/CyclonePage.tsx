@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getAgents } from '../../../store/agent';
+import { useConfirm } from '../../../components/common/ConfirmDialog';
 import type { Agent } from '../../../types';
 import RoomPanel from './RoomPanel';
 import CreateRoomPanel from './CreateRoomPanel';
@@ -15,6 +16,7 @@ import CreateWorkshopPanel from './CreateWorkshopPanel';
 import SeatPanel, { type SeatDraft } from './SeatPanel';
 import SeatChat from './SeatChat';
 import ChairDrawer, { chairStreamKey } from './ChairDrawer';
+import BulletinBoard, { type BulletinEntry } from './BulletinBoard';
 import { useSeatStreamRunners } from './useSeatStreamRunners';
 import { useRoomStreamRunners } from './useRoomStreamRunners';
 import '../../../styles/components/cyclone.css';
@@ -35,6 +37,7 @@ async function readErrorMessage(r: Response, fallback: string): Promise<string> 
 }
 
 export default function CyclonePage({ active }: { active?: boolean }) {
+  const confirm = useConfirm();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [workshops, setWorkshops] = useState<WorkshopSummary[]>([]);
   const [activeWid, setActiveWid] = useState<string | null>(null);
@@ -44,6 +47,8 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   const [chairAgentId, setChairAgentId] = useState<string | null>(null);
   /** 会长私聊抽屉是否展开（常驻右侧，独立于主区 view） */
   const [chairOpen, setChairOpen] = useState(false);
+  /** 工作室公告板条目（工作室级，全体工位可见）—— 作为工作室主区默认页 */
+  const [bulletin, setBulletin] = useState<BulletinEntry[]>([]);
   /** 右侧视图：私聊某工位 / 进入某群聊 / 创建群聊 / 创建工作室 / 创建工位 / 编辑工位 */
   const [view, setView] = useState<
     | { kind: 'seat'; id: string } | { kind: 'room'; id: string }
@@ -64,10 +69,11 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     // 完整内容由 SeatChat/RoomPanel 选中时各自加载。
     const r = await fetch(`/api/cyclone/workshop/${wid}/summary`);
     if (!r.ok) { console.error(await readErrorMessage(r, '加载工作室失败')); return; }
-    const sum: { id: string; title: string; chairAgentId?: string; seats: Seat[]; rooms: RoomLite[] } = await r.json();
+    const sum: { id: string; title: string; chairAgentId?: string; seats: Seat[]; rooms: RoomLite[]; bulletin?: { entries: BulletinEntry[] } } = await r.json();
     setSeats(sum.seats);
     setRooms(sum.rooms);
     setChairAgentId(sum.chairAgentId ?? null);
+    setBulletin(sum.bulletin?.entries ?? []);
     setActiveSeatId(prev => (sum.seats.length && !sum.seats.some(s => s.id === prev)) ? sum.seats[0].id : prev);
   }, []);
 
@@ -144,7 +150,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   }
 
   async function deleteWorkshop(wid: string, title: string) {
-    if (!confirm(`删除工作室「${title}」？工位、群聊及全部会话将一并删除，不可恢复。`)) return;
+    if (!(await confirm({ title: `删除工作室「${title}」？`, message: '工位、群聊及全部会话将一并删除，不可恢复。', confirmText: '删除', danger: true }))) return;
     // 删的是当前工作室 → 掐掉其各会议的会长流（仅当前工作室的 rooms 在内存里可知）
     if (activeWid === wid) rooms.forEach(rm => seatRunners.kill(wid, chairStreamKey(rm.id)));
     const r = await fetch(`/api/cyclone/workshop/${wid}/delete`, { method: 'POST' });
@@ -189,7 +195,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
 
   async function deleteSeat(seatId: string, title: string) {
     if (!activeWid) return;
-    if (!confirm(`删除工位「${title}」？该工位的私聊会话将一并删除，不可恢复。`)) return;
+    if (!(await confirm({ title: `删除工位「${title}」？`, message: '该工位的私聊会话将一并删除，不可恢复。', confirmText: '删除', danger: true }))) return;
     seatRunners.kill(activeWid, seatId); // 流式中删除 → 掐流防僵尸
     const r = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/delete`, { method: 'POST' });
     if (!r.ok) { alert(await readErrorMessage(r, '删除工位失败')); return; }
@@ -235,7 +241,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
           <button onClick={() => setView({ kind: 'create-workshop' })} className="icon-add-btn icon-add-btn--sm" title="新建工作室">+</button>
         </div>
         {workshops.map(w => (
-          <div key={w.id} onClick={() => setActiveWid(w.id)}
+          <div key={w.id} onClick={() => { setActiveWid(w.id); setView(null); }}
             style={{ ...itemStyle, display: 'flex', alignItems: 'center', gap: 4, ...(w.id === activeWid ? itemActiveStyle : null) }}>
             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{w.title} <span style={{ opacity: .5 }}>({w.seatCount})</span></span>
             <button onClick={e => { e.stopPropagation(); deleteWorkshop(w.id, w.title); }} style={delBtnStyle} title="删除工作室">×</button>
@@ -298,7 +304,16 @@ export default function CyclonePage({ active }: { active?: boolean }) {
         {view?.kind === 'room' && activeWid && (
           <RoomPanel key={view.id} workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} runners={roomRunners} onChanged={() => loadWorkshop(activeWid)} active={active} />
         )}
-        {(view === null || (view.kind === 'seat' && !activeSeat)) && <div style={{ color: 'var(--color-text-secondary)', margin: 'auto', textShadow: 'var(--text-halo)' }}>选择或创建一个工位开始私聊，或进入群聊</div>}
+        {!activeWid && (view === null || (view.kind === 'seat' && !activeSeat)) && <div style={{ color: 'var(--color-text-secondary)', margin: 'auto', textShadow: 'var(--text-halo)' }}>选择或创建一个工作室</div>}
+        {activeWid && (view === null || (view.kind === 'seat' && !activeSeat)) && (
+          <BulletinBoard
+            workshopId={activeWid}
+            title={workshops.find(w => w.id === activeWid)?.title}
+            entries={bulletin}
+            onSaved={e => setBulletin(e)}
+            onRenamed={refreshWorkshops}
+          />
+        )}
         {view?.kind === 'seat' && activeSeat && activeWid && (
           <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id} runners={seatRunners} onReloaded={() => loadWorkshop(activeWid)} active={active} />
         )}

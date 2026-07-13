@@ -139,6 +139,34 @@ export async function streamChatCompletion(
       }, STREAM_SILENCE_TIMEOUT_MS);
     };
 
+    const processLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.startsWith('data:')) return;
+      const data = trimmed.slice(5).trim();
+      if (data === '[DONE]') return;
+      try {
+        const chunk: Record<string, unknown> = JSON.parse(data);
+        const choices = chunk.choices as Array<{ delta?: { content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string }> | undefined;
+        const choice = choices?.[0];
+        const delta = choice?.delta;
+        if (choice?.finish_reason) {
+          finishReason = normalizeFinishReason(choice.finish_reason);
+        }
+        if (!delta) return;
+        if (delta.content) onChunk({ content: delta.content });
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            const existing = activeTCs.get(idx) || { id: '', name: '', arguments: '' };
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.name = tc.function.name;
+            if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+            activeTCs.set(idx, existing);
+          }
+        }
+      } catch { /* skip */ }
+    };
+
     while (true) {
       let done: boolean;
       let value: Uint8Array | undefined;
@@ -160,34 +188,11 @@ export async function streamChatCompletion(
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        if (data === '[DONE]') continue;
-        try {
-          const chunk: Record<string, unknown> = JSON.parse(data);
-          const choices = chunk.choices as Array<{ delta?: { content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string }> | undefined;
-          const choice = choices?.[0];
-          const delta = choice?.delta;
-          if (choice?.finish_reason) {
-            finishReason = normalizeFinishReason(choice.finish_reason);
-          }
-          if (!delta) continue;
-          if (delta.content) onChunk({ content: delta.content });
-          if (delta.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              const idx = tc.index ?? 0;
-              const existing = activeTCs.get(idx) || { id: '', name: '', arguments: '' };
-              if (tc.id) existing.id = tc.id;
-              if (tc.function?.name) existing.name = tc.function.name;
-              if (tc.function?.arguments) existing.arguments += tc.function.arguments;
-              activeTCs.set(idx, existing);
-            }
-          }
-        } catch { /* skip */ }
-      }
+      for (const line of lines) processLine(line);
     }
+    // 收尾：flush 解码器 + 处理末尾未换行终结的残留（否则尾段 chunk 会丢）
+    buffer += decoder.decode();
+    if (buffer) for (const line of buffer.split('\n')) processLine(line);
     clearTimeout(silenceTimer);
   } finally {
     const remainingTCs = [...activeTCs.values()].filter(t => t.name);

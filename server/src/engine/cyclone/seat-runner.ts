@@ -30,6 +30,7 @@ import { workshopWorkspace } from './paths';
 import { loadSeat, saveSeat, tryAcquireSeatLock } from './seat-store';
 import { seatTaskboardFile } from './paths';
 import { execTaskBoard } from '../shared/taskboard';
+import { execBulletin, readBulletinSync } from './bulletin';
 import { execContact } from './contact';
 import { listOtherSeats } from './contact-registry';
 import type { SeatData } from './types';
@@ -38,6 +39,7 @@ import path from 'node:path';
 /** 工位执行事件（流式推送用） */
 export type SeatEvent =
   | { type: 'token'; content: string }
+  | { type: 'reasoning'; content: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
   | { type: 'delegate-start'; task: string; delegateId: string }
@@ -62,8 +64,8 @@ export function wsRelPath(dataDir: string, workshopId: string): string {
 /** 构造工位的 LLM 调用器（落到 shared/callLLM） */
 export function makeLLM(dataDir: string, model: string, temperature: number): LLMCaller {
   return {
-    async call(msgs, _opts, onChunk, sig, tools) {
-      return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools });
+    async call(msgs, _opts, onChunk, sig, tools, onReasoning) {
+      return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools, onReasoning });
     },
   };
 }
@@ -126,6 +128,13 @@ function makeToolCaller(opts: {
         onEvent({ type: 'tool-result', tool, result, ok: true, meta });
         return result;
       }
+      // bulletin 假工具：工作室级公告板，增量读写（结论落款为本工位 title）
+      if (tool === 'bulletin') {
+        onEvent({ type: 'tool-call', tool, args });
+        const { result, meta } = await execBulletin(dataDir, workshopId, args, seatTitle);
+        onEvent({ type: 'tool-result', tool, result, ok: true, meta });
+        return result;
+      }
       if (tool === 'contact') {
         const contactId = `ct-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
         const target = args.target || '';
@@ -182,19 +191,26 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
     dataDir, workshopId, seatId: seat.id, seatTitle: seat.title,
     agentId: agent.id, sandboxLevel: agent.sandboxLevel, wsDir, signal, onEvent,
   });
-  const enableTools = toolDefs.length > 0;
   const nativeToolDefs = [...toolDefs, ...buildSeatVirtualToolDefs({ allowAsk: true, allowDelegate: true, contactTargets })];
 
+  // toolCaller 恒提供：ask/delegate/contact/task_board/bulletin 是恒在的虚拟工具，
+  // 即使工位没有任何真实工具也要能调用（否则文本模式下 bulletin/task_board 调不动）
   const result = native
     ? await runReActLoopNative({
         messages, llm, tools: toolCaller, toolDefs: nativeToolDefs,
-        onEvent: (ev) => { if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk }); },
+        onEvent: (ev) => {
+          if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
+          else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', content: ev.chunk });
+        },
         onToolError: (e) => e instanceof SuspendSignal ? { reason: 'ask', question: e.question, options: e.options } : null,
         signal,
       })
     : await runReActLoop({
-        messages, llm, tools: enableTools ? toolCaller : undefined,
-        onEvent: (ev) => { if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk }); },
+        messages, llm, tools: toolCaller,
+        onEvent: (ev) => {
+          if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
+          else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', content: ev.chunk });
+        },
         signal,
       });
 
@@ -212,6 +228,8 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
   // 注意：仅剔除首条注入的 system，保留历史中的压缩摘要 system 消息
   // （/reset summary 落库的「重置前…摘要」气泡，否则下一轮对话后会被一并滤掉而消失）。
   seat.messages = messages.filter((m, i) => !(i === 0 && m.role === 'system'));
+  // 变更注意力：标记本工位已读到当前公告板（含本轮自己的改动），下一轮据此算 🆕
+  seat.bulletinSeenAt = readBulletinSync(dataDir, workshopId).updatedAt;
   if (result.usage) {
     seat.tokenUsage = {
       promptTokens: result.usage.promptTokens,
@@ -268,7 +286,7 @@ export async function chatSeat(
     if (seat.pending) throw new Error('工位处于挂起状态，请先回复其提问（resume）');
     const system: ContextMessage = {
       role: 'system',
-      content: buildSeatSystemPrompt({ dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath: wsRelPath(dataDir, workshopId) }),
+      content: buildSeatSystemPrompt({ dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath: wsRelPath(dataDir, workshopId), bulletinSeenAt: seat.bulletinSeenAt }),
     };
     seat.messages.push({ role: 'user', content: humanMessage });
     const messages: ContextMessage[] = [system, ...seat.messages];
@@ -301,7 +319,7 @@ export async function resumeSeat(
     // resume 用挂起时的 native 模式，保证 prompt 协议段与循环模式一致
     const system: ContextMessage = {
       role: 'system',
-      content: buildSeatSystemPrompt({ dataDir, workshopId, seat, agent, toolDefs, native: pending.native, wsRelPath: wsRelPath(dataDir, workshopId) }),
+      content: buildSeatSystemPrompt({ dataDir, workshopId, seat, agent, toolDefs, native: pending.native, wsRelPath: wsRelPath(dataDir, workshopId), bulletinSeenAt: seat.bulletinSeenAt }),
     };
     const messages: ContextMessage[] = [system, ...seat.messages];
     return await withAgentTurn(seat.agentId, () => driveSeat({ dataDir, workshopId, seat, messages, native: pending.native, toolDefs, agent, contactTargets, signal, onEvent }));

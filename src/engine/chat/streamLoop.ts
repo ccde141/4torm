@@ -52,6 +52,16 @@ export async function runStreamLoop(ctx: StreamCtx) {
   let streamContent = '';
   let lastFlushAt = 0;
   const TOKEN_FLUSH_MS = 80;
+  // 前沿+后沿节流：突发（一次 read 灌入大量 reasoning/token）时，前沿先刷一帧，
+  // 其余被吞的更新用后沿 timer 在窗口末补刷，避免"卡住→阶段切换才全量蹦出"。
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  const doFlush = () => { flushTimer = null; lastFlushAt = Date.now(); setMessages([...allMessages]); };
+  const scheduleFlush = () => {
+    if (flushTimer) return;                       // 已有后沿刷新在排队
+    const wait = TOKEN_FLUSH_MS - (Date.now() - lastFlushAt);
+    if (wait <= 0) doFlush();                      // 过了窗口 → 立刻前沿刷
+    else flushTimer = setTimeout(doFlush, wait);   // 窗口内 → 排后沿刷
+  };
   const assistantMsg: ChatMessage = {
     id: assistantMsgId, role: 'assistant', content: '',
     timestamp: new Date().toISOString(), agentId: agent.id,
@@ -78,6 +88,7 @@ export async function runStreamLoop(ctx: StreamCtx) {
       body: JSON.stringify({
         sessionId: session.id,
         agentId: agent.id,
+        model: selectedModel,
         messages: chatMessages,
       }),
       signal: abortController.signal,
@@ -93,6 +104,30 @@ export async function runStreamLoop(ctx: StreamCtx) {
     const decoder = new TextDecoder();
     let buffer = '';
 
+    const processLine = async (line: string) => {
+      if (!line.startsWith('data: ')) return;
+      const json = line.slice(6).trim();
+      if (!json) return;
+
+      let ev: any;
+      try { ev = JSON.parse(json); } catch { return; }
+
+      // task_board 的 meta 侧通道：结构化任务板即时上屏（不进 LLM 上下文）
+      if (ev.type === 'tool-result' && ev.meta && 'taskboard' in ev.meta) {
+        ctx.onTaskboard?.(ev.meta.taskboard);
+      }
+
+      await handleSSEEvent(ev, {
+        assistantMsgId, allMessages, streamContent,
+        setMessages, generateMessageIdFn,
+        agent, session, selectedModel, saveSessionFn, refreshSessions, getTitle,
+        setStreamContent: (c: string) => { streamContent = c; },
+        setAllMessages: (m: ChatMessage[]) => { allMessages = m; },
+        setFirstToken: () => { firstTokenReceived = true; clearInterval(waitInterval); },
+        throttledFlush: scheduleFlush,
+      });
+    };
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -101,39 +136,16 @@ export async function runStreamLoop(ctx: StreamCtx) {
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const json = line.slice(6).trim();
-        if (!json) continue;
-
-        let ev: any;
-        try { ev = JSON.parse(json); } catch { continue; }
-
-        // task_board 的 meta 侧通道：结构化任务板即时上屏（不进 LLM 上下文）
-        if (ev.type === 'tool-result' && ev.meta && 'taskboard' in ev.meta) {
-          ctx.onTaskboard?.(ev.meta.taskboard);
-        }
-
-        await handleSSEEvent(ev, {
-          assistantMsgId, allMessages, streamContent,
-          setMessages, generateMessageIdFn,
-          agent, session, selectedModel, saveSessionFn, refreshSessions, getTitle,
-          setStreamContent: (c: string) => { streamContent = c; },
-          setAllMessages: (m: ChatMessage[]) => { allMessages = m; },
-          setFirstToken: () => { firstTokenReceived = true; clearInterval(waitInterval); },
-          throttledFlush: () => {
-            const now = Date.now();
-            if (now - lastFlushAt >= TOKEN_FLUSH_MS) {
-              lastFlushAt = now;
-              setMessages([...allMessages]);
-            }
-          },
-        });
-      }
+      for (const line of lines) await processLine(line);
     }
+    // 收尾：flush 解码器 + 处理末尾未换行终结的残留（否则尾段事件会丢）
+    buffer += decoder.decode();
+    if (buffer) for (const line of buffer.split('\n')) await processLine(line);
     // 流正常结束：强制最终刷新，保证节流期间未渲染的尾部 token 全部呈现
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     setMessages([...allMessages]);
   } catch (e) {
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     clearInterval(waitInterval);
     // 主动中断：用户点停止 / 切走被淘汰。跨 origin 直连时 abort 抛的是
     // TypeError「Failed to fetch」而非 AbortError，故以 signal.aborted 为准。
@@ -186,6 +198,16 @@ interface EventHandlerCtx {
 
 async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
   switch (ev.type) {
+    case 'reasoning': {
+      // 原生思考流：累积到独立字段，与正文互不干扰。首个思考 chunk 也算"模型开始响应"
+      ctx.setFirstToken();
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
+      if (!target) break;
+      const updated = { ...target, reasoningContent: (target.reasoningContent || '') + ev.content, streamingPhase: undefined, phaseElapsed: undefined };
+      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
+      ctx.throttledFlush();
+      break;
+    }
     case 'token': {
       ctx.setFirstToken();
       ctx.setStreamContent(ctx.streamContent + ev.content);
@@ -320,6 +342,7 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
         content: ev.rawContent || ev.content,
         timestamp: new Date().toISOString(), agentId: ctx.agent.id,
         toolSteps: target?.toolSteps,
+        reasoningContent: target?.reasoningContent,  // 原生思考流跨 answer 事件保留
       };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? finalMsg : m));
       ctx.setMessages([...ctx.allMessages]);

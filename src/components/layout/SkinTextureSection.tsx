@@ -8,20 +8,20 @@
 
 import React, { useState } from 'react';
 import {
-  applyTexture,
+  toggleTextureLayer,
   patchTexture,
   type SkinConfig,
   type SkinTextureConfig,
   type TextureBlend,
+  type TextureLayer,
 } from '../../store/skin';
-import type { TextureType } from '../../utils/skin-textures';
 import SkinCustomTextureControl from './SkinCustomTextureControl';
 import '../../styles/components/skin-texture.css';
 
-const TEXTURE_OPTIONS: Array<{ type: TextureType; name: string; desc: string }> = [
-  { type: 'none', name: '无', desc: '关闭底纹' },
-  { type: 'grid', name: '网格', desc: '细线栅格' },
-  { type: 'custom', name: '自定义', desc: '上传图片作为底纹' },
+// 平级、可共存的底纹图层（多选）
+const TEXTURE_LAYERS: Array<{ layer: TextureLayer; name: string; desc: string }> = [
+  { layer: 'grid', name: '网格', desc: '细线栅格' },
+  { layer: 'custom', name: '自定义', desc: '上传图片作为底纹' },
 ];
 
 const BLEND_OPTIONS: Array<{ value: TextureBlend; label: string }> = [
@@ -40,14 +40,15 @@ interface Props {
 const SkinTextureSection: React.FC<Props> = ({ config, onApply }) => {
   const [error, setError] = useState<string | null>(null);
   const texture: SkinTextureConfig = config.texture ?? {
-    type: 'none', opacity: 0, blur: 0, blend: 'normal',
+    layers: [], opacity: 0, blur: 0, blend: 'normal',
   };
-  const showDetails = texture.type !== 'none';
-  const isCustom = texture.type === 'custom';
+  const layers = texture.layers ?? [];
+  const isCustom = layers.includes('custom');
+  const showDetails = layers.length > 0;
 
-  const handleTypeChange = (type: TextureType) => {
+  const handleToggle = (layer: TextureLayer) => {
     setError(null);
-    onApply(applyTexture(type));
+    onApply(toggleTextureLayer(layer));
   };
 
   const handlePatch = (patch: Partial<SkinTextureConfig>) => {
@@ -60,22 +61,23 @@ const SkinTextureSection: React.FC<Props> = ({ config, onApply }) => {
       <div className="skin-panel__group">
         <div className="skin-panel__label-text">底纹</div>
         <div className="skin-panel__texture-row">
-          {TEXTURE_OPTIONS.map(opt => {
-            const active = texture.type === opt.type;
+          {TEXTURE_LAYERS.map(opt => {
+            const active = layers.includes(opt.layer);
             return (
               <button
-                key={opt.type}
+                key={opt.layer}
                 type="button"
                 className={`skin-panel__texture-btn${active ? ' skin-panel__texture-btn--active' : ''}`}
-                onClick={() => handleTypeChange(opt.type)}
+                onClick={() => handleToggle(opt.layer)}
                 title={opt.desc}
                 aria-pressed={active}
               >
-                {opt.name}
+                {active ? '✓ ' : ''}{opt.name}
               </button>
             );
           })}
         </div>
+        <div className="skin-panel__hint-text">可多选叠加 · 网格恒显示在自定义图之上</div>
 
         {error && <div className="skin-panel__error">{error}</div>}
 
@@ -87,10 +89,8 @@ const SkinTextureSection: React.FC<Props> = ({ config, onApply }) => {
           />
         )}
 
-        {showDetails && texture.type !== 'custom' && (
-          <TextureControls texture={texture} onPatch={handlePatch} />
-        )}
-        {isCustom && texture.customImage && (
+        {/* 透明度 / 模糊 / 混合模式 — 作用于全部启用图层 */}
+        {showDetails && (
           <TextureControls texture={texture} onPatch={handlePatch} />
         )}
       </div>

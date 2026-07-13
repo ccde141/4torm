@@ -247,6 +247,15 @@ export const MeetingMessageItem = memo(function MeetingMessageItem({ msg }: Prop
       </div>
     );
   }
+  // 无回复：显式灰字呈现，与正常发言区分
+  if (msg.noReply) {
+    return (
+      <div className="tw-meeting-msg tw-meeting-msg--no-reply">
+        <span className="tw-meeting-msg__speaker">{msg.speaker}</span>
+        <span className="tw-meeting-msg__no-reply">未回复</span>
+      </div>
+    );
+  }
 
   // 结束态：解析 think/answer/note 分块渲染（think 折叠，note 单独区块）
   const source = msg.rawContent || msg.content;

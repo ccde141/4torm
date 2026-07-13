@@ -13,6 +13,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { atomicWriteFile } from './atomic-io';
 import { extractParams, buildGraphFromParams, type GraphNode } from './workflow-builder';
 import { validateWorkflow } from './workflow-validator';
 
@@ -153,13 +154,13 @@ export async function execUpdateWorkflow(dataDir: string, args: Record<string, u
 
   // 6. 写回（覆盖 graph.json，更新 meta.updatedAt + name）
   try {
-    await fs.writeFile(path.join(wfDir, 'graph.json'), JSON.stringify(graph, null, 2), 'utf-8');
+    await atomicWriteFile(path.join(wfDir, 'graph.json'), JSON.stringify(graph, null, 2));
     const metaPath = path.join(wfDir, 'meta.json');
     let meta: Record<string, unknown> = { workflowId };
     try { meta = JSON.parse(await fs.readFile(metaPath, 'utf-8')); } catch { /* meta 缺失则重建 */ }
     meta.name = params.name;
     meta.updatedAt = new Date().toISOString();
-    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+    await atomicWriteFile(metaPath, JSON.stringify(meta, null, 2));
   } catch (e) {
     return `更新失败：写入文件时出错 — ${(e as Error).message}`;
   }

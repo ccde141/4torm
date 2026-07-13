@@ -102,6 +102,8 @@ import { mcpRoutes } from './routes/mcp';
 await app.register(mcpRoutes, { prefix: '/api/mcp' });
 import { cycloneRoutes } from './routes/cyclone';
 await app.register(cycloneRoutes, { prefix: '/api/cyclone' });
+import { memoryRoutes } from './routes/memory';
+await app.register(memoryRoutes, { prefix: '/api/memory' });
 
 // 启动潮汐调度器（必须在路由注册后，确保 unlock hook 注册前没有 unlock 触发）
 startScheduler(DATA_DIR);

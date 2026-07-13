@@ -27,10 +27,7 @@
   animation: messageIn var(--duration-normal) var(--ease-out-expo);
 }
 
-@keyframes messageIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
+/* messageIn 已收编至 variables/motion.css（全局单点定义） */
 
 .chat__message--user {
   flex-direction: row-reverse;
@@ -78,6 +75,11 @@
   border-radius: var(--border-radius-lg);
   font-size: var(--text-sm);
   line-height: var(--leading-relaxed);
+  /* flex 子项默认 min-width:auto，不会收缩到内容宽度以下 —— 一段超长代码/无空格长串
+     会把气泡撑破 85% 上限（用户消息还会朝左溢出视口够不着）。min-width:0 让它能收缩，
+     内层代码块的 overflow-x:auto 才有机会触发。max-width:100% 兜住撑破。 */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .chat__message--user .chat__bubble {
@@ -159,6 +161,35 @@
   overflow-x: auto;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+}
+
+/* 回到底部按钮：仅在用户上滑脱离跟随时出现 */
+.chat__jump-bottom {
+  position: absolute;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 34px;
+  height: 34px;
+  border-radius: var(--border-radius-full);
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 5;
+  color: var(--color-text-primary);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), 0 0 12px rgba(255,255,255,0.12);
+  animation: messageIn var(--duration-normal) var(--ease-out-expo);
+  transition: transform var(--duration-fast) var(--ease-out-expo), background var(--duration-fast);
+}
+.chat__jump-bottom:hover {
+  transform: translateX(-50%) translateY(-2px);
+  background: var(--color-bg-tertiary);
 }
 
 .chat__tool-call {
@@ -539,9 +570,7 @@
   margin-left: auto;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+/* spin 已收编至 variables/motion.css（全局单点定义） */
 
 .thinking-card__tool-detail {
   border-top: 1px solid var(--border-color);
@@ -1133,7 +1162,7 @@
 /* 展开抽屉：从右缘企宣级减速滑入（悬浮在消息上，不挤占会话）。
    位移 + 极轻缩放，强减速曲线铺出从容的收尾，避免生硬直插。 */
 @keyframes taskboard-slide-in {
-  from { opacity: 0; transform: translateX(30px) scale(0.985); }
+  from { opacity: 0; transform: translateX(var(--motion-drawer-distance)) scale(0.985); }
   to   { opacity: 1; transform: translateX(0) scale(1); }
 }
 /* 内容比外壳晚一拍浮起，形成分层的「铺开」质感 */
@@ -1142,7 +1171,7 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 .taskboard-drawer {
-  animation: taskboard-slide-in var(--duration-emphasized) var(--ease-emphasized);
+  animation: taskboard-slide-in var(--motion-drawer-duration) var(--motion-drawer-ease);
   transform-origin: right center;
   will-change: transform, opacity;
 }
@@ -1152,3 +1181,39 @@
 .taskboard-drawer > *:nth-child(2) { animation-delay: 70ms; }
 .taskboard-drawer > *:nth-child(3) { animation-delay: 120ms; }
 .taskboard-drawer > *:nth-child(4) { animation-delay: 160ms; }
+
+/* ── 原生思考流展示块 ─────────────────────────────────── */
+.reasoning-block {
+  margin: var(--space-1) 0 var(--space-2);
+  border-left: 2px solid var(--color-border);
+  padding-left: var(--space-3);
+}
+.reasoning-block__header {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: none;
+  border: none;
+  padding: var(--space-1) 0;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+.reasoning-block__header:hover { color: var(--color-text-secondary); }
+.reasoning-block__arrow { font-size: 0.7em; }
+.reasoning-block__label { font-style: italic; }
+.reasoning-block__spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.reasoning-block__body {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  padding: var(--space-1) 0 var(--space-2);
+}

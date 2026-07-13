@@ -19,11 +19,12 @@ import { execToolUnified } from '../shared/exec-tool';
 import { withAgentTurn } from '../shared/agent-queue';
 import { runReActLoop, runReActLoopNative, type ToolCaller } from './react-loop';
 import { buildSeatRoomSystemPrompt } from './seat-prompt';
+import { execBulletin, readBulletinSync } from './bulletin';
 import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { makeLLM, wsRelPath } from './seat-runner';
 import { execContact } from './contact';
 import { listOtherSeats } from './contact-registry';
-import { loadSeat } from './seat-store';
+import { loadSeat, saveSeat } from './seat-store';
 import { saveRoom } from './room-store';
 import type { RoomData, SeatData } from './types';
 
@@ -31,6 +32,7 @@ import type { RoomData, SeatData } from './types';
 export type RoomEvent =
   | { type: 'seat-start'; speaker: string }
   | { type: 'token'; speaker: string; content: string }
+  | { type: 'reasoning'; speaker: string; content: string }
   | { type: 'tool-call'; speaker: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; speaker: string; tool: string; result: string; ok: boolean }
   | { type: 'seat-done'; speaker: string; content: string }
@@ -53,6 +55,13 @@ function makeRoomToolCaller(opts: {
   const { dataDir, workshopId, seatId, seatTitle, agentId, sandboxLevel, wsDir, speaker, signal, onEvent } = opts;
   return {
     async call(tool, args) {
+      // bulletin 假工具：群聊里也可改工作室公告板（落款为发言工位 title）
+      if (tool === 'bulletin') {
+        onEvent({ type: 'tool-call', speaker, tool, args });
+        const { result } = await execBulletin(dataDir, workshopId, args, seatTitle);
+        onEvent({ type: 'tool-result', speaker, tool, result, ok: true });
+        return result;
+      }
       if (tool === 'contact') {
         onEvent({ type: 'tool-call', speaker, tool, args });
         const result = await execContact(
@@ -81,7 +90,7 @@ function makeRoomToolCaller(opts: {
 async function runSeatInRoom(
   dataDir: string, workshopId: string, room: RoomData, seat: SeatData,
   signal: AbortSignal | undefined, onEvent: (ev: RoomEvent) => void,
-): Promise<{ content: string; rawContent: string; toolCalls: Array<{ tool: string; args: Record<string, string>; result: string }> } | null> {
+): Promise<{ content: string; rawContent: string; reasoning?: string; toolCalls: Array<{ tool: string; args: Record<string, string>; result: string }> } | null> {
   const agent = await loadAgent(dataDir, seat.agentId);
   if (!agent) {
     onEvent({ type: 'error', message: `工位「${seat.title}」绑定的 agent 已删除，跳过` });
@@ -104,27 +113,38 @@ async function runSeatInRoom(
 
   const system: ContextMessage = {
     role: 'system',
-    content: buildSeatRoomSystemPrompt({ dataDir, seat, agent, toolDefs: effectiveToolDefs, native, wsRelPath: wsDir, topic: room.topic }),
+    content: buildSeatRoomSystemPrompt({ dataDir, workshopId, seat, agent, toolDefs: effectiveToolDefs, native, wsRelPath: wsDir, topic: room.topic, bulletinSeenAt: seat.bulletinSeenAt }),
   };
   const history: ContextMessage = { role: 'user', content: formatPublicContext(room) };
   const messages: ContextMessage[] = [system, history];
   // 群聊讨论场：剥 ask/delegate，保留 contact（热注入名单）
   const nativeToolDefs = [...effectiveToolDefs, ...buildSeatVirtualToolDefs({ allowAsk: false, allowDelegate: false, contactTargets })];
-  const hasTools = effectiveToolDefs.length > 0 || contactTargets.length > 0;
-
+  // toolCaller 恒提供：task_board / bulletin 是恒在的虚拟工具，即使没有真实工具/联络对象也要能调用
+  // 累积本轮思考流：既实时推给前端，也攒下来随发言落盘（重载可恢复）
+  let reasoningAcc = '';
   const result = native
     ? await runReActLoopNative({
-        messages, llm, tools: hasTools ? toolCaller : undefined, toolDefs: nativeToolDefs,
-        onEvent: (ev) => { if (ev.type === 'token') onEvent({ type: 'token', speaker: seat.title, content: ev.chunk }); },
+        messages, llm, tools: toolCaller, toolDefs: nativeToolDefs,
+        onEvent: (ev) => {
+          if (ev.type === 'token') onEvent({ type: 'token', speaker: seat.title, content: ev.chunk });
+          else if (ev.type === 'reasoning') { reasoningAcc += ev.chunk; onEvent({ type: 'reasoning', speaker: seat.title, content: ev.chunk }); }
+        },
         signal,
       })
     : await runReActLoop({
-        messages, llm, tools: hasTools ? toolCaller : undefined,
-        onEvent: (ev) => { if (ev.type === 'token') onEvent({ type: 'token', speaker: seat.title, content: ev.chunk }); },
+        messages, llm, tools: toolCaller,
+        onEvent: (ev) => {
+          if (ev.type === 'token') onEvent({ type: 'token', speaker: seat.title, content: ev.chunk });
+          else if (ev.type === 'reasoning') { reasoningAcc += ev.chunk; onEvent({ type: 'reasoning', speaker: seat.title, content: ev.chunk }); }
+        },
         signal,
       });
 
-  return { content: result.content, rawContent: result.rawContent, toolCalls: result.toolCalls };
+  // 变更注意力：本工位已看到当前公告板（跨频道共享 seenAt 水位，含本轮自己的改动）
+  const seenAt = readBulletinSync(dataDir, workshopId).updatedAt;
+  if (seat.bulletinSeenAt !== seenAt) { seat.bulletinSeenAt = seenAt; await saveSeat(dataDir, workshopId, seat); }
+
+  return { content: result.content, rawContent: result.rawContent, reasoning: reasoningAcc || undefined, toolCalls: result.toolCalls };
 }
 
 /**
@@ -155,6 +175,7 @@ export async function speakInRoom(
         content,
         timestamp: Date.now(),
         rawContent: r.rawContent || undefined,
+        reasoning: r.reasoning,
         toolCalls: r.toolCalls.length > 0 ? r.toolCalls : undefined,
       });
       onEvent({ type: 'seat-done', speaker: seat.title, content });

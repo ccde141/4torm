@@ -63,6 +63,14 @@ export const BUILTIN_EVENT_IDS = {
   MEETING_END: 'meeting-end',
   HUMAN_GATE_ARRIVE: 'human-gate-arrive',
   WORKFLOW_END: 'workflow-end',
+  /** 自动模式异常：节点未显式完成，已强制封口交接（写日志 + 前端高亮供人介入） */
+  AUTO_ANOMALY: 'auto-anomaly',
+  /** 节点内投递延迟：产出已生成，投递下游前盲等中（供侧板显示"等待投递"） */
+  DELIVERY_DELAY: 'delivery-delay',
+  /** 单圈完成：Output 到达，本圈已归档但循环不散（由 LoopController 决定是否续圈） */
+  LAP_DONE: 'lap-done',
+  /** 整个循环真正结束：圈数到顶 / 人为停止 / 出错终止 */
+  LOOP_END: 'loop-end',
 } as const;
 
 /** 内置事件 ID 联合类型（仅用于内部强类型场景，对外仍接受任意 string） */

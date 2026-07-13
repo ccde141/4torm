@@ -12,6 +12,13 @@ import { callLLM } from '../engine/shared/llm-bridge.js';
 import { loadAgent } from '../engine/shared/agent-loader.js';
 import { initSSE, pushSSE, endSSE } from '../utils/sse.js';
 
+/** 原子写：先写 .tmp 再 rename 覆盖，防止进程中途被杀（关软件）时留下半截 JSON 损坏会话。 */
+async function atomicWrite(filePath: string, data: string): Promise<void> {
+  const tmp = `${filePath}.tmp`;
+  await fs.writeFile(tmp, data, 'utf-8');
+  await fs.rename(tmp, filePath);
+}
+
 const COMPACT_SYSTEM_PROMPT = `你是一个工程对话压缩器。将开发对话压缩为结构化工作摘要，供后续对话恢复上下文。
 
 ## 输出格式
@@ -88,7 +95,10 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     const agent = await loadAgent(dataDir, agentId);
     if (!agent) return reply.status(404).send({ error: 'Agent 不存在' });
     const workspace = agent.workspace || `data/agents/${agentId}/.workspace/`;
-    const workspacePath = path.resolve(process.cwd(), workspace);
+    // agent.workspace 是「项目根相对」路径，须按项目根解析（= dataDir 的父目录），
+    // 与执行期 path.resolve(projectDir, workspace)（agent.ts:74）及对流/气旋端点保持一致。
+    // 旧代码用 process.cwd()，进程工作目录非仓库根时会指向错误位置并 mkdir 出幽灵工作区。
+    const workspacePath = path.resolve(path.dirname(dataDir), workspace);
     await fs.mkdir(workspacePath, { recursive: true });
     if (process.platform === 'win32') {
       spawn('explorer.exe', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
@@ -230,7 +240,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
     session.messages = newMessages;
     session.updatedAt = new Date().toISOString();
-    await fs.writeFile(sessionFile, JSON.stringify(session, null, 2), 'utf-8');
+    await atomicWrite(sessionFile, JSON.stringify(session, null, 2));
 
     pushSSE(reply, { type: 'done', markerId: marker.id, markerIdx: insertIdx });
     endSSE(reply);

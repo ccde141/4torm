@@ -27,6 +27,12 @@ export type OutputKind = 'handoff' | 'note' | 'none';
 /** 连线类型 */
 export type EdgeKind = 'handoff' | 'note';
 
+/**
+ * 运行模式：manual（人类在场、人类驱动）/ auto（无人类、全自动跑完）。
+ * 运行时选择，非搭建时属性——同一张图两种模式都能跑，自动模式点运行时额外否决手动专属节点。
+ */
+export type WorkflowMode = 'manual' | 'auto';
+
 /** 单个节点的画布序列化 */
 export interface WorkflowNode {
   /** 节点实例 ID（画布唯一） */

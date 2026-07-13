@@ -6,8 +6,15 @@
 
 .skin-panel__texture-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   gap: var(--space-1);
+  margin-bottom: var(--space-1);
+}
+
+/* 多选提示 — 说明网格/自定义可共存、叠放次序 */
+.skin-panel__hint-text {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
   margin-bottom: var(--space-3);
 }
 

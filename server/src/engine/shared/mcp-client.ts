@@ -21,6 +21,8 @@ export interface McpServerConfig {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  /** 仅 filesystem server 有意义：为 true 时，连接前自动把各 agent workspace 目录追加进 args（不写回配置文件）。 */
+  autoWorkspaces?: boolean;
 }
 
 export interface McpToolDef {

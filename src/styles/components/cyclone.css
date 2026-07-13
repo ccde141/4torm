@@ -74,3 +74,27 @@
 .cyclone__workspace-btn:hover .cyclone__workspace-btn-icon {
   transform: translate(1px, -1px) scale(1.08);
 }
+
+/* ─── 工作室公告板（主区默认页）——页面本身透明，只有文字内容区做磨砂玻璃 ─── */
+
+/* 只有 textarea（文字内容底）是磨砂玻璃，不铺满整页 */
+.bulletin-board .config-textarea {
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-color: var(--glass-border);
+}
+.bulletin-board .config-textarea:focus {
+  border-color: var(--color-accent);
+  background: var(--glass-bg-hover);
+}
+
+/* 全部文字加光晕阴影：无论背景黑白，字都可读 */
+.bulletin-board .config-modal-header h3,
+.bulletin-board .config-modal-subtitle,
+.bulletin-board .config-label,
+.bulletin-board .config-hint,
+.bulletin-board .config-textarea,
+.bulletin-board .config-textarea::placeholder {
+  text-shadow: var(--text-halo);
+}

@@ -3,7 +3,7 @@
  */
 
 // 信封
-export type { Envelope } from './envelope';
+export type { Envelope, EnvelopeHeader } from './envelope';
 
 // 事件
 export type { EventTypeDef, EventLog, BuiltinEventId } from './events';
@@ -17,6 +17,7 @@ export type {
   InputKind,
   OutputKind,
   EdgeKind,
+  WorkflowMode,
   WorkflowNode,
   WorkflowEdge,
   WorkflowGraph,

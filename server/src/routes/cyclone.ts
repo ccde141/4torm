@@ -25,6 +25,7 @@ import { generateJoinSpeech } from '../engine/cyclone/seat-summary';
 import { generateSeatDuty } from '../engine/cyclone/seat-duty';
 import type { JoinBehavior } from '../engine/cyclone/types';
 import { workshopWorkspace } from '../engine/cyclone/paths';
+import { readBulletin, applyBulletinOps, readBulletinHistory, revertBulletinChange, type BulletinOp } from '../engine/cyclone/bulletin';
 import { loadAgent } from '../engine/shared/agent-loader';
 import { callLLM } from '../engine/shared/llm-bridge';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
@@ -128,7 +129,7 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     if (action === 'summary') {
       const w = await loadWorkshop(dataDir, workshopId);
       if (!w) return reply.status(404).send({ error: '工作室不存在' });
-      const [seats, rooms] = await Promise.all([
+      const [seats, rooms, bulletin] = await Promise.all([
         Promise.all(w.seatIds.map(async (sid) => {
           const s = await loadSeat(dataDir, workshopId, sid);
           return s ? { id: s.id, title: s.title, pending: !!s.pending } : null;
@@ -137,12 +138,41 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
           const rm = await loadRoom(dataDir, workshopId, rid);
           return rm ? { id: rm.id, title: rm.title } : null;
         })),
+        readBulletin(dataDir, workshopId),
       ]);
       return reply.send({
         id: w.id, title: w.title, chairAgentId: w.chairAgentId,
         seats: seats.filter(Boolean),
         rooms: rooms.filter(Boolean),
+        bulletin,
       });
+    }
+
+    // 公告板：读 / 增量改（工作室级，全体工位可见；人与工位皆可写，增量操作免全量覆盖冲突）
+    if (action === 'bulletin') {
+      return reply.send(await readBulletin(dataDir, workshopId));
+    }
+
+    if (action === 'bulletin-mutate') {
+      const w = await loadWorkshop(dataDir, workshopId);
+      if (!w) return reply.status(404).send({ error: '工作室不存在' });
+      const ops = Array.isArray(body?.ops) ? (body.ops as BulletinOp[]) : [];
+      const b = ops.length ? await applyBulletinOps(dataDir, workshopId, ops, '人类') : await readBulletin(dataDir, workshopId);
+      return reply.send({ ...b, changes: await readBulletinHistory(dataDir, workshopId) });
+    }
+
+    // 改动时间轴：读 / 撤回某条（撤回者落款为「人类」）
+    if (action === 'bulletin-history') {
+      return reply.send({ changes: await readBulletinHistory(dataDir, workshopId) });
+    }
+
+    if (action === 'bulletin-revert') {
+      const w = await loadWorkshop(dataDir, workshopId);
+      if (!w) return reply.status(404).send({ error: '工作室不存在' });
+      const seq = Number(body?.seq);
+      if (!Number.isFinite(seq)) return reply.status(400).send({ error: '缺少 seq' });
+      const b = await revertBulletinChange(dataDir, workshopId, seq, '人类');
+      return reply.send({ ...b, changes: await readBulletinHistory(dataDir, workshopId) });
     }
 
     if (action === 'rename') {

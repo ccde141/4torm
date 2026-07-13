@@ -168,6 +168,66 @@
   flex-wrap: wrap;
 }
 
+.mcp-add-form__row + .mcp-add-form__row { margin-top: 8px; }
+
+/* 环境变量分区：与主参数行留出视觉间隔 */
+.mcp-add-form__env {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--glass-border);
+}
+
+.mcp-add-form__env-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.mcp-add-form__input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* filesystem 专属：workspace 自动放行开关 */
+.mcp-add-form__fs {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--glass-border);
+}
+
+.mcp-add-form__toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.mcp-add-form__toggle-row input { margin-top: 3px; }
+
+.mcp-add-form__hint {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.mcp-card__badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  background: var(--color-accent-glow, rgba(99,102,241,0.15));
+  color: var(--color-accent, #818cf8);
+  vertical-align: middle;
+}
+
 .mcp-add-form__input {
   flex: 1;
   min-width: 120px;

@@ -196,18 +196,11 @@ export function useSessionList(
 
       let receivedDone = false;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
+      const processLine = async (line: string) => {
           const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) continue;
+          if (!trimmed.startsWith('data:')) return;
           const payload = trimmed.slice(5).trim();
-          if (!payload) continue;
+          if (!payload) return;
 
           try {
             const evt = JSON.parse(payload);
@@ -237,8 +230,20 @@ export function useSessionList(
               notice(`⚠️ 压缩失败：${evt.error}`);
             }
           } catch { /* 非 JSON 行忽略 */ }
-        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) await processLine(line);
       }
+      // 收尾：flush 解码器 + 处理末尾未换行终结的残留
+      buffer += decoder.decode();
+      if (buffer) for (const line of buffer.split('\n')) await processLine(line);
 
       // fallback：流断开但没收到 done/error 事件，尝试重新加载会话
       if (!receivedDone) {

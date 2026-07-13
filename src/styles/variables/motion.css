@@ -1,0 +1,180 @@
+/**
+ * ============================================================
+ *  Motion — 应用级动效层（语义变量 + 规范 keyframes + 工具类）
+ * ============================================================
+ *
+ * 目标：把散落各组件的动画收拢成一套共用词汇，单点调节手感。
+ *
+ * 分五类（对应现有动画的自然分组）：
+ *   1. Enter      进场：元素出现（一次性）
+ *   2. Exit       退场：元素消失（一次性）
+ *   3. Emphasize  强调：吸引注意的一次性反馈（完成 pop 等）
+ *   4. Loop       持续态：无限循环（脉冲 / 呼吸 / 旋转）
+ *   5. Orchestrate 编排：stagger 等组合调度
+ *
+ * 组件只引用 --motion-* 语义变量与 .mo-* 工具类，不直接写时长/缓动，
+ * 这样"整体调快、调弹、调稳"永远只改这一处。
+ * raw token（--duration-* / --ease-*）见 tokens.css。
+ *
+ * ┌──────────────────────────────────────────────────────────┐
+ * │  手感调节面板 —— 改这里，全局生效                          │
+ * ├──────────────────────────────────────────────────────────┤
+ * │  想要的效果            改哪个旋钮                          │
+ * │  ─────────────────    ──────────────────────────────────  │
+ * │  整体更快/更慢         --motion-enter-duration            │
+ * │  滑入幅度大/小（跳）   --motion-slide-distance            │
+ * │  列表逐项更紧/更拖     --motion-stagger-step              │
+ * │  换进场缓动性格        --motion-enter-ease                │
+ * │  退场更利落/更缓       --motion-exit-duration / -ease     │
+ * │  完成pop弹跳幅度       --motion-emphasize-*               │
+ * │  抽屉/侧板展开质感     --motion-drawer-duration / -ease   │
+ * │  模态弹窗回弹质感      --motion-modal-duration / -ease    │
+ * │  循环脉冲/旋转节拍     --motion-loop-duration             │
+ * ├──────────────────────────────────────────────────────────┤
+ * │  未来皮肤化：在某作用域覆盖以上变量即可换整套动效性格，   │
+ * │  组件一行都不用动。                                        │
+ * └──────────────────────────────────────────────────────────┘
+ */
+
+:root {
+  /* ── 进场 ── */
+  --motion-enter-duration:   var(--duration-normal);   /* 250ms */
+  --motion-enter-ease:       var(--ease-out-expo);
+  --motion-enter-spring:     var(--ease-out-back);      /* 弹性超调进场 */
+
+  /* ── 退场 ── 比进场略快、收敛缓动，"利落地走" */
+  --motion-exit-duration:    var(--duration-fast);      /* 150ms */
+  --motion-exit-ease:        var(--ease-collapse);
+
+  /* ── 强调 ── 一次性反馈，短促带弹性 */
+  --motion-emphasize-duration: var(--duration-spring);  /* 520ms */
+  --motion-emphasize-ease:     var(--ease-spring);
+
+  /* ── 抽屉 / 侧板 ── 企宣级强减速，展开的高级质感（保留特调性格，纳入统一可调） */
+  --motion-drawer-duration:  var(--duration-emphasized); /* 480ms */
+  --motion-drawer-ease:      var(--ease-emphasized);
+  --motion-drawer-distance:  30px;   /* 抽屉浮出位移（比通用 slide 大，有分量感） */
+
+  /* ── 模态弹窗 ── 回弹出场质感（保留特调性格，纳入统一可调） */
+  --motion-modal-duration:   var(--duration-normal);   /* 250ms */
+  --motion-modal-ease:       var(--ease-out-back);
+
+  /* ── 持续态 ── 循环节拍 */
+  --motion-loop-duration:    1.2s;
+  --motion-loop-ease:        ease-in-out;
+
+  /* ── 位移 / 编排 ── */
+  --motion-slide-distance:   16px;   /* 滑入默认位移量 */
+  --motion-stagger-step:     40ms;   /* 编排逐项延迟 */
+}
+
+/* =========================================================== *
+ *  规范 keyframes —— 按五类归拢
+ * =========================================================== */
+
+/* ── 1. Enter ── */
+@keyframes mo-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes mo-fade-in-up {
+  from { opacity: 0; transform: translateY(var(--motion-slide-distance)); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes mo-slide-in-left {
+  from { opacity: 0; transform: translateX(calc(-1 * var(--motion-slide-distance))); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes mo-slide-in-right {
+  from { opacity: 0; transform: translateX(var(--motion-slide-distance)); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+/* 弹性进场：借用 tw-spring-in 的超调手感 */
+@keyframes mo-spring-in {
+  0%   { opacity: 0; transform: translateY(24px) scale(0.92); }
+  60%  { opacity: 1; transform: translateY(-4px) scale(1.01); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* messageIn —— 消息流进场的规范名（等价 mo-fade-in-up）。保留原名以兼容
+   chat.css / tradewind-panels.css 的 7 处 animation 引用（各自缓动不变），
+   此处单点定义帧体，位移随 --motion-slide-distance。原两处重复已收敛至此。 */
+@keyframes messageIn {
+  from { opacity: 0; transform: translateY(var(--motion-slide-distance)); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── 2. Exit ── 进场的镜像，收敛 */
+@keyframes mo-fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+@keyframes mo-fade-out-down {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(var(--motion-slide-distance)); }
+}
+@keyframes mo-slide-out-left {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(calc(-1 * var(--motion-slide-distance))); }
+}
+@keyframes mo-slide-out-right {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(var(--motion-slide-distance)); }
+}
+
+/* ── 3. Emphasize ── 一次性反馈 */
+@keyframes mo-pop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+/* ── 4. Loop ── 持续态。spin 保留原名，收编 chat/config-modal/loading 三处重复
+   （ContactCard 内联 animation:'spin ...' 依赖全局定义，收此更稳）。 */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* =========================================================== *
+ *  工具类 —— 组件挂类即用
+ * =========================================================== */
+
+/* ── Enter ── 用 both 保留首帧，避免闪现 */
+.mo-enter-fade      { animation: mo-fade-in      var(--motion-enter-duration) var(--motion-enter-ease) both; }
+.mo-enter-fade-up   { animation: mo-fade-in-up   var(--motion-enter-duration) var(--motion-enter-ease) both; }
+.mo-slide-in-left   { animation: mo-slide-in-left  var(--motion-enter-duration) var(--motion-enter-ease) both; }
+.mo-slide-in-right  { animation: mo-slide-in-right var(--motion-enter-duration) var(--motion-enter-ease) both; }
+.mo-spring-in       { animation: mo-spring-in    var(--motion-enter-spring, var(--duration-spring)) var(--motion-enter-spring) both; }
+
+/* ── Exit ── 由组件在卸载前挂上，配合延迟卸载 */
+.mo-exit-fade       { animation: mo-fade-out      var(--motion-exit-duration) var(--motion-exit-ease) both; }
+.mo-exit-fade-down  { animation: mo-fade-out-down var(--motion-exit-duration) var(--motion-exit-ease) both; }
+.mo-slide-out-left  { animation: mo-slide-out-left  var(--motion-exit-duration) var(--motion-exit-ease) both; }
+.mo-slide-out-right { animation: mo-slide-out-right var(--motion-exit-duration) var(--motion-exit-ease) both; }
+
+/* ── Emphasize ── 一次性；animationend 后由 JS 移除类 */
+.mo-pop { animation: mo-pop var(--motion-emphasize-duration) var(--motion-emphasize-ease); }
+
+/* ── Orchestrate ── 逐项延迟：容器挂 .mo-stagger，子项按序延后进场 */
+.mo-stagger > * { animation: mo-fade-in-up var(--motion-enter-duration) var(--motion-enter-ease) both; }
+.mo-stagger > *:nth-child(1)  { animation-delay: calc(var(--motion-stagger-step) * 0); }
+.mo-stagger > *:nth-child(2)  { animation-delay: calc(var(--motion-stagger-step) * 1); }
+.mo-stagger > *:nth-child(3)  { animation-delay: calc(var(--motion-stagger-step) * 2); }
+.mo-stagger > *:nth-child(4)  { animation-delay: calc(var(--motion-stagger-step) * 3); }
+.mo-stagger > *:nth-child(5)  { animation-delay: calc(var(--motion-stagger-step) * 4); }
+.mo-stagger > *:nth-child(6)  { animation-delay: calc(var(--motion-stagger-step) * 5); }
+.mo-stagger > *:nth-child(7)  { animation-delay: calc(var(--motion-stagger-step) * 6); }
+.mo-stagger > *:nth-child(8)  { animation-delay: calc(var(--motion-stagger-step) * 7); }
+.mo-stagger > *:nth-child(n+9) { animation-delay: calc(var(--motion-stagger-step) * 8); }
+
+/* =========================================================== *
+ *  Reduced Motion —— 无障碍：降级为瞬时
+ *  （index.css 已有全局 transition/animation 收敛，这里补一次性/循环语义）
+ * =========================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .mo-enter-fade, .mo-enter-fade-up, .mo-slide-in-left, .mo-slide-in-right,
+  .mo-spring-in, .mo-exit-fade, .mo-exit-fade-down, .mo-slide-out-left,
+  .mo-slide-out-right, .mo-pop, .mo-stagger > * {
+    animation: none !important;
+  }
+}

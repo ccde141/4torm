@@ -18,10 +18,6 @@ export function removeUnifiedClient(res: ServerResponse): void {
   clients.delete(res);
 }
 
-export function getUnifiedClientCount(): number {
-  return clients.size;
-}
-
 /**
  * 向所有 unified SSE 客户端推送事件。
  * 由 node-runner eventListener 和 meeting-broadcast 调用。

@@ -51,7 +51,7 @@ export function WorkflowListPanel({
   if (!visible) return null;
 
   return (
-    <div className="tw-wflist">
+    <div className="tw-wflist mo-slide-in-left">
       <div className="tw-wflist__header">
         <span className="tw-wflist__title">工作流</span>
         <button className="tw-wflist__close" onClick={onClose}>×</button>

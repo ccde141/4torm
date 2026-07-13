@@ -1,0 +1,143 @@
+/* 长期记忆面板 —— 复用 config-modal 遮罩/容器，仅补内容区样式。
+ * 只用 tokens.css 中确认存在的变量，配色对齐 config-modal 惯例。 */
+
+.mem-error {
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-secondary-subtle);
+  color: var(--color-error);
+  font-size: var(--font-sm);
+}
+
+.mem-empty {
+  padding: var(--space-8) var(--space-3);
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-sm);
+}
+
+.mem-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+
+.mem-item {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+
+.mem-item-head { display: flex; align-items: center; gap: var(--space-2); }
+
+/* 徽章：深色半透底 + 亮色字（颜色由内联 style 按类别给），深色面板上高对比 */
+.mem-badge {
+  padding: 2px 10px;
+  border-radius: var(--border-radius-full);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mem-summary { flex: 1; font-weight: 600; font-size: var(--font-sm); color: var(--color-text-primary); }
+.mem-actions { display: flex; gap: var(--space-1); opacity: 0; transition: opacity var(--duration-fast) var(--ease-out-expo); }
+.mem-item:hover .mem-actions { opacity: 1; }
+
+.mem-icon-btn {
+  border: none; background: transparent; cursor: pointer;
+  padding: 4px 6px; border-radius: var(--radius-sm); font-size: var(--font-sm);
+  color: var(--color-text-tertiary);
+}
+.mem-icon-btn:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.mem-icon-btn--danger:hover { color: var(--color-error); }
+
+.mem-detail {
+  margin: var(--space-2) 0;
+  font-size: var(--font-sm);
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+}
+.mem-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.mem-tag { font-size: var(--font-xs); color: var(--color-accent); }
+.mem-meta { margin-left: auto; font-size: var(--font-xs); color: var(--color-text-quaternary); }
+
+/* 待精炼徽标：系统兜底摘要、等 agent 精炼 */
+.mem-pending {
+  display: inline-block;
+  margin-right: var(--space-2);
+  padding: 1px 6px;
+  border-radius: var(--border-radius-full);
+  font-size: 10px;
+  color: var(--color-accent-secondary);
+  background: var(--color-accent-secondary-subtle);
+}
+
+/* 编辑/新增表单 */
+.mem-editor { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) 0; }
+.mem-editor-row { display: flex; align-items: center; gap: var(--space-2); }
+
+.mem-label { font-size: var(--font-sm); font-weight: 600; color: var(--color-text-primary); }
+.mem-field-label { font-size: var(--font-sm); color: var(--color-text-secondary); }
+.mem-hint { margin: 0; font-size: var(--font-xs); color: var(--color-text-quaternary); }
+
+.mem-link-btn {
+  border: none; background: transparent; cursor: pointer;
+  padding: 0; font-size: var(--font-sm); color: var(--color-accent);
+}
+.mem-link-btn:hover { text-decoration: underline; }
+
+.mem-input, .mem-textarea, .mem-select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-2) var(--space-3);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  transition: border-color var(--duration-fast) var(--ease-out-expo);
+}
+.mem-input:focus, .mem-textarea:focus, .mem-select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-glow);
+}
+.mem-input::placeholder, .mem-textarea::placeholder { color: var(--color-text-quaternary); }
+.mem-textarea { resize: vertical; }
+.mem-select { flex: 0 0 auto; width: auto; }
+.mem-select option { background: var(--color-bg-secondary); color: var(--color-text-primary); }
+.mem-editor-actions { display: flex; gap: var(--space-2); }
+
+/* 按钮：对齐 config-modal 惯例 */
+.mem-btn {
+  padding: var(--space-2) var(--space-4);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.mem-btn:hover:not(:disabled) { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.mem-btn:disabled { opacity: .5; cursor: default; }
+
+.mem-btn--primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-bg-primary);
+  font-weight: 600;
+}
+.mem-btn--primary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+  color: var(--color-bg-primary);
+}
+
+.mem-btn--add {
+  width: 100%;
+  margin-bottom: var(--space-3);
+  border-style: dashed;
+  color: var(--color-text-tertiary);
+}

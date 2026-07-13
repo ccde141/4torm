@@ -13,7 +13,7 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
-import type { WorkflowGraph, WorkflowNode, NodeExecutor } from '../foundation/types';
+import type { WorkflowGraph, WorkflowNode, NodeExecutor, WorkflowMode } from '../foundation/types';
 import { BUILTIN_EVENT_IDS } from '../foundation/types';
 import { InputBuffer } from '../foundation/input-buffer';
 import { EnvelopeRouter, countWorkInputs } from '../foundation/envelope-router';
@@ -35,7 +35,25 @@ export interface OrchestratorOptions {
   executors: Map<string, NodeExecutor>;
   /** 可选：外部提供初始输入内容（Entry 节点用） */
   initialInput?: string;
+  /** 运行模式（缺省 manual）；自动模式下节点走全自动路径 */
+  mode?: WorkflowMode;
+  /**
+   * 可选：循环上下文（由 LoopController 注入）。存在即表示本次是循环中的一圈，
+   * Entry 会据此给出线信封盖上信封皮（lap / loopNote / idempotencyKey）。
+   */
+  loopContext?: LoopContext;
 }
+
+/** 循环上下文：单圈在循环中的位置与续跑框定 */
+export interface LoopContext {
+  lapIndex: number;
+  lapTotal: number | null;
+  loopNote?: string;
+  idempotencyKey?: string;
+}
+
+/** 单圈结束的三种归宿 */
+export type LapOutcome = 'done' | 'error' | 'stopped';
 
 export class Orchestrator {
   private readonly executionId: string;
@@ -50,6 +68,8 @@ export class Orchestrator {
   private readonly nodeMap = new Map<string, WorkflowNode>();
   private readonly executors: Map<string, NodeExecutor>;
   private readonly initialInput: string;
+  private readonly mode: WorkflowMode;
+  private readonly loopContext?: LoopContext;
 
   private router!: EnvelopeRouter;
   private activator!: NodeActivator;
@@ -59,6 +79,12 @@ export class Orchestrator {
   private running = false;
   private agentIds = new Set<string>();
 
+  /** 本圈结束信号：Output → 'done'；出错 → 'error'；外部 stop 未出 output → 'stopped'。供 LoopController 等待。 */
+  private settledResolve!: (outcome: LapOutcome) => void;
+  private readonly settled = new Promise<LapOutcome>((resolve) => {
+    this.settledResolve = resolve;
+  });
+
   constructor(options: OrchestratorOptions) {
     this.executionId = randomUUID();
     this.graph = options.graph;
@@ -66,6 +92,8 @@ export class Orchestrator {
     this.workflowId = options.workflowId;
     this.executors = options.executors;
     this.initialInput = options.initialInput ?? '';
+    this.mode = options.mode ?? 'manual';
+    this.loopContext = options.loopContext;
 
     this.runDir = path.join(
       options.dataDir, 'tradewind', 'runs',
@@ -87,6 +115,9 @@ export class Orchestrator {
   getTokenStream(): TokenStreamBus { return this.tokenStream; }
   getRunDir(): string { return this.runDir; }
   isRunning(): boolean { return this.running; }
+
+  /** 本圈结束信号。LoopController 用它等待续圈时机；'done' 才续圈，'error'/'stopped' 终止循环。 */
+  whenSettled(): Promise<LapOutcome> { return this.settled; }
 
   async start(): Promise<void> {
     if (this.running) throw new Error('Orchestrator already running');
@@ -112,6 +143,7 @@ export class Orchestrator {
       workflowId: this.workflowId,
       runDir: this.runDir,
       dataDir: this.dataDir,
+      mode: this.mode,
       nodes: this.nodeMap,
       inputBuffers: this.inputBuffers,
       router: this.router,
@@ -181,18 +213,36 @@ export class Orchestrator {
       noteContents.set(edge.target, list);
     }
 
+    // 6.5 预计算下游感知（handoff 边的目标节点 label）：供 agent 知道"我 complete_task 后
+    // 信封自动交给谁"，避免误用 contact 把有自动下游的整包工作前向甩锅（流水线工人模型：
+    // 每人只需知直接下游，不给全量工作图）。
+    const downstreamLabels = new Map<string, string[]>(); // sourceNodeId → 下游 label 列表
+    for (const edge of this.graph.edges) {
+      if (edge.kind !== 'handoff') continue;
+      const targetNode = this.nodeMap.get(edge.target);
+      if (!targetNode) continue;
+      const list = downstreamLabels.get(edge.source) ?? [];
+      list.push(targetNode.label || targetNode.id);
+      downstreamLabels.set(edge.source, list);
+    }
+
     // 7. 激活所有节点
     // Entry 节点：buffer expected=0，waitForInputs 立即 resolve
     // 其他节点：挂起在 waitForInputs 直到 handoff 信封到齐
     for (const node of this.graph.nodes) {
       if (node.type === 'entry') {
         node.config._initialInput = this.initialInput;
+        // 循环中的一圈：把循环上下文交给 Entry，供它给出线信封盖信封皮
+        if (this.loopContext) node.config._loopContext = this.loopContext;
       }
       // 注入 _nodeLabel 供 executor 读取
       node.config._nodeLabel = node.label;
       // 注入 _notes 供 agent executor 读取
       const notes = noteContents.get(node.id);
       if (notes) node.config._notes = notes;
+      // 注入 _downstreamLabels 供 agent executor 读取（下游感知）
+      const dsLabels = downstreamLabels.get(node.id);
+      if (dsLabels && dsLabels.length) node.config._downstreamLabels = dsLabels;
 
       this.eventBus.emit({
         timestamp: new Date().toISOString(),
@@ -206,6 +256,15 @@ export class Orchestrator {
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
+
+    // 兜底：若本圈未经 output/error 就被外部停止，也要 resolve settled，
+    // 否则等待中的 LoopController 会永挂。Promise 只 resolve 一次，重复调用无害。
+    this.settledResolve('stopped');
+
+    // 写终结状态：被 stop 掐断的圈（未跑到 output）此前会因 handleNodeDone 闸门而不写 meta，
+    // 永留 'running'。这里补写 'stopped'，使 meta 状态真实反映"被中止"而非崩溃残留。
+    // ?. 守卫：gap 期停整个循环时 archive 可能尚未在 start() 中建立。
+    void this.archive?.writeEnd('stopped');
 
     // 0. 清理 Contact Registry
     clearContactRegistry();
@@ -240,21 +299,36 @@ export class Orchestrator {
   }
 
   private handleNodeDone(nodeId: string): void {
+    // 运行态闸门：stop() 第一件事就是 running=false。abort 会让卡在 waitForInputs 的
+    // 节点（尤其 output）抛 BufferAbortError，被 NodeActivator 当正常收尾走 onDone→此处。
+    // 若不挡，output 会在"从未收到交接"的情况下伪造 lap-done + writeEnd('done')。
+    if (!this.running) return;
+
     const node = this.nodeMap.get(nodeId);
     if (!node) return;
 
     if (node.type === 'output') {
+      // 单圈完成：归档 + 收尾（释放锁、清 runner）。
+      // 循环 vs 单次的区别由 settled 信号交给上层判断——本圈无论如何都 stop（每圈全新 Orchestrator）。
+      // 非循环（单次运行）时上层无人 await settled，等价于原 WORKFLOW_END + stop 行为。
       this.eventBus.emit({
         timestamp: new Date().toISOString(),
         nodeId,
-        eventTypeId: BUILTIN_EVENT_IDS.WORKFLOW_END,
+        eventTypeId: this.loopContext
+          ? BUILTIN_EVENT_IDS.LAP_DONE
+          : BUILTIN_EVENT_IDS.WORKFLOW_END,
       });
       this.archive.writeEnd('done');
+      this.settledResolve('done');
       this.stop();
     }
   }
 
   private handleNodeError(nodeId: string, error: Error): void {
+    // 同 handleNodeDone：stop() 后（running=false）到来的 error 是 teardown 噪声，
+    // settled 已由 stop() resolve('stopped')，不再覆写 meta / 重复 resolve。
+    if (!this.running) return;
+
     console.error(`[orchestrator] Node ${nodeId} failed:`, error.message);
     this.eventBus.emit({
       timestamp: new Date().toISOString(),
@@ -263,6 +337,7 @@ export class Orchestrator {
       payload: { message: error.message },
     });
     this.archive.writeEnd('error');
+    this.settledResolve('error');
     this.stop();
   }
 }

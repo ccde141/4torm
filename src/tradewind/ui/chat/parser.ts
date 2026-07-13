@@ -64,14 +64,3 @@ export function parseStructuredContent(content: string): ParsedContent {
 
   return result;
 }
-
-/** 剥离内部标签，返回可读文本 */
-export function stripTags(content: string): string {
-  return content
-    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
-    .replace(/<action[^>]*>[\s\S]*?<\/action>/gi, '')
-    .replace(/<answer>([\s\S]*?)<\/answer>/gi, '$1')
-    .replace(/<note>[\s\S]*?<\/note>/gi, '')
-    .replace(/<\/?(?:think(?:ing)?|action|answer|note)[^>]*>/gi, '')
-    .trim();
-}

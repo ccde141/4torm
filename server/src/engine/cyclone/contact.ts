@@ -19,6 +19,7 @@ import { execToolUnified } from '../shared/exec-tool';
 import { runReActLoop, runReActLoopNative, type ToolCaller, type LLMCaller } from './react-loop';
 import { callLLM } from '../shared/llm-bridge';
 import { buildSeatContactSystemPrompt } from './seat-prompt';
+import { execBulletin } from './bulletin';
 import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { loadSeat, saveSeat, tryAcquireSeatLock } from './seat-store';
 import { findSeatIdByTitle, listOtherSeats, tryRegisterWait, clearWait } from './contact-registry';
@@ -120,6 +121,9 @@ async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: 
 
   const toolCaller: ToolCaller = {
     async call(tool, args) {
+      if (tool === 'bulletin') {
+        return (await execBulletin(dataDir, workshopId, args, seat.title)).result;
+      }
       if (tool === 'contact') {
         // 嵌套联络：发起方变成当前目标工位，深度 +1
         return execContact(
@@ -151,7 +155,7 @@ async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: 
 
   const system: ContextMessage = {
     role: 'system',
-    content: buildSeatContactSystemPrompt({ dataDir, seat, agent, toolDefs, native, wsRelPath: wsDir, fromTitle }),
+    content: buildSeatContactSystemPrompt({ dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath: wsDir, fromTitle }),
   };
   const messages: ContextMessage[] = [system, ...seat.messages];
   // 被联络方剥 ask（无人类在场），保留 delegate + 嵌套 contact

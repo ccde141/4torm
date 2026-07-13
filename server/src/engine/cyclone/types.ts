@@ -62,6 +62,8 @@ export interface SeatData {
   messages: ContextMessage[];
   tokenUsage?: CycloneTokenUsage;
   compactState?: CycloneCompactState;
+  /** 本工位上次已读到的工作室公告板 updatedAt（变更注意力：晚于它的条目在下一轮标 🆕） */
+  bulletinSeenAt?: number;
   /**
    * ask 挂起态（工位向人类提问，等回复后 resume）。
    * 因工位无常驻 runner，挂起态必须落文件，不能存内存。
@@ -114,6 +116,8 @@ export interface RoomMessage {
   timestamp: number;
   /** 工位回复的原始 LLM 输出（含标签），前端解析渲染用 */
   rawContent?: string;
+  /** 本轮原生思考流（不进 LLM 上下文，仅存盘供重载展示） */
+  reasoning?: string;
   /** 本轮工具调用记录 */
   toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }>;
 }

@@ -14,7 +14,9 @@ import type {
   BaseContext,
   NodeState,
   Envelope,
+  EnvelopeHeader,
   WorkflowNode,
+  WorkflowMode,
 } from '../foundation/types';
 import { BUILTIN_EVENT_IDS } from '../foundation/types';
 import type { InputBuffer } from '../foundation/input-buffer';
@@ -26,6 +28,7 @@ export interface ContextBuilderDeps {
   workflowId: string;
   runDir: string;
   dataDir: string;
+  mode: WorkflowMode;
   nodes: Map<string, WorkflowNode>;
   inputBuffers: Map<string, InputBuffer>;
   router: EnvelopeRouter;
@@ -92,6 +95,7 @@ export class ContextBuilder {
       workflowId: deps.workflowId,
       runDir: deps.runDir,
       dataDir: deps.dataDir,
+      mode: deps.mode,
       signal: deps.signal,
       nodeAgentMap,
       nodeLabelMap,
@@ -102,7 +106,7 @@ export class ContextBuilder {
         return buffer.waitReady();
       },
 
-      sendHandoff(content: string, eventTypeId: string, sourcePort?: number): Promise<void> {
+      sendHandoff(content: string, eventTypeId: string, sourcePort?: number, header?: EnvelopeHeader): Promise<void> {
         const env = {
           source: nodeId,
           content,
@@ -110,6 +114,7 @@ export class ContextBuilder {
           eventTypeId,
           timestamp: new Date().toISOString(),
           executionId: deps.executionId,
+          ...(header ? { header } : {}),
         };
         deps.router.routeHandoff(env, sourcePort);
         deps.eventBus.emit({

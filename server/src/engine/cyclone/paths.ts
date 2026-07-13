@@ -27,6 +27,16 @@ export function workshopWorkspace(dataDir: string, id: string): string {
   return path.join(workshopDir(dataDir, id), 'workspace');
 }
 
+/** 工作室公告板：data/cyclone/{id}/bulletin.json（工作室级，全体工位可见，人可编辑） */
+export function workshopBulletinFile(dataDir: string, id: string): string {
+  return path.join(workshopDir(dataDir, id), 'bulletin.json');
+}
+
+/** 公告板改动时间轴：data/cyclone/{id}/bulletin-history.json（审计 + 撤回；独立文件不拖慢 prompt 读） */
+export function workshopBulletinHistoryFile(dataDir: string, id: string): string {
+  return path.join(workshopDir(dataDir, id), 'bulletin-history.json');
+}
+
 /** 工位文件：data/cyclone/{id}/seats/{seatId}.json */
 export function seatFile(dataDir: string, workshopId: string, seatId: string): string {
   return path.join(workshopDir(dataDir, workshopId), 'seats', `${seatId}.json`);

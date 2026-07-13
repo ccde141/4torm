@@ -61,7 +61,7 @@ export type MeetingStreamEvent =
   | { type: 'heartbeat'; label: string; phase: string; elapsed: number }
   | { type: 'contact-start'; label: string; target: string }
   | { type: 'contact-done'; label: string; target: string; result: string; ok: boolean }
-  | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }> }
+  | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>; noReply?: boolean }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-done'; content: string }
   | { type: 'minutes-done'; content: string }
@@ -338,7 +338,8 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           : result.content;
       }
 
-      if (finalContent && !finalContent.startsWith('[中止]') && !finalContent.startsWith('[错误]')) {
+      const hasContent = !!finalContent && !finalContent.startsWith('[中止]') && !finalContent.startsWith('[错误]');
+      if (hasContent) {
         session.publicMessages.push({
           speaker: label,
           content: finalContent,
@@ -346,9 +347,19 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           rawContent: result.rawContent || undefined,
           toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
         });
+      } else if (!aborted) {
+        // 无有效回复：显式入库一条 noReply 消息（对齐信封轮的兜底做法）。
+        // 让 round-done 权威快照带上它——既向用户呈现"未回复"，也让前端任何
+        // 遗留的 streaming 占位气泡在快照替换时被自愈清除（不再永久转圈）。
+        session.publicMessages.push({
+          speaker: label,
+          content: `（${label} 未回复）`,
+          timestamp: Date.now(),
+          noReply: true,
+        });
       }
       session.streamingCurrent = undefined;
-      onEvent?.({ type: 'agent-done', label, content: finalContent, rawContent: result.rawContent, toolCalls: result.toolCalls });
+      onEvent?.({ type: 'agent-done', label, content: finalContent, rawContent: result.rawContent, toolCalls: result.toolCalls, noReply: !hasContent && !aborted });
 
       if (aborted) break;
     }

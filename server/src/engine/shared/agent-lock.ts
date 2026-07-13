@@ -10,6 +10,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { atomicWriteFile } from './atomic-io';
 
 interface AgentEntry {
   status?: string;
@@ -33,7 +34,7 @@ async function readRegistry(dataDir: string): Promise<RegistryFile> {
 
 async function writeRegistry(dataDir: string, data: RegistryFile): Promise<void> {
   const file = path.join(dataDir, 'agents', 'registry.json');
-  await fs.writeFile(file, JSON.stringify(data, null, 2), 'utf-8');
+  await atomicWriteFile(file, JSON.stringify(data, null, 2));
 }
 
 // ── Unlock Hook（用于潮汐 slot flush）──

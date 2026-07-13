@@ -25,9 +25,13 @@ import type { ChatMessage } from '../../../types';
 interface AgentChatWindowProps {
   nodeId: string;
   nodeLabel: string;
+  /** 当前圈执行 ID：循环模式每圈全新，变化即触发会话面板硬重置（清屏 + 重拉快照） */
+  executionId?: string | null;
   onClose: () => void;
   /** 面板是否可见（display:none 隐藏时为 false） */
   visible?: boolean;
+  /** 本次工作流已结束：内容保留但转只读，封死输入（后端 runner 已销毁，发送也无意义） */
+  sealed?: boolean;
 }
 
 // ── SSE 连接事件类型 ───────────────────────────────────────────────
@@ -46,16 +50,21 @@ type StreamEvent =
   | { type: 'contact-start'; target: string }
   | { type: 'contact-done'; target: string; result: string; ok: boolean }
   | { type: 'answer'; content: string; rawContent: string }
+  | { type: 'paused' }
   | { type: 'error'; message: string }
   | { type: 'done' };
 
 // ── 组件 ──────────────────────────────────────────────────────────
 
-export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: AgentChatWindowProps) {
+export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visible = true, sealed = false }: AgentChatWindowProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 当前轮来源：'human' 可自由停止；'envelope'/'contact' 只能暂停/续跑或停整个工作流
+  const [roundSource, setRoundSource] = useState<'human' | 'envelope' | 'contact' | null>(null);
+  // 已暂停（扣住信封、待续跑）
+  const [paused, setPaused] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const msgIdRef = useRef(0);
@@ -80,6 +89,13 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
     lastSeqRef.current = 0;
     bufferingRef.current = true;
     bufferRef.current = [];
+    // 硬重置会话视图：executionId 变化（循环换圈）时清空上一圈残留，
+    // 随后 /snapshot 会拉到新圈全新 runner 的干净历史（仅 system prompt）。
+    setMessages([]);
+    setStreaming(false);
+    setPaused(false);
+    setRoundSource(null);
+    setError(null);
 
     // applyEvent：纯 reducer，回放与实时共用（不含 seq 去重）
     const applyEvent = (ev: StreamEvent & { scope?: string; nodeId?: string }) => {
@@ -94,6 +110,9 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
           // 后端注入的 user msg（envelope/contact）实时推送
           const id = nextId();
           setMessages(prev => [...prev, { id, role: 'user', content: ev.content, timestamp: new Date().toISOString() }]);
+          // 记录本轮来源，决定停止按钮形态（envelope/contact 只能暂停/停工作流）
+          if (ev.source === 'envelope' || ev.source === 'contact') setRoundSource(ev.source);
+          setPaused(false);
           break;
         }
 
@@ -280,6 +299,15 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
           console.log('[AgentChat] SSE done');
           streamRef.current = null;
           setStreaming(false);
+          setRoundSource(null);
+          setPaused(false);
+          break;
+
+        case 'paused':
+          // 信封轮暂停：react 已软中止，扣住信封待续跑。停 streaming 但保留 roundSource。
+          streamRef.current = null;
+          setStreaming(false);
+          setPaused(true);
           break;
       }
     };
@@ -318,6 +346,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
         messages: Array<{ role: string; content: string }>;
         roundLog: Array<StreamEvent & { seq?: number }>;
         busy: boolean;
+        paused?: boolean;
         lastSeq: number;
       }) => {
         if (cancelled) return;
@@ -336,6 +365,8 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
           setStreaming(false);
           streamRef.current = null;
         }
+        // 重连到已暂停的信封轮：恢复暂停态（roundLog 回放已含 user-message → roundSource 已置位）
+        if (snap.paused) setPaused(true);
         lastSeqRef.current = snap.lastSeq;
         // flush 缓冲：只应用快照之后产生的增量
         bufferingRef.current = false;
@@ -358,7 +389,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
       cancelled = true;
       unsubscribe(nodeId, onStreamEvent);
     };
-  }, [nodeId]);
+  }, [nodeId, executionId]);
 
   // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
   useEffect(() => {
@@ -389,12 +420,15 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
 
   const send = useCallback(() => {
     const text = input.trim();
-    if (!text || streaming) return;
+    if (!text || streaming || sealed) return;
     setInput('');
     setError(null);
 
     const userMsg: ChatMessage = { id: nextId(), role: 'user', content: text, timestamp: new Date().toISOString() };
     setMessages(prev => [...prev, userMsg]);
+    // 人类发起的轮：可自由停止（无下发承诺）。envelope/contact 轮由 user-message 事件标记。
+    setRoundSource('human');
+    setPaused(false);
 
     fetch(`/api/tradewind/chat/${nodeId}`, {
       method: 'POST',
@@ -409,7 +443,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
         }
       })
       .catch(() => {});
-  }, [input, streaming, nodeId]);
+  }, [input, streaming, nodeId, sealed]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -418,9 +452,29 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
     }
   };
 
+  // human 轮：自由停止（无下发承诺）
   const stop = () => {
     fetch(`/api/tradewind/chat/${nodeId}/abort`, { method: 'POST' }).catch(() => {});
   };
+
+  // envelope 轮：暂停（软中止 + 扣住信封，不投递）
+  const pauseRound = () => {
+    fetch(`/api/tradewind/chat/${nodeId}/pause`, { method: 'POST' }).catch(() => {});
+  };
+
+  // envelope 轮：续跑（重跑本轮，真封口才投递下游）
+  const resumeRound = () => {
+    setStreaming(true);
+    setPaused(false);
+    fetch(`/api/tradewind/chat/${nodeId}/resume`, { method: 'POST' }).catch(() => {});
+  };
+
+  // envelope 轮：停整个工作流（唯一合法的"停止"出口）
+  const stopWorkflow = () => {
+    fetch(`/api/tradewind/stop`, { method: 'POST' }).catch(() => {});
+  };
+
+  const isEnvelopeRound = roundSource === 'envelope' || roundSource === 'contact';
 
   // Portal 渲染到 body
   return createPortal(
@@ -515,19 +569,40 @@ export function AgentChatWindow({ nodeId, nodeLabel, onClose, visible = true }: 
           <div ref={messagesEndRef} />
         </div>
         <div className="tw-chat-window__input-area">
-          <textarea
-            className="tw-chat-window__input"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="输入消息..."
-            disabled={streaming}
-            rows={1}
-          />
-          {streaming ? (
-            <button className="tw-chat-window__stop" onClick={stop}>停止</button>
+          {sealed ? (
+            <div className="tw-chat-window__sealed">本次工作流已结束 · 内容只读保留。开始新一轮或重开工作流后可继续对话。</div>
           ) : (
-            <button className="tw-chat-window__send" onClick={send} disabled={!input.trim()}>发送</button>
+            <>
+              <textarea
+                className="tw-chat-window__input"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="输入消息..."
+                disabled={streaming}
+                rows={1}
+              />
+              {paused ? (
+                // 已暂停：续跑（重跑本轮）或停整个工作流。信封轮无"取消这一轮"出口。
+                <>
+                  <button className="tw-chat-window__send" onClick={resumeRound}>续跑</button>
+                  <button className="tw-chat-window__stop" onClick={stopWorkflow}>停止工作流</button>
+                </>
+              ) : streaming ? (
+                isEnvelopeRound ? (
+                  // 信封轮进行中：可暂停（扣住信封）或停整个工作流；不给"停止输出"（会投垃圾下游）
+                  <>
+                    <button className="tw-chat-window__stop" onClick={pauseRound}>暂停</button>
+                    <button className="tw-chat-window__stop" onClick={stopWorkflow}>停止工作流</button>
+                  </>
+                ) : (
+                  // human 轮：无下发承诺，可自由停止
+                  <button className="tw-chat-window__stop" onClick={stop}>停止</button>
+                )
+              ) : (
+                <button className="tw-chat-window__send" onClick={send} disabled={!input.trim()}>发送</button>
+              )}
+            </>
           )}
         </div>
       </div>

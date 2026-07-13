@@ -52,6 +52,7 @@ export interface LLMCaller {
     onChunk?: (chunk: string) => void,
     signal?: AbortSignal,
     tools?: import('../shared/tool-defs-loader').ToolDef[],
+    onReasoning?: (chunk: string) => void,
   ): Promise<{ content: string; finishReason: 'stop' | 'length' | 'tool_calls' | null; usage?: TokenUsage; toolCalls?: import('../shared/types').NativeToolCall[] }>;
 }
 
@@ -63,6 +64,7 @@ export interface ToolCaller {
 /** ReAct 循环事件（流式推送用） */
 export type ReActStreamEvent =
   | { type: 'token'; chunk: string }
+  | { type: 'reasoning'; chunk: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string }
   | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
@@ -197,12 +199,15 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     const onChunk = onEvent
       ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'token', chunk }); }
       : undefined;
+    const onReasoning = onEvent
+      ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'reasoning', chunk }); }
+      : undefined;
 
     let content: string;
     let finishReason: 'stop' | 'length' | 'tool_calls' | null;
     let toolCalls: import('../shared/types').NativeToolCall[] | undefined;
     try {
-      const result = await llm.call(msgs, undefined, onChunk, abortCtrl.signal, toolDefs);
+      const result = await llm.call(msgs, undefined, onChunk, abortCtrl.signal, toolDefs, onReasoning);
       content = result.content;
       finishReason = result.finishReason;
       toolCalls = result.toolCalls;
@@ -332,10 +337,4 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
 
 // ── 文本协议退路 barrel 转出 ──────────────────────────────────────
 // runReActLoop 及 XML 解析器拆至 react-loop-text.ts。
-export {
-  runReActLoop,
-  parseActions,
-  parseAskTag,
-  parseAnswer,
-  isLikelyTruncated,
-} from './react-loop-text';
+export { runReActLoop } from './react-loop-text';

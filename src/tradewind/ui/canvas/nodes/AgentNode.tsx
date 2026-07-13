@@ -1,7 +1,7 @@
 /**
  * Agent 节点 — 工作节点（琥珀色主色调）
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
 
 export function AgentNode({ id, data, selected }: NodeProps) {
@@ -12,10 +12,15 @@ export function AgentNode({ id, data, selected }: NodeProps) {
 
   // 订阅节点状态：busy（蓝色闪）/ envelopePending（琥珀光环）
   const [status, setStatus] = useState<{ busy: boolean; envelopePending: boolean }>({ busy: false, envelopePending: false });
+  // 完成正反馈：busy 由 true→false 的下降沿触发一次性绿色 pop（animationend 后清除）
+  const [justDone, setJustDone] = useState(false);
+  const prevBusyRef = useRef(false);
   useEffect(() => {
     const update = () => {
       const all = (window as any).__tw_node_status || {};
       const my = all[id] || { busy: false, envelopePending: false };
+      if (prevBusyRef.current && !my.busy) setJustDone(true);
+      prevBusyRef.current = my.busy;
       setStatus(my);
     };
     update();
@@ -34,10 +39,11 @@ export function AgentNode({ id, data, selected }: NodeProps) {
     selected ? 'tw-node--selected' : '',
     status.busy ? 'tw-node--busy' : '',
     status.envelopePending ? 'tw-node--envelope' : '',
+    justDone ? 'tw-node--just-done' : '',
   ].filter(Boolean).join(' ');
 
   return (
-    <div className={cls}>
+    <div className={cls} onAnimationEnd={(e) => { if (e.animationName === 'tw-node-done-pop') setJustDone(false); }}>
       <NodeResizer isVisible={!!selected} minWidth={120} minHeight={60} />
       <Handle type="target" position={Position.Left} className="tw-handle" />
       <div className="tw-node__icon">⚡</div>

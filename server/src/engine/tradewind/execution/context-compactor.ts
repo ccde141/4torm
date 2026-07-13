@@ -16,6 +16,7 @@
 
 import type { ContextMessage } from '../../shared/types';
 import { callLLM } from '../../shared/llm-bridge';
+import { atomicWriteFile } from '../../shared/atomic-io';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -136,11 +137,14 @@ export async function compactIfNeeded(
 
   try {
     await fs.mkdir(opts.archiveDir, { recursive: true });
-    await fs.writeFile(
+    await atomicWriteFile(
       path.join(opts.archiveDir, archiveFileName),
       JSON.stringify(toArchive, null, 2),
     );
-  } catch { /* 归档写入失败不阻塞 */ }
+  } catch (e) {
+    // 归档失败不阻塞压缩（摘要仍在上下文里，非灾难性），但显式告警，不静默吞。
+    opts.onEvent?.({ type: 'compact-warn', message: `归档写入失败（摘要仍生效）：${(e as Error).message}` });
+  }
 
   // 调 LLM 生成摘要（独立调用，只传待压缩消息）
   const summaryMessages: ContextMessage[] = [
@@ -215,6 +219,7 @@ export interface MeetingMessage {
   timestamp: number;
   rawContent?: string;
   toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }>;
+  noReply?: boolean; // true=该轮无有效回复（模型空回复），前端以灰字显式呈现
 }
 
 /** 构建会议压缩摘要 prompt（结构化，按参与者分条） */
@@ -290,11 +295,14 @@ export async function compactMeetingIfNeeded(
 
   try {
     await fs.mkdir(opts.archiveDir, { recursive: true });
-    await fs.writeFile(
+    await atomicWriteFile(
       path.join(opts.archiveDir, archiveFileName),
       JSON.stringify(toArchive, null, 2),
     );
-  } catch { /* 归档写入失败不阻塞 */ }
+  } catch (e) {
+    // 归档失败不阻塞压缩（摘要仍在上下文里，非灾难性），但显式告警，不静默吞。
+    opts.onEvent?.({ type: 'compact-warn', message: `归档写入失败（摘要仍生效）：${(e as Error).message}` });
+  }
 
   // 会长做摘要
   const speakerLabels = participants ?? extractSpeakers(toArchive);

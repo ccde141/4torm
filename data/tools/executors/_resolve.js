@@ -3,7 +3,7 @@
  *
  * 三档沙箱级别（来自 agent 配置）：
  *   - 'strict'        只能在 ctx.workspaceDir 内读写
- *   - 'relaxed'（默认）可在 ctx.workspaceDir 或 ctx.projectDir 内读写
+ *   - 'relaxed'（默认）写：仅 ctx.workspaceDir；读：workspaceDir + projectDir（可读项目源码）
  *   - 'unrestricted'  可在文件系统任意位置读写
  *
  * 三档都阻止 ".." 越权到允许根目录之外（unrestricted 除外）。
@@ -17,7 +17,9 @@ import path from 'node:path'
 // 框架控制面文件/目录（相对 dataDir）：即便 unrestricted 也禁止 agent 直接写，
 // 否则可绕过 create_automation / create_workflow 的专用工具与人工确认，伪造任务/工作流/注册表。
 const CONTROL_PLANE_FILES = ['tide/tasks.json', 'agents/registry.json', 'tools/registry.json']
-const CONTROL_PLANE_DIRS = ['tradewind/workflows']
+// 工作流目录：保护每个工作流的控制文件（graph.json / meta.json 等），
+// 但**放行** {wfId}/workspace/ —— 那是 agent 的工作区，本就该自由读写（信封产物、交付物等）。
+const WORKFLOWS_ROOT = 'tradewind/workflows'
 
 /** target 是否等于 base 或落在 base 目录内（用 path.relative 归一化分隔符/盘符/大小写，跨平台稳） */
 function within(target, base) {
@@ -29,9 +31,18 @@ function within(target, base) {
 function assertWritable(resolved, ctx) {
   if (!ctx.dataDir) return
   const files = CONTROL_PLANE_FILES.map(p => path.resolve(ctx.dataDir, p))
-  const dirs = CONTROL_PLANE_DIRS.map(p => path.resolve(ctx.dataDir, p))
-  const hit = files.some(f => path.relative(f, resolved) === '') || dirs.some(d => within(resolved, d))
-  if (hit) {
+  const fileHit = files.some(f => path.relative(f, resolved) === '')
+
+  // 工作流目录：命中则拒，但 {wfId}/workspace/** 是 agent 工作区，放行。
+  let workflowHit = false
+  const wfRoot = path.resolve(ctx.dataDir, WORKFLOWS_ROOT)
+  if (within(resolved, wfRoot)) {
+    const parts = path.relative(wfRoot, resolved).split(path.sep) // [wfId, seg2, ...]
+    const inWorkspace = parts.length >= 2 && parts[1] === 'workspace'
+    workflowHit = !inWorkspace
+  }
+
+  if (fileHit || workflowHit) {
     throw new Error(`拒绝写入框架控制文件：${resolved}。潮汐任务/工作流/注册表须经专用工具 + 人工确认，不能直接改写。`)
   }
 }
@@ -53,16 +64,20 @@ export function resolvePath(fp, ctx, opts = {}) {
     return resolved
   }
 
-  // 决定基准目录：以 data/ 开头的路径用 projectDir 解析（兼容 relaxed 历史行为）
+  // 决定基准目录：读操作且以 data/ 开头用 projectDir 解析（agent 常需读项目内文件）；
+  // 其余一律以 workspace 为基准 —— 贯彻"任何工作都以工作区为基准"。
   const normalized = fp.replace(/\\/g, '/')
-  const base = (level === 'relaxed' && normalized.startsWith('data/'))
+  const base = (level === 'relaxed' && !opts.write && normalized.startsWith('data/'))
     ? ctx.projectDir
     : ctx.workspaceDir
 
   const resolved = path.resolve(base, fp)
 
-  // 允许根目录列表
-  const allowedRoots = level === 'strict'
+  // 允许根目录列表：
+  //   - strict：仅 workspace
+  //   - relaxed 写：仅 workspace（不再允许写到项目根，杜绝源码目录污染）
+  //   - relaxed 读：workspace + projectDir（放行读项目源码）
+  const allowedRoots = (level === 'strict' || opts.write)
     ? [path.resolve(ctx.workspaceDir)]
     : [path.resolve(ctx.workspaceDir), path.resolve(ctx.projectDir)]
 

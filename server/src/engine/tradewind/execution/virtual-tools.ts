@@ -61,3 +61,52 @@ export function buildVirtualToolDefs(params: BuildVirtualToolDefsParams): ToolDe
 
   return defs;
 }
+
+/**
+ * 构建自动模式的四个信封工具定义（增/删/扫 + 完成任务）。
+ *
+ * 仅在自动模式注入（手动模式的信封由人类点"传递"触发，无需这些工具）——
+ * 是"两模式代码逻辑分离"的一部分。执行端拦截见 envelope-draft.ts 的
+ * execEnvelopeTool；complete_task 由 native 循环识别为终结信号（决策报告 §一、§三）。
+ */
+export function buildEnvelopeToolDefs(): ToolDef[] {
+  return [
+    {
+      name: 'envelope_add',
+      description: '向【交接信封】添加一条结构化交接信息（纯文本，一条一个要点）。你在多轮工作中随时可调用，逐步把要交给下游的硬信息（结论、数据、约束等）沉淀进信封。',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '一条交接要点，简洁完整、可独立理解' },
+        },
+        required: ['text'],
+      },
+    },
+    {
+      name: 'envelope_remove',
+      description: '从【交接信封】按条目 id 删除一条（id 用 envelope_list 查看）。用于修正、删掉过时或写错的条目。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '条目 id（形如 e1、e2）' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'envelope_list',
+      description: '列出【交接信封】当前所有条目及其 id，供你自查与修正。',
+      parameters: { type: 'object', properties: {} },
+    },
+    {
+      name: 'complete_task',
+      description: '声明本节点工作完成：封口交接信封并传递给下游。仅在你确认最终目标已达成时调用。可附一段自由备注（口语化的交接说明、注意事项）。⚠ 未调用此工具，系统不会向下游传递任何东西——绝不要用普通文本表示"我做完了"。',
+      parameters: {
+        type: 'object',
+        properties: {
+          note: { type: 'string', description: '给下游的自由备注（可选）：交接说明、注意事项、口头补充等' },
+        },
+      },
+    },
+  ];
+}

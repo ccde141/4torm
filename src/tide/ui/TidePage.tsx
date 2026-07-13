@@ -292,7 +292,10 @@ function TaskDetail({ task, runs, onViewSession, onDeleteSession, onUpdated }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [confirmingSessionDelete, setConfirmingSessionDelete] = useState(false);
-  const canDeleteSession = !task.enabled && !!task.targetSessionId;
+  // 仅 accumulate 模式可删：其会话是潮汐自建（sessions-tide/）。
+  // designated 指向共享季风会话（sessions/），既不在 deleteTideSession 的删除范围内
+  // （原先按钮会误报"删除成功"），删了也会破坏季风会话——故不提供该操作。
+  const canDeleteSession = !task.enabled && !!task.targetSessionId && task.pushMode === 'accumulate';
 
   // 删除会话确认态 3s 超时自动取消
   useEffect(() => {

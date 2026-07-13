@@ -107,12 +107,6 @@ export function parseAskTag(text: string): ParsedAction | null {
   return { tool: 'ask', args, start: m.index, end: m.index + m[0].length };
 }
 
-/** 提取 <answer>...</answer> 内容，null 表示未输出 answer */
-export function parseAnswer(text: string): string | null {
-  const m = /<answer>([\s\S]*?)<\/answer>/.exec(text);
-  return m ? m[1].trim() : null;
-}
-
 /**
  * 字符级截断检测：判断输出是否在标签内部被截断。
  * 规则：开标签数 > 闭标签数 → 该标签存在未闭合 → 大概率被截断。
@@ -167,10 +161,13 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
     const onChunk = onEvent
       ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'token', chunk }); }
       : undefined;
+    const onReasoning = onEvent
+      ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'reasoning', chunk }); }
+      : undefined;
 
     let reply: string;
     try {
-      const result = await llm.call(msgs, undefined, onChunk, abortCtrl.signal);
+      const result = await llm.call(msgs, undefined, onChunk, abortCtrl.signal, undefined, onReasoning);
       reply = result.content;
       recordUsage(result.usage);
 

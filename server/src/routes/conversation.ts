@@ -25,6 +25,11 @@ const activeRunners = new Map<string, SessionRunner>();
 
 function getOrCreateRunner(sessionId: string, opts: SessionRunnerOpts): SessionRunner {
   let runner = activeRunners.get(sessionId);
+  // 季风临时切模型：缓存 runner 的 model 定死在构造时，model 变化且未在跑时按新 opts 重建，
+  // 否则新选的模型会被旧 runner 吞掉。跑到一半不重建（isBusy 已在上层 409 拦）。
+  if (runner && !runner.isBusy() && runner.getModel() !== opts.model) {
+    runner = undefined;
+  }
   if (!runner) {
     runner = new SessionRunner(opts);
     activeRunners.set(sessionId, runner);
@@ -65,6 +70,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     const body = req.body as {
       sessionId?: string;
       agentId?: string;
+      model?: string;
       messages?: Array<{ role: string; content: string }>;
     };
 
@@ -77,14 +83,17 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: `Agent 不存在：${body.agentId}` });
     }
 
+    // 前端选择器可覆盖 agent 默认模型；缺省回落 agent.model
+    const effectiveModel = body.model || agent.model;
+
     // 决议原生模式：读 provider 的 nativeMode + nativeProbe 缓存
-    const nativeDecision = await resolveNativeMode(dataDir, agent.model);
-    console.log(`[conversation] ${agent.name} (${agent.model}) → native=${nativeDecision.native} mode=${nativeDecision.mode}`);
+    const nativeDecision = await resolveNativeMode(dataDir, effectiveModel);
+    console.log(`[conversation] ${agent.name} (${effectiveModel}) → native=${nativeDecision.native} mode=${nativeDecision.mode}`);
 
     const opts: SessionRunnerOpts = {
       dataDir,
       agentId: agent.id,
-      model: agent.model,
+      model: effectiveModel,
       temperature: agent.temperature,
       toolNames: agent.tools || [],
       skillIds: agent.skills || [],
@@ -139,7 +148,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // 按 Agent 串行：同一 Agent 被多个会话/功能区同时驱动时，自动排队依次执行，
-    // 避免并发读写同一 workspace/MEMORY.md。排队等待时推送一次提示。
+    // 避免并发读写同一 workspace / 记忆库。排队等待时推送一次提示。
     withAgentTurn(body.agentId!, () => runner.chat(systemPrompt, chatMessages, (ev) => {
       try { pushSSE(raw, ev); } catch { runner.abort(); }
     }), {

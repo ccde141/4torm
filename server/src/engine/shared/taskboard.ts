@@ -82,7 +82,10 @@ export function execTaskBoard(
     return { result: '任务板未更新：tasks 为空或格式不对，请传入 [{ title, status }] 数组。' };
   }
   fs.mkdirSync(path.dirname(fp), { recursive: true });
-  fs.writeFileSync(fp, JSON.stringify(board, null, 2), 'utf-8');
+  // 原子写：先写 .tmp 再 renameSync 覆盖，防止进程中途被杀留下半截 JSON 损坏任务板。
+  const tmp = `${fp}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(board, null, 2), 'utf-8');
+  fs.renameSync(tmp, fp);
   return { result: `任务板已更新：${summarizeTaskboard(board)}`, meta: { taskboard: board } };
 }
 

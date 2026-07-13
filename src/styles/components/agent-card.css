@@ -241,3 +241,33 @@
   border-color: var(--border-color);
   color: var(--color-text);
 }
+
+/* 记忆按钮：与配置齿轮同款，位于其左侧一格（右偏移 = space-3 + 按钮宽 32 + space-2） */
+.agent-card__memory-btn {
+  position: absolute;
+  top: var(--space-3);
+  right: calc(var(--space-3) + 32px + var(--space-2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: var(--color-surface);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+
+.agent-card:hover .agent-card__memory-btn {
+  opacity: 0.85;
+}
+
+.agent-card__memory-btn:hover {
+  opacity: 1;
+  background: var(--color-bg-hover);
+  border-color: var(--border-color);
+  color: var(--color-text);
+}

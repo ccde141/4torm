@@ -132,12 +132,6 @@ export function parseActions(text: string): ParsedAction[] {
   return out;
 }
 
-/** 提取 <answer>...</answer> 内容 */
-export function parseAnswer(text: string): string | null {
-  const m = /<answer>([\s\S]*?)<\/answer>/.exec(text);
-  return m ? m[1].trim() : null;
-}
-
 /** 剥离 <think> 和 <action> 标签，返回干净文本 */
 export function stripInternalTags(text: string): string {
   return text

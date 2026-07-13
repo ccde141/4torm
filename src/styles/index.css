@@ -5,6 +5,7 @@
  */
 
 @import './variables/tokens.css';
+@import './variables/motion.css';
 @import './skin.css';
 @import './components/tradewind.css';
 @import './components/tradewind-panels.css';
@@ -144,8 +145,11 @@ body::before {
 }
 
 /* ─── Entrance Animations ───────────────────────────────── */
+/* 实现接入 motion 层语义变量（variables/motion.css）：类名/keyframe 名不变，
+ * 时长/缓动/位移统一由 --motion-* 单点控制。全应用非信风区经由 .animate-in/
+ * .stagger 一并拉平到信风同款节奏。位移随 --motion-slide-distance（16px）。 */
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(var(--motion-slide-distance)); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
@@ -160,34 +164,38 @@ body::before {
 }
 
 .animate-in {
-  animation: fadeInUp 0.3s var(--ease-out-expo) both;
+  animation: fadeInUp var(--motion-enter-duration) var(--motion-enter-ease) both;
 }
 
 .animate-in--fast {
-  animation: fadeIn 0.15s var(--ease-out-expo) both;
+  animation: fadeIn var(--motion-exit-duration) var(--motion-enter-ease) both;
 }
 
-/* 页面切换过渡 — 通过 JS 在 page 变化时重新挂上 .page-panel--enter 触发 */
+/* 页面切换过渡 — 淡入 + 轻微上浮（原动效）。
+   卡顿的真正放大器是背景 canvas 常驻跑帧：面板子树含大量 backdrop-filter，
+   背景每重绘一帧、上面的玻璃层就得重采样一次，叠加面板进场动画后逐帧重合成
+   = 卡。修法不在砍动画，而在切换那段把背景 canvas 冻住（见 bgFreeze.ts），
+   背景静止后动画即可顺滑跑。故此处保留原来的位移+淡入。 */
 @keyframes pageEnter {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 .page-panel--enter {
-  animation: pageEnter var(--duration-normal) var(--ease-out-expo) both;
+  animation: pageEnter var(--motion-enter-duration) var(--motion-enter-ease) both;
 }
 
-/* stagger 辅助 — 每项延时 40ms */
-.stagger > * { animation: fadeInUp 0.3s var(--ease-out-expo) both; }
-.stagger > *:nth-child(1)  { animation-delay: 0ms; }
-.stagger > *:nth-child(2)  { animation-delay: 40ms; }
-.stagger > *:nth-child(3)  { animation-delay: 80ms; }
-.stagger > *:nth-child(4)  { animation-delay: 120ms; }
-.stagger > *:nth-child(5)  { animation-delay: 160ms; }
-.stagger > *:nth-child(6)  { animation-delay: 200ms; }
-.stagger > *:nth-child(7)  { animation-delay: 240ms; }
-.stagger > *:nth-child(8)  { animation-delay: 280ms; }
-.stagger > *:nth-child(9)  { animation-delay: 320ms; }
-.stagger > *:nth-child(10) { animation-delay: 360ms; }
+/* stagger 辅助 — 逐项延时（步长走 --motion-stagger-step） */
+.stagger > * { animation: fadeInUp var(--motion-enter-duration) var(--motion-enter-ease) both; }
+.stagger > *:nth-child(1)  { animation-delay: calc(var(--motion-stagger-step) * 0); }
+.stagger > *:nth-child(2)  { animation-delay: calc(var(--motion-stagger-step) * 1); }
+.stagger > *:nth-child(3)  { animation-delay: calc(var(--motion-stagger-step) * 2); }
+.stagger > *:nth-child(4)  { animation-delay: calc(var(--motion-stagger-step) * 3); }
+.stagger > *:nth-child(5)  { animation-delay: calc(var(--motion-stagger-step) * 4); }
+.stagger > *:nth-child(6)  { animation-delay: calc(var(--motion-stagger-step) * 5); }
+.stagger > *:nth-child(7)  { animation-delay: calc(var(--motion-stagger-step) * 6); }
+.stagger > *:nth-child(8)  { animation-delay: calc(var(--motion-stagger-step) * 7); }
+.stagger > *:nth-child(9)  { animation-delay: calc(var(--motion-stagger-step) * 8); }
+.stagger > *:nth-child(10) { animation-delay: calc(var(--motion-stagger-step) * 9); }
 
 /* ─── Focus ─────────────────────────────────────────────── */
 :focus-visible {

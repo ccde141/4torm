@@ -2,7 +2,7 @@
  * 皮肤配置 store — 持久化路径：data/skin-config.json
  */
 
-import { buildTextureBackground, getTextureDefaults, type TextureType } from '../utils/skin-textures';
+import { buildTextureBackground, gridBackgroundUrl, getTextureDefaults, type TextureType, type TextureLayer } from '../utils/skin-textures';
 import { hexToRgb, darkenColor, toRgba, onAccentColor, readJson, writeJson, uploadBinary, deleteFile, fileUrl } from './skin-helpers';
 import {
   CONTOUR_DEFAULTS,
@@ -20,12 +20,13 @@ import { DEFAULT_BADGE, type SkinBadgeConfig } from './skin-badge';
 export type { BackgroundType, ContourParams, WindParams, SkinBackgroundConfig, SkinBadgeConfig };
 export { CONTOUR_DEFAULTS, CONTOUR_RECOMMENDED, WIND_DEFAULTS, WIND_RECOMMENDED, DEFAULT_BACKGROUND, DEFAULT_BADGE };
 
+export type { TextureLayer };
 export type TextureBlend = 'normal' | 'overlay' | 'soft-light' | 'screen' | 'multiply';
 export type TextureSize = 'cover' | 'contain' | 'repeat';
 
 export interface SkinTextureConfig {
-  /** 类型（none = 关闭） */
-  type: TextureType;
+  /** 启用的底纹图层（多选，可共存；空数组 = 关闭）。网格恒叠在自定义图之上 */
+  layers: TextureLayer[];
   /** 透明度 0-1 */
   opacity: number;
   /** 模糊（px） */
@@ -58,7 +59,7 @@ export interface SkinConfig {
 }
 
 const DEFAULT_TEXTURE: SkinTextureConfig = {
-  type: 'custom',
+  layers: ['custom'],
   opacity: 0.5,
   blur: 0,
   blend: 'normal',
@@ -113,22 +114,48 @@ function applyConfig(config: SkinConfig): void {
 
 function applyTextureVars(config: SkinConfig, root: HTMLElement): void {
   const texture = config.texture ?? DEFAULT_TEXTURE;
-  const bg = buildTextureBackground(texture.type, texture.customImage);
-  root.style.setProperty('--texture', bg);
+  const layers = texture.layers ?? [];
+  const sizeMode = texture.size ?? 'cover';
+  const hasCustom = layers.includes('custom') && !!texture.customImage;
+  const hasGrid = layers.includes('grid');
+
+  const imageRepeat = sizeMode !== 'repeat' ? 'no-repeat' : 'repeat';
+  const imageSize = sizeMode !== 'repeat' ? sizeMode : 'auto';
+
+  // 单伪元素承多层背景（逗号分隔，靠前者在上）。网格恒在自定义图之上。
+  const imgList: string[] = [], repeatList: string[] = [], sizeList: string[] = [];
+  if (hasGrid) { imgList.push(gridBackgroundUrl()); repeatList.push('repeat'); sizeList.push('auto'); }
+  if (hasCustom) {
+    imgList.push(buildTextureBackground('custom', texture.customImage));
+    repeatList.push(imageRepeat); sizeList.push(imageSize);
+  }
+
+  root.style.setProperty('--texture', imgList.length ? imgList.join(', ') : 'none');
+  root.style.setProperty('--texture-repeat', repeatList.length ? repeatList.join(', ') : 'repeat');
+  root.style.setProperty('--texture-size', sizeList.length ? sizeList.join(', ') : 'auto');
   root.style.setProperty('--texture-opacity', String(texture.opacity));
   root.style.setProperty('--texture-blur', `${texture.blur}px`);
   root.style.setProperty('--texture-blend', texture.blend);
+}
 
-  // 图片纹理需要单独控制 size / repeat；SVG 纹理永远 repeat
-  const isImage = texture.type === 'custom';
-  const sizeMode = texture.size ?? 'cover';
-  if (isImage && sizeMode !== 'repeat') {
-    root.style.setProperty('--texture-size', sizeMode);
-    root.style.setProperty('--texture-repeat', 'no-repeat');
-  } else {
-    root.style.setProperty('--texture-size', 'auto');
-    root.style.setProperty('--texture-repeat', 'repeat');
+/**
+ * 迁移底纹图层。新数据用 layers 数组；旧数据用 type('none'|'grid'|'custom')
+ * + gridOverlay 布尔，这里折叠成等价的 layers。
+ */
+function normalizeTextureLayers(raw: Partial<SkinTextureConfig> | undefined): TextureLayer[] {
+  if (!raw) return [...DEFAULT_TEXTURE.layers];
+  if (Array.isArray(raw.layers)) {
+    return raw.layers.filter((l): l is TextureLayer => l === 'grid' || l === 'custom');
   }
+  // 旧结构降级读取
+  const legacy = raw as { type?: TextureType; gridOverlay?: boolean };
+  const layers: TextureLayer[] = [];
+  if (legacy.type === 'grid') layers.push('grid');
+  if (legacy.type === 'custom') {
+    if (legacy.gridOverlay === true) layers.push('grid');
+    layers.push('custom');
+  }
+  return layers;
 }
 
 /** 兼容旧数据：补全 texture / background 字段 */
@@ -136,7 +163,7 @@ function normalize(raw: Partial<SkinConfig>): SkinConfig {
   const primaryColor = raw.primaryColor || DEFAULTS.primaryColor;
   const secondaryColor = raw.secondaryColor || DEFAULTS.secondaryColor;
   const texture: SkinTextureConfig = {
-    type: (raw.texture?.type as TextureType) ?? DEFAULT_TEXTURE.type,
+    layers: normalizeTextureLayers(raw.texture),
     opacity: typeof raw.texture?.opacity === 'number' ? raw.texture.opacity : DEFAULT_TEXTURE.opacity,
     blur: typeof raw.texture?.blur === 'number' ? raw.texture.blur : DEFAULT_TEXTURE.blur,
     blend: (raw.texture?.blend as TextureBlend) ?? DEFAULT_TEXTURE.blend,
@@ -197,18 +224,25 @@ export function saveSkinConfig(patch: Partial<SkinConfig>): SkinConfig {
   return next;
 }
 
-/** 切换底纹类型（套用该类型的建议默认参数） */
-export function applyTexture(type: TextureType): SkinConfig {
-  const defaults = getTextureDefaults(type);
-  const current = cached.texture;
-  // 切到 custom 但没有图片：依然切，UI 会显示上传按钮；CSS 写 none
+/**
+ * 开关某一底纹图层（多选）。加入 / 移除该 layer。
+ * 从「无任何图层」变为「首次启用」时，套用该图层的建议 opacity/blur/blend。
+ */
+export function toggleTextureLayer(layer: TextureLayer): SkinConfig {
+  const current = cached.texture ?? DEFAULT_TEXTURE;
+  const has = current.layers.includes(layer);
+  const layers = has
+    ? current.layers.filter(l => l !== layer)
+    : [...current.layers, layer];
+  const wasEmpty = current.layers.length === 0;
+  const defaults = getTextureDefaults(layer);
   const texture: SkinTextureConfig = {
-    type,
-    opacity: defaults.opacity,
-    blur: defaults.blur,
-    blend: defaults.blend as TextureBlend,
-    customImage: current?.customImage,
-    size: current?.size ?? 'cover',
+    ...current,
+    layers,
+    // 从空到有：以新图层的建议值起步；否则沿用用户已调的参数
+    opacity: wasEmpty && !has ? defaults.opacity : current.opacity,
+    blur: wasEmpty && !has ? defaults.blur : current.blur,
+    blend: wasEmpty && !has ? (defaults.blend as TextureBlend) : current.blend,
   };
   return saveSkinConfig({ texture });
 }
@@ -232,11 +266,11 @@ export async function uploadCustomTexture(file: File): Promise<SkinConfig> {
   await uploadBinary(storePath, file);
 
   const defaults = getTextureDefaults('custom');
+  const hadCustom = !!prev?.layers?.includes('custom');
+  const layers = prev?.layers?.includes('custom') ? prev.layers : [...(prev?.layers ?? []), 'custom' as TextureLayer];
   const texture: SkinTextureConfig = {
-    type: 'custom',
-    opacity: prev?.type === 'custom' && typeof prev.opacity === 'number'
-      ? prev.opacity
-      : defaults.opacity,
+    layers,
+    opacity: hadCustom && typeof prev?.opacity === 'number' ? prev.opacity : defaults.opacity,
     blur: prev?.blur ?? defaults.blur,
     blend: (prev?.blend ?? defaults.blend) as TextureBlend,
     size: prev?.size ?? 'cover',
@@ -250,8 +284,14 @@ export async function uploadCustomTexture(file: File): Promise<SkinConfig> {
 export function clearCustomTexture(): SkinConfig {
   const current = cached.texture ?? DEFAULT_TEXTURE;
   if (current.customPath) void deleteFile(current.customPath);
+  // 只移除自定义图层，网格若开着则保留
   return saveSkinConfig({
-    texture: { ...current, type: 'none', customImage: undefined, customPath: undefined },
+    texture: {
+      ...current,
+      layers: current.layers.filter(l => l !== 'custom'),
+      customImage: undefined,
+      customPath: undefined,
+    },
   });
 }
 

@@ -32,7 +32,7 @@ export function ConfigPanel({ node, nodes, edges, onClose, onUpdate, onSyncRewor
   const label = (data.label ?? node.id) as string;
 
   return (
-    <div className="tw-config">
+    <div className="tw-config mo-slide-in-right">
       <div className="tw-config__header">
         <span className="tw-config__type">{getTypeLabel(nodeType)}</span>
         <span className="tw-config__title">{label}</span>
@@ -180,6 +180,22 @@ function AgentFields({ config, onChange }: { config: Record<string, unknown>; on
           onChange={(e) => onChange('role', e.target.value)}
         />
         {!role && <span className="tw-config__hint">未填写则使用默认职责</span>}
+      </div>
+      <div className="tw-config__field">
+        <label className="tw-config__label">投递延迟（秒）</label>
+        <input
+          className="tw-config__input"
+          type="number"
+          min={0}
+          step={1}
+          placeholder="0"
+          value={(config.deliveryDelaySec as number) ?? ''}
+          onChange={(e) => {
+            const v = e.target.value.trim();
+            onChange('deliveryDelaySec', v === '' ? undefined : Math.max(0, Number(v)));
+          }}
+        />
+        <span className="tw-config__hint">产出生成后、投递下游前盲等。0 或留空=无延迟</span>
       </div>
     </>
   );

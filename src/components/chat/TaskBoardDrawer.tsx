@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { STATUS_ORDER, type Task, type TaskBoard, type TaskStatus } from '../../utils/taskboard';
+import { useConfirm } from '../common/ConfirmDialog';
 
 const STATUS_META: Record<TaskStatus, { mark: string; color: string; label: string }> = {
   todo:    { mark: '○', color: 'var(--color-text-tertiary)', label: '待办' },
@@ -30,6 +31,7 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
   onToggle: () => void;
   glow: boolean;
 }) {
+  const confirm = useConfirm();
   const [width, setWidth] = useState(() => {
     const s = Number(localStorage.getItem('taskboard.width'));
     return s >= MIN_W && s <= MAX_W ? s : DEFAULT_W;
@@ -106,7 +108,7 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
         {total > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{done}/{total}</span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--space-1)' }}>
           <button onClick={addTask} className="taskboard-act" style={actionBtnStyle} title="新增一项任务">＋ 新增</button>
-          {total > 0 && <button onClick={() => { if (confirm('清空整个任务板？此操作不可撤销。')) onChange(null); }} className="taskboard-act taskboard-act--danger" style={dangerBtnStyle} title="清空整个任务板（不可撤销）">🗑 清空</button>}
+          {total > 0 && <button onClick={async () => { if (await confirm({ title: '清空整个任务板？', message: '此操作不可撤销。', confirmText: '清空', danger: true })) onChange(null); }} className="taskboard-act taskboard-act--danger" style={dangerBtnStyle} title="清空整个任务板（不可撤销）">🗑 清空</button>}
           {/* 收起归位到右上角：符合「关闭在右上」直觉，替掉原先易误点成关闭的 ✕ */}
           <button onClick={onToggle} className="taskboard-act" style={actionBtnStyle} title="收起任务板">收起 ›</button>
         </div>

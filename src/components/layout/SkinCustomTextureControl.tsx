@@ -1,7 +1,7 @@
 /**
  * 皮肤面板 - 自定义底纹控制
  *
- * 仅在 texture.type === 'custom' 时显示。
+ * 仅在启用了「自定义」底纹图层时显示。
  * 提供：上传 / 重新上传 / 删除 / 平铺方式（cover / contain / repeat）。
  */
 
@@ -32,7 +32,7 @@ const SkinCustomTextureControl: React.FC<Props> = ({ config, onApply, onError })
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const texture: SkinTextureConfig = config.texture ?? {
-    type: 'custom', opacity: 0.4, blur: 0, blend: 'normal',
+    layers: ['custom'], opacity: 0.4, blur: 0, blend: 'normal',
   };
 
   const handleUpload = async (file: File) => {

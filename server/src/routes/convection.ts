@@ -201,15 +201,20 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
       const archiveDir = path.join(wsPath, 'bak');
       const archiveFileName = `${String(state.archiveSeq).padStart(3, '0')}.json`;
 
+      // 归档必须先落盘成功才允许清空 —— 归档失败绝不能继续清（否则无备份数据丢失）。
+      // 原子写（.tmp + rename）：进程若在写归档时被杀（关软件），只留 .tmp，正式归档与 live 数据都完好。
       try {
         await fs.mkdir(archiveDir, { recursive: true });
-        await fs.writeFile(
-          path.join(archiveDir, archiveFileName),
-          JSON.stringify({ publicMessages: s.publicMessages, chairMessages: s.chairMessages }, null, 2),
-        );
-      } catch { /* 归档失败不阻塞 */ }
+        const archiveTarget = path.join(archiveDir, archiveFileName);
+        const archiveTmp = `${archiveTarget}.tmp`;
+        await fs.writeFile(archiveTmp, JSON.stringify({ publicMessages: s.publicMessages, chairMessages: s.chairMessages }, null, 2));
+        await fs.rename(archiveTmp, archiveTarget);
+      } catch (e) {
+        return reply.status(500).send({ error: `归档失败，已中止重置（消息未清空）：${(e as Error).message}` });
+      }
 
       let summaryContent = '';
+      let summaryFailed = false;
       if (mode === 'summary') {
         // 会长生成极简摘要
         const chairAgent = await loadAgent(dataDir, s.chairAgentId);
@@ -225,7 +230,9 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
               options: { temperature: 0.3 },
             });
             summaryContent = summaryResult.content.trim();
-          } catch { /* 摘要失败则退化为 clean */ }
+          } catch { summaryFailed = true; }   // 摘要失败：退化为 clean，但显式告知，不静默
+        } else {
+          summaryFailed = true;   // 会长 Agent 缺失，摘要无从生成
         }
       }
 
@@ -244,7 +251,7 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
       }
 
       await saveSession(dataDir, s);
-      return reply.send({ ok: true, mode, archived: archiveFileName, summary: summaryContent || undefined });
+      return reply.send({ ok: true, mode, archived: archiveFileName, summary: summaryContent || undefined, summaryFailed });
     }
 
     if (action === 'open-workspace') {

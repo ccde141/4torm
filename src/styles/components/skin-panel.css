@@ -15,7 +15,7 @@
     0 0 0 1px rgba(255, 255, 255, 0.05);
   padding: var(--space-3);
   z-index: 1000;
-  animation: skin-panel-in 0.2s var(--ease-out-expo);
+  animation: skin-panel-in var(--motion-enter-duration) var(--motion-enter-ease);
 }
 
 @keyframes skin-panel-in {

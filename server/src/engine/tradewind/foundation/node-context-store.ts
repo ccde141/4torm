@@ -44,14 +44,6 @@ export function appendNodeContext(
   execMap.set(nodeId, list);
 }
 
-/** 取出指定节点的所有待消费上下文（不清空） */
-export function peekNodeContext(
-  executionId: string,
-  nodeId: string,
-): readonly AppendedContext[] {
-  return store.get(executionId)?.get(nodeId) ?? [];
-}
-
 /** 取出并清空指定节点的待消费上下文 */
 export function consumeNodeContext(
   executionId: string,

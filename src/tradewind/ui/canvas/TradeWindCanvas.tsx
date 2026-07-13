@@ -28,6 +28,7 @@ import { NoteNode } from './nodes/NoteNode';
 import { HumanGateNode } from './nodes/HumanGateNode';
 import { TradeWindEdge } from './edges/TradeWindEdge';
 import { ContextMenu, type ContextMenuState } from './ContextMenu';
+import { useConfirm } from '../../../components/common/ConfirmDialog';
 import type { WorkflowStoreState, WorkflowStoreActions } from '../hooks/useWorkflowStore';
 
 interface TradeWindCanvasProps {
@@ -50,6 +51,7 @@ const edgeTypes: EdgeTypes = {
 const MENU_INIT: ContextMenuState = { visible: false, x: 0, y: 0, nodeId: null, flowPosition: null };
 
 export function TradeWindCanvas({ store }: TradeWindCanvasProps) {
+  const confirm = useConfirm();
   const rfInstance = useRef<ReactFlowInstance | null>(null);
   const [menu, setMenu] = useState<ContextMenuState>(MENU_INIT);
 
@@ -117,13 +119,13 @@ export function TradeWindCanvas({ store }: TradeWindCanvasProps) {
 
   /** 右键边：直接删除（带确认对话框） */
   const onEdgeContextMenu = useCallback(
-    (event: React.MouseEvent, edge: { id: string }) => {
+    async (event: React.MouseEvent, edge: { id: string }) => {
       event.preventDefault();
-      if (window.confirm('删除这条连线？')) {
+      if (await confirm({ title: '删除这条连线？', confirmText: '删除', danger: true })) {
         store.deleteEdge(edge.id);
       }
     },
-    [store],
+    [store, confirm],
   );
 
   return (

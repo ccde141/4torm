@@ -29,6 +29,8 @@ export interface FeedMsg {
   isArchiveSummary?: boolean;
   streaming?: boolean;
   phase?: string;
+  /** 原生思考流（流式当轮显示；不进上下文，重载不保留） */
+  reasoning?: string;
   tools: FeedTool[];
 }
 
@@ -57,6 +59,11 @@ function applyEvent(ev: any, r: RoomRunner): void {
     case 'token': {
       const m = feed[feed.length - 1];
       if (m && m.speaker === r.activeSpeaker) { m.content += ev.content; m.phase = ''; }
+      break;
+    }
+    case 'reasoning': {
+      const m = feed[feed.length - 1];
+      if (m && m.speaker === r.activeSpeaker) { m.reasoning = (m.reasoning || '') + ev.content; m.phase = ''; }
       break;
     }
     case 'tool-call': {
@@ -96,6 +103,13 @@ async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (
   if (!reader) return;
   const dec = new TextDecoder();
   let buf = '';
+  const processLine = (line: string) => {
+    const t = line.trim();
+    if (!t.startsWith('data:')) return;
+    const p = t.slice(5).trim();
+    if (!p || p === '[DONE]') return;
+    try { onEvent(JSON.parse(p)); } catch (e) { console.warn('[cyclone] 群聊 SSE 事件解析失败', p, e); }
+  };
   while (true) {
     if (signal.aborted) { reader.cancel(); break; }
     const { done, value } = await reader.read();
@@ -103,14 +117,11 @@ async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (
     buf += dec.decode(value, { stream: true });
     const lines = buf.split('\n');
     buf = lines.pop() ?? '';
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t.startsWith('data:')) continue;
-      const p = t.slice(5).trim();
-      if (!p || p === '[DONE]') continue;
-      try { onEvent(JSON.parse(p)); } catch (e) { console.warn('[cyclone] 群聊 SSE 事件解析失败', p, e); }
-    }
+    for (const line of lines) processLine(line);
   }
+  // 收尾：flush 解码器 + 处理末尾未换行终结的残留
+  buf += dec.decode();
+  if (buf) for (const line of buf.split('\n')) processLine(line);
 }
 
 /**
@@ -217,12 +228,25 @@ export function useRoomStreamRunners(onRoomFinished: (roomId: string) => void) {
     runners.current.set(roomId, runner);
     notify(roomId);
 
+    // 前沿+后沿节流：高频 token/reasoning 只延后 paint（roundFeed 已含最新累积，不丢内容）；
+    // 结构性事件立即刷。突发结束后由后沿 timer 兜底刷出。
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastFlushAt = 0;
+    const FLUSH_MS = 80;
+    const doNotify = () => { flushTimer = null; lastFlushAt = Date.now(); notify(roomId); };
+    const scheduleNotify = () => {
+      if (flushTimer) return;
+      const wait = FLUSH_MS - (Date.now() - lastFlushAt);
+      if (wait <= 0) doNotify(); else flushTimer = setTimeout(doNotify, wait);
+    };
+    const flushNotify = () => { if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; } lastFlushAt = Date.now(); notify(roomId); };
+    const HIGH_FREQ = new Set(['token', 'reasoning']);
     (async () => {
       try {
         await streamSSE(
           `/api/cyclone/workshop/${workshopId}/room/${roomId}/speak`,
           { message: text },
-          (ev) => { applyEvent(ev, runner); notify(roomId); },
+          (ev) => { applyEvent(ev, runner); if (HIGH_FREQ.has(ev.type)) scheduleNotify(); else flushNotify(); },
           ctrl.signal,
         );
       } catch (e) {
@@ -230,6 +254,7 @@ export function useRoomStreamRunners(onRoomFinished: (roomId: string) => void) {
           runner.roundFeed.push({ speaker: '系统', content: `[请求失败] ${(e as Error).message}`, isHuman: false, tools: [] });
         }
       } finally {
+        if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
         runner.streaming = false;
         runner.done = true;
         notify(roomId);            // 当前挂载的 RoomPanel → reload /status 后 clearIfDone

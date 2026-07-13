@@ -75,6 +75,8 @@ export async function execContact(
   opts: NodeRunnerOpts,
   args: Record<string, string>,
   emit: (ev: NodeRunnerEvent) => void,
+  /** 本轮正在服务的 contact 源节点 ID（非 contact 轮为 null）——死锁提示分流用 */
+  currentContactFrom?: string | null,
 ): Promise<string> {
   const target = args.target || '';
   const message = args.message || '';
@@ -89,10 +91,16 @@ export async function execContact(
     return err;
   }
 
-  // 2. 死锁检测
+  // 2. 死锁检测：环被拒时，按"目标是否正是当前正在服务你联络的那一方"分流措辞——
+  //    - 是：目标此刻确实在等你回复本轮 contact，"在当前回复里处理"是准确可行的建议。
+  //    - 否：目标的请求还排在你队列里（或它在等别的链路），本轮你根本没在处理它，
+  //      让它"当场处理"会误导。此时应先做完手头的活，它的请求会另轮到你处理。
   const canWait = tryRegisterWait(opts.nodeId, found.nodeId);
   if (!canWait) {
-    const err = `联络被系统拒绝：「${target}」当前正在等待你的回复，反向联络会造成死锁。请直接在当前回复中处理。`;
+    const servingTarget = currentContactFrom != null && currentContactFrom === found.nodeId;
+    const err = servingTarget
+      ? `联络被系统拒绝：「${target}」正在等你回复它本轮的联络，反向联络会造成死锁。请不要再联络它，直接在本次回复里给出它需要的内容。`
+      : `联络被系统拒绝：与「${target}」互相联络会造成死锁（它也正需要你的回复）。请勿等待它——先用你已有的信息把手头工作推进/收口；它的请求会在另一轮交由你处理。`;
     emit({ type: 'contact-done', target, result: err, ok: false });
     return err;
   }
@@ -110,6 +118,7 @@ export async function execContact(
       found.runner.push({
         source: 'contact',
         content: contactContent,
+        contactFrom: opts.nodeId,
         onComplete: (output) => {
           clearTimeout(timeout);
           resolve(output);

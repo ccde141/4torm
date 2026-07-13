@@ -25,6 +25,7 @@ export interface MeetingMessage {
   rawContent?: string;
   toolCalls?: ToolStep[];
   streaming?: boolean;
+  noReply?: boolean; // true=该轮无有效回复（模型空回复），前端以灰字显式呈现
 }
 
 export interface MeetingParticipant {
@@ -58,7 +59,7 @@ export type MeetingBroadcastEvent =
   | { type: 'heartbeat'; label: string; phase?: string; elapsed?: number }
   | { type: 'contact-start'; label: string; target: string }
   | { type: 'contact-done'; label: string; target: string; result: string; ok: boolean }
-  | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: ToolStep[] }
+  | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: ToolStep[]; noReply?: boolean }
   | { type: 'round-done'; messages: MeetingMessage[]; compacted?: boolean }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-done'; content: string }
@@ -72,39 +73,6 @@ export type MeetingBroadcastEvent =
   | { type: 'done'; messages: Array<{ role: string; content: string }> }
   | { type: 'error'; message: string };
 
-/** 建立会议室统一 SSE 事件流（持久连接） */
-export function connectEventStream(
-  nodeId: string,
-  onEvent: (ev: MeetingBroadcastEvent) => void,
-  signal: AbortSignal,
-): Promise<void> {
-  return fetch(`/api/tradewind/meeting/${nodeId}/events`, { signal })
-    .then(async (res) => {
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(text || `HTTP ${res.status}`);
-      }
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const json = line.slice(6).trim();
-          if (!json) continue;
-          try {
-            const ev = JSON.parse(json) as MeetingBroadcastEvent;
-            onEvent(ev);
-          } catch { /* skip */ }
-        }
-      }
-    });
-}
 
 /** 发送公共发言（fire-and-forget，事件通过 /events 流返回） */
 export async function sendSpeak(nodeId: string, message: string, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }> {

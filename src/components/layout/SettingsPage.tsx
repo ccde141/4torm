@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   getProviders,
   addProvider,
@@ -15,6 +15,8 @@ export default function SettingsPage() {
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [allModels, setAllModels] = useState<{ key: string; label: string }[]>([]);
   const [showPresets, setShowPresets] = useState(false);
+  // 新增提供商后高亮其卡片（accent 描边 + 上浮进场），对齐工具页「指出编辑态」
+  const [highlightId, setHighlightId] = useState<string | null>(null);
 
   useEffect(() => {
     getProviders().then(setProviders);
@@ -26,15 +28,23 @@ export default function SettingsPage() {
     getAllModels().then(setAllModels);
   };
 
+  // 高亮新卡：设 id 触发 accent 描边 + 上浮进场，2.4s 后自动褪去
+  const flagNew = (id: string) => {
+    setHighlightId(id);
+    window.setTimeout(() => setHighlightId(cur => (cur === id ? null : cur)), 2400);
+  };
+
   const handleQuickAdd = async (baseUrl: string, label: string) => {
-    await addProvider(label, baseUrl, '');
+    const entry = await addProvider(label, baseUrl, '');
     setShowPresets(false);
     refresh();
+    flagNew(entry.id);
   };
 
   const handleAdd = async () => {
-    await addProvider('新提供商', '', '');
+    const entry = await addProvider('新提供商', '', '');
     refresh();
+    flagNew(entry.id);
   };
 
   const handleRemove = async (id: string) => {
@@ -85,7 +95,7 @@ export default function SettingsPage() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
         {providers.map(p => (
-          <ProviderCard key={p.id} provider={p} onChange={handleChange} onRemove={handleRemove} onRefresh={refresh} />
+          <ProviderCard key={p.id} provider={p} highlight={p.id === highlightId} onChange={handleChange} onRemove={handleRemove} onRefresh={refresh} />
         ))}
       </div>
 
@@ -101,12 +111,18 @@ export default function SettingsPage() {
   );
 }
 
-function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
+function ProviderCard({ provider: p, highlight, onChange, onRemove, onRefresh }: {
   provider: ProviderEntry;
+  highlight?: boolean;
   onChange: (id: string, field: keyof ProviderEntry, value: string) => void;
   onRemove: (id: string) => void;
   onRefresh: () => void;
 }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  // 新增高亮时滚动到视口，避免新卡追加在列表末尾却在屏幕外
+  useEffect(() => {
+    if (highlight) rootRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [highlight]);
   const [testing, setTesting] = useState(false);
   const [fetchedModels, setFetchedModels] = useState<string[]>([]);
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -190,7 +206,13 @@ function ProviderCard({ provider: p, onChange, onRemove, onRefresh }: {
   const hasChange = fetchedModels.length > 0 && (p.models.length !== checked.size || !p.models.every(m => checked.has(m)));
 
   return (
-    <div style={cardStyle}>
+    <div
+      ref={rootRef}
+      className={highlight ? 'mo-spring-in' : undefined}
+      style={highlight
+        ? { ...cardStyle, border: '1px solid var(--color-accent)', boxShadow: '0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent)', transition: 'border-color 0.4s ease, box-shadow 0.4s ease' }
+        : { ...cardStyle, transition: 'border-color 0.4s ease, box-shadow 0.4s ease' }}
+    >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
         <div style={{ position: 'relative', flex: 1 }}>
           <input

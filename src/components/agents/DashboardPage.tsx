@@ -5,6 +5,7 @@ import { SYSTEM_STATUSES, getLabels, type UserLabel } from '../../store/statuses
 import type { Agent, DashboardStats } from '../../types';
 import AgentCard from './AgentCard';
 import AgentConfigModal from './AgentConfigModal';
+import MemoryPanel from './MemoryPanel';
 import '../../styles/components/dashboard.css';
 
 interface FilterOption {
@@ -19,6 +20,7 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [filterOptions, setFilterOptions] = useState<FilterOption[]>([]);
   const [configAgent, setConfigAgent] = useState<Agent | null>(null);
+  const [memoryAgent, setMemoryAgent] = useState<Agent | null>(null);
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
@@ -156,10 +158,15 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
               key={agent.id}
               agent={agent}
               onConfig={a => setConfigAgent(a)}
+              onMemory={a => setMemoryAgent(a)}
               onDelete={handleDelete}
             />
           ))}
       </div>
+
+      {memoryAgent && (
+        <MemoryPanel agentId={memoryAgent.id} agentName={memoryAgent.name} onClose={() => setMemoryAgent(null)} />
+      )}
 
       {configAgent && (
         <AgentConfigModal mode="edit" agent={configAgent} onClose={() => setConfigAgent(null)} onSave={handleSaveConfig} />

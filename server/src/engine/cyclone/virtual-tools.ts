@@ -44,6 +44,19 @@ export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDe
         required: ['action'],
       },
     },
+    {
+      name: 'bulletin',
+      description: '读写工作室公告板（全体工位共享、所有工位可见的结构化看板）。按条目增量改：只在产生需要全体知晓的结论/目标/状态变化时写，别刷屏、别写私事。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', description: 'get=读取 / add=新增条目 / update=改写条目 / remove=删除条目' },
+          text: { type: 'string', description: '（add/update 时）条目内容，一句话结论或事项' },
+          id: { type: 'string', description: '（update/remove 时）目标条目 id（形如 b-xxxx，见公告板中列出的 id）' },
+        },
+        required: ['action'],
+      },
+    },
   ];
 
   if (allowAsk) {

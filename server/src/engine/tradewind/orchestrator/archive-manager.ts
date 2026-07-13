@@ -17,13 +17,15 @@ export interface ExecutionMeta {
   workflowId: string;
   startTime: string;
   endTime?: string;
-  status: 'running' | 'done' | 'error' | 'crashed';
+  status: 'running' | 'done' | 'error' | 'stopped' | 'crashed';
 }
 
 export class ArchiveManager {
   private readonly runDir: string;
   private readonly metaPath: string;
   private meta: ExecutionMeta;
+  /** 终结状态写一次即锁定：首个 writeEnd 胜出，防止 stop() 覆写 handleNodeDone 已写的 'done'。 */
+  private ended = false;
 
   constructor(runDir: string, executionId: string, workflowId: string) {
     this.runDir = runDir;
@@ -46,8 +48,10 @@ export class ArchiveManager {
     }
   }
 
-  /** 标记执行结束 */
-  async writeEnd(status: 'done' | 'error'): Promise<void> {
+  /** 标记执行结束。'stopped' = 被外部 stop() 中止（未跑到 output 终点）。 */
+  async writeEnd(status: 'done' | 'error' | 'stopped'): Promise<void> {
+    if (this.ended) return; // 首个终结状态胜出（done/error 优先于随后的 stop→stopped）
+    this.ended = true;
     this.meta.endTime = new Date().toISOString();
     this.meta.status = status;
     try {

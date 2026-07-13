@@ -10,10 +10,11 @@
  *   6. delegate 说明
  *   7. ask 说明
  *   8. 工作流搭建假工具
- *   9. 历史记忆（条件触发）
+ *   9. 长期记忆（条目化召回 + 记忆自觉引导）
  */
 
 import type { ToolDef } from '../shared/tool-defs-loader';
+import { recallMemory } from '../shared/agent-memory';
 import { buildSandboxSection, type SandboxLevel } from '../shared/sandbox-prompt';
 import { buildWorkflowToolsSection } from '../shared/workflow-builder';
 import { buildSelfManagementSection } from '../shared/prompt';
@@ -112,7 +113,32 @@ export interface PromptBuildOpts {
   native?: boolean;
 }
 
-const MEMORY_TRIGGERS = /记忆|记住|之前|上次|历史|回忆|还记得/;
+/**
+ * 记忆自觉引导（积极触发版）。
+ * 文本/native 都注入：native 已有 memory_* 的 schema，此段承载"何时该主动记"。
+ * 工具执行由引擎侧拦截（execMemoryTool），自动补时间戳与来源，agent 无需关心。
+ */
+function buildMemoryAwarenessSection(): string {
+  return `## 你的长期记忆
+
+你有跨会话、跨任务的长期记忆。这次记下的，下次相关对话开始时会自动出现在上方「你的经验记忆」里。
+
+### 积极记录（用 memory_write）
+**宁可多记，不要漏记**。只要出现对未来有复用价值的信息，就立刻记一条，别等：
+- 用户表达偏好、习惯、约定，或纠正了你的做法 → category=feedback
+- 用户说"记住/以后/务必/别再/我们约定"这类跨会话指令 → **必须** memory_write，这是硬信号
+- 你踩坑并找到规避法 → category=pitfall
+- 确认了可复用的事实（项目约定、文件路径、接口、数据位置）→ category=fact
+- 值得回访的外部资源 → category=reference
+
+### 防噪音（唯一约束）
+写入前先 memory_list 看有没有同类，**有则不重复写**；summary 要一句话说清（召回匹配的关键）。
+
+### 工具
+- memory_write(summary, detail, category, tags?) — 记一条
+- memory_list() — 查已有，去重
+- memory_read(slug) — 读某条全文`;
+}
 
 /** 原生模式的精简协议段（替代 buildOutputProtocol，不教 <action> 格式） */
 function buildNativeProtocol(): string {
@@ -175,14 +201,15 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   // 8.5 能力扩展（查看 / 创建工具、技能、MCP）— 与对流/气旋/信风共用 shared 单一来源
   parts.push(buildSelfManagementSection());
 
-  // 9. 记忆注入
-  if (opts.userMessage && MEMORY_TRIGGERS.test(opts.userMessage)) {
-    const memPath = path.join(opts.dataDir, 'agents', opts.agentId, '.workspace', 'MEMORY.md');
-    try {
-      const mem = await fs.readFile(memPath, 'utf-8');
-      if (mem.trim()) parts.push(`\n\n## 历史记忆\n${mem.trim()}`);
-    } catch { /* 文件不存在 */ }
-  }
+  // 9. 长期记忆（新机制：条目化 + 相关性召回，替代旧 MEMORY.md 全文注入）
+  //    userMessage 作 taskHint：feedback 常驻档必带，情境档按相关性挑。召回失败静默降级。
+  try {
+    const memSection = await recallMemory(opts.dataDir, opts.agentId, opts.userMessage);
+    if (memSection) parts.push(memSection);
+  } catch { /* 召回失败不阻断对话 */ }
+
+  // 9.5 记忆自觉引导（积极触发：宁可多记，靠 memory_list 去重防噪音）
+  parts.push(buildMemoryAwarenessSection());
 
   // 10. 任务板假工具：始终描述用法（与 ask/delegate 同级）；已有板子时附当前状态（放最后，最贴近用户轮次）
   const board = opts.sessionId

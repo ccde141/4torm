@@ -15,7 +15,7 @@
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  animation: fadeIn var(--duration-fast) var(--ease-out-expo);
+  animation: fadeIn var(--motion-exit-duration) var(--motion-enter-ease);
 }
 
 @keyframes fadeIn {
@@ -33,7 +33,7 @@
   max-height: 90vh;
   display: flex;
   flex-direction: column;
-  animation: slideUp var(--duration-normal) var(--ease-out-back);
+  animation: slideUp var(--motion-modal-duration) var(--motion-modal-ease);
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
 }
 
@@ -280,6 +280,4 @@
   vertical-align: middle;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+/* spin 已收编至 variables/motion.css（全局单点定义） */

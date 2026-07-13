@@ -27,7 +27,8 @@ async function importWithCache(filePath: string) {
 const BLOCKED_COMMAND_PATTERNS = [
   /rm\s+-rf/i, /rmdir\s+\/s/i, /del\s+\/f/i,
   /shutdown/i, /reboot/i, /halt/i, /poweroff/i,
-  /mkfs/i, /format/i, /fdisk/i,
+  // format：仅拦「格式化盘符」如 `format C:`，不误伤 URL 里的 format=json 等
+  /mkfs/i, /\bformat\s+[a-z]:/i, /fdisk/i,
   /dd\s+if=/i,
 ];
 function checkBlockedCommand(cmd: string): string | null {
@@ -162,8 +163,9 @@ export async function executeTool(
     }
     const blocked = checkBlockedCommand(cmd);
     if (blocked) return `(安全拦截) ${blocked}`;
-    // cwd 起点按沙箱级别选择
-    const cmdCwd = sandboxLevel === 'strict' ? ctx.workspaceDir : ctx.projectDir;
+    // cwd 起点一律为工作区（与 run_command.js 对齐）：命令相对路径产物落在各自
+    // workspace，不污染项目根。unrestricted 若需碰项目根用绝对路径显式指定。
+    const cmdCwd = ctx.workspaceDir || ctx.projectDir;
     try {
       return execSync(cmd, {
         encoding: 'utf-8', timeout: 15000,

@@ -13,6 +13,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import { renderContourFrame } from '../../utils/contour';
+import { isBgFrozen } from './bgFreeze';
 import type { ContourParams } from '../../store/skin';
 
 const IDLE_TIMEOUT = 10 * 60 * 1000;       // 600s 无鼠标移动 → 降帧
@@ -62,8 +63,8 @@ const ContourBackground: React.FC<Props> = ({ params }) => {
     onMouseMove(); // 启动 idle 计时
 
     const animate = (now: number) => {
-      if (document.hidden) {
-        // 标签页隐藏时暂停，但保持 raf 注册（resume on visible）
+      if (document.hidden || isBgFrozen()) {
+        // 标签页隐藏 / 页面切换动画期间：暂停绘制，但保持 raf 注册（resume 后续帧）
         rafRef.current = requestAnimationFrame(animate);
         return;
       }

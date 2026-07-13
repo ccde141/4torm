@@ -3,31 +3,6 @@
  */
 import type { CSSProperties } from 'react';
 
-export const headerBtnStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--space-2)',
-  width: '100%',
-  padding: 'var(--space-3)',
-  background: 'transparent',
-  border: 'none',
-  color: 'var(--color-text-secondary)',
-  fontSize: 'var(--text-sm)',
-  fontWeight: 'var(--font-medium)',
-  cursor: 'pointer',
-  textAlign: 'left',
-};
-
-export const badgeStyle: CSSProperties = {
-  marginLeft: 'auto',
-  padding: '2px 6px',
-  borderRadius: '10px',
-  background: 'var(--color-accent-subtle)',
-  color: 'var(--color-accent)',
-  fontSize: 'var(--text-xs)',
-  fontWeight: 'var(--font-medium)',
-};
-
 export const emptyStyle: CSSProperties = {
   padding: 'var(--space-3)',
   fontSize: 'var(--text-xs)',

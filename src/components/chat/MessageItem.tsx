@@ -11,6 +11,7 @@
 
 import { memo } from 'react';
 import StructuredMessage from './StructuredMessage';
+import ReasoningBlock from './ReasoningBlock';
 import ToolCallMessage from './ToolCallMessage';
 import DelegateCard from './DelegateCard';
 import AskCard from './AskCard';
@@ -154,6 +155,8 @@ function MessageItemInner({
 
       return (
         <>
+          {/* 原生思考流（流式中默认展开） */}
+          {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming />}
           {/* 工具步骤独立渲染 */}
           {steps && steps.map((step, i) => (
             <ToolCallMessage
@@ -187,6 +190,8 @@ function MessageItemInner({
     if (hasStructure || (msg.toolSteps && msg.toolSteps.length > 0)) {
       return (
         <>
+          {/* 原生思考流（落定后默认折叠） */}
+          {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming={false} />}
           {/* 工具步骤独立渲染 */}
           {toolSteps.map((step, i) => (
             <ToolCallMessage
@@ -211,17 +216,21 @@ function MessageItemInner({
       );
     }
     return (
-      <div className={`chat__message chat__message--assistant`}>
-        <div className="chat__avatar">AI</div>
-        <div className="chat__bubble">
-          <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>
-          {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
-          <div className="chat__bubble-actions">
-            <button className="chat__msg-action-btn" title="编辑" onClick={() => onStartEdit(msg)}>✏</button>
-            <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+      <>
+        {/* 原生思考流（落定后默认折叠） */}
+        {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming={false} />}
+        <div className={`chat__message chat__message--assistant`}>
+          <div className="chat__avatar">AI</div>
+          <div className="chat__bubble">
+            <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>
+            {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
+            <div className="chat__bubble-actions">
+              <button className="chat__msg-action-btn" title="编辑" onClick={() => onStartEdit(msg)}>✏</button>
+              <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+            </div>
           </div>
         </div>
-      </div>
+      </>
     );
   }
 

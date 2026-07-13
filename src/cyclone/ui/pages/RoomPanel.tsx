@@ -11,14 +11,16 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { renderTextWithCode } from '../../../engine/markdown';
+import { useConfirm } from '../../../components/common/ConfirmDialog';
 import ToolCallMessage from '../../../components/chat/ToolCallMessage';
+import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import type { RoomStreamRunners, FeedMsg } from './useRoomStreamRunners';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import '../../../styles/components/convection.css';
 
 interface RoomToolCall { tool: string; args: Record<string, string>; result: string; }
-interface RoomMsg { speaker: string; content: string; timestamp: number; rawContent?: string; toolCalls?: RoomToolCall[]; }
+interface RoomMsg { speaker: string; content: string; timestamp: number; rawContent?: string; reasoning?: string; toolCalls?: RoomToolCall[]; }
 interface Room { id: string; title: string; topic: string; mode?: 'build' | 'plan'; participantSeatIds: string[]; publicMessages: RoomMsg[]; }
 interface SeatLite { id: string; title: string; }
 
@@ -33,6 +35,7 @@ function publicToFeed(msgs: RoomMsg[]): FeedMsg[] {
     content: m.content,
     isHuman: m.speaker === '人类',
     isArchiveSummary: m.speaker === 'system' || m.content.includes('重置前的群聊摘要'),
+    reasoning: m.reasoning,
     tools: (m.toolCalls || []).map(t => ({ tool: t.tool, args: t.args, result: t.result, status: 'success' as const })),
   }));
 }
@@ -40,6 +43,7 @@ function publicToFeed(msgs: RoomMsg[]): FeedMsg[] {
 export default function RoomPanel({ workshopId, roomId, seats, runners, onChanged, active = true }: {
   workshopId: string; roomId: string; seats: SeatLite[]; runners: RoomStreamRunners; onChanged?: () => void; active?: boolean;
 }) {
+  const confirm = useConfirm();
   const [room, setRoom] = useState<Room | null>(null);
   const [history, setHistory] = useState<FeedMsg[]>([]);
   // 草稿初值取自注册表：切走/重挂回来未发文本还在（内存级）
@@ -150,7 +154,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
   async function resetRoomContext(mode: 'clear' | 'summary', scope: 'public' | 'both' = 'public') {
     if (streaming) return;
     const label = scope === 'both' ? '群聊与会长私聊' : '群聊公共上下文';
-    if (!confirm(`${mode === 'summary' ? '归档并摘要重置' : '归档并清空'}当前${label}？共享工作区文件不会被删除。`)) return;
+    if (!(await confirm({ title: `${mode === 'summary' ? '归档并摘要重置' : '归档并清空'}当前${label}？`, message: '共享工作区文件不会被删除。', confirmText: mode === 'summary' ? '归档重置' : '归档清空', danger: true }))) return;
     await postAction('reset-context', { mode, scope }, '重置群聊上下文失败');
   }
 
@@ -299,6 +303,7 @@ function FeedRow({ m, idx, prefix }: { m: FeedMsg; idx: number; prefix: string }
       <div className="chat__avatar">{m.isArchiveSummary ? '档' : m.speaker.slice(0, 2)}</div>
       <div className="chat__bubble">
         <div className="conv__speaker-label">{m.speaker}</div>
+        {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} defaultOpen={false} />}
         {m.tools.map((t, ti) => (
           <ToolCallMessage key={ti} toolCall={{ toolName: t.tool, params: t.args, result: t.result, status: t.status }} />
         ))}

@@ -62,7 +62,7 @@ export default function ChairDrawer({
         style={{
           ...panelStyle,
           opacity: open ? 1 : 0,
-          transform: open ? 'translateX(0) scale(1)' : 'translateX(30px) scale(0.985)',
+          transform: open ? 'translateX(0) scale(1)' : 'translateX(var(--motion-drawer-distance)) scale(0.985)',
           pointerEvents: open ? 'auto' : 'none',
         }}
       >
@@ -135,7 +135,7 @@ const panelStyle: React.CSSProperties = {
   background: 'var(--glass-bg-strong)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))',
   borderLeft: '1px solid var(--glass-border)',
   boxShadow: '-8px 0 28px -12px rgba(0,0,0,0.45)',
-  transition: 'opacity var(--duration-normal) var(--ease-out-expo), transform var(--duration-emphasized) var(--ease-emphasized)',
+  transition: 'opacity var(--motion-enter-duration) var(--motion-enter-ease), transform var(--motion-drawer-duration) var(--motion-drawer-ease)',
 };
 const headerStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 'var(--space-2)',

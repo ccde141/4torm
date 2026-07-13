@@ -18,6 +18,8 @@ import type { TaskBoard } from '../../../utils/taskboard';
 export interface Live {
   blocks: DisplayBlock[];
   text: string;
+  /** 原生思考流（流式当轮显示；不进上下文，故重载不保留） */
+  reasoning?: string;
   phase: string;
   ask?: { question: string; options?: string[] };
   /** task_board 假工具通过 meta 侧通道回传的最新任务板（undefined=本轮未更新，null=已清空） */
@@ -52,6 +54,8 @@ function applyEvent(ev: any, ls: Live): void {
   switch (ev.type) {
     case 'token':
       ls.text += ev.content; ls.phase = ''; break;
+    case 'reasoning':
+      ls.reasoning = (ls.reasoning || '') + ev.content; ls.phase = ''; break;
     case 'tool-call':
       ls.blocks.push({ kind: 'tool', tool: ev.tool, args: ev.args, status: 'running' });
       ls.phase = `正在调用 ${ev.tool}...`; break;
@@ -113,6 +117,13 @@ async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (
   if (!reader) return;
   const dec = new TextDecoder();
   let buf = '';
+  const processLine = (line: string) => {
+    const t = line.trim();
+    if (!t.startsWith('data:')) return;
+    const p = t.slice(5).trim();
+    if (!p || p === '[DONE]') return;
+    try { onEvent(JSON.parse(p)); } catch (e) { console.warn('[cyclone] 工位 SSE 事件解析失败', p, e); }
+  };
   while (true) {
     if (signal.aborted) { reader.cancel(); break; }
     const { done, value } = await reader.read();
@@ -120,14 +131,11 @@ async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (
     buf += dec.decode(value, { stream: true });
     const lines = buf.split('\n');
     buf = lines.pop() ?? '';
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t.startsWith('data:')) continue;
-      const p = t.slice(5).trim();
-      if (!p || p === '[DONE]') continue;
-      try { onEvent(JSON.parse(p)); } catch (e) { console.warn('[cyclone] 工位 SSE 事件解析失败', p, e); }
-    }
+    for (const line of lines) processLine(line);
   }
+  // 收尾：flush 解码器 + 处理末尾未换行终结的残留
+  buf += dec.decode();
+  if (buf) for (const line of buf.split('\n')) processLine(line);
 }
 
 export interface StartStreamOpts {
@@ -277,17 +285,31 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void) {
 
     const payloadKey = action === 'chat' ? 'message' : 'answer';
     const path = opts.pathOverride ?? `/api/cyclone/workshop/${workshopId}/seat/${seatId}/${action}`;
+    // 前沿+后沿节流：高频 token/reasoning/delegate-token 只延后 paint（live 已含最新累积，
+    // 不丢内容）；结构性事件立即刷。突发结束后由后沿 timer 兜底刷出。
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastFlushAt = 0;
+    const FLUSH_MS = 80;
+    const doNotify = () => { flushTimer = null; lastFlushAt = Date.now(); notify(seatId); };
+    const scheduleNotify = () => {
+      if (flushTimer) return;
+      const wait = FLUSH_MS - (Date.now() - lastFlushAt);
+      if (wait <= 0) doNotify(); else flushTimer = setTimeout(doNotify, wait);
+    };
+    const flushNotify = () => { if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; } lastFlushAt = Date.now(); notify(seatId); };
+    const HIGH_FREQ = new Set(['token', 'reasoning', 'delegate-token']);
     (async () => {
       try {
         await streamSSE(
           path,
           { [payloadKey]: text },
-          (ev) => { applyEvent(ev, runner.live); notify(seatId); },
+          (ev) => { applyEvent(ev, runner.live); if (HIGH_FREQ.has(ev.type)) scheduleNotify(); else flushNotify(); },
           ctrl.signal,
         );
       } catch (e) {
         if (!ctrl.signal.aborted) { runner.live.text += `\n[请求失败] ${(e as Error).message}`; }
       } finally {
+        if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
         runner.streaming = false;
         runner.done = true;
         notify(seatId);          // 当前挂载的 SeatChat → reload /status 后 clearIfDone

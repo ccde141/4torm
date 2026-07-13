@@ -18,9 +18,13 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { atomicWriteFile } from '../engine/shared/atomic-io';
 import type { FastifyInstance } from 'fastify';
-import type { WorkflowGraph } from '../engine/tradewind/foundation/types';
-import { Orchestrator } from '../engine/tradewind/orchestrator';
+import type { WorkflowGraph, WorkflowMode } from '../engine/tradewind/foundation/types';
+import { Orchestrator, LoopController } from '../engine/tradewind/orchestrator';
+import type { LoopConfig } from '../engine/tradewind/orchestrator';
+import { loadProfiles, saveProfiles, findProfile, autoProfileToLoopConfig } from '../engine/shared/profile-store';
+import type { AutoProfile } from '../engine/tradewind/foundation/types';
 import { EntryExecutor } from '../engine/tradewind/nodes/entry';
 import { OutputExecutor } from '../engine/tradewind/nodes/output';
 import { AgentExecutor, activeNodeRunners } from '../engine/tradewind/nodes/agent';
@@ -42,8 +46,15 @@ async function getChairModel(dataDir: string, chairAgentId: string): Promise<str
   return agent?.model || '';
 }
 
-/** 当前活跃的 orchestrator 实例（单执行，后续改为 Map） */
+/** 当前活跃的 orchestrator 实例（单执行，后续改为 Map）。循环模式下指向当前圈。 */
 let activeOrchestrator: Orchestrator | null = null;
+/** 当前活跃的循环控制器（循环模式）；单次运行时为 null */
+let activeLoop: LoopController | null = null;
+
+/** 统一存活判定：循环存活（含圈间 gap）或单圈存活 */
+function isExecutionRunning(): boolean {
+  return !!(activeLoop?.isRunning() || activeOrchestrator?.isRunning());
+}
 
 export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
   const dataDir = (app as any).dataDir as string;
@@ -59,7 +70,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
 
   /** POST /run — 启动工作流 */
   app.post('/run', async (req, reply) => {
-    if (activeOrchestrator?.isRunning()) {
+    if (isExecutionRunning()) {
       return reply.status(409).send({ error: 'Execution already running' });
     }
 
@@ -67,25 +78,70 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       graph: WorkflowGraph;
       workflowId: string;
       initialInput?: string;
+      mode?: WorkflowMode;
+      /** 循环档案 ID：仅 mode='auto' 时有意义；manual 一律忽略 */
+      profileId?: string;
     };
 
     if (!body.graph || !body.workflowId) {
       return reply.status(400).send({ error: 'Missing graph or workflowId' });
     }
 
-    // 启动前校验图结构（无环 / 入出线 / 类型 / agent 引用 …）
+    const mode: WorkflowMode = body.mode === 'auto' ? 'auto' : 'manual';
+
+    // 启动前校验图结构（基础：无环 / 入出线 / 类型 / agent 引用 …；
+    // 自动模式追加：否决会议室/暂停点 + 模型须 native）。前端据 errors[].nodeId 高亮否决。
     const knownNodeTypes = new Set(executors.keys());
-    const errors = await validateWorkflow(body.graph, dataDir, knownNodeTypes);
+    const errors = await validateWorkflow(body.graph, dataDir, knownNodeTypes, mode);
     if (errors.length > 0) {
       return reply.status(400).send({ error: '工作流校验未通过', errors });
     }
 
+    // 循环内生于 auto：manual 一律不循环；auto 且指定了可映射的 profile 才起 LoopController。
+    let loopConfig: LoopConfig | null = null;
+    if (mode === 'auto' && body.profileId) {
+      const profiles = await loadProfiles(dataDir, body.workflowId);
+      const profile = findProfile(profiles, body.profileId);
+      if (!profile) {
+        return reply.status(404).send({ error: `档案不存在：${body.profileId}` });
+      }
+      loopConfig = autoProfileToLoopConfig(profile);
+      // absolute（潮汐）档本刀不支持循环执行 → 降级单圈 + 日志说明
+      if (!loopConfig) {
+        console.warn(`[tradewind] profile ${body.profileId} 为 absolute 档，本刀不支持循环，降级单圈`);
+      }
+    }
+
+    // 循环模式：LoopController 常驻，每圈起跑时把当前 Orchestrator 挂到 activeOrchestrator
+    if (loopConfig) {
+      activeLoop = new LoopController({
+        graph: body.graph,
+        dataDir,
+        workflowId: body.workflowId,
+        executors,
+        initialInput: body.initialInput,
+        mode,
+        loop: loopConfig,
+        onLapStart: (orch) => { activeOrchestrator = orch; },
+      });
+      await activeLoop.start();
+      // start 后 onLapStart 已同步设好首圈 activeOrchestrator
+      return reply.send({
+        executionId: activeOrchestrator?.getExecutionId() ?? '',
+        runDir: activeOrchestrator?.getRunDir() ?? '',
+        loop: true,
+      });
+    }
+
+    // 单次运行（manual，或 auto 无 profile / absolute 降级）：行为与循环无关，完全不变
+    activeLoop = null;
     activeOrchestrator = new Orchestrator({
       graph: body.graph,
       dataDir,
       workflowId: body.workflowId,
       executors,
       initialInput: body.initialInput,
+      mode,
     });
 
     await activeOrchestrator.start();
@@ -97,16 +153,21 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
 
   /** POST /stop — 停止当前执行 */
   app.post('/stop', async (_req, reply) => {
-    if (!activeOrchestrator?.isRunning()) {
+    if (!isExecutionRunning()) {
       return reply.status(404).send({ error: 'No running execution' });
     }
-    await activeOrchestrator.stop();
+    if (activeLoop) {
+      await activeLoop.stop();
+      activeLoop = null;
+    } else {
+      await activeOrchestrator!.stop();
+    }
     return reply.send({ stopped: true });
   });
 
   /** GET /status — 当前执行状态（用于前端刷新后恢复） */
   app.get('/status', async (_req, reply) => {
-    if (!activeOrchestrator?.isRunning()) {
+    if (!isExecutionRunning() || !activeOrchestrator) {
       return reply.send({ running: false });
     }
     return reply.send({
@@ -114,13 +175,20 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       executionId: activeOrchestrator.getExecutionId(),
       workflowId: activeOrchestrator.getWorkflowId(),
       runDir: activeOrchestrator.getRunDir(),
+      ...(activeLoop ? { loop: true, lap: activeLoop.getLapIndex() } : {}),
     });
   });
 
   /** GET /nodes/status — 所有节点的运行时状态（前端轮询用） */
   app.get('/nodes/status', async (_req, reply) => {
-    if (!activeOrchestrator?.isRunning()) {
+    // 循环模式下用统一存活判定：圈间 gap 期 activeLoop 仍存活，不能因当前圈已 stop 就误报 stopped。
+    if (!isExecutionRunning()) {
       return reply.send({ running: false, nodes: {} });
+    }
+    const lap = activeLoop ? activeLoop.getLapIndex() : undefined;
+    // gap 期 activeOrchestrator 可能指向已停实例：拿不到执行态就回空节点表，但 running 仍为 true。
+    if (!activeOrchestrator) {
+      return reply.send({ running: true, nodes: {}, ...(lap !== undefined ? { lap } : {}) });
     }
     const executionId = activeOrchestrator.getExecutionId();
     const envelopePending = getEnvelopePending(executionId);
@@ -163,7 +231,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    return reply.send({ running: true, nodes });
+    return reply.send({ running: true, nodes, executionId, ...(lap !== undefined ? { lap } : {}) });
   });
 
   /** POST /human-gate/:nodeId/submit — 人类编辑后继续 */
@@ -209,8 +277,8 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     }
     const wfDir = path.join(workflowsDir, body.workflowId);
     await fs.mkdir(path.join(wfDir, 'workspace'), { recursive: true });
-    await fs.writeFile(path.join(wfDir, 'graph.json'), JSON.stringify(body.graph, null, 2));
-    await fs.writeFile(path.join(wfDir, 'meta.json'), JSON.stringify({
+    await atomicWriteFile(path.join(wfDir, 'graph.json'), JSON.stringify(body.graph, null, 2));
+    await atomicWriteFile(path.join(wfDir, 'meta.json'), JSON.stringify({
       workflowId: body.workflowId,
       name: body.name || body.workflowId,
       updatedAt: new Date().toISOString(),
@@ -278,6 +346,49 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     } catch {
       return reply.status(404).send({ error: 'Workflow not found' });
     }
+  });
+
+  // ── AutoProfile CRUD（循环档案，独立 profiles.json，图保持 mode-free）────
+
+  /** GET /workflow/:id/profiles — 列出一个工作流的全部循环档案 */
+  app.get('/workflow/:id/profiles', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const profiles = await loadProfiles(dataDir, id);
+    return reply.send({ profiles });
+  });
+
+  /** POST /workflow/:id/profiles — 覆盖写整个档案数组（前端整存） */
+  app.post('/workflow/:id/profiles', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as { profiles?: AutoProfile[] };
+    if (!Array.isArray(body.profiles)) {
+      return reply.status(400).send({ error: 'Missing profiles array' });
+    }
+    // 基础 shape 校验：id/name 必填、cadence 合法、lapBound/carryOver 合法
+    for (const p of body.profiles) {
+      const okCadence = p.cadence?.kind === 'relative'
+        ? typeof (p.cadence as { gapSec?: unknown }).gapSec === 'number' && p.cadence.gapSec >= 0
+        : p.cadence?.kind === 'absolute';
+      const okBound = p.lapBound === null || (typeof p.lapBound === 'number' && p.lapBound > 0);
+      if (!p.id || !p.name || !okCadence || !okBound
+        || (p.carryOver !== 'accumulate' && p.carryOver !== 'reset' && p.carryOver !== 'summary')) {
+        return reply.status(400).send({ error: `档案字段非法：${p.id || '(缺 id)'}` });
+      }
+    }
+    await saveProfiles(dataDir, id, body.profiles);
+    return reply.send({ saved: true, count: body.profiles.length });
+  });
+
+  /** DELETE /workflow/:id/profiles/:profileId — 删单个档案 */
+  app.delete('/workflow/:id/profiles/:profileId', async (req, reply) => {
+    const { id, profileId } = req.params as { id: string; profileId: string };
+    const profiles = await loadProfiles(dataDir, id);
+    const next = profiles.filter(p => p.id !== profileId);
+    if (next.length === profiles.length) {
+      return reply.status(404).send({ error: `档案不存在：${profileId}` });
+    }
+    await saveProfiles(dataDir, id, next);
+    return reply.send({ deleted: true });
   });
 
   /** GET /health — 健康检查 */
@@ -464,7 +575,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ messages: [], roundLog: [], busy: false, lastSeq: 0 });
   });
 
-  /** POST /chat/:nodeId/abort — 中止 Agent 节点当前轮次 */
+  /** POST /chat/:nodeId/abort — 中止 Agent 节点当前轮次（仅 human 轮；envelope 轮请用 /pause） */
   app.post('/chat/:nodeId/abort', async (req, reply) => {
     const { nodeId } = req.params as { nodeId: string };
     const runner = activeNodeRunners.get(nodeId);
@@ -476,6 +587,38 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     }
     runner.abortRound();
     return reply.send({ aborted: true });
+  });
+
+  /**
+   * POST /chat/:nodeId/pause — 暂停 Agent 节点当前信封轮（软中止 + 扣住信封）。
+   * envelope 轮没有"单独取消"的合法出口：只能暂停后续跑，或 /stop 停整个工作流。
+   */
+  app.post('/chat/:nodeId/pause', async (req, reply) => {
+    const { nodeId } = req.params as { nodeId: string };
+    const runner = activeNodeRunners.get(nodeId);
+    if (!runner) {
+      return reply.status(404).send({ error: '节点尚未激活' });
+    }
+    if (!runner.pause()) {
+      return reply.status(409).send({ error: '节点当前没有可暂停的信封轮' });
+    }
+    return reply.send({ paused: true });
+  });
+
+  /**
+   * POST /chat/:nodeId/resume — 续跑已暂停的信封轮（重跑本轮，便宜版）。
+   * 真封口（complete_task/anomaly）才会投递下游。
+   */
+  app.post('/chat/:nodeId/resume', async (req, reply) => {
+    const { nodeId } = req.params as { nodeId: string };
+    const runner = activeNodeRunners.get(nodeId);
+    if (!runner) {
+      return reply.status(404).send({ error: '节点尚未激活' });
+    }
+    if (!runner.resume()) {
+      return reply.status(409).send({ error: '节点当前没有已暂停的信封轮' });
+    }
+    return reply.send({ resumed: true });
   });
 
   // ── Meeting 端点 ──────────────────────────────────────────────
@@ -571,7 +714,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
         const meetDir = getMeetingsDir(meeting.runDir);
         const fileName = getMeetingFileName(nodeId, meeting.session.round);
         fs.mkdir(meetDir, { recursive: true })
-          .then(() => fs.writeFile(
+          .then(() => atomicWriteFile(
             `${meetDir}/${fileName}`,
             JSON.stringify(meeting.session.publicMessages, null, 2),
           ))

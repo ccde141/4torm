@@ -12,6 +12,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { TideTask, TideRunRecord } from './types';
 
+/** 原子写：先写 .tmp 再 rename 覆盖，防止进程中途被杀（关软件）时留下半截 JSON 损坏任务表/记录。 */
+async function atomicWrite(filePath: string, data: string): Promise<void> {
+  const tmp = `${filePath}.tmp`;
+  await fs.writeFile(tmp, data, 'utf-8');
+  await fs.rename(tmp, filePath);
+}
+
 // ── Tasks CRUD ──────────────────────────────────────────────────
 
 function tasksFile(dataDir: string): string {
@@ -30,7 +37,7 @@ export async function loadTasks(dataDir: string): Promise<TideTask[]> {
 export async function saveTasks(dataDir: string, tasks: TideTask[]): Promise<void> {
   const dir = path.join(dataDir, 'tide');
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(tasksFile(dataDir), JSON.stringify(tasks, null, 2), 'utf-8');
+  await atomicWrite(tasksFile(dataDir), JSON.stringify(tasks, null, 2));
 }
 
 export async function getTask(dataDir: string, taskId: string): Promise<TideTask | undefined> {
@@ -61,7 +68,7 @@ export async function saveRunRecord(dataDir: string, record: TideRunRecord): Pro
   await fs.mkdir(dir, { recursive: true });
   const safeTs = record.timestamp.replace(/:/g, '-');
   const file = path.join(dir, `${safeTs}.json`);
-  await fs.writeFile(file, JSON.stringify(record, null, 2), 'utf-8');
+  await atomicWrite(file, JSON.stringify(record, null, 2));
 }
 
 export async function listRunRecords(

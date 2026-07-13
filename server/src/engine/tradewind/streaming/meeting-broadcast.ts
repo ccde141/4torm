@@ -18,7 +18,7 @@ export type MeetingBroadcastEvent =
   | { type: 'heartbeat'; label: string; phase?: string; elapsed?: number }
   | { type: 'contact-start'; label: string; target: string }
   | { type: 'contact-done'; label: string; target: string; result: string; ok: boolean }
-  | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }> }
+  | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>; noReply?: boolean }
   | { type: 'round-done'; messages: unknown[]; compacted?: boolean }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-done'; content: string }

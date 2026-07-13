@@ -258,19 +258,28 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
                     ...(typeof (t as any).meta?.before === 'string' ? { diff: { before: (t as any).meta.before } } : {}),
                   }))
                 : undefined);
-          const doneContent = ev.content;
-          const doneRaw = stream.streamContent || ev.rawContent || ev.content;
+          // 无回复：显式定稿为"未回复"（灰字），而非留下空气泡/永久光标
+          const noReply = ev.noReply === true;
+          const doneContent = noReply ? `（${doneLabel} 未回复）` : ev.content;
+          const doneRaw = noReply ? undefined : (stream.streamContent || ev.rawContent || ev.content);
           // 直接定位目标消息（不依赖 streamRef，避免 React batch 时序问题）
           setPublicMsgs(prev => {
             const idx = (() => { for (let i = prev.length - 1; i >= 0; i--) { if (prev[i].speaker === doneLabel && prev[i].streaming) return i; } return -1; })();
-            if (idx < 0) return prev;
+            if (idx < 0) {
+              // 占位气泡已丢失（订阅时序竞态）：无回复时补一条显式消息，
+              // 避免"没有然后了"。有内容的情形交给 round-done 权威快照补出。
+              return noReply
+                ? [...prev, { speaker: doneLabel, content: doneContent, timestamp: Date.now(), noReply: true }]
+                : prev;
+            }
             const next = [...prev];
             next[idx] = {
               ...prev[idx],
               content: doneContent,
               rawContent: doneRaw,
-              toolCalls: finalTools,
+              toolCalls: noReply ? undefined : finalTools,
               streaming: false,
+              noReply,
             };
             return next;
           });

@@ -3,12 +3,14 @@
  */
 
 import { useState, useEffect } from 'react';
+import type { WorkflowMode } from '../../types';
 
 interface ToolbarProps {
   workflowId: string;
   running: boolean;
   saveTime: number | null;
-  onRun: () => void;
+  onRun: (mode: WorkflowMode) => void;
+  onOpenProfiles: () => void;
   onStop: () => void;
   onSave: () => void;
   onSetWorkflowId: (id: string) => void;
@@ -16,7 +18,7 @@ interface ToolbarProps {
 }
 
 export function Toolbar({
-  workflowId, running, saveTime, onRun, onStop, onSave, onSetWorkflowId, onLoadList,
+  workflowId, running, saveTime, onRun, onOpenProfiles, onStop, onSave, onSetWorkflowId, onLoadList,
 }: ToolbarProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(workflowId);
@@ -80,10 +82,24 @@ export function Toolbar({
             停止
           </button>
         ) : (
-          <button className="tw-toolbar__btn tw-toolbar__btn--run" onClick={onRun}>
-            <span className="tw-toolbar__btn-icon">▶</span>
-            运行
-          </button>
+          <>
+            <button
+              className="tw-toolbar__btn tw-toolbar__btn--run"
+              onClick={() => onRun('manual')}
+              title="手动模式：人类在场，可随时对话、介入、暂停；会议室 / 暂停点节点可用"
+            >
+              <span className="tw-toolbar__btn-icon">▶</span>
+              手动运行
+            </button>
+            <button
+              className="tw-toolbar__btn tw-toolbar__btn--run tw-toolbar__btn--auto"
+              onClick={onOpenProfiles}
+              title="自动模式：选择循环档案或单圈运行；无人值守全自动跑完，会议室 / 暂停点节点会被否决，Agent 模型须支持原生工具调用"
+            >
+              <span className="tw-toolbar__btn-icon">⚡</span>
+              自动运行
+            </button>
+          </>
         )}
         <div className={`tw-toolbar__status ${running ? 'tw-toolbar__status--running' : ''}`}>
           <span className="tw-toolbar__dot" />

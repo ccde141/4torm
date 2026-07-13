@@ -9,6 +9,7 @@ import { getAgents } from '../../../store/agent';
 import { parseStructuredOutput } from '../../../engine/parser';
 import { renderTextWithCode } from '../../../engine/markdown';
 import StructuredMessage from '../../../components/chat/StructuredMessage';
+import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { formatTimestamp } from '../../../utils/time';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
@@ -17,8 +18,8 @@ import type { Agent } from '../../../types';
 
 interface ToolStep { tool: string; args: Record<string, string>; result?: string; status: 'pending' | 'running' | 'done' | 'error' }
 interface WaitingInfo { phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
-interface ConvMsg { speaker: string; content: string; streaming?: boolean; rawContent?: string; toolCalls?: ToolStep[]; waitingInfo?: WaitingInfo; timestamp?: string }
-interface CMsg { role: string; content: string; streaming?: boolean; waitingInfo?: WaitingInfo; timestamp?: string }
+interface ConvMsg { speaker: string; content: string; streaming?: boolean; rawContent?: string; toolCalls?: ToolStep[]; waitingInfo?: WaitingInfo; timestamp?: string; reasoning?: string }
+interface CMsg { role: string; content: string; streaming?: boolean; waitingInfo?: WaitingInfo; timestamp?: string; reasoning?: string }
 interface SessionSummary { id: string; title: string; chairAgentId: string; participantAgentIds: string[]; topic: string; messageCount: number; tokenEstimate: number; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number }; updatedAt: string }
 
 async function readErrorMessage(r: Response, fallback: string): Promise<string> {
@@ -250,6 +251,10 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
           body: JSON.stringify({ mode }),
         });
         if (!resetResp.ok) { alert(await readErrorMessage(resetResp, '重置对流失败')); return; }
+        const resetData = await resetResp.json().catch(() => ({}));
+        if (mode === 'summary' && resetData?.summaryFailed) {
+          alert('摘要生成失败，已按「归档清空」处理（历史已归档到 bak，可恢复）。');
+        }
         refreshSessions();
         const r = await fetch(`/api/convection/session/${activeId}/status`);
         if (r.ok) {
@@ -272,11 +277,29 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
     try {
       let currentLabel = '';
       let streamContent = '';
+      let reasoningContent = '';
       let pendingTools: ToolStep[] = [];
+      // 前沿+后沿节流：token/reasoning 高频，只延后 paint（快照来自本地累积，不丢内容）；
+      // 结构性事件仍即时 setMsgs。突发结束由后沿 timer 兜底刷出。
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
+      let lastFlushAt = 0;
+      const FLUSH_MS = 80;
+      const applyStream = () => {
+        const c = streamContent, rc = reasoningContent, lbl = currentLabel;
+        setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === lbl ? { ...m, content: c, reasoning: rc, waitingInfo: undefined } : m));
+      };
+      const doFlush = () => { flushTimer = null; lastFlushAt = Date.now(); applyStream(); };
+      const scheduleFlush = () => {
+        if (flushTimer) return;
+        const wait = FLUSH_MS - (Date.now() - lastFlushAt);
+        if (wait <= 0) doFlush(); else flushTimer = setTimeout(doFlush, wait);
+      };
+      const cancelFlush = () => { if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; } };
       await streamSSE(`/api/convection/session/${activeId}/speak`, { message: msg }, ev => {
         if (ev.type === 'agent-start') {
           currentLabel = ev.label;
           streamContent = '';
+          reasoningContent = '';
           pendingTools = [];
           setMsgs(p => [...p, { speaker: ev.label, content: '', streaming: true, toolCalls: [], timestamp: new Date().toISOString() }]);
         } else if (ev.type === 'heartbeat') {
@@ -284,8 +307,10 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
           setMsgs(p => p.map((m, i) => i === p.length - 1 && m.streaming ? { ...m, waitingInfo: info } : m));
         } else if (ev.type === 'token') {
           streamContent += ev.chunk;
-          const snap = streamContent;
-          setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === currentLabel ? { ...m, content: snap, waitingInfo: undefined } : m));
+          scheduleFlush();
+        } else if (ev.type === 'reasoning') {
+          reasoningContent += ev.chunk;
+          scheduleFlush();
         } else if (ev.type === 'tool-call') {
           pendingTools = [...pendingTools, { tool: ev.tool, args: ev.args, status: 'running' }];
           const tools = pendingTools;
@@ -295,10 +320,12 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
           const tools = pendingTools;
           setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === currentLabel ? { ...m, toolCalls: tools } : m));
         } else if (ev.type === 'agent-done') {
+          cancelFlush();   // 终答权威，撤掉可能在排队的后沿刷新（否则覆盖 final content）
           const finalTools: ToolStep[] = (ev.toolCalls || []).map((tc: any) => ({ tool: tc.tool, args: tc.args, result: tc.result, status: 'done' as const }));
           setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === ev.label ? { ...m, content: ev.content, rawContent: streamContent || ev.rawContent || ev.content, toolCalls: finalTools, streaming: false } : m));
           currentLabel = '';
           streamContent = '';
+          reasoningContent = '';
           pendingTools = [];
         } else if (ev.type === 'compact-start') {
           setMsgs(p => [...p, { speaker: '系统', content: '会长正在整理对话记录...', streaming: true, toolCalls: [], timestamp: new Date().toISOString() }]);
@@ -350,6 +377,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
     setCMsgs(prev => [...prev, { role: 'user', content: msg, timestamp: new Date().toISOString() }]);
     try {
       let acc = '';
+      let cReasoning = '';
       setCMsgs(prev => [...prev, { role: 'assistant', content: '', streaming: true, timestamp: new Date().toISOString() }]);
       await streamSSE(`/api/convection/session/${activeId}/chair`, { message: msg }, ev => {
         if (ev.type === 'heartbeat') {
@@ -359,6 +387,10 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
           acc += ev.chunk;
           const snap = acc;
           setCMsgs(p => p.map((m, i) => i === p.length - 1 && m.role === 'assistant' && (m as any).streaming ? { ...m, content: snap, waitingInfo: undefined } : m));
+        } else if (ev.type === 'chair-reasoning') {
+          cReasoning += ev.chunk;
+          const snap = cReasoning;
+          setCMsgs(p => p.map((m, i) => i === p.length - 1 && m.role === 'assistant' && (m as any).streaming ? { ...m, reasoning: snap, waitingInfo: undefined } : m));
         } else if (ev.type === 'chair-done') {
           setCMsgs(p => p.map((m, i) => i === p.length - 1 && m.role === 'assistant' ? { ...m, content: ev.content, streaming: false, waitingInfo: undefined } : m));
         }
@@ -513,6 +545,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
                       <div className="chat__avatar">{m.speaker.slice(0, 2)}</div>
                       <div className="chat__bubble stmsg-bubble">
                         <div className="conv__speaker-label">{m.speaker}</div>
+                        {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} />}
                         {thinkText && (
                           <div className="stmsg-section stmsg-section--collapsible">
                             <details open={thinkStreaming}>
@@ -651,6 +684,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
           {cMsgs.map((m, i) => (
             <div key={i} className={`conv__chair-msg conv__chair-msg--${m.role === 'user' ? 'user' : 'assistant'}`}>
               <div className={`conv__chair-bubble conv__chair-bubble--${m.role === 'user' ? 'user' : 'assistant'}`}>
+                {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!(m as any).streaming} />}
                 {m.waitingInfo && (m as any).streaming && (
                   <div className="conv__waiting-hint">
                     等待模型响应

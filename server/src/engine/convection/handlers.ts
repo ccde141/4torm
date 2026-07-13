@@ -57,11 +57,13 @@ async function getAgent(dataDir: string, agentId: string): Promise<LoadedAgent> 
 export type ConvectionStreamEvent =
   | { type: 'agent-start'; label: string }
   | { type: 'token'; label: string; chunk: string }
+  | { type: 'reasoning'; label: string; chunk: string }
   | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; label: string; tool: string; result: string }
   | { type: 'agent-done'; label: string; content: string; rawContent: string; toolCalls: ToolCallRecord[] }
   | { type: 'heartbeat'; label: string; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | { type: 'chair-token'; chunk: string }
+  | { type: 'chair-reasoning'; chunk: string }
   | { type: 'chair-done'; content: string }
   | { type: 'compact-start' }
   | { type: 'compact-done'; archivedCycles: number; summaryLength: number }
@@ -176,6 +178,7 @@ export async function handleSpeak(
           toolDefs,
           onEvent: onEvent ? (ev) => {
             if (ev.type === 'token') onEvent({ type: 'token', label: ev.label, chunk: ev.chunk! });
+            else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', label: ev.label, chunk: ev.chunk! });
             else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', label: ev.label, tool: ev.tool!, args: ev.args! });
             else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', label: ev.label, tool: ev.tool!, result: ev.result! });
             else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
@@ -313,10 +316,13 @@ export async function handleChair(
   const onChunk = onEvent
     ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'chair-token', chunk }); }
     : undefined;
+  const onReasoning = onEvent
+    ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'chair-reasoning', chunk }); }
+    : undefined;
 
   let reply: string;
   try {
-    const r = await callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal: abortCtrl.signal });
+    const r = await callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal: abortCtrl.signal, onReasoning });
     reply = r.content;
     updateSessionUsage(session, r.usage);
   } catch (e) {

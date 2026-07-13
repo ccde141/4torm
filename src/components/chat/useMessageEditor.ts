@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { getSession, saveSession, autoTitle } from '../../store/chat';
+import { useConfirm } from '../common/ConfirmDialog';
 import type { Agent, ChatMessage } from '../../types';
 
 export function useMessageEditor(
@@ -10,17 +11,18 @@ export function useMessageEditor(
 ) {
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
+  const confirm = useConfirm();
 
   const deleteMessage = useCallback(async (msgId: string) => {
     if (!activeSessionId || !selectedAgent) return;
-    if (!window.confirm('确定删除此消息？')) return;
+    if (!(await confirm({ title: '删除此消息？', message: '此操作不可撤销。', confirmText: '删除', danger: true }))) return;
     const session = await getSession(activeSessionId);
     if (!session) return;
     const filtered = session.messages.filter(m => m.id !== msgId);
     setMessages(filtered);
     await saveSession({ ...session, messages: filtered, title: autoTitle(filtered) });
     refreshSessions(selectedAgent);
-  }, [activeSessionId, selectedAgent, setMessages, refreshSessions]);
+  }, [activeSessionId, selectedAgent, setMessages, refreshSessions, confirm]);
 
   const startEdit = useCallback((msg: ChatMessage) => {
     setEditingMsgId(msg.id);

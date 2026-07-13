@@ -65,11 +65,6 @@ export function parseActions(text: string): ParsedAction[] {
   return out;
 }
 
-export function parseAnswer(text: string): string | null {
-  const m = /<answer>([\s\S]*?)<\/answer>/.exec(text);
-  return m ? m[1].trim() : null;
-}
-
 export function stripInternalTags(text: string): string {
   return text
     .replace(/<think>[\s\S]*?<\/think>/g, '')
@@ -111,7 +106,7 @@ export interface AgentReActResult {
 }
 
 export interface ConvectionReActEvent {
-  type: 'token' | 'tool-call' | 'tool-result' | 'heartbeat' | 'error';
+  type: 'token' | 'reasoning' | 'tool-call' | 'tool-result' | 'heartbeat' | 'error';
   label: string;
   chunk?: string;
   tool?: string;
@@ -177,10 +172,13 @@ export async function runConvectionReAct(params: RunReActParams): Promise<AgentR
     const onChunk = onEvent
       ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'token', label, chunk }); }
       : undefined;
+    const onReasoning = onEvent
+      ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'reasoning', label, chunk }); }
+      : undefined;
 
     let reply: string;
     try {
-      const r = await callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: abortCtrl.signal });
+      const r = await callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: abortCtrl.signal, onReasoning });
       reply = r.content;
       recordUsage(r.usage);
 
@@ -191,7 +189,7 @@ export async function runConvectionReAct(params: RunReActParams): Promise<AgentR
         for (let c = 0; c < MAX_CONTINUATIONS; c++) {
           msgs.push({ role: 'assistant', content: reply });
           msgs.push({ role: 'user', content: '继续' });
-          const cr = await callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: abortCtrl.signal });
+          const cr = await callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: abortCtrl.signal, onReasoning });
           recordUsage(cr.usage);
           msgs.pop();
           msgs.pop();
@@ -225,7 +223,7 @@ export async function runConvectionReAct(params: RunReActParams): Promise<AgentR
       msgs.push({ role: 'user', content: retryHint });
       let retryReply = '';
       try {
-        const rr = await callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: abortCtrl.signal });
+        const rr = await callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: abortCtrl.signal, onReasoning });
         retryReply = rr.content;
         recordUsage(rr.usage);
       } catch { /* 走兜底 */ }

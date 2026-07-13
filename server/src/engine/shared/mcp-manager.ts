@@ -44,6 +44,8 @@ const reconnectAttempts = new Map<string, number>();
 let healthTimer: ReturnType<typeof setInterval> | null = null;
 let configWatcher: FSWatcher | null = null;
 let watchDebounce: ReturnType<typeof setTimeout> | null = null;
+/** initMcpManager 时记下，供 connectServer 做 workspace 自动注入（connectServer 不显式收 dataDir）。 */
+let rootDataDir = '';
 
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
@@ -65,6 +67,43 @@ function addTools(serverName: string, client: McpStdioClient): void {
   }
 }
 
+// ── workspace 自动注入（仅 filesystem server）────────────────────
+
+/** 扫描 data 下各子系统的 agent 工作区目录，用于给 filesystem MCP 放行。 */
+async function scanWorkspaceDirs(dataDir: string): Promise<string[]> {
+  const dirs: string[] = [];
+  // 各子系统工作区的父目录 + 该层下的 workspace/.workspace 目录名
+  const roots: Array<{ base: string; sub: string }> = [
+    { base: 'agents', sub: '.workspace' },
+    { base: 'cyclone', sub: 'workspace' },
+    { base: 'convection/sessions', sub: 'workspace' },
+    { base: 'tradewind/workflows', sub: 'workspace' },
+  ];
+  for (const { base, sub } of roots) {
+    const parent = path.join(dataDir, base);
+    let entries: string[];
+    try { entries = await fs.readdir(parent); } catch { continue; }
+    for (const name of entries) {
+      const wsPath = path.join(parent, name, sub);
+      try {
+        if ((await fs.stat(wsPath)).isDirectory()) dirs.push(wsPath);
+      } catch { /* 该实例无 workspace，跳过 */ }
+    }
+  }
+  return dirs;
+}
+
+/** 若开启 autoWorkspaces，返回追加了 workspace 目录的 args 副本；否则原样返回。 */
+async function withAutoWorkspaces(cfg: McpServerConfig): Promise<string[]> {
+  const args = cfg.args || [];
+  if (!cfg.autoWorkspaces || !rootDataDir) return args;
+  const dirs = await scanWorkspaceDirs(rootDataDir);
+  // 去重：已在 args 里的目录不重复追加
+  const fresh = dirs.filter(d => !args.includes(d));
+  if (fresh.length) console.log(`[MCP] ${cfg.name} 自动放行 ${fresh.length} 个 agent workspace`);
+  return [...args, ...fresh];
+}
+
 // ── 连接 / 重连 / 断开 ─────────────────────────────────────────────
 
 /** 连接（或重连）单个 server。会先清掉同名旧 client 与待重连定时器。 */
@@ -77,7 +116,9 @@ async function connectServer(cfg: McpServerConfig): Promise<void> {
   if (existing) { existing.disconnect(); clients.delete(cfg.name); }
   purgeTools(cfg.name);
 
-  const client = new McpStdioClient(cfg);
+  // filesystem 自动放行：连接前把 agent workspace 目录拼进 args（不写回配置文件）
+  const effectiveCfg: McpServerConfig = { ...cfg, args: await withAutoWorkspaces(cfg) };
+  const client = new McpStdioClient(effectiveCfg);
   client.on('log', (msg: string) => console.log(msg));
   client.on('disconnected', (info: { code: number | null; intentional: boolean } | number) => {
     purgeTools(cfg.name);
@@ -154,6 +195,7 @@ export async function reconnectServer(dataDir: string, name: string): Promise<vo
 
 /** 初始化：读取配置、启动所有 enabled 的 server，并开启热监听 + 健康检查 */
 export async function initMcpManager(dataDir: string): Promise<void> {
+  rootDataDir = dataDir;   // 记下供 workspace 自动注入
   const configs = await readAllConfigs(dataDir);
   for (const cfg of configs) {
     if (!cfg.enabled || cfg.transport !== 'stdio') continue;

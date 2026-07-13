@@ -98,6 +98,13 @@ async function removeStrict(targetPath: string, opts?: { recursive?: boolean }):
   }
 }
 
+/** 原子写：先写 .tmp 再 rename 覆盖，防止进程中途被杀（关软件）时留下半截 JSON 损坏会话/索引。 */
+async function atomicWrite(filePath: string, data: string): Promise<void> {
+  const tmp = `${filePath}.tmp`;
+  await fs.writeFile(tmp, data, 'utf-8');
+  await fs.rename(tmp, filePath);
+}
+
 // ── 旧结构迁移 ──────────────────────────────────────────────────
 
 /**
@@ -177,7 +184,7 @@ async function updateIndex(dir: string, sessionId: string): Promise<void> {
   const index = Array.isArray(existing) ? existing : [];
   if (!index.includes(sessionId)) {
     index.push(sessionId);
-    await fs.writeFile(indexFile, JSON.stringify(index, null, 2), 'utf-8');
+    await atomicWrite(indexFile, JSON.stringify(index, null, 2));
   }
 }
 
@@ -259,7 +266,7 @@ export async function writeTideSession(
 
   const dir = taskSessionDir(dataDir, session.agentId, taskId, taskName);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, `${session.id}.json`), JSON.stringify(session, null, 2), 'utf-8');
+  await atomicWrite(path.join(dir, `${session.id}.json`), JSON.stringify(session, null, 2));
   await updateIndex(dir, session.id);
 }
 
@@ -267,7 +274,7 @@ export async function writeTideSession(
 export async function writeSeasonSession(dataDir: string, session: TideSession): Promise<void> {
   const dir = seasonDir(dataDir, session.agentId);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, `${session.id}.json`), JSON.stringify(session, null, 2), 'utf-8');
+  await atomicWrite(path.join(dir, `${session.id}.json`), JSON.stringify(session, null, 2));
   await updateIndex(dir, session.id);
 }
 
@@ -284,7 +291,7 @@ export async function deleteTideSession(
   const index = await readJsonFile<string[]>(indexFile, '潮汐会话索引');
   if (Array.isArray(index)) {
     const updated = index.filter(id => id !== sessionId);
-    await fs.writeFile(indexFile, JSON.stringify(updated, null, 2), 'utf-8');
+    await atomicWrite(indexFile, JSON.stringify(updated, null, 2));
   }
   return true;
 }

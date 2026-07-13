@@ -24,6 +24,7 @@ import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execListAgents, execCreateWorkflow } from '../shared/workflow-builder';
 import { execListWorkflows, execUpdateWorkflow } from '../shared/workflow-editor';
 import { buildVirtualToolDefs } from './virtual-tools';
+import { execMemoryTool, MEMORY_TOOL_NAMES, buildMemoryToolDefs } from '../shared/agent-memory';
 import { execCreateAutomation, execUpdateAutomation, execListAutomations } from '../shared/automation-builder';
 import { execTaskBoard, taskboardFile } from '../shared/taskboard';
 import fs from 'node:fs/promises';
@@ -55,6 +56,7 @@ function renderReviewChanges(ledger: FileChange[]): string {
 
 export type ConversationEvent =
   | { type: 'token'; content: string }
+  | { type: 'reasoning'; content: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
   | { type: 'delegate-start'; task: string; delegateId: string }
@@ -115,6 +117,8 @@ export class SessionRunner {
   isSuspended(): boolean { return this.suspended; }
   /** 绑定的 Agent id（供按-Agent 串行队列取 key） */
   getAgentId(): string { return this.opts.agentId; }
+  /** 构造时定死的生效模型（供注册表判断季风临时切模型时是否需重建） */
+  getModel(): string { return this.opts.model; }
 
   /** 中止当前执行 */
   abort(): void {
@@ -194,11 +198,11 @@ export class SessionRunner {
     // 原生模式：把虚拟工具（ask/delegate/list_agents/create_workflow）也作为 schema
     // 注入 tools 参数，否则模型在原生通道看不见它们。执行端 toolCaller 按 name 拦截不变。
     // create_automation 仅在可交互会话（有 sessionId）注入：潮汐无人值守运行不给，避免自我繁殖。
-    const nativeToolDefs = [...toolDefs, ...buildVirtualToolDefs(true, !!this.opts.sessionId)];
+    const nativeToolDefs = [...toolDefs, ...buildVirtualToolDefs(true, !!this.opts.sessionId), ...buildMemoryToolDefs()];
 
     const llm: LLMCaller = {
-      async call(msgs, _options, onChunk, sig, tools) {
-        return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools });
+      async call(msgs, _options, onChunk, sig, tools, onReasoning) {
+        return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools, onReasoning });
       },
     };
 
@@ -224,6 +228,19 @@ export class SessionRunner {
         }
         if (tool === 'delegate') {
           return await this.execDelegate(args, onEvent);
+        }
+        // 长期记忆工具：引擎侧内联执行，补 source='conversation'+时间戳
+        if ((MEMORY_TOOL_NAMES as readonly string[]).includes(tool)) {
+          onEvent({ type: 'tool-call', tool, args });
+          try {
+            const result = await execMemoryTool(dataDir, this.opts.agentId, 'conversation', tool, args);
+            onEvent({ type: 'tool-result', tool, result, ok: true });
+            return result;
+          } catch (e) {
+            const err = `记忆工具执行失败: ${(e as Error).message}`;
+            onEvent({ type: 'tool-result', tool, result: err, ok: false });
+            return err;
+          }
         }
         // task_board 假工具：服务端 inline 落盘，meta 走 UI 侧通道刷新置顶面板
         if (tool === 'task_board') {
@@ -317,6 +334,7 @@ export class SessionRunner {
           toolDefs: nativeToolDefs,
           onEvent: (ev) => {
             if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
+            else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', content: ev.chunk });
           },
           // 季风专属：识别 ask 触发的 SuspendSignal，让 core 走挂起分支
           onToolError: (e) => {
@@ -333,6 +351,7 @@ export class SessionRunner {
           tools: enableTools ? toolCaller : undefined,
           onEvent: (ev) => {
             if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
+            else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', content: ev.chunk });
           },
           signal,
         });

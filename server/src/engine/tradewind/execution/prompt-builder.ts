@@ -5,7 +5,7 @@
  * - 注入 Note 内容（编译期静态注入，来自 note 边）
  * - 注入工作流身份（让 Agent 知道自己在多 Agent 协作系统中工作）
  * - 信封内容不再走 prompt，改为 user message 注入（agent.ts 流程）
- * - 无 memory/history 段落（信风 Agent 无持久记忆）
+ * - 长期记忆段（memorySection）由 agent.ts 经 recallMemory 召回后注入，可空
  *
  * 信风独立副本，可自主演进。
  */
@@ -27,11 +27,23 @@ function loadMeta(): string {
   }
 }
 
+/** 读取信风基础协作准则段（baseline.md，与本文件同级）。读不到则静默跳过。 */
+function loadBaseline(): string {
+  try {
+    const p = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'baseline.md');
+    return readFileSync(p, 'utf-8').trim();
+  } catch {
+    return '';
+  }
+}
+
 // ── 类型 ──────────────────────────────────────────────────────────
 
 export interface TradewindPromptParams {
   /** Agent 角色提示词 */
   rolePrompt: string;
+  /** 长期记忆段（recallMemory 返回，可空——空则不渲染） */
+  memorySection?: string;
   /** 工具定义列表 */
   toolDefs: ToolDef[];
   /** Note 内容（来自 note 边，多条拼合） */
@@ -69,6 +81,18 @@ export interface TradewindPromptParams {
   modelFamily?: 'claude' | 'gpt' | 'gemini' | 'other';
   /** 是否走原生工具调用模式（true 时使用精简协议段，不教标签格式） */
   native?: boolean;
+  /**
+   * 是否自动模式。注意：信封交接段对**所有 native agent**都注入（因两模式 envelope 轮
+   * 都用 complete_task 封口投递），autoMode 只调措辞——自动=无人实时驱动、需自主做完；
+   * 手动=人可随时介入对话，仅处理上游信封时才 complete_task。text agent（仅手动）不注入。
+   */
+  autoMode?: boolean;
+  /**
+   * 下游感知：本节点 complete_task 封口后，信封自动交给的下游节点 label 列表。
+   * 注入 prompt 让 agent 明白"我有自动交接路径、下游是谁"，避免误用 contact 前向甩锅。
+   * 空数组=终点节点（无 handoff 下游），不渲染下游感知句。
+   */
+  downstreamLabels?: string[];
 }
 
 /** 构建信风 Agent 的完整 system prompt */
@@ -96,9 +120,17 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
   // §1 角色定义
   sections.push(`# 角色\n\n${params.rolePrompt}`);
 
+  // §1.2 基础协作准则（baseline.md；紧接角色，角色定义可覆盖）
+  const baseline = loadBaseline();
+  if (baseline) sections.push(baseline);
+
+  // §1.5 长期记忆（跨任务经验，recallMemory 召回；空则跳过）
+  if (params.memorySection?.trim()) sections.push(params.memorySection.trim());
+
   // §2 工作环境（信风协作程序背景 + 消息来源识别）
+  // native agent（两模式）处理上游信封时必须 complete_task 封口投递；text agent 用 <answer>。
   const handoffDesc = params.native
-    ? `完成后用自然语言给出最终答复即可，会自动打包成信封交给下游。`
+    ? `处理上游信封的任务完成后，必须调用 complete_task 封口交接（详见下方「交接信封」段）——普通文本不代表完成、不会交给下游。`
     : `完成后输出 <answer>，会自动打包成信封交给下游。`;
   sections.push([
     `# 你的工作环境`,
@@ -148,6 +180,13 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
     sections.push(buildToolProtocol(params.toolDefs, params.allowDelegate, params.sandboxLevel, params.teamRoster));
   }
 
+  // §5.5 信封交接段（所有 native agent；教信封累积 + complete_task 显式交接）。
+  // text agent 无可靠终结信号，不注入（保持 <answer> 现状）。
+  if (params.native) sections.push(buildEnvelopeHandoffSection(params.autoMode ?? false, params.downstreamLabels ?? []));
+
+  // §5.6 长期记忆（工具说明 + 记忆自觉引导；文本/native 都注入）
+  sections.push(buildMemorySection());
+
   // §6 「基地 + 沙箱」段
   sections.push(buildSandboxSection({
     workspaceAbs: params.workspaceAbs,
@@ -157,6 +196,79 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
   }));
 
   return sections.join('\n\n---\n\n');
+}
+
+// ── 长期记忆段 ────────────────────────────────────────────────────
+
+/**
+ * 记忆工具说明 + 「记忆自觉」行为引导。
+ * 文本/native 都注入：native 已有 schema，此段主要承载"何时该主动记"的引导。
+ * 工具执行由引擎侧拦截（execMemoryTool），会自动补时间戳与来源，agent 无需关心。
+ */
+function buildMemorySection(): string {
+  return `# 你的长期记忆
+
+你有跨任务、跨工作流的长期记忆。它独立于当前对话——这次记下的，下次相关任务开始时会自动出现在你上方的「你的经验记忆」里。
+
+## 何时主动写入（用 memory_write）
+工作中出现以下情形，**主动**记一条，别等：
+- 人类纠正了你的做法，或表达了明确偏好 → category=feedback
+- 你踩了坑并找到规避方式 → category=pitfall
+- 你确认了一个可跨任务复用的事实（约定、路径、接口、数据位置）→ category=fact
+- 值得回访的外部资源 → category=reference
+
+## 怎么写得好
+- summary 一句话说清，是召回匹配的关键；detail 写"是什么/为什么/下次怎么用"
+- 写入前先用 memory_list 看有没有同类，**有则不要重复写**
+- 只记真正可复用的经验，不记一次性的过程细节（那些归档已留存）
+
+## 可用工具
+- memory_write(summary, detail, category, tags?) — 记一条（自动带时间戳）
+- memory_list() — 查已有条目，避免重复
+- memory_read(slug) — 读某条全文`;
+}
+
+// ── 信封交接说明段 ────────────────────────────────────────────────
+
+/**
+ * 信封交接说明：教 native 模型「攒信封 → 显式 complete_task 交接」的工作方式。
+ * 两模式共用（envelope 轮机制同构），autoMode 只改开头对"人是否在场"的措辞。
+ * text 模型不注入此段，也拿不到这些信封工具。
+ */
+function buildEnvelopeHandoffSection(autoMode: boolean, downstreamLabels: string[]): string {
+  const intro = autoMode
+    ? `你正运行在**自动模式**：没有人类实时驱动，你要自主把当前任务做完，并**显式交接**给下游节点。`
+    : `处理上游信封的任务时，你要多轮工作把它做完，并**显式交接**给下游节点。（人类可随时与你对话——那只是聊天，不触发交接；只有处理上游信封、调用 complete_task 才会向下游传递。）`;
+
+  // 下游感知句：让 agent 明白自己有自动交接路径、下游是谁——从根上消除"用 contact 把整包工作
+  // 前向甩锅"的动机。终点节点（无下游）则明说交接即完成本工作流。
+  const downstreamLine = downstreamLabels.length
+    ? `\n\n**你的自动下游**：complete_task 封口后，信封会**自动交给「${downstreamLabels.join('、')}」**——你无需、也不应该用 contact 把本职工作推给他们；做完你这一步、封口交接即可，系统会自动流转。`
+    : `\n\n**你是流程终点**：complete_task 封口即完成整个工作流本轮，无下游节点。`;
+
+  return `# 交接信封
+
+**当前你处于信封轮**：你收到的是上游传来的工作信封。完成**你这一步**的职责后，用 complete_task 封口交接给下游。${downstreamLine}
+
+${intro}
+
+## 交接信封（逐步累积）
+
+你要交给下游的**硬信息**（结论、数据、决策、约束等）通过「信封」传递。用以下工具在多轮工作中逐步维护它：
+- **envelope_add(text)** — 往信封加一条交接要点（一条一个要点，简洁完整、可独立理解）
+- **envelope_list()** — 查看信封当前所有条目及其 id
+- **envelope_remove(id)** — 按 id 删掉写错或过时的条目
+
+信封是增量累积的：随着工作推进，随时把可交接的结论沉淀进去，不必等到最后一次性写。
+
+## 完成任务（显式交接）
+
+确认最终目标达成后，调用 **complete_task**（可附一段自由备注：口语化的交接说明、注意事项）。这会**封口信封并交给下游**。
+
+⚠ **关键规则**：
+- 只有调用 complete_task 才会向下游交接。**普通文本 / 自然语言答复不代表完成，也不会交接任何东西。**
+- 不要用"我完成了""任务已结束"这类话表示完成——必须实际调用 complete_task。
+- 即使工作受阻或结论不完美，也要把**已有结论 + 受阻原因**写进信封后调用 complete_task，把能交接的先交接下去，绝不停在半空。`;
 }
 
 // ── 工具协议构建 ──────────────────────────────────────────────────
@@ -347,10 +459,13 @@ ${toolList}`];
 
 可调用 \`contact\` 联络工作流中的其他节点（可选目标：${others}）。
 
-适合使用 contact 的场景：
-- 需要对方的专业能力或已有成果
-- 缺少完成本职所必需的信息
-- 某个子任务更适合由特定节点承担——可以直接交办给对方
+适合使用 contact 的场景（**拉取协助 / 索取信息**）：
+- 需要对方的专业能力协助**你手头**的工作
+- 缺少完成本职所必需的信息，需要向对方索取（如上游数据、接口规格、决策依据）
+
+**不适合**使用 contact 的场景：
+- **把有自动下游的整包工作推给别人**——那不是你该做的事，用 complete_task 交接给自动下游即可
+- 你只是想让下游"接着干"——下游会在收到你封口的信封后自动开始，无需你 contact 催办
 
 注意：收到联络后直接回复，不要反过来 contact 对方（会死锁）`);
   }

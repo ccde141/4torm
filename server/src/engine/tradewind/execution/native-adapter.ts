@@ -31,6 +31,8 @@ export interface NativeAdapterParams {
   toolCaller: ToolCaller;
   onEvent?: (ev: NodeRunnerEvent) => void;
   signal?: AbortSignal;
+  /** 自动模式：显式终结工具门（传入则启用 complete_task 终结语义，见 conversation/react-loop.ts） */
+  completion?: { tool: string };
 }
 
 /**
@@ -38,8 +40,8 @@ export interface NativeAdapterParams {
  */
 export async function runTradewindReActNative(
   params: NativeAdapterParams,
-): Promise<{ content: string; rawContent: string; toolCalls: ToolCallRecord[]; turns: number; usage?: TokenUsage; lastPromptTokens?: number }> {
-  const { dataDir, model, temperature, messages, toolDefs, toolCaller, onEvent, signal } = params;
+): Promise<{ content: string; rawContent: string; toolCalls: ToolCallRecord[]; turns: number; usage?: TokenUsage; lastPromptTokens?: number; autoOutcome?: 'completed' | 'anomaly' }> {
+  const { dataDir, model, temperature, messages, toolDefs, toolCaller, onEvent, signal, completion } = params;
 
   const llm: LLMCaller = {
     async call(msgs, _opts, onChunk, sig, tools) {
@@ -63,6 +65,7 @@ export async function runTradewindReActNative(
     toolDefs,
     onEvent: onLoopEvent,
     signal,
+    completion,
     // 信风不注入 onToolError：无 ask、无挂起语义
   });
 
@@ -73,5 +76,6 @@ export async function runTradewindReActNative(
     turns: result.turns,
     usage: result.usage,
     lastPromptTokens: result.usage?.promptTokens,
+    autoOutcome: result.autoOutcome,
   };
 }

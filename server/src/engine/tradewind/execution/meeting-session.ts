@@ -22,6 +22,8 @@ export interface MeetingMessage {
   toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>;
   /** 入会摘要流式过程中为 true；定稿后为 false / undefined */
   streaming?: boolean;
+  /** true=该轮无有效回复（模型空回复），前端以灰字显式呈现 */
+  noReply?: boolean;
 }
 
 /** 会议参与者（节点维度，非 Agent 实体维度） */

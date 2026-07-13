@@ -14,6 +14,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import { renderWindFrame, buildLineProfiles, recalcFadeFactors, type LineProfile } from '../../utils/wind';
+import { isBgFrozen } from './bgFreeze';
 import type { WindParams } from '../../store/skin';
 
 const IDLE_TIMEOUT = 10 * 60 * 1000; // 10 分钟无操作才降帧（切走标签页由 document.hidden 即时暂停）
@@ -77,7 +78,8 @@ const WindBackground: React.FC<Props> = ({ params }) => {
     onMouseMove();
 
     const animate = (now: number) => {
-      if (document.hidden) {
+      // 标签页隐藏 / 页面切换动画期间：跳过绘制、只续帧，让玻璃层动画顺滑
+      if (document.hidden || isBgFrozen()) {
         rafRef.current = requestAnimationFrame(animate);
         return;
       }

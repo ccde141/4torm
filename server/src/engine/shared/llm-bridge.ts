@@ -120,6 +120,9 @@ export interface LLMCallParams {
   options?: LLMOptions;
   /** 流式回调：每收到一个 token chunk 调一次。不传则走非流式。 */
   onChunk?: (chunk: string) => void;
+  /** 原生思考流回调：模型吐 reasoning_content/reasoning/thinking 时调一次。
+   *  与 onChunk 物理分开；不支持原生思考的模型永不触发（零副作用）。 */
+  onReasoning?: (chunk: string) => void;
   /** 中止信号：runner stop 时 abort，截断正在进行的 LLM 请求 */
   signal?: AbortSignal;
   /**
@@ -188,7 +191,9 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
     model: options?.model ?? extractModelId(fullModelKey),
     messages: mapMessages(messages, forwardMap),
     temperature: options?.temperature ?? 0.7,
-    max_tokens: options?.maxTokens ?? 4096,
+    // 默认 8192（原 4096 太低，长命令/长 write_file content 作为 tool_call 参数易被截断）。
+    // 仍是可被 options.maxTokens 覆盖的上限，按实际生成计费，抬高不等于增费。
+    max_tokens: options?.maxTokens ?? 8192,
     stream,
   };
   if (toolsParam) {
@@ -281,9 +286,16 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
         signal: params.signal,
       });
     } catch (err: any) {
-      // 网络错误（DNS/连接失败）也重试
+      // 网络错误（DNS/连接失败）也重试。
+      // undici 把真实原因（ECONNREFUSED/ENOTFOUND/证书错误）塞在 err.cause，
+      // 只读 err.message 会得到无信息的 "fetch failed"，这里展开 cause 便于定位。
       if (err?.name === 'AbortError') throw err;
-      lastError = err instanceof Error ? err : new Error(String(err));
+      const cause = err?.cause;
+      const detail = cause?.code || cause?.message || '';
+      const base = err instanceof Error ? err.message : String(err);
+      lastError = new Error(
+        detail ? `${base}（${detail} — 无法连接 ${url}，请确认该地址/服务可达）` : base
+      );
       continue;
     }
 
@@ -318,7 +330,7 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
     }
 
     // 流式：解析 OpenAI SSE 格式
-    return parseSSEStream(res, params.onChunk!, !!params.tools, nameMap);
+    return parseSSEStream(res, params.onChunk!, !!params.tools, nameMap, params.onReasoning);
   }
 
   throw lastError ?? new Error('LLM 调用失败（重试耗尽）');
@@ -350,6 +362,7 @@ async function parseSSEStream(
   onChunk: (chunk: string) => void,
   native: boolean,
   nameMap: Map<string, string>,
+  onReasoning?: (chunk: string) => void,
 ): Promise<LLMResult> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error('LLM 流式响应无 body');
@@ -361,29 +374,36 @@ async function parseSSEStream(
   let usage: TokenUsage | undefined;
   const toolAcc = native ? makeToolCallAccumulator() : null;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-
-    for (const line of lines) {
+  // 单行处理抽成闭包：主循环与流结束后的残留 buffer 收尾复用同一套逻辑，
+  // 避免末尾未换行的 chunk（部分聚合端最后一条 data 不补 \n\n 就关连接）被丢弃。
+  const processLine = (line: string) => {
       const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data:')) continue;
+      if (!trimmed || !trimmed.startsWith('data:')) return;
       const payload = trimmed.slice(5).trim();
-      if (payload === '[DONE]') continue;
+      if (payload === '[DONE]') return;
 
       try {
         const json = JSON.parse(payload) as {
           choices?: Array<{
-            delta?: { content?: string; tool_calls?: unknown[] };
+            delta?: {
+              content?: string;
+              tool_calls?: unknown[];
+              // 原生思考流：不同 provider 命名不一，按形态而非厂商兜底。
+              // 新规范出现 → 往这里加一个字段名即可（针对性补丁）。
+              reasoning_content?: string;  // DeepSeek R1 / 硅基流动 / 多数国内聚合
+              reasoning?: string;          // OpenRouter / 部分兼容端
+              thinking?: string;           // 少数把 Anthropic 转译成 OpenAI 格式的网关
+            };
             finish_reason?: string | null;
           }>;
           usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
         };
         const choice = json.choices?.[0];
+        // 原生思考流：与正文物理分开，不进 full（不污染正文、不回灌上下文）
+        const reasoning = choice?.delta?.reasoning_content
+          ?? choice?.delta?.reasoning
+          ?? choice?.delta?.thinking;
+        if (reasoning && onReasoning) onReasoning(reasoning);
         const token = choice?.delta?.content;
         if (token) {
           full += token;
@@ -404,8 +424,22 @@ async function parseSSEStream(
       } catch {
         // 非 JSON 行忽略
       }
-    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) processLine(line);
   }
+
+  // 收尾：flush 解码器取出末尾残留的多字节字符（如中文），并入 buffer；
+  // 再把最后一段未被换行终结的内容处理掉——否则末尾（常是思维链/正文结尾）会丢。
+  buffer += decoder.decode();
+  if (buffer) for (const line of buffer.split('\n')) processLine(line);
 
   const toolCalls = toolAcc && toolAcc.hasAny() ? toolAcc.finish() : undefined;
   // 工具名反解（净化名 → 原始名），与非流式路径一致

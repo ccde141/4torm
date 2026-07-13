@@ -6,11 +6,16 @@
 .md-bubble {
   font-size: var(--text-sm);
   line-height: 1.6;
+  /* 约束链：让 min-width:0 / max-width 一路传到代码块，使其 overflow-x 生效而非撑破气泡 */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .md-rendered {
   white-space: normal;
   word-break: break-word;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* 段落 */
@@ -122,6 +127,9 @@
   background: var(--color-bg-elevated, rgba(127, 127, 127, 0.12));
   color: var(--color-accent, #f59e0b);
   border: 1px solid var(--border-color, rgba(127, 127, 127, 0.18));
+  /* 长行内 code（如无空格长路径/URL）也要能断行，否则同样撑破气泡 */
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 /* 兼容旧 .md-text（已弃用，保留以防遗漏） */
@@ -137,6 +145,8 @@
   background: #0f1115;
   border: 1px solid rgba(255, 255, 255, 0.06);
   font-family: var(--font-mono);
+  /* 不得超过气泡宽度；超长代码由内部 __body 的 overflow-x 横向滚动消化 */
+  max-width: 100%;
 }
 
 .md-code-block__header {

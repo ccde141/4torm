@@ -36,6 +36,7 @@ import { broadcastToMeeting } from '../streaming/meeting-broadcast';
 import { appendNodeContext } from '../foundation/node-context-store';
 import { markEnvelopePending, markEnvelopeDone } from '../foundation/node-status-store';
 import { activeNodeRunners } from './agent';
+import { EnvelopeDraft } from '../execution/envelope-draft';
 import path from 'node:path';
 
 /** 活跃会议注册表：nodeId → { session, resolve } */
@@ -249,14 +250,17 @@ export class MeetingExecutor implements NodeExecutor {
       }
     }
 
-    // handoff 内容 = 简短引导语（详细内容已通过节点上下文广播给参与者）
-    const handoffContent = [
-      `会议《${meetingLabel}》已结束。`,
-      `话题：${session.topic}`,
-      `参与者：${participants.map(p => p.label).join('、')}`,
-      ``,
-      `会议纪要已注入会议参与者的上下文。下游节点请基于自身角色继续工作。`,
-    ].join('\n');
+    // handoff 内容 = 会长纪要走信封封口（与 agent 的 complete_task 交接同构，相对更严谨）：
+    // 会议结论作为结构化交接信息，交接备注给下游导航到参与者上下文里的完整纪要 + 对话快照。
+    const draft = new EnvelopeDraft();
+    draft.add(`会议《${meetingLabel}》纪要：${endResult.minutes}`);
+    const handoffContent = draft.seal(
+      [
+        `话题：${session.topic}`,
+        `参与者：${participants.map(p => p.label).join('、')}`,
+        `完整纪要与对话快照已注入会议参与者的上下文，下游节点请基于自身角色继续工作。`,
+      ].join('\n'),
+    );
 
     await ctx.sendHandoff(handoffContent, BUILTIN_EVENT_IDS.HANDOFF);
     ctx.emit(BUILTIN_EVENT_IDS.WORK_DONE);

@@ -60,6 +60,11 @@ export interface ChatMessage {
   streamingPhase?: 'llm-waiting' | 'tool-exec';
   /** 当前阶段已等待秒数（运行时字段） */
   phaseElapsed?: number;
+  /**
+   * 原生思考流（reasoning_content/reasoning/thinking）。与正文物理分开，
+   * 不在 rawContent 里，故需持久化，否则重载丢失。无原生思考的模型为空。
+   */
+  reasoningContent?: string;
 }
 
 /** 工具调用步骤（StructuredMessage 与流式期间共用） */

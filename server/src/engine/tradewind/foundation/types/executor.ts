@@ -8,11 +8,11 @@
  * - 无 consult 机制（由人类对话 + 会议室替代）
  */
 
-import type { Envelope } from './envelope';
+import type { Envelope, EnvelopeHeader } from './envelope';
 import type { EventTypeDef } from './events';
 import type { ContextMessage } from './context';
 import type { NodeSnapshot } from './archive';
-import type { InputKind, OutputKind } from './workflow';
+import type { InputKind, OutputKind, WorkflowMode } from './workflow';
 
 // ── 辅助类型 ─────────────────────────────────────────────────────────
 
@@ -42,6 +42,8 @@ export interface BaseContext {
   readonly runDir: string;
   readonly dataDir: string;
   readonly signal: AbortSignal;
+  /** 运行模式：'manual'（人类在场）/ 'auto'（全自动）。节点据此走对应执行路径。 */
+  readonly mode: WorkflowMode;
   /** nodeId → agentId 映射（仅 type=agent 的节点） */
   readonly nodeAgentMap: Readonly<Record<string, string>>;
   /** nodeId → label 映射（所有节点） */
@@ -56,8 +58,9 @@ export interface BaseContext {
    *
    * @param sourcePort 可选源出口编号；不传则投到 source 的所有 handoff 出线（兼容现有节点）
    *                   传入时只投到 sourcePort 匹配的出线（用于 Human Gate 区分 approve/rework）
+   * @param header 可选信封皮（循环/触发元数据：lap / loopNote / idempotencyKey）
    */
-  sendHandoff(content: string, eventTypeId: string, sourcePort?: number): Promise<void>;
+  sendHandoff(content: string, eventTypeId: string, sourcePort?: number, header?: EnvelopeHeader): Promise<void>;
   /** 设置节点状态（机械动作，引擎记账用） */
   setState(state: NodeState): void;
   /** 发射业务事件（写日志 + SSE 推送） */

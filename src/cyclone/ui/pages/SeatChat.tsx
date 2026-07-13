@@ -10,9 +10,11 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { renderTextWithCode } from '../../../engine/markdown';
+import { useConfirm } from '../../../components/common/ConfirmDialog';
 import ToolCallMessage from '../../../components/chat/ToolCallMessage';
 import DelegateCard from '../../../components/chat/DelegateCard';
 import AskCard from '../../../components/chat/AskCard';
+import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import ContactCard from './ContactCard';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import TaskBoardDrawer, { RAIL_W } from '../../../components/chat/TaskBoardDrawer';
@@ -34,6 +36,7 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
   /** 当前工作室页是否可见。仅用于桌面拖拽路径接收，会长实例（chairBase 存在）始终不接收。 */
   active?: boolean;
 }) {
+  const confirm = useConfirm();
   const [seat, setSeat] = useState<SeatStatus | null>(null);
   const [history, setHistory] = useState<DisplayMessage[]>([]);
   // 草稿初值取自注册表：切走/重挂回来未发文本还在（内存级，硬退出不留）
@@ -184,7 +187,7 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
     if (streaming) return;
     const isChair = seatId.startsWith('__chair__');
     const label = isChair ? '会长私聊' : '工位私聊';
-    if (!confirm(`${mode === 'summary' ? '归档并摘要重置' : '归档并清空'}当前${label}上下文？共享工作区文件不会被删除。`)) return;
+    if (!(await confirm({ title: `${mode === 'summary' ? '归档并摘要重置' : '归档并清空'}当前${label}上下文？`, message: '共享工作区文件不会被删除。', confirmText: mode === 'summary' ? '归档重置' : '归档清空', danger: true }))) return;
     const url = isChair
       ? `${chairBase}/reset-context`
       : `/api/cyclone/workshop/${workshopId}/seat/${seatId}/reset-context`;
@@ -244,6 +247,7 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
         {optimistic && <DisplayRow key={optimistic.id} msg={optimistic} />}
         {live && (
           <>
+            {live.reasoning && <ReasoningBlock reasoning={live.reasoning} isStreaming />}
             {live.blocks.map((b, i) => <BlockRow key={`live-${i}`} block={b} />)}
             {live.ask && <AskCard question={live.ask.question} options={live.ask.options} answered={false} onReply={(a) => run('resume', a)} />}
             {(live.text || live.phase) && (

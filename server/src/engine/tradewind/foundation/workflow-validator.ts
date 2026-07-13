@@ -29,7 +29,8 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { WorkflowGraph, WorkflowEdge, WorkflowNode } from './types';
+import type { WorkflowGraph, WorkflowEdge, WorkflowNode, WorkflowMode } from './types';
+import { autoModeSyncRules, checkAgentsNativeCapable } from './workflow-validator-auto';
 
 export interface ValidationError {
   code: string;
@@ -40,11 +41,13 @@ export interface ValidationError {
   edgeId?: string;
 }
 
-/** 派生数据上下文，buildContext 一次构建给所有规则使用 */
-interface ValidationContext {
+/** 派生数据上下文，buildContext 一次构建给所有规则使用（含自动模式规则） */
+export interface ValidationContext {
   graph: WorkflowGraph;
   knownNodeTypes: Set<string>;
   knownAgentIds: Set<string>;
+  /** agentId → model key（自动模式 native 能力校验用） */
+  agentModels: Map<string, string>;
   nodeById: Map<string, WorkflowNode>;
   /** target → handoff 入线列表 */
   handoffInEdges: Map<string, WorkflowEdge[]>;
@@ -52,7 +55,7 @@ interface ValidationContext {
   handoffOutEdges: Map<string, WorkflowEdge[]>;
 }
 
-type ValidationRule = (ctx: ValidationContext) => ValidationError[];
+export type ValidationRule = (ctx: ValidationContext) => ValidationError[];
 
 // ── 主函数 ────────────────────────────────────────────────────────
 
@@ -60,6 +63,7 @@ export async function validateWorkflow(
   graph: WorkflowGraph,
   dataDir: string,
   knownNodeTypes: Set<string>,
+  mode: WorkflowMode = 'manual',
 ): Promise<ValidationError[]> {
   const ctx = await buildContext(graph, dataDir, knownNodeTypes);
 
@@ -82,7 +86,16 @@ export async function validateWorkflow(
     checkNoteNodeIO,              // R15
   ];
 
-  return rules.flatMap(rule => rule(ctx));
+  // 自动模式：追加独立的 auto 规则组（基础规则一行不改，不在 R1–R15 里塞 if(auto)）。
+  // 无环 R14 已全模式通用，无需重复。
+  if (mode === 'auto') rules.push(...autoModeSyncRules);
+
+  const errors = rules.flatMap(rule => rule(ctx));
+
+  // native 能力校验是异步的（需读 provider 配置 + 探测缓存），单列于同步规则之后。
+  if (mode === 'auto') errors.push(...await checkAgentsNativeCapable(ctx, dataDir));
+
+  return errors;
 }
 
 // ── 上下文构建 ────────────────────────────────────────────────────
@@ -103,24 +116,26 @@ async function buildContext(
     (handoffOutEdges.get(e.source) ?? handoffOutEdges.set(e.source, []).get(e.source)!).push(e);
   }
 
+  const agentModels = await readAgentModelMap(dataDir);
   return {
     graph,
     knownNodeTypes,
-    knownAgentIds: await readAgentIdSet(dataDir),
+    knownAgentIds: new Set(agentModels.keys()),
+    agentModels,
     nodeById,
     handoffInEdges,
     handoffOutEdges,
   };
 }
 
-/** 读 Agent registry 用于 agentId 存在性检查；失败返回空表 */
-async function readAgentIdSet(dataDir: string): Promise<Set<string>> {
+/** 读 Agent registry → agentId→model 映射（兼 agentId 存在性检查）；失败返回空表 */
+async function readAgentModelMap(dataDir: string): Promise<Map<string, string>> {
   try {
     const raw = await fs.readFile(path.join(dataDir, 'agents', 'registry.json'), 'utf-8');
-    const registry = JSON.parse(raw) as Record<string, unknown>;
-    return new Set(Object.keys(registry));
+    const registry = JSON.parse(raw) as Record<string, { model?: string }>;
+    return new Map(Object.entries(registry).map(([id, e]) => [id, e?.model ?? '']));
   } catch {
-    return new Set();
+    return new Map();
   }
 }
 

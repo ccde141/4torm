@@ -38,4 +38,32 @@ export interface Envelope {
 
   /** 本次工作流执行 ID，用于归档定位 */
   executionId: string;
+
+  /**
+   * 信封皮（可选）—— 循环/触发元数据的家。
+   * 缺省整个字段不存在 = 现有单次运行行为完全不变。
+   * 「条目纯文本、不带键」的公理只约束 content；结构化元数据一律住这里。
+   */
+  header?: EnvelopeHeader;
+}
+
+/**
+ * 信封皮 —— 无键信封长出的第一个结构化载体。
+ * 幂等键与续跑框定同住此处，条目本身仍是纯文本。
+ */
+export interface EnvelopeHeader {
+  /**
+   * 幂等键：触发窗口号 / 交易号等，跨重跑稳定。
+   * 供不可逆 sink 去重（同键 = 同一次操作，重跑不再执行）。
+   */
+  idempotencyKey?: string;
+
+  /**
+   * 循环备注：框定语（非数据），如"你不是第一次工作，接着上次继续"。
+   * 任何模式都可写；仅自动循环轮（isEnvelopeRound）被投递回 input。
+   */
+  loopNote?: string;
+
+  /** 圈数：供信息侧板显示"第几圈"、供圈数上界判定。total 为 null 表示永续。 */
+  lap?: { index: number; total: number | null };
 }

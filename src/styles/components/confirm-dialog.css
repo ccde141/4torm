@@ -1,0 +1,107 @@
+/**
+ * ============================================================
+ *  Confirm Dialog — 应用内确认弹窗（替换 window.confirm）
+ * ============================================================
+ *  毛玻璃质感 + 贝塞尔回弹进场，复用 motion.css 语义变量。
+ *  Electron 下原生 confirm 会丢焦点冻结输入，故全域改用此弹窗。
+ */
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  animation: mo-fade-in var(--motion-exit-duration) var(--motion-enter-ease);
+}
+
+.confirm-overlay--closing {
+  animation: mo-fade-in var(--motion-exit-duration) var(--motion-exit-ease) reverse forwards;
+}
+
+/* 毛玻璃主体 + 贝塞尔回弹进场（--motion-modal-ease = ease-out-back，带超调） */
+.confirm-dialog {
+  width: min(400px, calc(100vw - 48px));
+  background: var(--glass-bg-strong, var(--glass-bg));
+  backdrop-filter: blur(var(--glass-blur, 12px));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 12px));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  animation: confirm-pop var(--motion-modal-duration) var(--motion-modal-ease);
+}
+
+.confirm-overlay--closing .confirm-dialog {
+  animation: confirm-pop var(--motion-exit-duration) var(--motion-exit-ease) reverse forwards;
+}
+
+@keyframes confirm-pop {
+  from { opacity: 0; transform: translateY(12px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ─── 文本 ─────────────────────────────────────────────── */
+
+.confirm-title {
+  font-family: var(--font-sans);
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
+  color: var(--color-text-primary);
+  margin: 0 0 var(--space-2);
+}
+
+.confirm-message {
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  margin: 0 0 var(--space-5);
+  white-space: pre-wrap;
+}
+
+/* ─── 按钮区 ───────────────────────────────────────────── */
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.confirm-btn {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border);
+  cursor: pointer;
+  transition: transform var(--duration-fast) var(--ease-out-expo),
+              background var(--duration-fast) var(--ease-out-expo);
+}
+
+.confirm-btn:hover { transform: scale(1.04); }
+.confirm-btn:active { transform: scale(0.96); }
+
+.confirm-btn--cancel {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-secondary);
+}
+.confirm-btn--cancel:hover { color: var(--color-text-primary); }
+
+/* 默认（非危险）确认键：强调色 */
+.confirm-btn--confirm {
+  background: var(--color-accent);
+  color: var(--color-bg-primary);
+  border-color: var(--color-accent);
+}
+
+/* 危险确认键：删除类操作 */
+.confirm-btn--danger {
+  background: var(--color-danger, #ef4444);
+  color: #fff;
+  border-color: var(--color-danger, #ef4444);
+}

@@ -5,6 +5,7 @@ import { getAllModels } from '../../llm';
 import MessageItem from './MessageItem';
 import { useSessionList } from './useSessionList';
 import { useMessageEditor } from './useMessageEditor';
+import { useConfirm } from '../common/ConfirmDialog';
 import { useStreamRunners } from './useStreamRunners';
 import QueuedChips, { MAX_QUEUE } from './QueuedChips';
 import TaskBoardDrawer, { RAIL_W } from './TaskBoardDrawer';
@@ -49,6 +50,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   preselectSession?: string;
   onClearPreselect?: () => void;
 }) {
+  const confirm = useConfirm();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [offlineIds, setOfflineIds] = useState<Set<string>>(new Set());
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
@@ -71,6 +73,10 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   // 同步发送锁：streaming state 是异步的，挡不住"卡顿期间快速二次点击"，
   // 用 ref 在 handleSend 入口同步置位，从根上杜绝重复发送（两条消息 bug）
   const sendingRef = useRef(false);
+  // 压缩期间的同步互斥：压缩要几秒（读会话→LLM流式→写回），期间若发新消息，
+  // 新消息的存盘会与压缩的写回互相覆盖（lost update）。故压缩时禁发消息、禁二次压缩。
+  const compactingRef = useRef(false);
+  const [compacting, setCompacting] = useState(false);
   const messagesRef = useRef<ChatMessage[]>([]);
   const setMessages = useCallback((msgs: ChatMessage[]) => {
     messagesRef.current = msgs;
@@ -137,12 +143,85 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   } = useMessageEditor(activeSessionId, selectedAgent, setMessages, refreshSessions);
 
 
+  // ── 智能吸底滚动 ──────────────────────────────────────────────
+  // follow=true：视图跟随底部（agent 打印时自动下拉）。用户手动上滑 → 脱离跟随、
+  // 固定在当前位置；滑回底部附近 → 重新吸附。发送消息时强制吸底并把新消息带入视野。
+  const followRef = useRef(true);
+  const [showJumpBtn, setShowJumpBtn] = useState(false);
+  const NEAR_BOTTOM_PX = 120;
+
+  const lastScrollTopRef = useRef(0);
+
+  const isNearBottom = useCallback(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+  }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+    lastScrollTopRef.current = el.scrollTop;
+    followRef.current = true;
+    setShowJumpBtn(false);
+  }, []);
+
+  // 用户主动上滑 → 立即脱离跟随。wheel/touch 在 token 重渲染之前同步触发，
+  // 能赢下"流式拽回底部"的竞态（这是之前上滑不了的根因）。
+  const breakFollow = useCallback(() => {
+    followRef.current = false;
+    setShowJumpBtn(true);
+  }, []);
+
   useEffect(() => {
     const el = messagesContainerRef.current;
-    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [messages]);
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => { if (e.deltaY < 0) breakFollow(); };
+    let touchY = 0;
+    const onTouchStart = (e: TouchEvent) => { touchY = e.touches[0]?.clientY ?? 0; };
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY ?? 0;
+      if (y > touchY + 2) breakFollow();   // 手指下滑 = 视图上移 = 看历史
+      touchY = y;
+    };
+    // scroll 事件兜底：拖动滚动条(无 wheel)时靠 scrollTop 方向判断；触底则重新吸附
+    const onScroll = () => {
+      const st = el.scrollTop;
+      const near = isNearBottom();
+      if (st < lastScrollTopRef.current - 2 && !near) followRef.current = false;  // 向上且离底 → 脱离
+      if (near) followRef.current = true;                                          // 触底 → 吸附
+      setShowJumpBtn(!near);
+      lastScrollTopRef.current = st;
+    };
+    el.addEventListener('wheel', onWheel, { passive: true });
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: true });
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('scroll', onScroll);
+    };
+    // activeSessionId 必须在依赖里：消息容器仅在选中会话后才挂载，
+    // 否则 effect 首跑时 ref 为 null，监听器永远挂不上（回底按钮不出现、上滑脱离失效）。
+  }, [isNearBottom, breakFollow, activeSessionId]);
+
+  // 消息/流式内容变化：仅在"跟随中"才自动下拉，否则保持用户当前阅读位置
+  useEffect(() => {
+    if (followRef.current) scrollToBottom('auto');
+  }, [messages, scrollToBottom]);
+
+  // 切换会话：重置为跟随态并定位到底部（最新消息），不受上个会话上滑状态影响
+  useEffect(() => {
+    if (!activeSessionId) return;
+    followRef.current = true;
+    setShowJumpBtn(false);
+    // 等本轮消息渲染完再滚，避免滚到旧高度
+    const t = setTimeout(() => scrollToBottom('auto'), 0);
+    return () => clearTimeout(t);
+  }, [activeSessionId, scrollToBottom]);
 
   useEffect(() => {
     getAgents().then(async list => {
@@ -176,6 +255,20 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     }, 2000);
     return () => clearInterval(id);
   }, [active]);
+
+  // 模型小卡跟随 agent 配置：在 Agent 页改了当前 agent 的模型后，小卡无条件归位到新模型。
+  // 触发点是「agent 本体模型变更」——平时手动快切覆盖有效（只动 selectedModel，不动 agent.model）；
+  // 一旦 agent.model 从 snapshot 变了（A→B、B→C），就跟随，覆盖当前小卡值（含会话存的覆盖）。
+  // agents 列表由 2s 轮询刷新，故配置保存后最迟 2s 内跟随。
+  useEffect(() => {
+    if (!selectedAgent) return;
+    const fresh = agents.find(a => a.id === selectedAgent.id);
+    if (!fresh) return;
+    if (fresh.model !== selectedAgent.model && fresh.model && models.some(m => m.key === fresh.model)) {
+      setSelectedAgent(fresh);        // 推进 snapshot，避免重复触发
+      setSelectedModel(fresh.model);  // 小卡归位到 agent 新配的模型
+    }
+  }, [agents, selectedAgent, models, setSelectedAgent]);
 
   useEffect(() => {
     if (!preselectSession) return;
@@ -231,8 +324,19 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       // 创建 assistant 占位消息
       const assistantMsgId = generateMessageId();
       let streamContent = '';
+      let reasoningContent = '';   // 推理模型思考流：与正文分开累加
       let lastFlushAt = 0;
       const TOKEN_FLUSH_MS = 80;
+      // 前沿+后沿节流：突发灌入时前沿刷一帧，被吞的更新用后沿 timer 补刷，
+      // 否则思考流会"卡住→阶段切换才全量蹦出"。
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
+      const doFlush = () => { flushTimer = null; lastFlushAt = Date.now(); emit([...allMessages]); };
+      const scheduleFlush = () => {
+        if (flushTimer) return;
+        const wait = TOKEN_FLUSH_MS - (Date.now() - lastFlushAt);
+        if (wait <= 0) doFlush();
+        else flushTimer = setTimeout(doFlush, wait);
+      };
       const assistantMsg: ChatMessage = {
         id: assistantMsgId, role: 'assistant', content: '',
         timestamp: new Date().toISOString(), agentId: selectedAgent.id,
@@ -261,15 +365,17 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
           let ev: any;
           try { ev = JSON.parse(json); } catch { continue; }
 
-          // 简化事件处理（token + answer + ask + tool-call + tool-result + done）
-          if (ev.type === 'token') {
+          // 简化事件处理（reasoning + token + answer + ask + tool-call + tool-result + done）
+          if (ev.type === 'reasoning') {
+            // 推理模型（glm/deepseek）思考流：累积到 reasoningContent，与首答路径一致，
+            // 否则续答轮的思考阶段界面全空白。节流复用 token 的刷新窗口。
+            reasoningContent += ev.content;
+            allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, reasoningContent } : m);
+            scheduleFlush();
+          } else if (ev.type === 'token') {
             streamContent += ev.content;
             allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: streamContent } : m);
-            const now = Date.now();
-            if (now - lastFlushAt >= TOKEN_FLUSH_MS) {
-              lastFlushAt = now;
-              emit([...allMessages]);
-            }
+            scheduleFlush();
           } else if (ev.type === 'tool-call') {
             // 清理 assistant 流式内容中的 action/think 标签
             const cleanContent = streamContent
@@ -310,6 +416,8 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               id: assistantMsgId, role: 'assistant',
               content: ev.rawContent || ev.content,
               timestamp: new Date().toISOString(), agentId: selectedAgent.id,
+              // 思考流跨 answer 事件保留（与首答路径 streamLoop 对齐），否则思考块被抹掉
+              ...(reasoningContent ? { reasoningContent } : {}),
             };
             allMessages = allMessages.map(m => m.id === assistantMsgId ? finalMsg : m);
             emit([...allMessages]);
@@ -350,6 +458,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       }
 
       // 流结束：强制最终刷新，保证节流期间未渲染的尾部 token 全部呈现
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
       emit([...allMessages]);
       // 被删会话（弃用）跳过存盘，杜绝僵尸复活
       if (!(streamRunners.runners.current.get(sid)?.abandoned)) {
@@ -400,6 +509,8 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       if (activeSessionId && streamRunners.enqueue(activeSessionId, text)) { setInput(''); bumpQueue(t => t + 1); }
       return;
     }
+    // 压缩进行中：禁止发消息 / 二次压缩，避免与压缩写回互相覆盖会话
+    if (compactingRef.current) return;
     // 同步锁：入口立即置位，挡住 await 期间（getAgent/getSession 读大文件慢）的二次点击
     if (sendingRef.current) return;
     sendingRef.current = true;
@@ -409,7 +520,14 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       if (!activeSessionId) return;
       const session = await getSession(activeSessionId);
       if (!session) return;
-      await compactSession(session);
+      compactingRef.current = true;
+      setCompacting(true);
+      try {
+        await compactSession(session);
+      } finally {
+        compactingRef.current = false;
+        setCompacting(false);
+      }
       return;
     }
 
@@ -420,6 +538,9 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     console.log(`[${userMsg.timestamp}] 人类 → ${selectedAgent.name}: ${userMsg.content.slice(0, 80)}`);
     const updatedMessages = [...messagesRef.current, userMsg];
     setMessages(updatedMessages);
+    // 发送后强制回到跟随态并定位到刚发出的消息（无论之前是否上滑）
+    followRef.current = true;
+    requestAnimationFrame(() => scrollToBottom('smooth'));
     if (!fromQueue) setInput('');   // 出队续发不动当前正在输入的草稿
     setStreaming(true);
     setAgentStatus(selectedAgent.id, 'busy');
@@ -429,10 +550,12 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     const freshAgent = await getAgent(selectedAgent.id);
     if (freshAgent && LOCKED_STATUSES.includes(freshAgent.status as LockedStatus)) {
       const label = LOCKED_STATUS_LABELS[freshAgent.status as LockedStatus];
-      const ok = confirm(
-        `此 Agent 正被「${label}」占用。\n\n` +
-        `确定：直接释放并开始对话\n取消：返回`,
-      );
+      const ok = await confirm({
+        title: `此 Agent 正被「${label}」占用`,
+        message: '确定将直接释放占用并开始对话。',
+        confirmText: '释放并开始',
+        danger: true,
+      });
       if (ok) {
         await forceUnlock(selectedAgent.id);
       } else {
@@ -605,7 +728,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             {/* 收起态：让出竖条宽度，滚动条落在竖条左侧可点可拖；展开态：抽屉浮层覆盖，无需让位 */}
             <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginRight: taskboardOpen ? 0 : RAIL_W }}>
             <div className="chat__messages" ref={messagesContainerRef} style={{ paddingRight: taskboardOpen ? 'calc(var(--space-6) + 30px)' : 'var(--space-6)' }}>
-              {messages.filter(msg => msg.toolCall || msg.content.trim()).map(msg => (
+              {messages.filter(msg => msg.toolCall || msg.content.trim() || msg.reasoningContent).map(msg => (
                 <div key={msg.id}>
                   <MessageItem
                     msg={msg}
@@ -624,13 +747,25 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               {streaming && <div className="chat__message chat__message--assistant"><div className="chat__avatar">AI</div><div className="chat__bubble"><div className="loading-spinner" /></div></div>}
               <div ref={messagesEndRef} />
             </div>
+            {showJumpBtn && (
+              <button
+                className="chat__jump-bottom"
+                onClick={() => scrollToBottom('smooth')}
+                aria-label="回到底部"
+                title="回到最新消息"
+              >↓</button>
+            )}
             </div>
 
             <div className="chat__input-area">
               <QueuedChips items={queue} onRemove={i => { if (activeSessionId) { streamRunners.removeQueued(activeSessionId, i); bumpQueue(t => t + 1); } }} />
               <div className="chat__input-wrapper">
-                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} placeholder={streaming ? '回复中…（可继续输入，发送将排队）' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} aria-label="输入消息" />
-                {streaming ? (
+                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} disabled={compacting} placeholder={compacting ? '正在压缩上下文…请稍候' : streaming ? '回复中…（可继续输入，发送将排队）' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} aria-label="输入消息" />
+                {compacting ? (
+                  <button className="chat__send-btn" disabled title="压缩中…">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+                  </button>
+                ) : streaming ? (
                   <>
                     <button className="chat__send-btn" onClick={() => handleSend()} disabled={!input.trim() || queue.length >= MAX_QUEUE} title={queue.length >= MAX_QUEUE ? '队列已满（最多 3 条）' : '加入队列'}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>

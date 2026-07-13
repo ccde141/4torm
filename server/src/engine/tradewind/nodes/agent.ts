@@ -24,9 +24,11 @@ import { loadAgent } from '../../shared/agent-loader';
 import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
 import { resolveNativeMode } from '../../shared/llm-bridge';
 import { buildTradewindSystemPrompt } from '../execution/prompt-builder';
+import { recallMemory } from '../../shared/agent-memory';
 import { NodeRunner } from '../execution/node-runner';
 import { consumeNodeContext } from '../foundation/node-context-store';
 import { markEnvelopePending, markEnvelopeDone } from '../foundation/node-status-store';
+import { abortableSleep, readDeliveryDelaySec } from '../execution/delivery-delay';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -46,6 +48,10 @@ export class AgentExecutor implements NodeExecutor {
       type: 'object',
       properties: {
         agentId: { type: 'string', description: 'Agent 实体 ID' },
+        deliveryDelaySec: {
+          type: 'number',
+          description: '投递延迟秒数：产出生成后、投递下游前盲等（抗外部节拍）。0=无延迟',
+        },
       },
       required: ['agentId'],
     };
@@ -64,6 +70,9 @@ export class AgentExecutor implements NodeExecutor {
 
     // 收集 Note 内容（启动期注入，信封内容稍后通过 user message 注入）
     const notes: string[] = (ctx.nodeConfig as any)._notes ?? [];
+
+    // 下游感知：本节点 complete_task 后信封自动交给的下游节点 label（orchestrator 预计算注入）
+    const downstreamLabels: string[] = (ctx.nodeConfig as any)._downstreamLabels ?? [];
 
     // 加载工具定义
     const toolDefs = await loadAgentToolDefs(ctx.dataDir, agent.tools ?? [], agent.skills ?? []);
@@ -86,9 +95,19 @@ export class AgentExecutor implements NodeExecutor {
     // 决议原生工具调用模式（启动时一次，运行期固定）
     const nativeDecision = await resolveNativeMode(ctx.dataDir, agent.model || '');
 
+    // 长期记忆召回（跨任务经验）：启动期无信封，taskHint 用身份+角色+note 兜底；
+    // feedback 常驻档无论 hint 是否命中都必带（"至少召回一次"）。召回失败不断链。
+    const nodeLabelForHint = (ctx.nodeConfig as any)._nodeLabel || ctx.nodeId;
+    const taskHint = [nodeLabelForHint, agent.rolePrompt, ...notes].filter(Boolean).join(' ');
+    let memorySection = '';
+    try {
+      memorySection = await recallMemory(ctx.dataDir, agentId, taskHint);
+    } catch { /* 召回失败静默降级，不阻断节点启动 */ }
+
     // 启动期 system prompt（信封内容稍后通过 user message 注入）
     const systemPrompt = buildTradewindSystemPrompt({
       rolePrompt: agent.rolePrompt || '你是一个工作流中的 Agent。',
+      memorySection,
       toolDefs,
       notes,
       nodeLabel: (ctx.nodeConfig as any)._nodeLabel || ctx.nodeId,
@@ -106,6 +125,8 @@ export class AgentExecutor implements NodeExecutor {
       today: new Date().toLocaleDateString('zh-CN'),
       modelId: agent.model || 'unknown',
       native: nativeDecision.native,
+      autoMode: ctx.mode === 'auto',
+      downstreamLabels,
     });
 
     // 持久化路径（归档用，写 messages.json）
@@ -134,6 +155,7 @@ export class AgentExecutor implements NodeExecutor {
       allowDelegate: true,
       contactTargets,
       native: nativeDecision.native,
+      autoMode: ctx.mode === 'auto',
     });
 
     // 立刻注册到全局表（路由层通过此表向节点发人类消息）
@@ -168,20 +190,36 @@ export class AgentExecutor implements NodeExecutor {
                   `[系统信息：工作流上游传来的工作指令 ${i + 1}/${envelopes.length}]\n${e.content}`,
                 ).join('\n\n');
 
-            const output = await new Promise<string>((resolve) => {
+            const result = await new Promise<{ output: string; autoOutcome?: 'completed' | 'anomaly' }>((resolve) => {
               runner.push({
                 source: 'envelope',
                 content: userMessage,
-                onComplete: resolve,
+                onComplete: (output, info) => resolve({ output, autoOutcome: info?.autoOutcome }),
               });
               // abort 兜底：工作流停止时强制 resolve，避免 Promise 永挂
-              ctx.signal.addEventListener('abort', () => resolve(''), { once: true });
+              ctx.signal.addEventListener('abort', () => resolve({ output: '' }), { once: true });
             });
 
             // abort 后不投递下游，跳出循环
             if (ctx.signal.aborted) return;
 
-            await ctx.sendHandoff(output, BUILTIN_EVENT_IDS.HANDOFF);
+            // 自动模式异常：模型未显式完成、已被强制封口。仍照常交接下游（内容即强制封口的信封），
+            // 但打异常事件（写 events.jsonl 日志 + 前端高亮），供人类事后介入。
+            if (result.autoOutcome === 'anomaly') {
+              ctx.emit(BUILTIN_EVENT_IDS.AUTO_ANOMALY, {
+                message: '自动模式：节点未显式调用 complete_task，已强制封口并交接下游',
+              });
+            }
+
+            // 投递延迟（前提①）：产出已生成，投递下游前盲等 N 秒，可被 abort 中断
+            const delaySec = readDeliveryDelaySec(ctx.nodeConfig);
+            if (delaySec > 0) {
+              ctx.emit(BUILTIN_EVENT_IDS.DELIVERY_DELAY, { seconds: delaySec });
+              const outcome = await abortableSleep(delaySec, ctx.signal);
+              if (outcome === 'aborted' || ctx.signal.aborted) return;
+            }
+
+            await ctx.sendHandoff(result.output, BUILTIN_EVENT_IDS.HANDOFF);
             ctx.emit(BUILTIN_EVENT_IDS.WORK_DONE);
           } finally {
             markEnvelopeDone(ctx.executionId, ctx.nodeId);
