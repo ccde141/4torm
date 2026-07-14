@@ -687,7 +687,11 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                     <div className="session-item__title"><span className="text-truncate" style={{ maxWidth: '140px' }}>{s.title}</span>{unread > 0 && <span className="session-item__unread">{unread}</span>}</div>
                     <div className="session-item__meta"><span className="text-truncate" style={{ maxWidth: '120px' }}>{s.id}</span><span className="session-item__tokens">{tokenLabel}</span></div>
                   </div>
-                  <button onClick={e => { e.stopPropagation(); handleDeleteSession(s.id); }} style={deleteBtnStyle} title="删除会话">x</button>
+                  <button onClick={async e => {
+                    e.stopPropagation();
+                    if (!(await confirm({ title: `删除会话「${s.title}」？`, message: '整个会话的对话历史将被删除，不可恢复。', confirmText: '删除', danger: true }))) return;
+                    handleDeleteSession(s.id);
+                  }} style={deleteBtnStyle} title="删除会话">x</button>
                 </div>
                 );
               })}
