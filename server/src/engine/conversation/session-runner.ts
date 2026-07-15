@@ -65,7 +65,7 @@ export type ConversationEvent =
   | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
   | { type: 'ask'; question: string; options?: string[] }
-  | { type: 'answer'; content: string; rawContent: string }
+  | { type: 'answer'; content: string; rawContent: string; native?: boolean }
   | { type: 'usage'; usage: TokenUsage }
   | { type: 'error'; message: string }
   | { type: 'notice'; message: string }
@@ -369,7 +369,7 @@ export class SessionRunner {
       return { content: '', rawContent: '' };
     }
 
-    onEvent({ type: 'answer', content: result.content, rawContent: result.rawContent });
+    onEvent({ type: 'answer', content: result.content, rawContent: result.rawContent, native: !!this.opts.native });
     if (result.usage) onEvent({ type: 'usage', usage: result.usage });
     onEvent({ type: 'done' });
     return { content: result.content, rawContent: result.rawContent };
@@ -436,6 +436,8 @@ export class SessionRunner {
       emit: (ev) => {
         switch (ev.type) {
           case 'token':
+          case 'reasoning':
+            // sub-agent 的思考流也并入卡片正文，避免卡片出现后长时间空白
             onEvent({ type: 'delegate-token', delegateId, content: ev.data.t });
             break;
           case 'tool_call':

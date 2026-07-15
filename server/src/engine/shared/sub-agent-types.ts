@@ -35,6 +35,7 @@ export interface SubAgentResult {
 /** SSE 事件类型 */
 export type SubAgentEvent =
   | { type: 'token'; data: { t: string } }
+  | { type: 'reasoning'; data: { t: string } }
   | { type: 'tool_call'; data: { tool: string; args: Record<string, string> } }
   | { type: 'tool_result'; data: { tool: string; result: string; ok: boolean } }
   | { type: 'continuation'; data: { reason: string; attempt: number } }

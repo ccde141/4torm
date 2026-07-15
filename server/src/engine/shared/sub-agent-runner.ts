@@ -528,6 +528,7 @@ async function runSubAgentNative(p: NativeSubAgentParams): Promise<SubAgentResul
       signal: combinedController.signal,
       onEvent: (ev) => {
         if (ev.type === 'token') emitEvent({ type: 'token', data: { t: ev.chunk } });
+        else if (ev.type === 'reasoning') emitEvent({ type: 'reasoning', data: { t: ev.chunk } });
       },
     });
     result = { content: r.content, turns: r.turns };
@@ -562,6 +563,7 @@ async function runSubAgentNative(p: NativeSubAgentParams): Promise<SubAgentResul
         signal: combinedController.signal,
         onEvent: (ev) => {
           if (ev.type === 'token') emitEvent({ type: 'token', data: { t: ev.chunk } });
+          else if (ev.type === 'reasoning') emitEvent({ type: 'reasoning', data: { t: ev.chunk } });
         },
       });
       reminded = true;
@@ -593,6 +595,7 @@ async function runSubAgentNative(p: NativeSubAgentParams): Promise<SubAgentResul
       signal: fallbackController.signal,
       onEvent: (ev) => {
         if (ev.type === 'token') emitEvent({ type: 'token', data: { t: ev.chunk } });
+        else if (ev.type === 'reasoning') emitEvent({ type: 'reasoning', data: { t: ev.chunk } });
       },
     });
     retry = { content: r2.content, turns: r2.turns };

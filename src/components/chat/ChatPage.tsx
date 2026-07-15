@@ -418,6 +418,8 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               timestamp: new Date().toISOString(), agentId: selectedAgent.id,
               // 思考流跨 answer 事件保留（与首答路径 streamLoop 对齐），否则思考块被抹掉
               ...(reasoningContent ? { reasoningContent } : {}),
+              // 模式标志：与 streamLoop 对齐，重载后据此决定是否扫描正文 <action>
+              native: (ev as any).native,
             };
             allMessages = allMessages.map(m => m.id === assistantMsgId ? finalMsg : m);
             emit([...allMessages]);
@@ -607,15 +609,38 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       ? updatedMessages.slice(lastMarkerIdx)
       : updatedMessages;
 
-    const chatMessages: Array<{ role: string; content: string }> = llmMessages.map(m => {
+    type OutMsg = {
+      role: string; content: string;
+      toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+      toolCallId?: string;
+    };
+    const chatMessages: OutMsg[] = llmMessages.flatMap((m): OutMsg[] => {
       // compact-marker 作为 system 消息发送（摘要内容）
       if ((m as any).type === 'compact-marker') {
-        return { role: 'system', content: `[历史上下文摘要]\n${m.content}` };
+        return [{ role: 'system', content: `[历史上下文摘要]\n${m.content}` }];
       }
+      if (m.role === 'user') return [{ role: 'user', content: m.content }];
+      if (m.role === 'system') return [{ role: 'system', content: m.content }];
+
+      // assistant：有结构化工具步骤 → 展开成 native 规范序列，
+      // 让 agent 跨轮次看到自己上一轮的工具调用与返回原文（修复跨轮失忆）。
+      const steps = m.toolSteps;
+      if (steps && steps.length > 0) {
+        const out: OutMsg[] = [];
+        steps.forEach((step, i) => {
+          const id = `${m.id}-ts${i}`;
+          out.push({ role: 'assistant', content: '', toolCalls: [{ id, name: step.tool, arguments: JSON.stringify(step.args) }] });
+          out.push({ role: 'tool', content: step.result ?? '', toolCallId: id });
+        });
+        if (m.content.trim()) out.push({ role: 'assistant', content: m.content });
+        return out;
+      }
+
+      // delegate 单步（toolCall，无结构化 result 回灌）→ 保留旧文本回退
       if (m.toolCall && !m.content.startsWith('<')) {
-        return { role: 'assistant', content: `<action tool="${m.toolCall.toolName}">${JSON.stringify(m.toolCall.params)}</action>` };
+        return [{ role: 'assistant', content: `<action tool="${m.toolCall.toolName}">${JSON.stringify(m.toolCall.params)}</action>` }];
       }
-      return { role: m.role === 'user' ? 'user' : 'assistant', content: m.content };
+      return [{ role: 'assistant', content: m.content }];
     });
 
     // 流跑完后端处理 idle 状态（仅当它仍是当前激活会话时才动全局 streaming）
@@ -732,7 +757,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             {/* 收起态：让出竖条宽度，滚动条落在竖条左侧可点可拖；展开态：抽屉浮层覆盖，无需让位 */}
             <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginRight: taskboardOpen ? 0 : RAIL_W }}>
             <div className="chat__messages" ref={messagesContainerRef} style={{ paddingRight: taskboardOpen ? 'calc(var(--space-6) + 30px)' : 'var(--space-6)' }}>
-              {messages.filter(msg => msg.toolCall || msg.content.trim() || msg.reasoningContent).map(msg => (
+              {messages.filter(msg => msg.toolCall || msg.content.trim() || msg.reasoningContent || msg.toolSteps?.length).map(msg => (
                 <div key={msg.id}>
                   <MessageItem
                     msg={msg}

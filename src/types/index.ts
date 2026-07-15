@@ -52,8 +52,10 @@ export interface ChatMessage {
     reply?: string;
   };
   /**
-   * 流式期间的内嵌工具步骤（运行时字段，不持久化到磁盘）。
-   * 流结束后，重新加载时由 parseStructuredOutput(rawContent) 重生成。
+   * 内嵌工具步骤（工具名/参数/结果/状态）。
+   * 原生模式下 rawContent 不含 <action>，故此字段是工具调用的唯一源数据，
+   * 需持久化：既用于重载渲染，也用于跨轮次历史回灌（见 ChatPage 历史重建）。
+   * 文本模式下亦可由 parseStructuredOutput(rawContent) 重生成。
    */
   toolSteps?: ToolStep[];
   /** 流式阶段标识（运行时字段，不持久化） */
@@ -65,6 +67,13 @@ export interface ChatMessage {
    * 不在 rawContent 里，故需持久化，否则重载丢失。无原生思考的模型为空。
    */
   reasoningContent?: string;
+  /**
+   * 该回复是否由原生工具调用模式（native tool_calls）产生。持久化：重载后仍需据此
+   * 决定前端是否扫描正文里的 <action> 文本标签——native 模式正文不该有真实调用，
+   * 扫描只会把模型幻觉/引用的 <action> 误判成调用（见 parseStructuredOutput opts.native）。
+   * 老会话为 undefined → 按文本模式处理（安全兜底）。
+   */
+  native?: boolean;
 }
 
 /** 工具调用步骤（StructuredMessage 与流式期间共用） */
@@ -73,6 +82,19 @@ export interface ToolStep {
   args: Record<string, string>;
   result?: string;
   status: 'pending' | 'running' | 'done' | 'error';
+  /**
+   * delegate 专用：sub-agent 的思考流 + 子步骤 + 汇总。
+   * 存在时该 step 用 DelegateCard inline 渲染，落在 toolSteps 的调用顺序里
+   * （框架串行：思考流 → 按序工具含 sub-agent 卡 → 最终 content）。
+   */
+  delegate?: {
+    delegateId: string;
+    task: string;
+    content: string;
+    steps: Array<{ type: 'tool'; tool?: string; args?: Record<string, string>; result?: string; ok?: boolean }>;
+    summary?: string;
+    status: 'running' | 'success' | 'error';
+  };
 }
 
 /** 工具调用记录 */

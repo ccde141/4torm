@@ -45,6 +45,10 @@ function initSSE(raw: ServerResponse, origin?: string): void {
   raw.setHeader('Cache-Control', 'no-cache');
   raw.setHeader('Connection', 'keep-alive');
   raw.setHeader('X-Accel-Buffering', 'no');
+  // 关键：关闭 Nagle 算法。直连裸 socket 时，单个小事件（如 delegate-start）后接
+  // 长时间近静默的 sub-agent 执行，数据会滞留在内核发送缓冲，直到后续字节累积才发出
+  // ——表现为「卡片直到 agent 收尾/手动停止才蹦出来」。高频 token 流因持续有字节而不受影响。
+  raw.socket?.setNoDelay(true);
   // reply.hijack() 绕过了 @fastify/cors 的 hook，跨 origin 直连（dev 下前端直连
   // 3001 分摊连接）会因缺 CORS 头被浏览器拦截 → fetch 抛 Failed to fetch。
   // 这里手动回显 Origin（等价 cors origin:true）补回。
@@ -53,6 +57,9 @@ function initSSE(raw: ServerResponse, origin?: string): void {
     raw.setHeader('Access-Control-Allow-Credentials', 'true');
     raw.setHeader('Vary', 'Origin');
   }
+  // 所有响应头（含上面的 CORS）设置完毕后再 flush，否则 CORS 头发不出去 →
+  // 浏览器拦截跨 origin 响应 → Failed to fetch。顺序至关重要。
+  raw.flushHeaders?.();
   raw.write(': connected\n\n');
 }
 
@@ -71,7 +78,14 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       sessionId?: string;
       agentId?: string;
       model?: string;
-      messages?: Array<{ role: string; content: string }>;
+      messages?: Array<{
+        role: string;
+        content: string;
+        /** 原生模式历史回灌：assistant 携带的工具调用 */
+        toolCalls?: import('../engine/shared/types').NativeToolCall[];
+        /** 原生模式历史回灌：tool 结果消息配对 id */
+        toolCallId?: string;
+      }>;
     };
 
     if (!body.sessionId || !body.agentId || !Array.isArray(body.messages)) {
@@ -131,9 +145,13 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     // 构造 chatMessages（system + 历史）
     const chatMessages: ContextMessage[] = [
       { role: 'system', content: systemPrompt },
+      // 保留 toolCalls / toolCallId / role:'tool'——native 历史回灌，让 agent
+      // 跨轮次仍能看到自己上一轮的工具调用与工具返回原文（llm-bridge 已能序列化）。
       ...body.messages.map(m => ({
-        role: m.role as 'user' | 'assistant' | 'system',
+        role: m.role as 'user' | 'assistant' | 'system' | 'tool',
         content: m.content,
+        ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
+        ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
       })),
     ];
 

@@ -19,7 +19,13 @@ import type { TaskBoard } from '../../utils/taskboard';
 export type StreamCtx = {
   session: ChatSession;
   allMessages: ChatMessage[];
-  chatMessages: Array<{ role: string; content: string }>;
+  chatMessages: Array<{
+    role: string; content: string;
+    /** 原生历史回灌：assistant 携带的工具调用 */
+    toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+    /** 原生历史回灌：tool 结果消息配对 id */
+    toolCallId?: string;
+  }>;
   providerInfo: { baseUrl: string; apiKey: string; headers?: Record<string, string>; signal: AbortSignal };
   modelId: string;
   toolDefs: ToolDef[];
@@ -232,7 +238,7 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
       const steps = [...(target.toolSteps || []), newStep];
       const updated = { ...target, toolSteps: steps, streamingPhase: 'tool-exec' as const, phaseElapsed: 0 };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
-      ctx.setMessages([...ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m)]);
+      ctx.throttledFlush();
       break;
     }
     case 'tool-result': {
@@ -248,7 +254,7 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
       }
       const updated = { ...target, toolSteps: steps, streamingPhase: undefined, phaseElapsed: undefined };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
-      ctx.setMessages([...ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m)]);
+      ctx.throttledFlush();
       break;
     }
     case 'heartbeat': {
@@ -258,79 +264,67 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
       const phase = ev.phase === 'tool-exec' ? 'tool-exec' as const : 'llm-waiting' as const;
       const updated = { ...target, streamingPhase: phase, phaseElapsed: Math.round((ev.elapsed || 0) / 1000) };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
-      ctx.setMessages([...ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m)]);
+      ctx.throttledFlush();
       break;
     }
+    // delegate 事件 → 写入 assistantMsg.toolSteps[] 里的一个 delegate step，
+    // 按调用顺序落位（与其它工具同列），由 DelegateCard inline 渲染。
     case 'delegate-start': {
-      const delegateMsg: ChatMessage = {
-        id: ctx.generateMessageIdFn(), role: 'assistant', content: '',
-        timestamp: new Date().toISOString(), agentId: ctx.agent.id,
-        toolCall: { toolName: 'delegate', params: { task: ev.task }, status: 'running' as any, steps: [] },
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
+      if (!target) break;
+      const step: import('../../types').ToolStep = {
+        tool: 'delegate', args: { task: ev.task }, status: 'running',
+        delegate: { delegateId: ev.delegateId, task: ev.task, content: '', steps: [], status: 'running' },
       };
-      // 用 delegateId 作为消息 id 的后缀，方便后续事件定位
-      (delegateMsg as any)._delegateId = ev.delegateId;
-      // 插入到 assistantMsg 之前，保证 delegate 卡片在最终回复前面
-      const msgs = [...ctx.allMessages];
-      const aIdx = msgs.findIndex(m => m.id === ctx.assistantMsgId);
-      msgs.splice(aIdx, 0, delegateMsg);
-      ctx.setAllMessages(msgs);
-      ctx.setMessages([...msgs]);
+      const steps = [...(target.toolSteps || []), step];
+      const updated = { ...target, toolSteps: steps, streamingPhase: 'tool-exec' as const, phaseElapsed: 0 };
+      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
+      ctx.throttledFlush();
       break;
     }
     case 'delegate-token': {
-      // 更新对应 delegate 卡片的 content
-      const msgs = [...ctx.allMessages];
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if ((msgs[i] as any)._delegateId === ev.delegateId) {
-          msgs[i] = { ...msgs[i], content: (msgs[i].content || '') + ev.content };
-          break;
-        }
-      }
-      ctx.setAllMessages(msgs);
-      ctx.setMessages([...msgs]);
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
+      const steps = updateDelegateStep(target?.toolSteps, ev.delegateId, d => ({ ...d, content: d.content + ev.content }));
+      if (!steps) break;
+      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? { ...m, toolSteps: steps } : m));
+      ctx.throttledFlush();
       break;
     }
     case 'delegate-tool-call': {
-      // 往对应 delegate 卡片的 steps 里追加工具调用
-      const msgs = [...ctx.allMessages];
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if ((msgs[i] as any)._delegateId === ev.delegateId && msgs[i].toolCall) {
-          const steps = [...(msgs[i].toolCall!.steps || [])];
-          steps.push({ type: 'tool', tool: ev.tool, args: ev.args });
-          msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, steps } };
-          break;
-        }
-      }
-      ctx.setAllMessages(msgs);
-      ctx.setMessages([...msgs]);
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
+      const steps = updateDelegateStep(target?.toolSteps, ev.delegateId, d => ({
+        ...d, steps: [...d.steps, { type: 'tool' as const, tool: ev.tool, args: ev.args }],
+      }));
+      if (!steps) break;
+      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? { ...m, toolSteps: steps } : m));
+      ctx.throttledFlush();
       break;
     }
     case 'delegate-tool-result': {
-      // 更新对应 delegate 卡片最后一个匹配 step 的 result
-      const msgs = [...ctx.allMessages];
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if ((msgs[i] as any)._delegateId === ev.delegateId && msgs[i].toolCall) {
-          const steps = [...(msgs[i].toolCall!.steps || [])];
-          const last = steps.findLast((s: any) => s.tool === ev.tool && !s.result);
-          if (last) { (last as any).result = ev.result; (last as any).ok = ev.ok; }
-          msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, steps } };
-          break;
-        }
-      }
-      ctx.setAllMessages(msgs);
-      ctx.setMessages([...msgs]);
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
+      const steps = updateDelegateStep(target?.toolSteps, ev.delegateId, d => {
+        const sub = [...d.steps];
+        const last = sub.findLast(s => s.tool === ev.tool && s.result == null);
+        if (last) { last.result = ev.result; last.ok = ev.ok; }
+        return { ...d, steps: sub };
+      });
+      if (!steps) break;
+      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? { ...m, toolSteps: steps } : m));
+      ctx.throttledFlush();
       break;
     }
     case 'delegate-done': {
-      const msgs = [...ctx.allMessages];
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if ((msgs[i] as any)._delegateId === ev.delegateId && msgs[i].toolCall) {
-          msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, result: ev.summary, status: ev.status === 'success' ? 'success' : 'error' } };
-          break;
-        }
-      }
-      ctx.setAllMessages(msgs);
-      ctx.setMessages([...msgs]);
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
+      const st = ev.status === 'success' ? 'success' as const : 'error' as const;
+      const steps = updateDelegateStep(target?.toolSteps, ev.delegateId, d => ({ ...d, summary: ev.summary, status: st }));
+      if (!steps) break;
+      // 同步外层 step 的 result/status，供跨轮历史回灌（toolSteps 展开成 tool 消息）
+      const synced = steps.map(s =>
+        s.delegate?.delegateId === ev.delegateId
+          ? { ...s, result: ev.summary, status: st === 'success' ? 'done' as const : 'error' as const }
+          : s);
+      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? { ...m, toolSteps: synced } : m));
+      ctx.throttledFlush();
       break;
     }
     case 'answer': {
@@ -343,6 +337,7 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
         timestamp: new Date().toISOString(), agentId: ctx.agent.id,
         toolSteps: target?.toolSteps,
         reasoningContent: target?.reasoningContent,  // 原生思考流跨 answer 事件保留
+        native: ev.native,  // 持久化模式标志：重载后据此决定是否扫描正文 <action>
       };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? finalMsg : m));
       ctx.setMessages([...ctx.allMessages]);
@@ -396,4 +391,23 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
 
 function findMsg(msgs: ChatMessage[], id: string): ChatMessage | undefined {
   return msgs.find(m => m.id === id);
+}
+
+type DelegateData = NonNullable<import('../../types').ToolStep['delegate']>;
+
+/**
+ * 在 toolSteps 中定位 delegateId 对应的 delegate step，对其 delegate 数据做不可变更新。
+ * 返回新 toolSteps 数组；未找到则返回 undefined（调用方据此跳过刷新）。
+ */
+function updateDelegateStep(
+  toolSteps: import('../../types').ToolStep[] | undefined,
+  delegateId: string,
+  fn: (d: DelegateData) => DelegateData,
+): import('../../types').ToolStep[] | undefined {
+  if (!toolSteps) return undefined;
+  const idx = toolSteps.findIndex(s => s.delegate?.delegateId === delegateId);
+  if (idx < 0) return undefined;
+  const next = [...toolSteps];
+  next[idx] = { ...next[idx], delegate: fn(next[idx].delegate!) };
+  return next;
 }

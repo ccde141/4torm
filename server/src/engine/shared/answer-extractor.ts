@@ -81,24 +81,41 @@ export function extractAnswer(content: string): string | null {
  * - 未闭合的 <action ... >  (从 <action 开始的截断)
  * - 残缺标签字面量（如 </answer> 单独出现）
  */
-export function stripAllKnownTags(content: string): string {
-  let text = content;
+function stripTagsFromTextSegment(text: string): string {
+  let t = text;
 
   // 闭合标签：think / answer / action / note / result
-  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
-  text = text.replace(/<answer>[\s\S]*?<\/answer>/gi, '');
-  text = text.replace(/<action\s+[^>]*>[\s\S]*?<\/action>/gi, '');
-  text = text.replace(/<note>[\s\S]*?<\/note>/gi, '');
-  text = text.replace(/<result[^>]*>[\s\S]*?<\/result>/gi, '');
+  t = t.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  t = t.replace(/<answer>[\s\S]*?<\/answer>/gi, '');
+  t = t.replace(/<action\s+[^>]*>[\s\S]*?<\/action>/gi, '');
+  t = t.replace(/<note>[\s\S]*?<\/note>/gi, '');
+  t = t.replace(/<result[^>]*>[\s\S]*?<\/result>/gi, '');
 
   // 未闭合开标签：从 <action 开始到末尾（流式截断常见）
-  text = text.replace(/<action\s+[^>]*>[\s\S]*$/i, '');
-  text = text.replace(/<think>[\s\S]*$/i, '');
+  t = t.replace(/<action\s+[^>]*>[\s\S]*$/i, '');
+  t = t.replace(/<think>[\s\S]*$/i, '');
 
   // 残缺标签字面量（孤立 < / > 结尾）
-  text = text.replace(/<\/?(?:think|answer|action|note|result)[^>]*>/gi, '');
+  t = t.replace(/<\/?(?:think|answer|action|note|result)[^>]*>/gi, '');
 
-  return text;
+  return t;
+}
+
+export function stripAllKnownTags(content: string): string {
+  // 关键：先切出代码块（``` 围栏 + 行内 `code`）加以保护，只在代码块外剥标签。
+  // 否则模型在正文里「引用」协议标签当例子时，未闭合的 <action> 会触发贪婪正则
+  // 把其后全部内容删到末尾，造成内容被截断（与前端 parser.stripAllKnownTags 对齐）。
+  const re = /```[\s\S]*?```|`[^`\n]+`/g;
+  let out = '';
+  let lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    out += stripTagsFromTextSegment(content.slice(lastIndex, m.index));
+    out += m[0]; // 代码块原样保留
+    lastIndex = m.index + m[0].length;
+  }
+  out += stripTagsFromTextSegment(content.slice(lastIndex));
+  return out;
 }
 
 /**

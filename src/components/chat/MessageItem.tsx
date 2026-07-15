@@ -16,10 +16,37 @@ import ToolCallMessage from './ToolCallMessage';
 import DelegateCard from './DelegateCard';
 import AskCard from './AskCard';
 import AutomationDraftCard from './AutomationDraftCard';
-import { parseStructuredOutput } from '../../engine/parser';
+import { parseStructuredOutput, stripAllKnownTags } from '../../engine/parser';
 import { renderTextWithCode } from '../../engine/markdown';
 import { formatTimestamp } from '../../utils/time';
-import type { ChatMessage } from '../../types';
+import type { ChatMessage, ToolStep } from '../../types';
+
+/**
+ * 渲染单个工具步骤：delegate 步 → DelegateCard（含子步骤/思考流/汇总），
+ * 其余 → ToolCallMessage。两处渲染路径（流式中 / 落定后）共用，保证 sub-agent
+ * 卡片按调用顺序 inline 落在工具列里，而非浮在整条消息之上。
+ */
+function renderToolStep(step: ToolStep, key: string) {
+  const d = step.delegate;
+  if (d) {
+    return (
+      <DelegateCard
+        key={`del-${key}`}
+        toolCall={{
+          toolName: 'delegate', params: { task: d.task },
+          status: d.status, result: d.summary, steps: d.steps,
+        } as NonNullable<ChatMessage['toolCall']> & { steps?: typeof d.steps }}
+        content={d.content}
+      />
+    );
+  }
+  return (
+    <ToolCallMessage
+      key={`tool-${key}`}
+      toolCall={{ toolName: step.tool, params: step.args as Record<string, unknown>, result: step.result, status: step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending' }}
+    />
+  );
+}
 
 export interface MessageItemProps {
   msg: ChatMessage;
@@ -130,16 +157,29 @@ function MessageItemInner({
       } else if (open) {
         display = open[1].trim();
       } else {
-        // 优先级 3: 剥离已知标签，显示标签外裸文本
-        let stripped = raw;
-        stripped = stripped.replace(/<think>[\s\S]*?<\/think>/gi, '');
-        stripped = stripped.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '');
-        const unclosed = stripped.lastIndexOf('<action');
-        if (unclosed !== -1 && stripped.indexOf('</action>', unclosed) === -1) {
-          stripped = stripped.slice(0, unclosed);
+        // 优先级 3: 剥离已知标签，显示标签外裸文本。
+        // 未闭合 <action> 的截断只在「代码块外」执行，避免误伤正文里引用的标签例子。
+        const protect = /```[\s\S]*?```|`[^`\n]+`/g;
+        const stripSeg = (seg: string): string => {
+          let s = seg;
+          s = s.replace(/<think>[\s\S]*?<\/think>/gi, '');
+          s = s.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '');
+          const unclosed = s.lastIndexOf('<action');
+          if (unclosed !== -1 && s.indexOf('</action>', unclosed) === -1) {
+            s = s.slice(0, unclosed);
+          }
+          s = s.replace(/<think>[\s\S]*$/i, '');
+          return s.replace(/<\/?(?:think|answer|note|action[^>]*)>/gi, '');
+        };
+        let stripped = '';
+        let li = 0;
+        let mm: RegExpExecArray | null;
+        while ((mm = protect.exec(raw)) !== null) {
+          stripped += stripSeg(raw.slice(li, mm.index)) + mm[0];
+          li = mm.index + mm[0].length;
         }
-        stripped = stripped.replace(/<think>[\s\S]*$/i, '');
-        display = stripped.replace(/<\/?(?:think|answer|note|action[^>]*)>/gi, '').trim();
+        stripped += stripSeg(raw.slice(li));
+        display = stripped.trim();
       }
 
       // 流式状态指示器
@@ -157,13 +197,8 @@ function MessageItemInner({
         <>
           {/* 原生思考流（流式中默认展开） */}
           {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming />}
-          {/* 工具步骤独立渲染 */}
-          {steps && steps.map((step, i) => (
-            <ToolCallMessage
-              key={`tool-${msg.id}-${i}`}
-              toolCall={{ toolName: step.tool, params: step.args as Record<string, unknown>, result: step.result, status: step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending' }}
-            />
-          ))}
+          {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
+          {steps && steps.map((step, i) => renderToolStep(step, `${msg.id}-${i}`))}
           {/* 流式文本气泡 */}
           <div className="chat__message chat__message--assistant">
             <div className="chat__avatar">AI</div>
@@ -177,7 +212,7 @@ function MessageItemInner({
       );
     }
 
-    const parsed = parseStructuredOutput(msg.content, []);
+    const parsed = parseStructuredOutput(msg.content, [], { native: msg.native });
     const hasStructure = parsed.think || parsed.actions.length > 0 || parsed.note || parsed.answer;
     // 优先使用 msg.toolSteps（原生模式下 rawContent 不含 <action>，toolSteps 是源数据）
     const toolSteps = msg.toolSteps && msg.toolSteps.length > 0
@@ -192,16 +227,11 @@ function MessageItemInner({
         <>
           {/* 原生思考流（落定后默认折叠） */}
           {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming={false} />}
-          {/* 工具步骤独立渲染 */}
-          {toolSteps.map((step, i) => (
-            <ToolCallMessage
-              key={`tool-${msg.id}-${i}`}
-              toolCall={{ toolName: step.tool, params: step.args as Record<string, unknown>, result: step.result, status: step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending' }}
-            />
-          ))}
+          {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
+          {toolSteps.map((step, i) => renderToolStep(step, `${msg.id}-${i}`))}
           <StructuredMessage
             think={parsed.think}
-            tools={[]} answer={parsed.answer || msg.content.replace(/<[^>]+>/g, '').trim()} note={parsed.note}
+            tools={[]} answer={parsed.answer || stripAllKnownTags(msg.content).trim()} note={parsed.note}
             msgId={msg.id}
             timestamp={msg.timestamp}
             answerSource={parsed.answerSource}

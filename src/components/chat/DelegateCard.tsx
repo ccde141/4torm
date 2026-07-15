@@ -43,7 +43,7 @@ export default function DelegateCard({ toolCall, content, actions, timestamp }: 
     : (durationStr ? `${toolSteps.length} 步 · ${durationStr}` : `${toolSteps.length} 步`);
 
   return (
-    <div className="chat__message chat__message--assistant" style={{ paddingLeft: '24px' }}>
+    <div className="chat__message chat__message--assistant chat__message--tool" style={{ paddingLeft: '24px' }}>
       <div className="chat__bubble" style={{
         minWidth: '280px', maxWidth: '600px',
         border: `1px solid var(--glass-border)`,
