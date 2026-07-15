@@ -14,6 +14,7 @@
 
 import type { ContextMessage, LLMOptions } from '../shared/types';
 import type { TokenUsage } from '../shared/llm-bridge';
+import { salvageToolArgs } from '../shared/tool-bridge';
 
 // ── 共享常量（native + text 双路径共用） ──────────────────────────
 
@@ -267,16 +268,14 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       }
       let args: Record<string, string> = {};
       let argParseErr: string | undefined;
-      try {
-        const parsed = JSON.parse(tc.arguments || '{}');
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          for (const [k, v] of Object.entries(parsed)) {
-            args[k] = typeof v === 'string' ? v : JSON.stringify(v);
-          }
-        } else {
-          argParseErr = `参数必须是 JSON 对象，实际收到：${tc.arguments?.slice(0, 200)}`;
+      // 参数救回（本地模型脏 JSON），见 conversation/react-loop 同段说明
+      const salvaged = salvageToolArgs(tc.arguments || '{}');
+      if (salvaged.ok) {
+        args = salvaged.args;
+        if (salvaged.repaired) {
+          console.warn(`[cyclone] 工具参数已救回：${tc.name} ${JSON.stringify(tc.arguments)?.slice(0, 120)}`);
         }
-      } catch {
+      } else {
         argParseErr = `参数 JSON 解析失败：${tc.arguments?.slice(0, 200)}`;
       }
       if (argParseErr) {

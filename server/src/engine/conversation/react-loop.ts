@@ -11,6 +11,7 @@
 
 import type { ContextMessage, LLMOptions } from '../shared/types';
 import type { TokenUsage } from '../shared/llm-bridge';
+import { salvageToolArgs } from '../shared/tool-bridge';
 
 // ── 共享常量（native + text 双路径共用） ──────────────────────────
 
@@ -350,18 +351,15 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       }
       let args: Record<string, string> = {};
       let argParseErr: string | undefined;
-      try {
-        const parsed = JSON.parse(tc.arguments || '{}');
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          for (const [k, v] of Object.entries(parsed)) {
-            args[k] = typeof v === 'string' ? v : JSON.stringify(v);
-          }
-        } else {
-          // bug #3：arguments 是数组/标量而非对象 → 不能静默丢参，回填错误自纠
-          argParseErr = `参数必须是 JSON 对象，实际收到：${tc.arguments?.slice(0, 200)}`;
+      // 参数救回：本地模型常吐脏 JSON（fence/前后垃圾/尾逗号）。salvageToolArgs
+      // 按代价递增尝试救回，救不回才回填错误让模型自纠。
+      const salvaged = salvageToolArgs(tc.arguments || '{}');
+      if (salvaged.ok) {
+        args = salvaged.args;
+        if (salvaged.repaired) {
+          console.warn(`[conversation] 工具参数已救回：${tc.name} ${JSON.stringify(tc.arguments)?.slice(0, 120)}`);
         }
-      } catch {
-        // 原生模式参数解析失败极罕见（provider 已序列化），回填错误让模型自纠
+      } else {
         argParseErr = `参数 JSON 解析失败：${tc.arguments?.slice(0, 200)}`;
       }
       if (argParseErr) {

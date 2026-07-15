@@ -12,6 +12,7 @@ import type { ContextMessage } from '../shared/types';
 import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import { callTool } from './tool-bridge';
 import { extractAnswer } from '../shared/answer-extractor';
+import { salvageToolArgs } from '../shared/tool-bridge';
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
@@ -47,17 +48,15 @@ export function parseActions(text: string): ParsedAction[] {
     let args: Record<string, string> = {};
     let parseError: string | undefined;
     if (body) {
-      try {
-        const parsed = JSON.parse(body);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          for (const [k, v] of Object.entries(parsed)) {
-            args[k] = typeof v === 'string' ? v : JSON.stringify(v);
-          }
-        } else {
-          parseError = 'action body 必须是 JSON 对象';
+      // 参数救回（本地模型脏 body），见 conversation/react-loop-text 同段说明
+      const salvaged = salvageToolArgs(body);
+      if (salvaged.ok) {
+        args = salvaged.args;
+        if (salvaged.repaired) {
+          console.warn(`[convection] action body 已救回：${tool} ${body.slice(0, 120)}`);
         }
-      } catch (e) {
-        parseError = `action body 不是合法 JSON: ${(e as Error).message}`;
+      } else {
+        parseError = `action body 不是合法 JSON（已尝试救回）`;
       }
     }
     out.push({ tool, args, parseError, start: m.index, end: re.lastIndex });

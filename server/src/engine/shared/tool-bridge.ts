@@ -175,3 +175,123 @@ export function makeToolCallAccumulator() {
     },
   };
 }
+
+// ── 工具调用参数救回（salvageToolArgs）────────────────────────────
+//
+// 本地模型（LM Studio / Ollama / vLLM 上的 7B~35B）常吐脏 arguments：
+//   ① markdown 包裹：```json {...} ```
+//   ② 前后垃圾：functions.write {...} .   或   工具名前缀混进来
+//   ③ 语法瑕疵：尾逗号、单引号
+// 云端 API 靠约束解码保证结构，本地是对文本跑正则解析器，脏输出频率高得多。
+// 直接 JSON.parse 失败就丢弃→回填错误→模型重发还是错→死循环烧 token。
+// 这里按代价递增四步尝试救回，任一步成功即返回；全败才让上层回填错误。
+
+export type SalvageResult =
+  | { ok: true; args: Record<string, string>; repaired: boolean }
+  | { ok: false; reason: string };
+
+const SALVAGE_MAX_LEADING = 96;   // 配平括号前允许的垃圾前缀上限（防把正文当参数）
+const SALVAGE_MAX_TRAILING = 3;   // 配平括号后允许的垃圾后缀上限
+const SALVAGE_LEADING_RE = /^[a-z0-9\s"'`.:/_-]+$/i; // 前缀只允许工具名样式字符
+
+/** 把任意 parse 出的对象值统一成 Record<string,string>（与 react-loop 现有约定一致）。 */
+function coerceArgsRecord(parsed: unknown): Record<string, string> | null {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+    out[k] = typeof v === 'string' ? v : JSON.stringify(v);
+  }
+  return out;
+}
+
+/**
+ * 从含前后垃圾的字符串里抠出第一个配平的 {...} 或 [...]。
+ * 栈式扫描：深度计数 + 字符串状态机（正确跳过字符串内的括号与转义），
+ * 这样 "读取 I:\A_..." 这种字符串内的反斜杠/括号不会干扰配平判断。
+ * 返回配平子串及其起止位置，找不到返回 null。
+ */
+function extractBalancedJson(raw: string): { json: string; start: number; end: number } | null {
+  let start = 0;
+  while (start < raw.length && raw[start] !== '{' && raw[start] !== '[') start += 1;
+  if (start >= raw.length) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{' || ch === '[') depth += 1;
+    else if (ch === '}' || ch === ']') {
+      depth -= 1;
+      if (depth === 0) return { json: raw.slice(start, i + 1), start, end: i + 1 };
+    }
+  }
+  return null;
+}
+
+/** 轻量语法修：去尾逗号（}]前的逗号）。只做保守、无歧义的修复。 */
+function lightSyntaxRepair(s: string): string {
+  return s.replace(/,(\s*[}\]])/g, '$1');
+}
+
+/** 剥 markdown 代码围栏：```json\n...\n``` 或 ```\n...\n```。 */
+function stripCodeFence(s: string): string {
+  const m = /^\s*```(?:json|javascript|js)?\s*\n?([\s\S]*?)\n?```\s*$/i.exec(s.trim());
+  return m ? m[1].trim() : s;
+}
+
+/**
+ * 工具调用参数救回。按代价递增四步尝试，任一步成功即返回：
+ *   1. 直接 parse（绝大多数情况，零开销）
+ *   2. 剥 markdown fence 后 parse
+ *   3. 抠配平 {...} 后 parse（带前后垃圾白名单，防误修把正文当参数）
+ *   4. 轻量语法修（去尾逗号）后对配平子串 parse
+ * 全败返回 { ok:false }，由上层回填错误让模型重试。
+ *
+ * repaired=false 表示第 1 步直接命中（干净输入）；true 表示动用了 2~4 步。
+ */
+export function salvageToolArgs(raw: string): SalvageResult {
+  const input = (raw ?? '').trim();
+  if (!input) return { ok: true, args: {}, repaired: false };
+
+  // 步骤 1：直接 parse
+  try {
+    const rec = coerceArgsRecord(JSON.parse(input));
+    if (rec) return { ok: true, args: rec, repaired: false };
+  } catch { /* 落到后续步骤 */ }
+
+  // 步骤 2：剥 fence 后 parse
+  const defenced = stripCodeFence(input);
+  if (defenced !== input) {
+    try {
+      const rec = coerceArgsRecord(JSON.parse(defenced));
+      if (rec) return { ok: true, args: rec, repaired: true };
+    } catch { /* 继续 */ }
+  }
+
+  // 步骤 3 & 4：抠配平子串（对已去 fence 的文本），校验前后垃圾在白名单内
+  const balanced = extractBalancedJson(defenced);
+  if (balanced) {
+    const lead = defenced.slice(0, balanced.start).trim();
+    const trail = defenced.slice(balanced.end).trim();
+    const leadOk = lead.length <= SALVAGE_MAX_LEADING && (lead === '' || SALVAGE_LEADING_RE.test(lead));
+    const trailOk = trail.length <= SALVAGE_MAX_TRAILING;
+    if (leadOk && trailOk) {
+      for (const candidate of [balanced.json, lightSyntaxRepair(balanced.json)]) {
+        try {
+          const rec = coerceArgsRecord(JSON.parse(candidate));
+          if (rec) return { ok: true, args: rec, repaired: true };
+        } catch { /* 试下一个候选 */ }
+      }
+    }
+  }
+
+  return { ok: false, reason: '无法解析为 JSON 对象（已尝试剥围栏/抠配平/去尾逗号）' };
+}

@@ -267,6 +267,12 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
   const { url, headers, body, nameMap } = await buildRequest(params, useStream);
   const bodyStr = JSON.stringify(body);
 
+  // 诊断埋点：每次请求打 prompt 规模，看上下文是否随轮次膨胀（框架侧信号）。
+  if (process.env.LLM_STREAM_DIAG !== '0') {
+    const msgCount = Array.isArray(body.messages) ? body.messages.length : 0;
+    console.log(`[llm-request] 发送 prompt：消息数=${msgCount} body=${(bodyStr.length / 1024).toFixed(1)}KB max_tokens=${body.max_tokens}${body.tools ? ' +tools' : ''}`);
+  }
+
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -357,6 +363,19 @@ function parseUsage(raw: { prompt_tokens?: number; completion_tokens?: number; t
 }
 
 /** 解析 OpenAI SSE 流，逐 chunk 回调，返回 LLMResult */
+/** 从流式 tool_calls delta 里抽出可回显的片段（函数名首次出现 + arguments 增量）。 */
+function extractToolArgDelta(deltas: unknown): string {
+  if (!Array.isArray(deltas)) return '';
+  let out = '';
+  for (const d of deltas) {
+    const fn = (d as any)?.function;
+    if (!fn) continue;
+    if (fn.name) out += `«${fn.name}» `;
+    if (typeof fn.arguments === 'string') out += fn.arguments;
+  }
+  return out;
+}
+
 async function parseSSEStream(
   res: Response,
   onChunk: (chunk: string) => void,
@@ -373,6 +392,48 @@ async function parseSSEStream(
   let finishReason: 'stop' | 'length' | 'tool_calls' | null = null;
   let usage: TokenUsage | undefined;
   const toolAcc = native ? makeToolCallAccumulator() : null;
+
+  // ── 诊断埋点：累积生成量日志 ──────────────────────────────────────
+  // 目的：区分「模型自己在复读/停不下来」(内容持续增长且尾部重复) 与
+  //       「框架问题」(prompt 喂爆/断流)。每累积约 2000 字符打一行，含尾部片段。
+  const DIAG = process.env.LLM_STREAM_DIAG !== '0'; // 累积统计，默认开，LLM_STREAM_DIAG=0 关
+  // 实时逐字回显：把 agent 正在生成的内容直接打到后端控制台（像看它打字）。
+  // 正文 / 思考链 / 工具调用参数分别标记——native 模式下"写文件内容"走 tool_call
+  // 参数流，不在正文里，故必须一并回显才能看全 agent 在敲什么。设 LLM_STREAM_ECHO=0 关。
+  const ECHO = process.env.LLM_STREAM_ECHO !== '0';
+  const streamStart = Date.now();
+  let chunkCount = 0;
+  let lastLogAt = 0;
+  let toolArgLen = 0;        // 工具参数累积字符数（判断是否在流式增长）
+  let toolArgLastLog = 0;
+  let toolDeltaDumped = 0;   // 已转储的原始 tool delta 条数（只转前几条防刷屏）
+  // 静默心跳：LM Studio 攒整包发 tool 参数时 reader.read() 会长时间阻塞、零输出。
+  // 每 10s 打一条心跳，区分「模型在后台生成(会持续心跳直到出结果)」与「彻底死了」。
+  let lastActivityAt = Date.now();
+  const heartbeat = DIAG ? setInterval(() => {
+    const silent = ((Date.now() - lastActivityAt) / 1000).toFixed(0);
+    if (Number(silent) >= 10) {
+      console.log(`[llm-stream] ⏳ 已静默 ${silent}s（等待 provider 输出中，正文=${full.length} 工具参数=${toolArgLen}）`);
+    }
+  }, 10_000) : null;
+  let echoMode = ''; // 'think' | 'text' | 'tool'，切换来源时换行标注前缀
+  const echo = (kind: 'think' | 'text' | 'tool', s: string) => {
+    if (!ECHO || !s) return;
+    if (echoMode !== kind) {
+      const label = kind === 'think' ? '🧠think' : kind === 'text' ? '✍️ text' : '🔧tool-args';
+      process.stdout.write(`\n[agent:${label}] `);
+      echoMode = kind;
+    }
+    process.stdout.write(s);
+  };
+  const logAccum = (tag: string) => {
+    if (!DIAG) return;
+    if (ECHO && echoMode) { process.stdout.write('\n'); echoMode = ''; }
+    const secs = ((Date.now() - streamStart) / 1000).toFixed(1);
+    const tail = full.slice(-80).replace(/\n/g, '⏎');
+    const toolInfo = toolArgLen > 0 ? ` 工具参数=${toolArgLen}字符` : '';
+    console.log(`[llm-stream] ${tag} 正文=${full.length}字符${toolInfo} chunks=${chunkCount} 耗时=${secs}s 尾部«${tail}»`);
+  };
 
   // 单行处理抽成闭包：主循环与流结束后的残留 buffer 收尾复用同一套逻辑，
   // 避免末尾未换行的 chunk（部分聚合端最后一条 data 不补 \n\n 就关连接）被丢弃。
@@ -403,15 +464,33 @@ async function parseSSEStream(
         const reasoning = choice?.delta?.reasoning_content
           ?? choice?.delta?.reasoning
           ?? choice?.delta?.thinking;
-        if (reasoning && onReasoning) onReasoning(reasoning);
+        if (reasoning) { echo('think', reasoning); if (onReasoning) onReasoning(reasoning); }
         const token = choice?.delta?.content;
         if (token) {
           full += token;
+          chunkCount++;
+          echo('text', token);
           onChunk(token);
+          if (full.length - lastLogAt >= 2000) { lastLogAt = full.length; logAccum('生成中'); }
         }
         // 原生模式：累加 tool_calls 分片
         if (toolAcc && choice?.delta?.tool_calls) {
-          toolAcc.push(choice.delta.tool_calls as any);
+          const tcs = choice.delta.tool_calls as any[];
+          // 诊断：转储前 3 条原始 delta 结构，看 provider 到底怎么发 arguments
+          if (DIAG && toolDeltaDumped < 3) {
+            toolDeltaDumped++;
+            console.log(`[tool-delta#${toolDeltaDumped}] ${JSON.stringify(tcs).slice(0, 300)}`);
+          }
+          const frag = extractToolArgDelta(tcs);
+          toolArgLen += frag.length;
+          echo('tool', frag);
+          // 参数每累积 2000 字符打一次，确认是"在流"还是"卡住不动"
+          if (DIAG && toolArgLen - toolArgLastLog >= 2000) {
+            toolArgLastLog = toolArgLen;
+            const secs = ((Date.now() - streamStart) / 1000).toFixed(1);
+            console.log(`[tool-args] 参数累积=${toolArgLen}字符 耗时=${secs}s`);
+          }
+          toolAcc.push(tcs as any);
         }
         // finish_reason 出现在最后一个 chunk
         if (choice?.finish_reason) {
@@ -426,22 +505,48 @@ async function parseSSEStream(
       }
   };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-    for (const line of lines) processLine(line);
+      lastActivityAt = Date.now();
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) processLine(line);
+    }
+  } catch (err) {
+    if (heartbeat) clearInterval(heartbeat);
+    // 流中途被对端掐断（undici "terminated"）等：先把诊断打全，再把已累积内容与
+    // 错误一并抛出，便于判断是「模型吐到一半连接断」还是「framework 侧问题」。
+    const detail = (err as any)?.cause?.code || (err as any)?.cause?.message || (err as Error)?.message || String(err);
+    logAccum('流中断');
+    console.warn(`[llm-stream] ⚠ 流读取中断：${detail}（已累积 ${full.length} 字符，finishReason=${finishReason ?? '未收到'}）`);
+    throw err;
   }
+
+  if (heartbeat) clearInterval(heartbeat);
 
   // 收尾：flush 解码器取出末尾残留的多字节字符（如中文），并入 buffer；
   // 再把最后一段未被换行终结的内容处理掉——否则末尾（常是思维链/正文结尾）会丢。
   buffer += decoder.decode();
   if (buffer) for (const line of buffer.split('\n')) processLine(line);
 
+  logAccum(`完成(finish=${finishReason ?? '无'})`);
+
   const toolCalls = toolAcc && toolAcc.hasAny() ? toolAcc.finish() : undefined;
+  // 诊断：LM Studio 对 tool_call 参数是攒整包发（不流式），故流式过程看不到内容。
+  // 这里在收尾时把每个工具调用的完整参数 dump 出来，能看到 agent 到底写了什么、多长。
+  // finish=length 说明参数被 max_tokens 截断（大概率残缺），单独标红提示。
+  if (DIAG && toolCalls) {
+    for (const tc of toolCalls) {
+      const argLen = tc.arguments.length;
+      const truncFlag = finishReason === 'length' ? ' ⚠被max_tokens截断(参数可能残缺)' : '';
+      console.log(`[tool-final] «${tc.name}» 参数${argLen}字符${truncFlag}`);
+      console.log(`[tool-final] 内容：${tc.arguments.slice(0, 600)}${argLen > 600 ? ` …（省略${argLen - 600}字符）` : ''}`);
+    }
+  }
   // 工具名反解（净化名 → 原始名），与非流式路径一致
   if (toolCalls) for (const tc of toolCalls) tc.name = restoreToolName(tc.name, nameMap);
   return { content: full, finishReason, usage, toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined };

@@ -10,6 +10,7 @@
 
 import type { ContextMessage, LLMOptions } from '../../shared/types';
 import { extractAnswer } from '../../shared/answer-extractor';
+import { salvageToolArgs } from '../../shared/tool-bridge';
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
@@ -25,8 +26,13 @@ const DELEGATE_NUDGE_THRESHOLD = 7;
 const REMINDER_INTERVAL = 12;
 /** LLM 静默超时（毫秒）：连续无 token 流入超过此值判定卡死，abort 报错。
  *  注意是「无活动」超时而非总时长——只要持续吐 token（哪怕是很长的回答）就不会触发，
- *  仅在网络断/模型不响应（一个 token 都收不到）时才触发。 */
-const LLM_IDLE_TIMEOUT_MS = 180_000;
+ *  仅在网络断/模型不响应（一个 token 都收不到）时才触发。
+ *
+ *  3600s（非 180s）：本地模型经 LM Studio 跑时，tool_call 参数是「攒整包才发」——
+ *  生成一大段内容（如完整 HTML 文件）期间全程 0 token 到达，resetIdle 不触发，
+ *  这段合法慢生成会被过短的 idle 超时误杀。实测赤壁赋级内容静默 65s，完整前端
+ *  页面/慢模型会更久，故与其他引擎的硬超时对齐到 1 小时，彻底避免误杀。 */
+const LLM_IDLE_TIMEOUT_MS = 3_600_000;
 /** 心跳推送间隔（毫秒） */
 const HEARTBEAT_INTERVAL_MS = 5_000;
 /** 工具结果裁切阈值 */
@@ -114,17 +120,15 @@ export function parseActions(text: string): ParsedAction[] {
     let args: Record<string, string> = {};
     let parseError: string | undefined;
     if (body) {
-      try {
-        const parsed = JSON.parse(body);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          for (const [k, v] of Object.entries(parsed)) {
-            args[k] = typeof v === 'string' ? v : JSON.stringify(v);
-          }
-        } else {
-          parseError = 'action body 必须是 JSON 对象';
+      // 参数救回（本地模型脏 body），见 conversation/react-loop-text 同段说明
+      const salvaged = salvageToolArgs(body);
+      if (salvaged.ok) {
+        args = salvaged.args;
+        if (salvaged.repaired) {
+          console.warn(`[tradewind] action body 已救回：${tool} ${body.slice(0, 120)}`);
         }
-      } catch (e) {
-        parseError = `action body 不是合法 JSON: ${(e as Error).message}`;
+      } else {
+        parseError = `action body 不是合法 JSON（已尝试救回）`;
       }
     }
     out.push({ tool, args, parseError, start: m.index, end: re.lastIndex });

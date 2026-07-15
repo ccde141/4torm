@@ -86,6 +86,55 @@ export async function findToolInSkills(
   return undefined;
 }
 
+/** 收集 registry + 所有 skills 的已知工具名（用于归一化候选匹配）。 */
+async function listKnownToolNames(dataDir: string): Promise<string[]> {
+  const names = new Set<string>();
+  try {
+    const raw = await fs.readFile(path.join(dataDir, 'tools/registry.json'), 'utf-8');
+    for (const t of JSON.parse(raw) as ToolDefWithSource[]) if (t?.name) names.add(t.name);
+  } catch { /* skip */ }
+  try {
+    const skillsDir = path.join(dataDir, 'skills');
+    const entries = await fs.readdir(skillsDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const raw = await fs.readFile(path.join(skillsDir, entry.name, 'tools.json'), 'utf-8');
+        for (const t of JSON.parse(raw) as ToolDefWithSource[]) if (t?.name) names.add(t.name);
+      } catch { /* skip */ }
+    }
+  } catch { /* skip */ }
+  return [...names];
+}
+
+/**
+ * 工具名归一化匹配。本地模型（7B~35B）常吐脏工具名：带空格、大小写不一、
+ * `functions.`/`tools.` 前缀、`namespace/tool` 分隔。精确匹配不中时按候选顺序
+ * 归一化，在 known 里找【唯一】匹配才返回规范名；有歧义（多个匹配）则放弃。
+ * 绝不做模糊/编辑距离匹配（避免把 read 错纠成 reads 这类危险纠正）。
+ */
+export function resolveToolName(raw: string, known: string[]): string | null {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed || known.length === 0) return null;
+
+  const candidates: string[] = [];
+  const add = (v: string) => { const c = v.trim(); if (c && !candidates.includes(c)) candidates.push(c); };
+  add(trimmed);
+  const dotted = trimmed.replace(/\//g, '.');                 // namespace/tool → namespace.tool
+  add(dotted);
+  add(dotted.replace(/^(?:functions?|tools?)[._-]/i, ''));    // 剥 functions./tools. 前缀
+  const segs = dotted.split('.').map(s => s.trim()).filter(Boolean);
+  if (segs.length > 1) add(segs[segs.length - 1]);            // 取最后一段
+
+  for (const cand of candidates) {
+    const folded = cand.toLowerCase();
+    const hits = known.filter(n => n.toLowerCase() === folded);
+    if (hits.length === 1) return hits[0];                    // 唯一匹配才采纳
+    if (hits.length > 1) return null;                          // 歧义 → 放弃
+  }
+  return null;
+}
+
 async function getAgentConfig(dataDir: string, agentId: string): Promise<{ workspace: string; sandboxLevel: 'strict' | 'relaxed' | 'unrestricted' }> {
   const projectDir = path.resolve(dataDir, '..');
   let workspace = path.resolve(dataDir, 'agents', agentId, '.workspace');
@@ -127,6 +176,17 @@ export async function executeTool(
   }
   let toolDef = await findToolInRegistry(dataDir, tool);
   if (!toolDef) toolDef = await findToolInSkills(dataDir, tool);
+  if (!toolDef) {
+    // 精确匹配失败：本地模型常吐脏工具名（带空格/大小写/functions. 前缀）。
+    // 先归一化候选匹配一次，命中唯一规范名则用规范名重查，仍不中才报未知工具。
+    const resolved = resolveToolName(tool, await listKnownToolNames(dataDir));
+    if (resolved && resolved !== tool) {
+      console.warn(`[tool-executor] 工具名归一化：${JSON.stringify(tool)} → ${resolved}`);
+      toolDef = await findToolInRegistry(dataDir, resolved);
+      if (!toolDef) toolDef = await findToolInSkills(dataDir, resolved);
+      if (toolDef) tool = resolved;
+    }
+  }
   if (!toolDef) {
     // 未知工具不是系统故障，而是模型用错了工具名（或复读了协议示例占位符）。
     // 返回友好结果让模型自我纠正，不抛异常（避免被上层包成 HTTP 500 崩掉本轮对话）。
