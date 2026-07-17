@@ -14,6 +14,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { agentMemoryDir } from '../../services/data-paths.js';
 import { atomicWriteFile } from './atomic-io';
 import type { ToolDef } from './tool-defs-loader';
 
@@ -60,7 +61,7 @@ export interface MemoryIndexRow {
 // ── 路径 ──────────────────────────────────────────────────────────
 
 function memoryDir(dataDir: string, agentId: string): string {
-  return path.join(dataDir, 'agents', agentId, 'memory');
+  return agentMemoryDir(dataDir, agentId);
 }
 function indexPath(dataDir: string, agentId: string): string {
   return path.join(memoryDir(dataDir, agentId), 'index.md');

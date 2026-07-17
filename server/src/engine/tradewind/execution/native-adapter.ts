@@ -44,17 +44,16 @@ export async function runTradewindReActNative(
   const { dataDir, model, temperature, messages, toolDefs, toolCaller, onEvent, signal, completion } = params;
 
   const llm: LLMCaller = {
-    async call(msgs, _opts, onChunk, sig, tools) {
-      return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools });
+    async call(msgs, _opts, onChunk, sig, tools, onReasoning) {
+      return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools, onReasoning });
     },
   };
 
   // 事件翻译：共享循环的 ReActStreamEvent → 信风 NodeRunnerEvent
   const onLoopEvent = onEvent
-    ? (ev: { type: string; chunk?: string; tool?: string; args?: Record<string, string>; result?: string; phase?: string; elapsed?: number; message?: string }) => {
-        if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk! });
-        // tool-call / tool-result 由 toolCaller 内部 emit，循环只补发旁路事件
-        else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
+    ? (ev: NativeLoopEvent) => {
+        const translated = translateNativeLoopEvent(ev);
+        if (translated) onEvent(translated);
       }
     : undefined;
 
@@ -78,4 +77,17 @@ export async function runTradewindReActNative(
     lastPromptTokens: result.usage?.promptTokens,
     autoOutcome: result.autoOutcome,
   };
+}
+
+interface NativeLoopEvent {
+  type: string;
+  chunk?: string;
+  message?: string;
+}
+
+export function translateNativeLoopEvent(event: NativeLoopEvent): NodeRunnerEvent | undefined {
+  if (event.type === 'token') return { type: 'token', content: event.chunk ?? '' };
+  if (event.type === 'reasoning') return { type: 'reasoning', content: event.chunk ?? '' };
+  if (event.type === 'error') return { type: 'error', message: event.message ?? '' };
+  return undefined;
 }

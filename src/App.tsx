@@ -53,7 +53,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   mcp:       { title: 'MCP', subtitle: '外部工具服务管理' },
 };
 
-function PageContent({ page, preselectSession, onClearPreselect }: { page: string; preselectSession?: string | null; onClearPreselect?: () => void }) {
+function PageContent({ page, preselectSession, onClearPreselect, onNavigate }: { page: string; preselectSession?: string | null; onClearPreselect?: () => void; onNavigate: (page: string) => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevPageRef = useRef(page);
 
@@ -82,7 +82,7 @@ function PageContent({ page, preselectSession, onClearPreselect }: { page: strin
       <div className="page-panel" data-page="chat" style={show('chat')}><div style={scrollArea}><ChatPage active={page === 'chat'} preselectSession={preselectSession ?? undefined} onClearPreselect={onClearPreselect} /></div></div>
       <div className="page-panel" data-page="tools" style={show('tools')}><div style={scrollArea}><ToolsPage /></div></div>
       <div className="page-panel" data-page="skills" style={show('skills')}><div style={scrollArea}><SkillsPage /></div></div>
-      <div className="page-panel" data-page="convection" style={show('convection')}><div style={scrollArea}><ConvectionPage active={page === 'convection'} /></div></div>
+      <div className="page-panel" data-page="convection" style={show('convection')}><div style={scrollArea}><ConvectionPage active={page === 'convection'} onNavigate={onNavigate} /></div></div>
       <div className="page-panel" data-page="cyclone" style={show('cyclone')}><div style={scrollArea}><CyclonePage active={page === 'cyclone'} /></div></div>
       <div className="page-panel" data-page="tradewind" style={show('tradewind')}><div style={scrollArea}><TradeWindPage /></div></div>
       <div className="page-panel" data-page="tide" style={show('tide')}><div style={scrollArea}><TidePage active={page === 'tide'} /></div></div>
@@ -127,7 +127,7 @@ export default function App() {
         <div className="main-content" style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
           <Header title={pageInfo.title} subtitle={pageInfo.subtitle} onNavigate={handleNavigate} />
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <PageContent page={activePage} preselectSession={preselectSession} onClearPreselect={() => setPreselectSession(null)} />
+            <PageContent page={activePage} preselectSession={preselectSession} onClearPreselect={() => setPreselectSession(null)} onNavigate={setActivePage} />
           </div>
         </div>
       </div>

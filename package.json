@@ -14,6 +14,9 @@
     "start:prod": "cd server && cross-env SERVE_STATIC=1 NODE_ENV=production npx tsx src/index.ts",
     "electron:prod": "cross-env ELECTRON_PROD=1 electron electron/main.cjs",
     "build": "tsc -b && vite build && vitepress build docs",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:server": "npm --prefix server test",
+    "test:all": "npm test && npm run test:server",
     "lint": "eslint .",
     "preview": "vite preview",
     "docs:dev": "vitepress dev docs --port 5174 --strictPort",
@@ -46,10 +49,11 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.5.0",
+    "tsx": "^4.19.4",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",
     "vite": "^8.0.10",
-    "vitepress": "^1.6.4",
+    "vitepress": "^2.0.0-alpha.18",
     "wait-on": "^9.0.10"
   }
 }

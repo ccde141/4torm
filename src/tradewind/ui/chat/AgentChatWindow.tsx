@@ -19,6 +19,7 @@ import { parseStructuredContent } from './parser';
 import StructuredMessage from './StructuredMessage';
 import ToolCallMessage from './ToolCallMessage';
 import DelegateCard from './DelegateCard';
+import { normalizeDelegateProgressAtToolBoundary } from '../../../engine/chat/delegate-progress';
 import ContactCard from './ContactCard';
 import type { ChatMessage } from '../../../types';
 
@@ -210,7 +211,11 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
               if ((msgs[i] as any)._delegateId === ev.delegateId && msgs[i].toolCall) {
                 const steps = [...((msgs[i].toolCall as any).steps || [])];
                 steps.push({ type: 'tool', tool: ev.tool, args: ev.args });
-                msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, steps } as any };
+                msgs[i] = {
+                  ...msgs[i],
+                  content: normalizeDelegateProgressAtToolBoundary(msgs[i].content || ''),
+                  toolCall: { ...msgs[i].toolCall!, steps } as any,
+                };
                 break;
               }
             }
@@ -243,7 +248,11 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
             const msgs = [...prev];
             for (let i = msgs.length - 1; i >= 0; i--) {
               if ((msgs[i] as any)._delegateId === ev.delegateId && msgs[i].toolCall) {
-                msgs[i] = { ...msgs[i], toolCall: { ...msgs[i].toolCall!, result: ev.summary, status: ev.status === 'success' ? 'success' : 'error' } };
+                msgs[i] = {
+                  ...msgs[i],
+                  content: normalizeDelegateProgressAtToolBoundary(msgs[i].content || ''),
+                  toolCall: { ...msgs[i].toolCall!, result: ev.summary, status: ev.status === 'success' ? 'success' : 'error' },
+                };
                 break;
               }
             }

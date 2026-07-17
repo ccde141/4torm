@@ -5,6 +5,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { getAppContext } from '../services/app-context.js';
 import { loadTasks, getTask, upsertTask, deleteTask, listRunRecords } from '../services/tide/store';
 import { parseInterval } from '../services/tide/schedule-parser';
 import { fireManual } from '../services/tide/scheduler';
@@ -32,7 +33,7 @@ function applySelfLoop(task: TideTask): void {
 }
 
 export async function tideRoutes(app: FastifyInstance): Promise<void> {
-  const dataDir = (app as any).dataDir as string;
+  const { dataDir } = getAppContext(app);
 
   // ── POST /api/tide/task — 创建任务 ──
   app.post('/task', async (req, reply) => {

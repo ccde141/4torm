@@ -67,6 +67,7 @@ export interface LLMCaller {
     options?: LLMOptions,
     onChunk?: (chunk: string) => void,
     signal?: AbortSignal,
+    onReasoning?: (chunk: string) => void,
   ): Promise<{ content: string; finishReason: 'stop' | 'length' | 'tool_calls' | null; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }>;
 }
 
@@ -78,6 +79,7 @@ export interface ToolCaller {
 /** ReAct 循环事件（流式推送用） */
 export type ReActStreamEvent =
   | { type: 'token'; chunk: string }
+  | { type: 'reasoning'; chunk: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string; meta?: unknown }
   | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
@@ -211,10 +213,15 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
       resetIdle(); // 每收到 token 重置静默计时——持续吐字永不超时
       onEvent?.({ type: 'token', chunk });
     };
+    const onReasoning = (chunk: string) => {
+      tokenReceived = true;
+      resetIdle();
+      onEvent?.({ type: 'reasoning', chunk });
+    };
 
     let reply: string;
     try {
-      const result = await llm.call(msgs, undefined, onChunk, abortCtrl.signal);
+      const result = await llm.call(msgs, undefined, onChunk, abortCtrl.signal, onReasoning);
       reply = result.content;
       if (result.usage?.promptTokens) lastPromptTokens = result.usage.promptTokens;
 
@@ -226,7 +233,7 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
           msgs.push({ role: 'assistant', content: reply });
           msgs.push({ role: 'user', content: '继续' });
           resetIdle(); // 续写前重置静默窗口，覆盖两次 call 间的空窗
-          const contResult = await llm.call(msgs, undefined, onChunk, abortCtrl.signal);
+          const contResult = await llm.call(msgs, undefined, onChunk, abortCtrl.signal, onReasoning);
           msgs.pop();
           msgs.pop();
           reply += contResult.content;

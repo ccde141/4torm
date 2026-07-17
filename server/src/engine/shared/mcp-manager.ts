@@ -14,6 +14,7 @@ import { watch as fsWatch, mkdirSync, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import { McpStdioClient, type McpServerConfig, type McpToolDef } from './mcp-client';
 import type { ToolDef } from './tool-defs-loader';
+import { mcpServersFile } from '../../services/data-paths.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -293,7 +294,7 @@ function startHealthCheck(): void {
 
 async function readAllConfigs(dataDir: string): Promise<McpServerConfig[]> {
   try {
-    const raw = await fs.readFile(path.join(dataDir, 'mcp', 'servers.json'), 'utf-8');
+    const raw = await fs.readFile(mcpServersFile(dataDir), 'utf-8');
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch {

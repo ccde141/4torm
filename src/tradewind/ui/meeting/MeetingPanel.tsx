@@ -17,6 +17,7 @@ import {
 } from './meeting-client';
 import { MeetingMessageItem } from './MeetingMessageItem';
 import { renderTextWithCode } from '../../../engine/markdown';
+import { appendReasoning } from './meeting-reasoning';
 
 interface MeetingPanelProps {
   nodeId: string;
@@ -28,7 +29,7 @@ interface MeetingPanelProps {
 
 export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: MeetingPanelProps) {
   const [publicMsgs, setPublicMsgs] = useState<MeetingMessage[]>([]);
-  const [chairMsgs, setChairMsgs] = useState<Array<{ role: string; content: string }>>([]);
+  const [chairMsgs, setChairMsgs] = useState<Array<{ role: string; content: string; reasoning?: string }>>([]);
   const [status, setStatus] = useState<MeetingStatus | null>(null);
   const [publicInput, setPublicInput] = useState('');
   const [chairInput, setChairInput] = useState('');
@@ -98,6 +99,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         if (streamingMsg) {
           streamRef.current.currentLabel = streamingMsg.speaker;
           streamRef.current.streamContent = streamingMsg.content || '';
+          streamRef.current.reasoningContent = streamingMsg.reasoning || '';
           streamRef.current.pendingTools = streamingMsg.toolCalls || [];
           setBusy(true);
           setWaitingLabel(streamingMsg.speaker);
@@ -120,6 +122,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
           setWaitingLabel('');
           streamRef.current.currentLabel = '';
           streamRef.current.streamContent = '';
+          streamRef.current.reasoningContent = '';
           streamRef.current.pendingTools = [];
           // 关键：opening 阶段的开场发言（agent-start/token/agent-done）若因订阅时序
           // 被前端错过，会一直缺失，直到下一轮 round-done 才补出（表现为"打招呼延迟蹦出"）。
@@ -134,6 +137,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         break;
       case 'agent-start':
       case 'token':
+      case 'reasoning':
       case 'tool-call':
       case 'tool-result':
       case 'contact-start':
@@ -160,8 +164,9 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
   const streamRef = useRef<{
     currentLabel: string;
     streamContent: string;
+    reasoningContent: string;
     pendingTools: ToolStep[];
-  }>({ currentLabel: '', streamContent: '', pendingTools: [] });
+  }>({ currentLabel: '', streamContent: '', reasoningContent: '', pendingTools: [] });
 
   const updateLastPublic = useCallback((mutate: (last: MeetingMessage) => MeetingMessage) => {
     setPublicMsgs(prev => {
@@ -184,6 +189,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
       case 'agent-start':
         stream.currentLabel = ev.label;
         stream.streamContent = '';
+        stream.reasoningContent = '';
         stream.pendingTools = [];
         setWaitingSince(Date.now());
         setWaitingLabel(ev.label);
@@ -203,6 +209,12 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         stream.streamContent += ev.chunk;
         { const snap = stream.streamContent;
           updateLastPublic(last => ({ ...last, content: snap })); }
+        break;
+      case 'reasoning':
+        setWaitingSince(null);
+        stream.reasoningContent = appendReasoning(stream.reasoningContent, ev.chunk);
+        { const reasoning = stream.reasoningContent;
+          updateLastPublic(last => ({ ...last, reasoning })); }
         break;
       case 'tool-call':
         stream.pendingTools = [...stream.pendingTools, { tool: ev.tool, args: ev.args, status: 'running' }];
@@ -262,6 +274,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
           const noReply = ev.noReply === true;
           const doneContent = noReply ? `（${doneLabel} 未回复）` : ev.content;
           const doneRaw = noReply ? undefined : (stream.streamContent || ev.rawContent || ev.content);
+          const doneReasoning = noReply ? undefined : (stream.reasoningContent || ev.reasoning);
           // 直接定位目标消息（不依赖 streamRef，避免 React batch 时序问题）
           setPublicMsgs(prev => {
             const idx = (() => { for (let i = prev.length - 1; i >= 0; i--) { if (prev[i].speaker === doneLabel && prev[i].streaming) return i; } return -1; })();
@@ -277,6 +290,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
               ...prev[idx],
               content: doneContent,
               rawContent: doneRaw,
+              reasoning: doneReasoning,
               toolCalls: noReply ? undefined : finalTools,
               streaming: false,
               noReply,
@@ -286,6 +300,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         }
         stream.currentLabel = '';
         stream.streamContent = '';
+        stream.reasoningContent = '';
         stream.pendingTools = [];
         break;
       case 'round-done':
@@ -295,9 +310,11 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         setWaitingSince(null);
         streamRef.current.currentLabel = '';
         streamRef.current.streamContent = '';
+        streamRef.current.reasoningContent = '';
         streamRef.current.pendingTools = [];
         break;
       case 'chair-token':
+      case 'chair-reasoning':
         stream.streamContent += ev.chunk;
         setChairMsgs(prev => {
           const msgs = [...prev];
@@ -307,8 +324,19 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
           return msgs;
         });
         break;
+      case 'chair-reasoning':
+        stream.reasoningContent = appendReasoning(stream.reasoningContent, ev.chunk);
+        setChairMsgs(prev => {
+          const msgs = [...prev];
+          if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {
+            msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], reasoning: stream.reasoningContent };
+          }
+          return msgs;
+        });
+        break;
       case 'chair-done':
         stream.streamContent = '';
+        stream.reasoningContent = '';
         break;
       case 'summary-chunk':
         setPublicMsgs(prev => {
@@ -465,6 +493,8 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     if (!text) return;
     setChairInput('');
     setError(null);
+    streamRef.current.streamContent = '';
+    streamRef.current.reasoningContent = '';
 
     setChairMsgs(prev => [...prev, { role: 'user', content: text }]);
     setChairMsgs(prev => [...prev, { role: 'assistant', content: '' }]);
@@ -598,6 +628,12 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
             <div className="tw-meeting-panel__messages" ref={chairContainerRef}>
               {chairMsgs.filter(m => m.role !== 'system').map((m, i) => (
                 <div key={i} className={`tw-meeting-msg tw-meeting-msg--${m.role}`}>
+                  {m.reasoning && (
+                    <details className="tw-meeting-think" open={!m.content}>
+                      <summary className="tw-meeting-think__trigger">思考过程</summary>
+                      <div className="tw-meeting-think__body">{m.reasoning}</div>
+                    </details>
+                  )}
                   <span className="tw-meeting-msg__content">{renderTextWithCode(m.content, `chair-${i}`)}</span>
                 </div>
               ))}

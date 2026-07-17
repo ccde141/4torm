@@ -15,6 +15,7 @@ import type { ChatMessage, Agent } from '../../types';
 import type { ChatSession } from '../../store/chat';
 import type { ToolDef } from '../../store/tools';
 import type { TaskBoard } from '../../utils/taskboard';
+import { normalizeDelegateProgressAtToolBoundary } from './delegate-progress';
 
 export type StreamCtx = {
   session: ChatSession;
@@ -71,6 +72,7 @@ export async function runStreamLoop(ctx: StreamCtx) {
   const assistantMsg: ChatMessage = {
     id: assistantMsgId, role: 'assistant', content: '',
     timestamp: new Date().toISOString(), agentId: agent.id,
+    streamingPhase: 'llm-waiting', phaseElapsed: 0,
   };
   allMessages = [...allMessages, assistantMsg];
   setMessages([...allMessages]);
@@ -81,8 +83,9 @@ export async function runStreamLoop(ctx: StreamCtx) {
   const waitInterval = setInterval(() => {
     if (firstTokenReceived) return;
     const elapsed = Math.round((Date.now() - waitStart) / 1000);
-    const hint = `等待模型响应 ${elapsed}s...`;
-    allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: hint } : m);
+    allMessages = allMessages.map(m => m.id === assistantMsgId
+      ? { ...m, streamingPhase: 'llm-waiting', phaseElapsed: elapsed }
+      : m);
     setMessages([...allMessages]);
   }, 1000);
 
@@ -209,7 +212,7 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
       ctx.setFirstToken();
       const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
       if (!target) break;
-      const updated = { ...target, reasoningContent: (target.reasoningContent || '') + ev.content, streamingPhase: undefined, phaseElapsed: undefined };
+      const updated = { ...target, reasoningContent: (target.reasoningContent || '') + ev.content, streamingPhase: 'model-output' as const, phaseElapsed: 0, streamingStatus: undefined, streamingTool: undefined, streamingArgumentChars: undefined };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
       ctx.throttledFlush();
       break;
@@ -219,10 +222,25 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
       ctx.setStreamContent(ctx.streamContent + ev.content);
       const target = findMsg(ctx.allMessages, ctx.assistantMsgId)!;
       // 首 token 到达即清掉等待状态（模型开始写了）
-      const updated = { ...target, content: ctx.streamContent + ev.content, streamingPhase: undefined, phaseElapsed: undefined };
+      const updated = { ...target, content: ctx.streamContent + ev.content, streamingPhase: 'model-output' as const, phaseElapsed: 0, streamingStatus: undefined, streamingTool: undefined, streamingArgumentChars: undefined };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
       // 节流：超长输出时每个 token 都 setMessages 会导致 O(n²) 渲染塌方，
       // 改为最多每 THROTTLE_MS 刷新一次 UI（最终内容由后续事件或流结束保证完整）
+      ctx.throttledFlush();
+      break;
+    }
+    case 'tool-progress': {
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
+      if (!target) break;
+      const updated = {
+        ...target,
+        streamingPhase: 'tool-preparing' as const,
+        phaseElapsed: Math.round((ev.elapsed || 0) / 1000),
+        streamingStatus: undefined,
+        streamingTool: ev.tool,
+        streamingArgumentChars: ev.argumentChars,
+      };
+      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
       ctx.throttledFlush();
       break;
     }
@@ -236,7 +254,7 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
         status: 'running',
       };
       const steps = [...(target.toolSteps || []), newStep];
-      const updated = { ...target, toolSteps: steps, streamingPhase: 'tool-exec' as const, phaseElapsed: 0 };
+      const updated = { ...target, toolSteps: steps, streamingPhase: 'tool-exec' as const, phaseElapsed: 0, streamingTool: ev.tool, streamingArgumentChars: undefined };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
       ctx.throttledFlush();
       break;
@@ -252,7 +270,7 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
           break;
         }
       }
-      const updated = { ...target, toolSteps: steps, streamingPhase: undefined, phaseElapsed: undefined };
+      const updated = { ...target, toolSteps: steps, streamingPhase: 'llm-waiting' as const, phaseElapsed: 0, streamingTool: undefined, streamingArgumentChars: undefined };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
       ctx.throttledFlush();
       break;
@@ -263,6 +281,19 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
       if (!target) break;
       const phase = ev.phase === 'tool-exec' ? 'tool-exec' as const : 'llm-waiting' as const;
       const updated = { ...target, streamingPhase: phase, phaseElapsed: Math.round((ev.elapsed || 0) / 1000) };
+      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
+      ctx.throttledFlush();
+      break;
+    }
+    case 'notice': {
+      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
+      if (!target) break;
+      const queued = typeof ev.message === 'string' && ev.message.includes('排队');
+      const updated = {
+        ...target,
+        streamingPhase: queued ? 'queued' as const : target.streamingPhase,
+        streamingStatus: ev.message,
+      };
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
       ctx.throttledFlush();
       break;
@@ -293,7 +324,9 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
     case 'delegate-tool-call': {
       const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
       const steps = updateDelegateStep(target?.toolSteps, ev.delegateId, d => ({
-        ...d, steps: [...d.steps, { type: 'tool' as const, tool: ev.tool, args: ev.args }],
+        ...d,
+        content: normalizeDelegateProgressAtToolBoundary(d.content),
+        steps: [...d.steps, { type: 'tool' as const, tool: ev.tool, args: ev.args }],
       }));
       if (!steps) break;
       ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? { ...m, toolSteps: steps } : m));
@@ -316,7 +349,12 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
     case 'delegate-done': {
       const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
       const st = ev.status === 'success' ? 'success' as const : 'error' as const;
-      const steps = updateDelegateStep(target?.toolSteps, ev.delegateId, d => ({ ...d, summary: ev.summary, status: st }));
+      const steps = updateDelegateStep(target?.toolSteps, ev.delegateId, d => ({
+        ...d,
+        content: normalizeDelegateProgressAtToolBoundary(d.content),
+        summary: ev.summary,
+        status: st,
+      }));
       if (!steps) break;
       // 同步外层 step 的 result/status，供跨轮历史回灌（toolSteps 展开成 tool 消息）
       const synced = steps.map(s =>

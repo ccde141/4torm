@@ -6,6 +6,8 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { readJsonFile } from '../../services/json-file-store.js';
+import { atomicWriteFile } from '../shared/atomic-io.js';
 
 /** 工作室根目录：data/cyclone/{workshopId}/ */
 export function workshopDir(dataDir: string, id: string): string {
@@ -82,23 +84,7 @@ export function cycloneArchiveFile(dataDir: string, workshopId: string, name: st
  * 顺带容忍 UTF-8 BOM —— 当初正是开头的 BOM 让 JSON.parse 抛错、房间凭空消失。
  */
 export async function readJsonSafe<T>(file: string): Promise<T | null> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(file, 'utf-8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    console.error(`[cyclone] 读取失败（非缺失，请检查权限/IO）：${file}`, e);
-    throw e;
-  }
-  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1); // 去 BOM
-  try {
-    return JSON.parse(raw) as T;
-  } catch (e) {
-    const quarantine = `${file}.corrupt-${Date.now().toString(36)}`;
-    try { await fs.rename(file, quarantine); } catch { /* 隔离失败也别让读崩，下面照样告警 */ }
-    console.error(`[cyclone] JSON 损坏，已隔离为 ${quarantine}（原文件保留可恢复）：${(e as Error).message}`);
-    return null;
-  }
+  return readJsonFile<T>(file, 'cyclone');
 }
 
 /**
@@ -121,9 +107,7 @@ export async function ensureDir(dir: string): Promise<void> {
 
 /** 原子写：先写 .tmp 再 rename 覆盖，防止半截 JSON */
 export async function atomicWrite(filePath: string, data: string): Promise<void> {
-  const tmp = filePath + '.tmp';
-  await fs.writeFile(tmp, data);
-  await fs.rename(tmp, filePath);
+  await atomicWriteFile(filePath, data);
 }
 
 /** 生成带前缀的随机 id（Date.now + 8 位随机，降低碰撞） */

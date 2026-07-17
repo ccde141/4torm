@@ -13,6 +13,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { agentRegistryFile, tradewindWorkflowsDir } from '../../services/data-paths.js';
 import { atomicWriteFile } from './atomic-io';
 import { extractParams, buildGraphFromParams, type GraphNode } from './workflow-builder';
 import { validateWorkflow } from './workflow-validator';
@@ -23,7 +24,7 @@ interface GraphFile {
 }
 
 function workflowsDir(dataDir: string): string {
-  return path.join(dataDir, 'tradewind', 'workflows');
+  return tradewindWorkflowsDir(dataDir);
 }
 
 // ── list_workflows ────────────────────────────────────────────────
@@ -135,7 +136,7 @@ export async function execUpdateWorkflow(dataDir: string, args: Record<string, u
   // 3. 加载 agent 注册表供校验
   let agentIds: Set<string>;
   try {
-    const raw = await fs.readFile(path.join(dataDir, 'agents', 'registry.json'), 'utf-8');
+    const raw = await fs.readFile(agentRegistryFile(dataDir), 'utf-8');
     agentIds = new Set(Object.keys(JSON.parse(raw)));
   } catch {
     return '更新失败：无法读取 agent 注册表。';

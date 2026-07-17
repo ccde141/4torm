@@ -15,6 +15,7 @@ import { useConfirm } from '../../../components/common/ConfirmDialog';
 import ToolCallMessage from '../../../components/chat/ToolCallMessage';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
+import ExecutionStatusBar from '../../../components/chat/ExecutionStatusBar';
 import type { RoomStreamRunners, FeedMsg } from './useRoomStreamRunners';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import '../../../styles/components/convection.css';
@@ -30,7 +31,8 @@ async function readErrorMessage(r: Response, fallback: string): Promise<string> 
 }
 
 function publicToFeed(msgs: RoomMsg[]): FeedMsg[] {
-  return msgs.map(m => ({
+  return msgs.map((m, sourceIndex) => ({
+    sourceIndex,
     speaker: m.speaker === 'system' ? '归档摘要' : m.speaker,
     content: m.content,
     isHuman: m.speaker === '人类',
@@ -50,6 +52,8 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
   const [input, setInputRaw] = useState(() => runners.getDraft(roomId));
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
+  const [editMessageContent, setEditMessageContent] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
   /** 订阅 tick：runner 每次 notify 自增，触发本组件重渲染读取最新 roundFeed 缓冲 */
   const [, forceTick] = useState(0);
@@ -127,12 +131,13 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
   const seatName = (id: string) => seats.find(s => s.id === id)?.title || id;
 
   // ── 工位管理（替代 prompt）──
-  async function postAction(action: string, body: Record<string, unknown>, fallback: string) {
+  async function postAction(action: string, body: Record<string, unknown>, fallback: string): Promise<boolean> {
     const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/${action}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
-    if (!r.ok) { alert(await readErrorMessage(r, fallback)); return; }
+    if (!r.ok) { alert(await readErrorMessage(r, fallback)); return false; }
     await reload(true);
+    return true;
   }
   const joinSeat = (seatId: string) => postAction('join', { seatId }, '添加工位进群失败');
   const leaveSeat = (seatId: string) => postAction('leave', { seatId }, '移除工位失败');
@@ -149,6 +154,30 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
     setEditingTitle(false);
     const t = titleDraft.trim();
     if (room && t && t !== room.title) await postAction('rename', { title: t }, '重命名群聊失败');
+  }
+
+  function startEditMessage(message: FeedMsg) {
+    if (message.sourceIndex === undefined) return;
+    setEditingMessageIndex(message.sourceIndex);
+    setEditMessageContent(message.content);
+  }
+
+  function cancelEditMessage() {
+    setEditingMessageIndex(null);
+    setEditMessageContent('');
+  }
+
+  async function saveEditMessage() {
+    if (editingMessageIndex === null) return;
+    if (await postAction('edit-message', { index: editingMessageIndex, content: editMessageContent }, '编辑消息失败')) cancelEditMessage();
+  }
+
+  async function deleteMessage(message: FeedMsg) {
+    if (message.sourceIndex === undefined) return;
+    if (!(await confirm({ title: '删除此消息？', message: '此操作不可撤销。', confirmText: '删除', danger: true }))) return;
+    if (await postAction('delete-message', { index: message.sourceIndex }, '删除消息失败')) {
+      if (editingMessageIndex === message.sourceIndex) cancelEditMessage();
+    }
   }
 
   async function resetRoomContext(mode: 'clear' | 'summary', scope: 'public' | 'both' = 'public') {
@@ -238,12 +267,25 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
 
       {/* Messages：已落库 history + 本轮 roundFeed（流式中 history 不含本轮；done 后 reload 带回、clearIfDone 清 roundFeed，无重影） */}
       <div ref={scrollRef} className="chat__messages conv__messages" style={{ flex: 1, overflowY: 'auto' }}>
-        {history.map((m, i) => <FeedRow key={`h-${i}`} m={m} idx={i} prefix="h" />)}
-        {roundFeed?.map((m, i) => <FeedRow key={`r-${i}`} m={m} idx={i} prefix="r" />)}
+        {history.map((m, i) => <FeedRow
+          key={`h-${i}`}
+          m={m}
+          idx={i}
+          prefix="h"
+          editing={editingMessageIndex === m.sourceIndex}
+          editContent={editMessageContent}
+          onEditContent={setEditMessageContent}
+          onStartEdit={() => startEditMessage(m)}
+          onSaveEdit={saveEditMessage}
+          onCancelEdit={cancelEditMessage}
+          onDelete={() => deleteMessage(m)}
+        />)}
+        {roundFeed?.map((m, i) => <FeedRow key={`r-${i}`} m={m} idx={i} prefix="r" editing={false} editContent="" onEditContent={() => {}} onStartEdit={() => {}} onSaveEdit={() => {}} onCancelEdit={() => {}} onDelete={() => {}} />)}
       </div>
 
       {/* Input */}
       <div className="chat__input-area">
+        <ExecutionStatusBar label={streaming ? roundFeed?.[roundFeed.length - 1]?.phase : undefined} />
         <QueuedChips items={queue} onRemove={i => runners.removeQueued(roomId, i)} />
         <div className="chat__input-wrapper">
           <textarea ref={inputRef} className="chat__input" value={input}
@@ -289,12 +331,33 @@ const inputHintStyle: React.CSSProperties = {
 };
 
 /** 单条群聊消息（人类气泡 / 工位气泡，历史 + 本轮实时共用） */
-function FeedRow({ m, idx, prefix }: { m: FeedMsg; idx: number; prefix: string }) {
+function FeedRow({ m, idx, prefix, editing, editContent, onEditContent, onStartEdit, onSaveEdit, onCancelEdit, onDelete }: {
+  m: FeedMsg; idx: number; prefix: string; editing: boolean; editContent: string;
+  onEditContent: (value: string) => void; onStartEdit: () => void; onSaveEdit: () => void;
+  onCancelEdit: () => void; onDelete: () => void;
+}) {
+  if (editing) {
+    return (
+      <div className={`chat__message chat__message--${m.isHuman ? 'user' : 'assistant'}`}>
+        <div className="chat__avatar">{m.isHuman ? '你' : m.speaker.slice(0, 2)}</div>
+        <div className="chat__bubble chat__bubble--editing">
+          <textarea className="chat__edit-textarea" value={editContent} onChange={e => onEditContent(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') onCancelEdit(); if (e.key === 'Enter' && e.ctrlKey) onSaveEdit(); }} rows={4} autoFocus />
+          <div className="chat__edit-actions"><button onClick={onSaveEdit}>保存</button><button onClick={onCancelEdit}>取消</button></div>
+        </div>
+      </div>
+    );
+  }
+  const actions = m.sourceIndex === undefined ? null : (
+    <div className="chat__bubble-actions">
+      <button className="chat__msg-action-btn" title="编辑" onClick={onStartEdit}>✏</button>
+      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={onDelete}>🗑</button>
+    </div>
+  );
   if (m.isHuman) {
     return (
       <div className="chat__message chat__message--user">
         <div className="chat__avatar">你</div>
-        <div className="chat__bubble"><div className="chat__content">{renderTextWithCode(m.content, `room-${prefix}u-${idx}`)}</div></div>
+        <div className="chat__bubble"><div className="chat__content">{renderTextWithCode(m.content, `room-${prefix}u-${idx}`)}</div>{actions}</div>
       </div>
     );
   }
@@ -309,6 +372,7 @@ function FeedRow({ m, idx, prefix }: { m: FeedMsg; idx: number; prefix: string }
         ))}
         {m.phase && <div className="chat__streaming-phase">{m.phase}</div>}
         {m.content && <div className="chat__content" style={{ whiteSpace: 'pre-wrap' }}>{renderTextWithCode(m.content, `room-${prefix}s-${idx}`)}{m.streaming ? '▍' : ''}</div>}
+        {!m.streaming && actions}
       </div>
     </div>
   );

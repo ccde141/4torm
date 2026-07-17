@@ -27,6 +27,7 @@ import {
   type ConvectionReActEvent,
 } from './react-loop';
 import { buildNativeConvectionProtocol, runConvectionReActNative } from './native-adapter';
+import { appendConvectionReasoning, buildConvectionMessage } from './convection-reasoning';
 
 const LLM_TIMEOUT_MS = 3_600_000;
 const HEARTBEAT_INTERVAL_MS = 5_000;
@@ -60,7 +61,7 @@ export type ConvectionStreamEvent =
   | { type: 'reasoning'; label: string; chunk: string }
   | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; label: string; tool: string; result: string }
-  | { type: 'agent-done'; label: string; content: string; rawContent: string; toolCalls: ToolCallRecord[] }
+  | { type: 'agent-done'; label: string; content: string; rawContent: string; reasoning?: string; toolCalls: ToolCallRecord[] }
   | { type: 'heartbeat'; label: string; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-reasoning'; chunk: string }
@@ -161,6 +162,7 @@ export async function handleSpeak(
     }
 
     let result: { cleanContent: string; rawContent: string; toolCalls: ToolCallRecord[]; usage?: TokenUsage };
+    let reasoningContent = '';
 
     // 按-Agent 串行：该参与者若正被其他会话/功能区占用，排队等其空出再发言
     result = await withAgentTurn(agentId, async () => {
@@ -176,14 +178,16 @@ export async function handleSpeak(
           label: loadedAgent.name,
           messages,
           toolDefs,
-          onEvent: onEvent ? (ev) => {
+          onEvent: (ev) => {
+            if (ev.type === 'reasoning') reasoningContent = appendConvectionReasoning(reasoningContent, ev.chunk!);
+            if (!onEvent) return;
             if (ev.type === 'token') onEvent({ type: 'token', label: ev.label, chunk: ev.chunk! });
             else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', label: ev.label, chunk: ev.chunk! });
             else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', label: ev.label, tool: ev.tool!, args: ev.args! });
             else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', label: ev.label, tool: ev.tool!, result: ev.result! });
             else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
             else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
-          } : undefined,
+          },
           signal,
         });
       } else {
@@ -197,13 +201,16 @@ export async function handleSpeak(
           sessionId: session.id,
           label: loadedAgent.name,
           messages,
-          onEvent: onEvent ? (ev) => {
+          onEvent: (ev) => {
+            if (ev.type === 'reasoning') reasoningContent = appendConvectionReasoning(reasoningContent, ev.chunk!);
+            if (!onEvent) return;
             if (ev.type === 'token') onEvent({ type: 'token', label: ev.label, chunk: ev.chunk! });
+            else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', label: ev.label, chunk: ev.chunk! });
             else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', label: ev.label, tool: ev.tool!, args: ev.args! });
             else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', label: ev.label, tool: ev.tool!, result: ev.result! });
             else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
             else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
-          } : undefined,
+          },
           signal,
         });
       }
@@ -213,17 +220,18 @@ export async function handleSpeak(
     const aborted = signal?.aborted;
     const content = result.cleanContent;
     if (content && !content.startsWith('[中止]') && !content.startsWith('[错误]')) {
-      session.publicMessages.push({
+      session.publicMessages.push(buildConvectionMessage({
         speaker: agent.name,
         content,
         timestamp: Date.now(),
         rawContent: result.rawContent || undefined,
-        toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
-      });
+        reasoning: reasoningContent || undefined,
+        toolCalls: result.toolCalls,
+      }));
       updateSessionUsage(session, result.usage);
       onEvent?.({
         type: 'agent-done', label: agent.name,
-        content, rawContent: result.rawContent, toolCalls: result.toolCalls,
+        content, rawContent: result.rawContent, reasoning: reasoningContent || undefined, toolCalls: result.toolCalls,
       });
     }
 

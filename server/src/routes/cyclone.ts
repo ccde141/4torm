@@ -9,14 +9,15 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { getAppContext } from '../services/app-context.js';
 import {
   createWorkshop, loadWorkshop, listWorkshops, deleteWorkshop, renameWorkshop, setChair,
 } from '../engine/cyclone/workshop-store';
 import {
-  addSeat, loadSeat, deleteSeat, updateSeatRole, resetSeatContext,
+  addSeat, loadSeat, saveSeat, deleteSeat, updateSeatRole, resetSeatContext, tryAcquireSeatLock,
 } from '../engine/cyclone/seat-store';
 import {
-  createRoom, loadRoom, deleteRoom, joinRoom, leaveRoom, setRoomParticipants, renameRoom, setRoomMode, tryAcquireRoomLock, resetRoomContext,
+  createRoom, loadRoom, saveRoom, deleteRoom, joinRoom, leaveRoom, setRoomParticipants, renameRoom, setRoomMode, tryAcquireRoomLock, resetRoomContext,
 } from '../engine/cyclone/room-store';
 import { chatSeat, resumeSeat, type SeatEvent } from '../engine/cyclone/seat-runner';
 import { chatChair } from '../engine/cyclone/chair-runner';
@@ -29,6 +30,7 @@ import { readBulletin, applyBulletinOps, readBulletinHistory, revertBulletinChan
 import { loadAgent } from '../engine/shared/agent-loader';
 import { callLLM } from '../engine/shared/llm-bridge';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
+import { deleteContextMessage, editContextMessage } from '../engine/cyclone/message-mutations';
 
 /** 活跃轮次 AbortController：`${workshopId}/${seatId}` 或 `${workshopId}/room/${roomId}` → ctrl */
 const activeAborts = new Map<string, AbortController>();
@@ -96,10 +98,10 @@ async function summarizeWithAgent(dataDir: string, agentId: string, subject: str
 }
 
 export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
-  // 注：本文件里 req.params / req.body / (app as any).dataDir 的 as any 均为 Fastify HTTP /
+  // 注：HTTP 参数在进入领域逻辑前保持轻量适配。
   // 装饰器边界的**有意转型**——请求载荷在校验前无静态类型，各 handler 内用显式判空 / 取默认
   // 值兜底（如 `body?.title?.trim()`、`body?.agentId`）。非"类型随意"。
-  const dataDir = (app as any).dataDir as string;
+  const { dataDir } = getAppContext(app);
 
   // POST /api/cyclone/create —— 建工作室
   app.post('/create', async (req, reply) => {
@@ -252,6 +254,25 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       return reply.send(updated);
     }
 
+    if (action === 'edit-message' || action === 'delete-message') {
+      const release = tryAcquireSeatLock(workshopId, seatId);
+      if (!release) return reply.status(409).send({ error: '该工位正在处理消息，暂时不能修改历史' });
+      try {
+        const seat = await loadSeat(dataDir, workshopId, seatId);
+        if (!seat) return reply.status(404).send({ error: '工位不存在' });
+        if (seat.pending) return reply.status(409).send({ error: '该工位存在挂起提问，请先完成回答再修改历史' });
+        if (!Number.isInteger(body?.index)) return reply.status(400).send({ error: '缺少 index' });
+        const changed = action === 'edit-message'
+          ? typeof body?.content === 'string' && editContextMessage(seat.messages, body.index, body.content)
+          : deleteContextMessage(seat.messages, body.index);
+        if (!changed) return reply.status(400).send({ error: '消息索引越界或内容无效' });
+        await saveSeat(dataDir, workshopId, seat);
+        return reply.send({ ok: true });
+      } finally {
+        release();
+      }
+    }
+
     if (action === 'reset-context') {
       if (activeAborts.has(lockKey)) return reply.status(409).send({ error: '该工位正在处理中，请稍后再重置上下文' });
       const seat = await loadSeat(dataDir, workshopId, seatId);
@@ -352,6 +373,26 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
         return reply.send({ ok: true, archivePath: result.archivePath, archivedChairCount: result.archivedChairCount, summary: !!chairSummary });
       } catch (e) {
         return reply.status(409).send({ error: (e as Error).message });
+      }
+    }
+
+    if (action === 'edit-message' || action === 'delete-message') {
+      const release = tryAcquireRoomLock(workshopId, roomId);
+      if (!release) return reply.status(409).send({ error: '会长正在处理消息，暂时不能修改历史' });
+      try {
+        const room = await loadRoom(dataDir, workshopId, roomId);
+        if (!room) return reply.status(404).send({ error: '群聊不存在' });
+        if (!Number.isInteger(body?.index)) return reply.status(400).send({ error: '缺少 index' });
+        const messages = room.chairMessages || [];
+        const changed = action === 'edit-message'
+          ? typeof body?.content === 'string' && editContextMessage(messages, body.index, body.content)
+          : deleteContextMessage(messages, body.index);
+        if (!changed) return reply.status(400).send({ error: '消息索引越界或内容无效' });
+        room.chairMessages = messages;
+        await saveRoom(dataDir, workshopId, room);
+        return reply.send({ ok: true });
+      } finally {
+        release();
       }
     }
 
@@ -457,6 +498,29 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       const room = await setRoomMode(dataDir, workshopId, roomId, body?.mode);
       if (!room) return reply.status(404).send({ error: '群聊不存在' });
       return reply.send({ mode: room.mode });
+    }
+
+    if (action === 'edit-message' || action === 'delete-message') {
+      const release = tryAcquireRoomLock(workshopId, roomId);
+      if (!release) return reply.status(409).send({ error: '群聊正在处理消息，暂时不能修改历史' });
+      try {
+        const room = await loadRoom(dataDir, workshopId, roomId);
+        if (!room) return reply.status(404).send({ error: '群聊不存在' });
+        if (!Number.isInteger(body?.index)) return reply.status(400).send({ error: '缺少 index' });
+        const message = room.publicMessages[body.index];
+        if (!message) return reply.status(400).send({ error: '消息索引越界' });
+        if (action === 'edit-message') {
+          if (typeof body?.content !== 'string') return reply.status(400).send({ error: '缺少 content' });
+          message.content = body.content;
+          message.rawContent = undefined;
+        } else {
+          room.publicMessages.splice(body.index, 1);
+        }
+        await saveRoom(dataDir, workshopId, room);
+        return reply.send({ ok: true });
+      } finally {
+        release();
+      }
     }
 
     if (action === 'reset-context') {

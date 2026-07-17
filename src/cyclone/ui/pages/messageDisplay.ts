@@ -20,6 +20,7 @@ export type DisplayBlock =
 
 export interface DisplayMessage {
   id: string;
+  sourceIndex?: number;
   role: 'user' | 'assistant' | 'system';
   /** 文本气泡内容（已剥工具调用标签） */
   content: string;
@@ -80,12 +81,12 @@ export function contextToDisplay(stored: StoredMsg[]): DisplayMessage[] {
 
   const out: DisplayMessage[] = [];
   let seq = 0;
-  for (const m of stored) {
+  for (const [sourceIndex, m] of stored.entries()) {
     if (m.role === 'tool') continue;
     if (m.role === 'system') {
       const text = stripTags(m.content);
       if (text.includes('重置前') || text.includes('摘要')) {
-        out.push({ id: `d${seq++}`, role: 'system', content: text });
+        out.push({ id: `d${seq++}`, sourceIndex, role: 'system', content: text });
       }
       continue;
     }
@@ -114,9 +115,9 @@ export function contextToDisplay(stored: StoredMsg[]): DisplayMessage[] {
       const text = stripTags(m.content);
       // 跳过纯工具调用且无文本的空壳（卡片已单列），但保留有文本或有卡片的
       if (!text && blocks.length === 0) continue;
-      out.push({ id: `d${seq++}`, role: 'assistant', content: text, blocks: blocks.length ? blocks : undefined });
+      out.push({ id: `d${seq++}`, sourceIndex, role: 'assistant', content: text, blocks: blocks.length ? blocks : undefined });
     } else if (m.role === 'user') {
-      out.push({ id: `d${seq++}`, role: 'user', content: m.content });
+      out.push({ id: `d${seq++}`, sourceIndex, role: 'user', content: m.content });
     }
   }
   return out;

@@ -59,9 +59,15 @@ export interface ChatMessage {
    */
   toolSteps?: ToolStep[];
   /** 流式阶段标识（运行时字段，不持久化） */
-  streamingPhase?: 'llm-waiting' | 'tool-exec';
+  streamingPhase?: 'queued' | 'llm-waiting' | 'model-output' | 'tool-preparing' | 'tool-exec';
   /** 当前阶段已等待秒数（运行时字段） */
   phaseElapsed?: number;
+  /** 正在准备或执行的工具名（运行时字段） */
+  streamingTool?: string;
+  /** 原生工具参数已生成字符数（运行时字段，不包含参数正文） */
+  streamingArgumentChars?: number;
+  /** 服务端给出的具体运行提示（排队、兼容性警告等；运行时字段） */
+  streamingStatus?: string;
   /**
    * 原生思考流（reasoning_content/reasoning/thinking）。与正文物理分开，
    * 不在 rawContent 里，故需持久化，否则重载丢失。无原生思考的模型为空。
@@ -158,10 +164,7 @@ export interface AgentConfig {
   skills?: string[];
   workspace?: string;
   /**
-   * 文件工具沙箱级别。
-   * - 'strict'       严格 — 只能在 workspaceDir 内读写（use_skill 等系统工具不受限）
-   * - 'relaxed'（默认）弱限制 — 可在 workspaceDir 或软件项目根目录内读写
-   * - 'unrestricted' 无限制 — 可在文件系统任意位置读写
+   * 旧权限档字段，仅为历史数据兼容保留；当前执行策略不再按此分支。
    */
   sandboxLevel?: 'strict' | 'relaxed' | 'unrestricted';
 }

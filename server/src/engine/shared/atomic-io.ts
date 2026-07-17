@@ -9,9 +9,34 @@
  */
 
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+
+const writeQueues = new Map<string, Promise<void>>();
+
+async function replaceFile(filePath: string, data: string): Promise<void> {
+  const tmp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(tmp, data, 'utf-8');
+    await fs.rename(tmp, filePath);
+  } catch (error) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw error;
+  }
+}
 
 export async function atomicWriteFile(filePath: string, data: string): Promise<void> {
-  const tmp = `${filePath}.tmp`;
-  await fs.writeFile(tmp, data, 'utf-8');
-  await fs.rename(tmp, filePath);
+  const previous = writeQueues.get(filePath) ?? Promise.resolve();
+  const current = previous.catch(() => {}).then(() => replaceFile(filePath, data));
+  writeQueues.set(filePath, current);
+  try {
+    await current;
+  } finally {
+    if (writeQueues.get(filePath) === current) writeQueues.delete(filePath);
+  }
+}
+
+export async function drainAtomicWrites(): Promise<void> {
+  while (writeQueues.size > 0) {
+    await Promise.all([...writeQueues.values()]);
+  }
 }

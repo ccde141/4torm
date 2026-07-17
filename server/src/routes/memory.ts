@@ -8,6 +8,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { getAppContext } from '../services/app-context.js';
 import {
   listMemoryFull,
   writeMemory,
@@ -27,7 +28,7 @@ function coerceTags(v: unknown): string[] | undefined {
 }
 
 export async function memoryRoutes(app: FastifyInstance): Promise<void> {
-  const dataDir = (app as any).dataDir as string;
+  const { dataDir } = getAppContext(app);
 
   // GET /api/memory/list?agentId=xxx — 列全部条目（含全文）
   app.get('/list', async (req, reply) => {

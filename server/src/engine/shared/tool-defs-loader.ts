@@ -7,6 +7,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { skillDir, toolRegistryFile } from '../../services/data-paths.js';
 import { resolveMcpTools } from './mcp-manager';
 
 /** 与 src/store/tools.ts 的 ToolDef 同构 */
@@ -34,16 +35,18 @@ async function readJsonSafe<T>(file: string): Promise<T | null> {
   }
 }
 
-async function loadRegistryTools(dataDir: string, names: string[]): Promise<ToolDef[]> {
-  if (names.length === 0) return [];
-  const all = await readJsonSafe<ToolDef[]>(path.join(dataDir, 'tools', 'registry.json'));
+async function loadRegistryTools(dataDir: string, names?: string[]): Promise<ToolDef[]> {
+  const all = await readJsonSafe<ToolDef[]>(toolRegistryFile(dataDir));
   if (!Array.isArray(all)) return [];
+  const valid = all.filter(t => t && typeof t.name === 'string');
+  if (names === undefined) return valid.filter(t => t.executorType === 'builtin');
+  if (names.length === 0) return [];
   const set = new Set(names);
-  return all.filter(t => t && typeof t.name === 'string' && set.has(t.name));
+  return valid.filter(t => set.has(t.name));
 }
 
 async function loadSkillTools(dataDir: string, skillId: string): Promise<ToolDef[]> {
-  const file = path.join(dataDir, 'skills', skillId, 'tools.json');
+  const file = path.join(skillDir(dataDir, skillId), 'tools.json');
   const tools = await readJsonSafe<ToolDef[]>(file);
   return Array.isArray(tools) ? tools.filter(t => t && typeof t.name === 'string') : [];
 }
@@ -52,14 +55,15 @@ async function loadSkillTools(dataDir: string, skillId: string): Promise<ToolDef
  * 加载某 Agent 实体可用的全部工具定义。
  *
  * 合并规则：
- * - tools[]（registry.json 命中的工具）
+ * - tools[] 为空时默认加载 registry.json 中的框架内置工具
+ * - tools[] 非空时只加载其中命中的工具（包括自定义工具）
  * - skills[] 携带的工具（去重，registry 优先）
  * - 若 skills.length > 0 且工具集中含 use_skill：动态改写其 description
  */
 export async function loadAgentToolDefs(
   dataDir: string,
-  toolNames: string[],
-  skillIds: string[],
+  toolNames: string[] = [],
+  skillIds: string[] = [],
 ): Promise<ToolDef[]> {
   const result: ToolDef[] = [];
   const seenNames = new Set<string>();
@@ -68,7 +72,10 @@ export async function loadAgentToolDefs(
   const localNames = toolNames.filter(n => !n.startsWith('mcp:'));
   const mcpNames = toolNames.filter(n => n.startsWith('mcp:'));
 
-  const registryTools = await loadRegistryTools(dataDir, localNames);
+  const registryTools = await loadRegistryTools(
+    dataDir,
+    toolNames.length === 0 ? undefined : localNames,
+  );
   for (const t of registryTools) {
     if (!seenNames.has(t.name)) {
       result.push(t);

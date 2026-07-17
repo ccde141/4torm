@@ -8,17 +8,14 @@ import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { getAppContext } from '../services/app-context.js';
+import { atomicWriteFile } from '../engine/shared/atomic-io.js';
 import { callLLM } from '../engine/shared/llm-bridge.js';
 import { loadAgent } from '../engine/shared/agent-loader.js';
 import { initSSE, pushSSE, endSSE } from '../utils/sse.js';
+import { agentSessionFile } from '../services/data-paths.js';
 
 /** 原子写：先写 .tmp 再 rename 覆盖，防止进程中途被杀（关软件）时留下半截 JSON 损坏会话。 */
-async function atomicWrite(filePath: string, data: string): Promise<void> {
-  const tmp = `${filePath}.tmp`;
-  await fs.writeFile(tmp, data, 'utf-8');
-  await fs.rename(tmp, filePath);
-}
-
 const COMPACT_SYSTEM_PROMPT = `你是一个工程对话压缩器。将开发对话压缩为结构化工作摘要，供后续对话恢复上下文。
 
 ## 输出格式
@@ -87,7 +84,7 @@ interface ChatSession {
 }
 
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
-  const dataDir = (app as any).dataDir as string;
+  const { dataDir } = getAppContext(app);
 
   // POST /api/chat/agent/:agentId/open-workspace —— 用系统文件管理器打开当前 Agent 的本地工作区
   app.post('/agent/:agentId/open-workspace', async (req, reply) => {
@@ -122,7 +119,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // 读会话文件
-    const sessionFile = path.join(dataDir, 'agents', agentId, 'sessions', `${sessionId}.json`);
+    const sessionFile = agentSessionFile(dataDir, agentId, sessionId);
     let session: ChatSession;
     try {
       const raw = await fs.readFile(sessionFile, 'utf-8');
@@ -240,7 +237,10 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
     session.messages = newMessages;
     session.updatedAt = new Date().toISOString();
-    await atomicWrite(sessionFile, JSON.stringify(session, null, 2));
+    // 压缩改变了下一轮真实上下文。旧 usage 属于压缩前请求，继续展示会造成假精确；
+    // 清除后由下一次 provider 返回的 usage 重建。
+    delete session.tokenUsage;
+    await atomicWriteFile(sessionFile, JSON.stringify(session, null, 2));
 
     pushSSE(reply, { type: 'done', markerId: marker.id, markerIdx: insertIdx });
     endSSE(reply);

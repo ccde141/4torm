@@ -9,6 +9,7 @@ import type { Agent, AgentConfig } from '../../types';
 import type { ToolDef } from '../../store/tools';
 import type { SkillMeta } from '../../types';
 import type { UserLabel } from '../../store/statuses';
+import { getEffectiveLocalTools } from './agent-tool-selection';
 import '../../styles/components/config-modal.css';
 
 interface McpToolItem { name: string; fullName: string; description: string; }
@@ -34,7 +35,7 @@ export default function AgentConfigModal(props: Props) {
   const [rolePrompt, setRolePrompt] = useState(agent?.config?.rolePrompt ?? (isCreate ? EXAMPLE_ROLE : ''));
   const [temperature, setTemperature] = useState(agent?.config?.temperature ?? 0.7);
   const [workspace, setWorkspace] = useState(agent?.config?.workspace ?? (isCreate ? '' : `data/agents/${(agent as Agent).id}/.workspace/`));
-  const [sandboxLevel, setSandboxLevel] = useState<'strict' | 'relaxed' | 'unrestricted'>(agent?.config?.sandboxLevel ?? 'relaxed');
+  const sandboxLevel = agent?.config?.sandboxLevel ?? 'relaxed';
   const [model, setModel] = useState(agent?.model ?? '');
   const [label, setLabel] = useState(agent?.label ?? '');
   const [saved, setSaved] = useState(false);
@@ -51,6 +52,7 @@ export default function AgentConfigModal(props: Props) {
   const [showAddLabel, setShowAddLabel] = useState(false);
   const [mcpGroups, setMcpGroups] = useState<Record<string, McpToolItem[]>>({});
   const [mcpExpanded, setMcpExpanded] = useState<Set<string>>(new Set());
+  const effectiveLocalTools = getEffectiveLocalTools(allTools, checkedTools);
 
   useEffect(() => {
     getAllModels().then(setAllModels);
@@ -190,35 +192,11 @@ export default function AgentConfigModal(props: Props) {
               </div>
               <div className="config-field" style={{ marginBottom: 'var(--space-4)' }}>
                 <label className="config-label">
-                  沙箱级别
-                  <span className="config-hint">
-                    {sandboxLevel === 'strict' && '严格 — 文件工具只能在工作区内读写（use_skill 等系统工具不受限）'}
-                    {sandboxLevel === 'relaxed' && '弱限制 — 可在工作区或软件项目根目录内读写'}
-                    {sandboxLevel === 'unrestricted' && '无限制 — 可在文件系统任意位置读写（高风险）'}
-                  </span>
+                  执行权限
+                  <span className="config-hint">统一策略，不再区分权限档</span>
                 </label>
-                <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
-                  {([
-                    { v: 'strict', label: '严格' },
-                    { v: 'relaxed', label: '弱限制（默认）' },
-                    { v: 'unrestricted', label: '无限制' },
-                  ] as const).map(opt => (
-                    <button
-                      key={opt.v}
-                      type="button"
-                      onClick={() => setSandboxLevel(opt.v)}
-                      style={{
-                        padding: 'var(--space-2) var(--space-3)',
-                        background: sandboxLevel === opt.v ? 'var(--color-accent)' : 'transparent',
-                        color: sandboxLevel === opt.v ? 'var(--color-on-accent)' : 'var(--color-text)',
-                        border: '1px solid ' + (sandboxLevel === opt.v ? 'var(--color-accent)' : 'var(--border-color)'),
-                        borderRadius: 'var(--border-radius-sm)',
-                        fontSize: 'var(--text-sm)',
-                        cursor: 'pointer',
-                        flex: 1,
-                      }}
-                    >{opt.label}</button>
-                  ))}
+                <div style={{ marginTop: 'var(--space-2)', padding: 'var(--space-3)', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius-sm)', color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
+                  相对路径以工作区为基准，绝对路径直接使用；仅禁止普通文件工具直接改写 Agent、潮汐、工作流等框架控制面数据。
                 </div>
               </div>
               <div className="config-field">
@@ -273,7 +251,7 @@ export default function AgentConfigModal(props: Props) {
             <>
 
               <div className="config-field" style={{ marginTop: 'var(--space-4)' }}>
-                <label className="config-label">工具<span className="config-hint">勾选后运行时自动注入到提示词末尾</span></label>
+                <label className="config-label">工具<span className="config-hint">未勾选时默认启用全部框架内置工具；勾选任意工具后仅启用所选工具。MCP 与自定义工具需显式勾选</span></label>
 
                 {/* 本地工具 */}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: 'var(--space-3)' }}>
@@ -326,9 +304,9 @@ export default function AgentConfigModal(props: Props) {
                   );
                 })}
 
-                {checkedTools.size > 0 && (
+                {effectiveLocalTools.length > 0 && (
                   <div style={{ maxHeight: '120px', overflowY: 'auto', padding: 'var(--space-3)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', opacity: 0.65, userSelect: 'none', marginBottom: 'var(--space-3)' }}>
-                    {buildToolsPrompt(allTools.filter(t => checkedTools.has(t.name)))}
+                    {buildToolsPrompt(effectiveLocalTools)}
                   </div>
                 )}
               </div>

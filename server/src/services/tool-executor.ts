@@ -8,6 +8,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { resolveExecutionContext } from './execution-context.js';
+import { skillDir, toolExecutorDir, toolRegistryFile } from './data-paths.js';
 
 // 热重载缓存：文件路径 → { mtime, module }
 const modCache = new Map<string, { mtime: number; mod: any }>();
@@ -55,7 +57,7 @@ export async function findToolInRegistry(
 ): Promise<ToolDefWithSource | undefined> {
   try {
     const raw = await fs.readFile(
-      path.join(dataDir, 'tools/registry.json'), 'utf-8',
+      toolRegistryFile(dataDir), 'utf-8',
     );
     const registry: ToolDefWithSource[] = JSON.parse(raw);
     return registry.find(t => t.name === tool);
@@ -72,7 +74,7 @@ export async function findToolInSkills(
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       try {
-        const toolsPath = path.join(skillsDir, entry.name, 'tools.json');
+        const toolsPath = path.join(skillDir(dataDir, entry.name), 'tools.json');
         const toolsRaw = await fs.readFile(toolsPath, 'utf-8');
         const tools: ToolDefWithSource[] = JSON.parse(toolsRaw);
         const found = tools.find(t => t.name === tool);
@@ -90,7 +92,7 @@ export async function findToolInSkills(
 async function listKnownToolNames(dataDir: string): Promise<string[]> {
   const names = new Set<string>();
   try {
-    const raw = await fs.readFile(path.join(dataDir, 'tools/registry.json'), 'utf-8');
+    const raw = await fs.readFile(toolRegistryFile(dataDir), 'utf-8');
     for (const t of JSON.parse(raw) as ToolDefWithSource[]) if (t?.name) names.add(t.name);
   } catch { /* skip */ }
   try {
@@ -99,7 +101,7 @@ async function listKnownToolNames(dataDir: string): Promise<string[]> {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       try {
-        const raw = await fs.readFile(path.join(skillsDir, entry.name, 'tools.json'), 'utf-8');
+        const raw = await fs.readFile(path.join(skillDir(dataDir, entry.name), 'tools.json'), 'utf-8');
         for (const t of JSON.parse(raw) as ToolDefWithSource[]) if (t?.name) names.add(t.name);
       } catch { /* skip */ }
     }
@@ -133,24 +135,6 @@ export function resolveToolName(raw: string, known: string[]): string | null {
     if (hits.length > 1) return null;                          // 歧义 → 放弃
   }
   return null;
-}
-
-async function getAgentConfig(dataDir: string, agentId: string): Promise<{ workspace: string; sandboxLevel: 'strict' | 'relaxed' | 'unrestricted' }> {
-  const projectDir = path.resolve(dataDir, '..');
-  let workspace = path.resolve(dataDir, 'agents', agentId, '.workspace');
-  let sandboxLevel: 'strict' | 'relaxed' | 'unrestricted' = 'relaxed';
-  try {
-    const raw = await fs.readFile(path.join(dataDir, 'agents/registry.json'), 'utf-8');
-    const registry = JSON.parse(raw);
-    const agent = registry[agentId];
-    if (agent?.config?.workspace) {
-      workspace = path.resolve(projectDir, agent.config.workspace);
-    }
-    if (agent?.config?.sandboxLevel === 'strict' || agent?.config?.sandboxLevel === 'unrestricted') {
-      sandboxLevel = agent.config.sandboxLevel;
-    }
-  } catch { /* use defaults */ }
-  return { workspace, sandboxLevel };
 }
 
 export async function executeTool(
@@ -193,27 +177,12 @@ export async function executeTool(
     return `（未知工具：${tool}）该工具不存在。请检查工具名是否正确，或确认是否误把协议示例当成了真实调用。`;
   }
 
-  let workspaceDir: string;
-  let sandboxLevel: 'strict' | 'relaxed' | 'unrestricted' = 'relaxed';
-  if (workspaceDirOverride) {
-    workspaceDir = path.resolve(dataDir, '..', workspaceDirOverride);
-    // workspace 由调用方覆盖（如信风工作流共享 workspace）
-    if (sandboxLevelOverride) {
-      sandboxLevel = sandboxLevelOverride;
-    } else if (agentId) {
-      const cfg = await getAgentConfig(dataDir, agentId);
-      sandboxLevel = cfg.sandboxLevel;
-    }
-  } else if (agentId) {
-    const cfg = await getAgentConfig(dataDir, agentId);
-    workspaceDir = cfg.workspace;
-    sandboxLevel = sandboxLevelOverride ?? cfg.sandboxLevel;
-  } else {
-    workspaceDir = path.resolve(dataDir, '..');
-    if (sandboxLevelOverride) sandboxLevel = sandboxLevelOverride;
-  }
-  const projectDir = path.resolve(dataDir, '..');
-  const ctx = { dataDir, workspaceDir, projectDir, sandboxLevel };
+  const ctx = await resolveExecutionContext(
+    dataDir,
+    agentId,
+    workspaceDirOverride,
+    sandboxLevelOverride,
+  );
 
   // template 类型：shell 命令模板
   if (toolDef.executorType === 'template' && toolDef.executorTemplate) {
@@ -246,9 +215,9 @@ export async function executeTool(
     const source = toolDef._skillId;
 
     const candidates = source
-      ? [path.join(dataDir, 'skills', source, 'executors', `${fileName}.js`)]
+      ? [path.join(skillDir(dataDir, source), 'executors', `${fileName}.js`)]
       : [];
-    candidates.push(path.join(dataDir, 'tools/executors', `${fileName}.js`));
+    candidates.push(path.join(toolExecutorDir(dataDir), `${fileName}.js`));
 
     let lastError: unknown;
     for (const filePath of candidates) {

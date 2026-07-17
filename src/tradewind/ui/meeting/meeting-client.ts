@@ -23,6 +23,7 @@ export interface MeetingMessage {
   content: string;
   timestamp: number;
   rawContent?: string;
+  reasoning?: string;
   toolCalls?: ToolStep[];
   streaming?: boolean;
   noReply?: boolean; // true=该轮无有效回复（模型空回复），前端以灰字显式呈现
@@ -47,21 +48,23 @@ export interface MeetingStatus {
   publicMessages?: MeetingMessage[];
   chairMessages?: Array<{ role: string; content: string }>;
   /** 正在流式产出的消息（面板关了再开时 replay 用） */
-  streamingCurrent?: { speaker: string; content: string } | null;
+  streamingCurrent?: { speaker: string; content: string; reasoning?: string } | null;
 }
 
 export type MeetingBroadcastEvent =
   | { type: 'connected'; phase: string; round: number; messages: MeetingMessage[]; chairMessages: Array<{ role: string; content: string }>; participants: MeetingParticipant[]; configuredParticipants: MeetingParticipant[] }
   | { type: 'agent-start'; label: string }
   | { type: 'token'; label: string; chunk: string }
+  | { type: 'reasoning'; label: string; chunk: string }
   | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; label: string; tool: string; result: string; meta?: { before?: string } }
   | { type: 'heartbeat'; label: string; phase?: string; elapsed?: number }
   | { type: 'contact-start'; label: string; target: string }
   | { type: 'contact-done'; label: string; target: string; result: string; ok: boolean }
-  | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: ToolStep[]; noReply?: boolean }
+  | { type: 'agent-done'; label: string; content: string; rawContent?: string; reasoning?: string; toolCalls?: ToolStep[]; noReply?: boolean }
   | { type: 'round-done'; messages: MeetingMessage[]; compacted?: boolean }
   | { type: 'chair-token'; chunk: string }
+  | { type: 'chair-reasoning'; chunk: string }
   | { type: 'chair-done'; content: string }
   | { type: 'minutes-done'; content: string }
   | { type: 'summary-chunk'; chunk: string }

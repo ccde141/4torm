@@ -20,6 +20,7 @@ import { parseStructuredOutput, stripAllKnownTags } from '../../engine/parser';
 import { renderTextWithCode } from '../../engine/markdown';
 import { formatTimestamp } from '../../utils/time';
 import type { ChatMessage, ToolStep } from '../../types';
+import { formatStreamStatus } from './stream-status';
 
 /**
  * 渲染单个工具步骤：delegate 步 → DelegateCard（含子步骤/思考流/汇总），
@@ -188,10 +189,9 @@ function MessageItemInner({
       const steps = msg.toolSteps;
       const lastRunningTool = steps?.findLast(s => s.status === 'running')?.tool;
 
-      let phaseLabel = '';
-      if (phase === 'llm-waiting') phaseLabel = `等待模型响应${elapsed ? ` ${elapsed}s` : ''}...`;
-      else if (phase === 'tool-exec' && lastRunningTool) phaseLabel = `正在调用 ${lastRunningTool}...`;
-      else if (!display && !steps?.length) phaseLabel = '等待模型响应...';
+      let phaseLabel = msg.streamingStatus || '';
+      if (!phaseLabel && phase) phaseLabel = formatStreamStatus(phase, elapsed, msg.streamingTool || lastRunningTool, msg.streamingArgumentChars);
+      else if (!phaseLabel && !display && !steps?.length) phaseLabel = formatStreamStatus('llm-waiting');
 
       return (
         <>

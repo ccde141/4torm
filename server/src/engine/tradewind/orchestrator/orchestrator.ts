@@ -264,7 +264,7 @@ export class Orchestrator {
     // 写终结状态：被 stop 掐断的圈（未跑到 output）此前会因 handleNodeDone 闸门而不写 meta，
     // 永留 'running'。这里补写 'stopped'，使 meta 状态真实反映"被中止"而非崩溃残留。
     // ?. 守卫：gap 期停整个循环时 archive 可能尚未在 start() 中建立。
-    void this.archive?.writeEnd('stopped');
+    await this.archive?.writeEnd('stopped');
 
     // 0. 清理 Contact Registry
     clearContactRegistry();

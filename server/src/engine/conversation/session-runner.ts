@@ -20,6 +20,7 @@ import {
   type ToolCaller,
 } from './react-loop';
 import { callLLM, type TokenUsage } from '../shared/llm-bridge';
+import type { ToolPreparationProgress } from '../shared/tool-progress';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execListAgents, execCreateWorkflow } from '../shared/workflow-builder';
 import { execListWorkflows, execUpdateWorkflow } from '../shared/workflow-editor';
@@ -57,6 +58,7 @@ function renderReviewChanges(ledger: FileChange[]): string {
 export type ConversationEvent =
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
+  | ({ type: 'tool-progress' } & ToolPreparationProgress)
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
   | { type: 'delegate-start'; task: string; delegateId: string }
@@ -201,8 +203,8 @@ export class SessionRunner {
     const nativeToolDefs = [...toolDefs, ...buildVirtualToolDefs(true, !!this.opts.sessionId), ...buildMemoryToolDefs()];
 
     const llm: LLMCaller = {
-      async call(msgs, _options, onChunk, sig, tools, onReasoning) {
-        return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools, onReasoning });
+      async call(msgs, _options, onChunk, sig, tools, onReasoning, onToolProgress) {
+        return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools, onReasoning, onToolProgress });
       },
     };
 
@@ -335,6 +337,7 @@ export class SessionRunner {
           onEvent: (ev) => {
             if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
             else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', content: ev.chunk });
+            else if (ev.type === 'tool-progress') onEvent(ev);
           },
           // 季风专属：识别 ask 触发的 SuspendSignal，让 core 走挂起分支
           onToolError: (e) => {
@@ -428,6 +431,7 @@ export class SessionRunner {
       context,
       systemPrompt: subSystemPrompt,
       agentId: this.opts.agentId,
+      model: this.opts.model,
       dataDir: this.opts.dataDir,
       signal: abortCtrl.signal,
       timeout: 1_200_000,

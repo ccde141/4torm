@@ -6,6 +6,7 @@
 
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { getAgents } from '../../../store/agent';
+import { useConfirm } from '../../../components/common/ConfirmDialog';
 import { parseStructuredOutput } from '../../../engine/parser';
 import { renderTextWithCode } from '../../../engine/markdown';
 import StructuredMessage from '../../../components/chat/StructuredMessage';
@@ -13,6 +14,11 @@ import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { formatTimestamp } from '../../../utils/time';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
+import { getConvectionCreateError } from './convection-guards';
+import { shouldLoadConvectionSession } from './convection-session-guards';
+import { streamConvectionSSE } from './convection-sse';
+import { restoreConvectionMessage } from './convection-message-map';
+import { createLatestRequestGuard } from '../../../lib/latest-request';
 import '../../../styles/components/convection.css';
 import type { Agent } from '../../../types';
 
@@ -22,12 +28,15 @@ interface ConvMsg { speaker: string; content: string; streaming?: boolean; rawCo
 interface CMsg { role: string; content: string; streaming?: boolean; waitingInfo?: WaitingInfo; timestamp?: string; reasoning?: string }
 interface SessionSummary { id: string; title: string; chairAgentId: string; participantAgentIds: string[]; topic: string; messageCount: number; tokenEstimate: number; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number }; updatedAt: string }
 
+const ACTIVE_SESSION_KEY = 'convection_active_id';
+
 async function readErrorMessage(r: Response, fallback: string): Promise<string> {
   const e = await r.json().catch(() => ({}));
   return e?.error || `${fallback}（HTTP ${r.status}）`;
 }
 
-export default memo(function ConvectionPage({ active = true }: { active?: boolean }) {
+export default memo(function ConvectionPage({ active = true, onNavigate }: { active?: boolean; onNavigate?: (page: string) => void }) {
+  const confirm = useConfirm();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -46,6 +55,8 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
   const cRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const cAbortRef = useRef<AbortController | null>(null);
+  const loadingSessionRef = useRef<string | null>(null);
+  const sessionRequestGuard = useRef(createLatestRequestGuard());
   // 主对话框消息队列：运行期发送先入队（按 activeId 索引），本轮结束后由 busy 落定 effect 出队
   const queueRef = useRef(new Map<string, string[]>());
   const stoppedRef = useRef(false);   // 用户手动「停止」→ 退回队列入框而非续发
@@ -92,32 +103,52 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
 
   // 加载会话消息
   const loadSession = useCallback(async (id: string) => {
-    if (id === activeId) return; // 重复点击当前会话不重新加载
+    if (!shouldLoadConvectionSession(id, activeId, loadingSessionRef.current)) return;
+    const request = sessionRequestGuard.current.begin();
+    loadingSessionRef.current = id;
     setActiveId(id);
-    localStorage.setItem('convection_active_id', id);
+    localStorage.setItem(ACTIVE_SESSION_KEY, id);
     try {
       const r = await fetch(`/api/convection/session/${id}/status`);
-      if (!r.ok) { alert(await readErrorMessage(r, '加载对流会话失败')); return; }
+      if (!request.isCurrent()) return;
+      if (!r.ok) {
+        if (r.status === 404 && localStorage.getItem(ACTIVE_SESSION_KEY) === id) {
+          localStorage.removeItem(ACTIVE_SESSION_KEY);
+          setActiveId(null);
+          setMsgs([]);
+          setCMsgs([]);
+          return;
+        }
+        alert(await readErrorMessage(r, '加载对流会话失败'));
+        return;
+      }
       const d = await r.json();
-      setMsgs((d.publicMessages || []).map((m: any) => ({
-        speaker: m.speaker,
-        content: m.content,
-        rawContent: m.rawContent || undefined,
-        toolCalls: m.toolCalls?.map((tc: any) => ({ tool: tc.tool, args: tc.args, result: tc.result, status: 'done' as const })) || undefined,
-      })));
+      if (!request.isCurrent()) return;
+      setMsgs((d.publicMessages || []).map(restoreConvectionMessage));
       setCMsgs(d.chairMessages || []);
-    } catch (e) { console.error('[convection] 加载对流会话失败', e); alert(`加载对流会话失败：${(e as Error).message}`); }
+    } catch (e) { if (request.isCurrent()) { console.error('[convection] 加载对流会话失败', e); alert(`加载对流会话失败：${(e as Error).message}`); } }
+    finally { if (loadingSessionRef.current === id) loadingSessionRef.current = null; }
   }, [activeId]);
 
   // 恢复上次活跃会话
   useEffect(() => {
-    const saved = localStorage.getItem('convection_active_id');
+    const saved = localStorage.getItem(ACTIVE_SESSION_KEY);
     if (saved) loadSession(saved);
   }, [loadSession]);
 
   // 创建会话
   const handleNew = async () => {
-    if (agents.length < 2) return;
+    const createError = getConvectionCreateError(agents.length);
+    if (createError) {
+      const goToAgents = await confirm({
+        title: '无法创建会议室',
+        message: createError,
+        cancelText: '取消',
+        confirmText: '前往 Agent 管理',
+      });
+      if (goToAgents) onNavigate?.('agent');
+      return;
+    }
     const chair = agents[0];
     const participants = agents.slice(1, 3);
     try {
@@ -259,7 +290,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
         const r = await fetch(`/api/convection/session/${activeId}/status`);
         if (r.ok) {
           const fresh = await r.json();
-          setMsgs(fresh.publicMessages?.map((m: any) => ({ speaker: m.speaker, content: m.content, streaming: false, toolCalls: [], timestamp: m.timestamp ? new Date(m.timestamp).toISOString() : new Date().toISOString() })) || []);
+          setMsgs(fresh.publicMessages?.map(restoreConvectionMessage) || []);
         } else {
           alert(await readErrorMessage(r, '重载对流会话失败'));
         }
@@ -295,7 +326,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
         if (wait <= 0) doFlush(); else flushTimer = setTimeout(doFlush, wait);
       };
       const cancelFlush = () => { if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; } };
-      await streamSSE(`/api/convection/session/${activeId}/speak`, { message: msg }, ev => {
+      await streamConvectionSSE(`/api/convection/session/${activeId}/speak`, { message: msg }, (ev: any) => {
         if (ev.type === 'agent-start') {
           currentLabel = ev.label;
           streamContent = '';
@@ -322,7 +353,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
         } else if (ev.type === 'agent-done') {
           cancelFlush();   // 终答权威，撤掉可能在排队的后沿刷新（否则覆盖 final content）
           const finalTools: ToolStep[] = (ev.toolCalls || []).map((tc: any) => ({ tool: tc.tool, args: tc.args, result: tc.result, status: 'done' as const }));
-          setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === ev.label ? { ...m, content: ev.content, rawContent: streamContent || ev.rawContent || ev.content, toolCalls: finalTools, streaming: false } : m));
+          setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === ev.label ? { ...m, content: ev.content, rawContent: streamContent || ev.rawContent || ev.content, reasoning: reasoningContent || ev.reasoning, toolCalls: finalTools, streaming: false } : m));
           currentLabel = '';
           streamContent = '';
           reasoningContent = '';
@@ -339,8 +370,16 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
         }
       }, ctrl.signal);
     } catch (e: any) {
-      if (e.name === 'AbortError') {
-        setMsgs(p => p.map((m, i) => i === p.length - 1 && m.streaming ? { ...m, streaming: false } : m));
+      setMsgs(p => p.map((m, i) => i === p.length - 1 && m.streaming
+        ? { ...m, streaming: false, waitingInfo: undefined }
+        : m));
+      if (e.name !== 'AbortError') {
+        setMsgs(p => [...p, {
+          speaker: '系统',
+          content: `对流连接中断：${e.message || '未知错误'}`,
+          toolCalls: [],
+          timestamp: new Date().toISOString(),
+        }]);
       }
     } finally { abortRef.current = null; setBusy(false); refreshSessions(); }
   }, [input, busy, activeId, refreshSessions]);
@@ -379,7 +418,7 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
       let acc = '';
       let cReasoning = '';
       setCMsgs(prev => [...prev, { role: 'assistant', content: '', streaming: true, timestamp: new Date().toISOString() }]);
-      await streamSSE(`/api/convection/session/${activeId}/chair`, { message: msg }, ev => {
+      await streamConvectionSSE(`/api/convection/session/${activeId}/chair`, { message: msg }, (ev: any) => {
         if (ev.type === 'heartbeat') {
           const info: WaitingInfo = { phase: ev.phase, elapsed: ev.elapsed };
           setCMsgs(p => p.map((m, i) => i === p.length - 1 && (m as any).streaming ? { ...m, waitingInfo: info } : m));
@@ -396,9 +435,14 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
         }
       }, ctrl.signal);
     } catch (e: any) {
-      if (e.name === 'AbortError') {
-        setCMsgs(p => p.map((m, i) => i === p.length - 1 && (m as any).streaming ? { ...m, streaming: false } : m));
-      }
+      setCMsgs(p => p.map((m, i) => i === p.length - 1 && (m as any).streaming
+        ? {
+            ...m,
+            content: e.name === 'AbortError' ? m.content : (m.content || `请求失败：${e.message || '未知错误'}`),
+            streaming: false,
+            waitingInfo: undefined,
+          }
+        : m));
     } finally { cAbortRef.current = null; setCBusy(false); }
   }, [cInput, cBusy, activeId]);
 
@@ -408,7 +452,13 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
       <div className="conv__sidebar">
         <div className="conv__sidebar-header">
           <span className="conv__sidebar-title">会话</span>
-          <button onClick={handleNew} className="icon-add-btn">+</button>
+          <button
+            onClick={handleNew}
+            className="icon-add-btn"
+            title={agents.length < 2 ? '至少需要 2 个 Agent' : '创建会议室'}
+            aria-label="创建会议室"
+          >+
+          </button>
         </div>
         <div className="conv__sessions">
           {sessions.map(s => {
@@ -720,31 +770,6 @@ export default memo(function ConvectionPage({ active = true }: { active?: boolea
     </div>
   );
 });
-
-async function streamSSE(url: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal?: AbortSignal): Promise<void> {
-  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
-  if (!res.ok) { const err = await res.text(); throw new Error(err); }
-  const reader = res.body?.getReader();
-  if (!reader) return;
-  const dec = new TextDecoder();
-  let buf = '';
-  while (true) {
-    if (signal?.aborted) { reader.cancel(); break; }
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() ?? '';
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t.startsWith('data:')) continue;
-      const p = t.slice(5).trim();
-      if (!p || p === '[DONE]') continue;
-      try { const ev = JSON.parse(p); if (ev.type !== 'done') onEvent(ev); }
-      catch (e) { console.warn('[convection] SSE 事件解析失败', p, e); }
-    }
-  }
-}
 
 // ── 会长悬浮侧板样式（与气旋 ChairDrawer / 季风任务板统一：玻璃 + 企宣缓动滑入） ──
 const CHAIR_TAB_W = 34;

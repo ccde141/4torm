@@ -6,6 +6,7 @@ import type { Agent, DashboardStats } from '../../types';
 import AgentCard from './AgentCard';
 import AgentConfigModal from './AgentConfigModal';
 import MemoryPanel from './MemoryPanel';
+import { loadDashboardSnapshot } from './dashboard-data';
 import '../../styles/components/dashboard.css';
 
 interface FilterOption {
@@ -27,24 +28,10 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
   const [offlineIds, setOfflineIds] = useState<Set<string>>(new Set());
 
   const refresh = useCallback(async () => {
-    const [list, sessions] = await Promise.all([getAgents(), getAllSessions()]);
-    setAgents(list);
-
-    const idle = list.filter(a => a.status === 'idle' && !offlineIds.has(a.id)).length;
-    setStats({
-      totalAgents: list.length,
-      onlineAgents: idle,
-      totalSessions: sessions.length,
-      activeSessions: sessions.length,
-      avgResponseTime: 0,
-      totalToolCalls: 0,
-    });
-  }, [offlineIds]);
-
-  // 首次加载时做重量级 model 可用性检查
-  const checkOffline = useCallback(async () => {
-    const list = await getAgents();
-    setOfflineIds(await getOfflineAgentIds(list));
+    const snapshot = await loadDashboardSnapshot({ getAgents, getAllSessions, getOfflineAgentIds });
+    setAgents(snapshot.agents);
+    setOfflineIds(snapshot.offlineIds);
+    setStats(snapshot.stats);
   }, []);
 
   useEffect(() => {
@@ -61,13 +48,12 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
       }));
       setFilterOptions([...systemOpts, ...labelOpts]);
     });
-    checkOffline();
-    refresh().finally(() => setLoading(false));
-  }, [refresh, checkOffline]);
+  }, []);
 
-  // 2s 轮询 agent 状态（仅当前页面活跃时跑；含 getAllSessions 全量扫描，后台跑会灌爆请求）
+  // 仅页面活跃时执行重量级快照加载，隐藏页面不读取所有会话索引。
   useEffect(() => {
     if (!active) return;
+    refresh().finally(() => setLoading(false));
     const id = setInterval(refresh, 2000);
     return () => clearInterval(id);
   }, [refresh, active]);
@@ -145,7 +131,7 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
             </button>
           ))}
         </div>
-        <button className="dashboard__create-btn" onClick={() => setCreating(true)}>
+        <button className="dashboard__create-btn primary-cta-btn" onClick={() => setCreating(true)}>
           + 创建 Agent
         </button>
       </div>

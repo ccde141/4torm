@@ -274,29 +274,29 @@ ${intro}
 // ── 工具协议构建 ──────────────────────────────────────────────────
 
 /**
- * Sub-Agent 委托能力说明（信风版本，沙箱级别动态注入）
+ * Sub-Agent 委托能力说明（信风版本）
  *
  * 设计要点：
  * - delegate 不在 registry.json，是引擎层虚拟工具
- * - sub-agent 继承母 agent 的沙箱级别
+ * - sub-agent 使用相同的统一执行策略
  * - 母 agent 必须在 context 中明确告知 sub-agent 工作路径
  */
-function buildDelegateSection(parentSandboxLevel: SandboxLevel): string {
+function buildDelegateSection(): string {
   return `
 
 ### delegate
-  描述: 将子任务委托给独立的 SubAgent 执行。SubAgent 拥有与你相同的工具集和沙箱权限，在隔离环境中独立完成任务后返回结果摘要。
+  描述: 将子任务委托给独立的 SubAgent 执行。SubAgent 拥有与你相同的工具集和执行策略，在隔离环境中独立完成任务后返回结果摘要。
   参数:
     task: string [必填] — 任务描述（清晰、具体、可独立执行）
     context: string [必填] — 必要的背景信息（SubAgent 看不到你的对话历史；**必须在此说明 SubAgent 需要工作的绝对路径或目录**）
     systemPrompt: string [必填] — SubAgent 的角色定义
 
-## 关于 SubAgent 的沙箱权限
+## 关于 SubAgent 的执行权限
 
-你派出的 SubAgent **继承你当前的沙箱级别（${parentSandboxLevel}）**：
-- 你能访问的文件，SubAgent 也能访问；你不能访问的，SubAgent 同样不能。
+你派出的 SubAgent 使用相同的统一执行策略：
+- 相对路径基于它的工作区，绝对路径直接使用。
+- 框架控制面仍禁止通过普通文件工具直接改写。
 - 委托涉及具体文件/目录时，**必须在 context 中写明绝对路径**，因为 SubAgent 看不到你的上下文。
-- 如果 SubAgent 在结果摘要中报告"路径越权"错误，说明任务路径写错了或确实需要更高沙箱权限。
 
 ## 工作方法：先收集再综合
 
@@ -382,7 +382,7 @@ function buildToolProtocol(
 
 ## 可用工具
 
-${toolList}${allowDelegate ? buildDelegateSection(sandboxLevel) : ''}${teamRoster.length > 1 ? buildContactSection(teamRoster) : ''}
+${toolList}${allowDelegate ? buildDelegateSection() : ''}${teamRoster.length > 1 ? buildContactSection(teamRoster) : ''}
 
 ## 协议自检（每次输出前默念）
 
@@ -446,7 +446,7 @@ ${toolList}`];
 
 可调用 \`delegate\` 把子任务交给独立 SubAgent。SubAgent 在隔离上下文中工作，最多 90 轮，可独立完成相当复杂的任务（深度探索、多文件分析、整模块梳理都没问题）。
 
-**沙箱继承**：SubAgent 继承你的沙箱级别（${sandboxLevel}）。涉及文件/目录时必须在 context 中写明绝对路径。
+**执行策略**：SubAgent 同样以工作区解析相对路径、接受绝对路径，并保留控制面写保护。涉及文件/目录时必须在 context 中写明绝对路径。
 
 **必须委托**的场景：分析整个模块/项目、对比多方案、读取多个文件才能回答、调研盘点。
 

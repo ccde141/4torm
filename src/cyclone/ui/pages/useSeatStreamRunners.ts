@@ -9,23 +9,24 @@
  *
  * 与季风差异：季风累积 ChatMessage[]；气旋累积 Live（blocks/text/phase/ask）+ 乐观用户消息。
  */
-
 import { useRef, useCallback } from 'react';
 import { streamUrl } from '../../../lib/apiBase';
 import type { DisplayBlock, DisplayMessage } from './messageDisplay';
 import type { TaskBoard } from '../../../utils/taskboard';
-
+import { readCycloneSSE } from './cyclone-sse';
+import { normalizeDelegateProgressAtToolBoundary } from '../../../engine/chat/delegate-progress';
+import { formatStreamStatus, getToolTarget } from '../../../components/chat/stream-status';
 export interface Live {
   blocks: DisplayBlock[];
   text: string;
   /** 原生思考流（流式当轮显示；不进上下文，故重载不保留） */
   reasoning?: string;
   phase: string;
+  activityTarget?: string;
   ask?: { question: string; options?: string[] };
   /** task_board 假工具通过 meta 侧通道回传的最新任务板（undefined=本轮未更新，null=已清空） */
   taskboard?: TaskBoard | null;
 }
-
 /** 单条工位流的运行态。归属 seatId，不归属当前界面。 */
 interface SeatRunner {
   live: Live;
@@ -42,23 +43,25 @@ interface SeatRunner {
   /** 转入后台的时刻；0 = 前台正在看，永不淘汰 */
   backgroundedAt: number;
 }
-
 const MAX_BG = 3;
-
 function emptyLive(): Live {
-  return { blocks: [], text: '', phase: '等待模型响应...' };
+  return { blocks: [], text: '', phase: formatStreamStatus('llm-waiting') };
 }
 
 /** 把一个 SeatEvent 应用到 Live 累积态（流式 + 重载共用的卡片块构建逻辑）。 */
 function applyEvent(ev: any, ls: Live): void {
   switch (ev.type) {
     case 'token':
-      ls.text += ev.content; ls.phase = ''; break;
+      ls.text += ev.content; ls.phase = formatStreamStatus('model-output'); ls.activityTarget = undefined; break;
     case 'reasoning':
-      ls.reasoning = (ls.reasoning || '') + ev.content; ls.phase = ''; break;
+      ls.reasoning = (ls.reasoning || '') + ev.content; ls.phase = formatStreamStatus('model-output'); ls.activityTarget = undefined; break;
+    case 'tool-progress':
+      ls.phase = formatStreamStatus('tool-preparing', Math.round((ev.elapsed || 0) / 1000), ev.tool, ev.argumentChars);
+      ls.activityTarget = undefined; break;
     case 'tool-call':
       ls.blocks.push({ kind: 'tool', tool: ev.tool, args: ev.args, status: 'running' });
-      ls.phase = `正在调用 ${ev.tool}...`; break;
+      ls.phase = formatStreamStatus('tool-exec', 0, ev.tool);
+      ls.activityTarget = getToolTarget(ev.args); break;
     case 'tool-result': {
       // task_board 侧通道：结构化任务板即时刷新抽屉（不进 LLM 上下文）
       if (ev.meta && 'taskboard' in ev.meta) ls.taskboard = ev.meta.taskboard;
@@ -66,7 +69,17 @@ function applyEvent(ev: any, ls: Live): void {
         const b = ls.blocks[i];
         if (b.kind === 'tool' && b.status === 'running') { ls.blocks[i] = { ...b, result: ev.result, status: ev.ok ? 'success' : 'error' }; break; }
       }
-      ls.phase = ''; break;
+      ls.phase = formatStreamStatus('llm-waiting'); ls.activityTarget = undefined; break;
+    }
+    case 'heartbeat': {
+      const tool = ls.blocks.findLast(b => b.kind === 'tool' && b.status === 'running');
+      ls.phase = formatStreamStatus(
+        ev.phase === 'tool-exec' ? 'tool-exec' : 'llm-waiting',
+        Math.round((ev.elapsed || 0) / 1000),
+        tool?.kind === 'tool' ? tool.tool : undefined,
+      );
+      ls.activityTarget = tool?.kind === 'tool' ? getToolTarget(tool.args) : undefined;
+      break;
     }
     case 'delegate-start':
       ls.blocks.push({ kind: 'delegate', id: ev.delegateId, task: ev.task, steps: [], status: 'running' });
@@ -77,7 +90,11 @@ function applyEvent(ev: any, ls: Live): void {
     }
     case 'delegate-tool-call': {
       const b = ls.blocks.find(x => x.kind === 'delegate' && x.id === ev.delegateId);
-      if (b && b.kind === 'delegate') b.steps.push({ type: 'tool', tool: ev.tool, args: ev.args }); break;
+      if (b && b.kind === 'delegate') {
+        b.content = normalizeDelegateProgressAtToolBoundary(b.content || '');
+        b.steps.push({ type: 'tool', tool: ev.tool, args: ev.args });
+      }
+      break;
     }
     case 'delegate-tool-result': {
       const b = ls.blocks.find(x => x.kind === 'delegate' && x.id === ev.delegateId);
@@ -90,7 +107,11 @@ function applyEvent(ev: any, ls: Live): void {
     }
     case 'delegate-done': {
       const b = ls.blocks.find(x => x.kind === 'delegate' && x.id === ev.delegateId);
-      if (b && b.kind === 'delegate') { b.summary = ev.summary; b.status = ev.status === 'error' ? 'error' : 'success'; }
+      if (b && b.kind === 'delegate') {
+        b.content = normalizeDelegateProgressAtToolBoundary(b.content || '');
+        b.summary = ev.summary;
+        b.status = ev.status === 'error' ? 'error' : 'success';
+      }
       ls.phase = ''; break;
     }
     case 'contact-start':
@@ -106,36 +127,14 @@ function applyEvent(ev: any, ls: Live): void {
     case 'ask':
       ls.ask = { question: ev.question, options: ev.options }; ls.phase = ''; break;
     case 'error':
-      ls.text += `\n[错误] ${ev.message}`; break;
+      ls.text += `\n[错误] ${ev.message}`; ls.phase = ''; break;
   }
 }
 
 async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal: AbortSignal): Promise<void> {
   const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
   if (!res.ok) throw new Error(await res.text());
-  const reader = res.body?.getReader();
-  if (!reader) return;
-  const dec = new TextDecoder();
-  let buf = '';
-  const processLine = (line: string) => {
-    const t = line.trim();
-    if (!t.startsWith('data:')) return;
-    const p = t.slice(5).trim();
-    if (!p || p === '[DONE]') return;
-    try { onEvent(JSON.parse(p)); } catch (e) { console.warn('[cyclone] 工位 SSE 事件解析失败', p, e); }
-  };
-  while (true) {
-    if (signal.aborted) { reader.cancel(); break; }
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() ?? '';
-    for (const line of lines) processLine(line);
-  }
-  // 收尾：flush 解码器 + 处理末尾未换行终结的残留
-  buf += dec.decode();
-  if (buf) for (const line of buf.split('\n')) processLine(line);
+  await readCycloneSSE(res, onEvent, signal);
 }
 
 export interface StartStreamOpts {
@@ -307,7 +306,10 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void) {
           ctrl.signal,
         );
       } catch (e) {
-        if (!ctrl.signal.aborted) { runner.live.text += `\n[请求失败] ${(e as Error).message}`; }
+        if (!ctrl.signal.aborted) {
+          runner.live.text += `\n[请求失败] ${(e as Error).message}`;
+          runner.live.phase = '';
+        }
       } finally {
         if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
         runner.streaming = false;

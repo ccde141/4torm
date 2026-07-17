@@ -52,24 +52,26 @@ run('读操作不受控制面限制（graph.json 可读）', () => {
   resolvePath(abs('tradewind/workflows', wfId, 'graph.json'), ctx) // 无 write → 不校验控制面
 })
 
-// relaxed 沙箱：写只能落 workspace，读可及项目根（贯彻"以工作区为基准"）
-const relaxedCtx = { ...ctx, sandboxLevel: 'relaxed' }
-
-run('relaxed 写到项目根（../../foo.txt）：拦', () => {
-  assert.throws(
-    () => resolvePath('../../../../foo.txt', relaxedCtx, { write: true }),
-    /路径越权/,
-  )
+run('旧沙箱字段不再改变执行结果', () => {
+  const levels = ['strict', 'relaxed', 'unrestricted']
+  const resolved = levels.map(sandboxLevel => resolvePath('note.txt', { ...ctx, sandboxLevel }, { write: true }))
+  assert.deepEqual(resolved, [resolved[0], resolved[0], resolved[0]])
+  assert.ok(resolved[0].endsWith(path.join('workspace', 'note.txt')))
 })
 
-run('relaxed 相对写：落在 workspace 内', () => {
-  const r = resolvePath('note.txt', relaxedCtx, { write: true })
-  assert.ok(r.endsWith(path.join('workspace', 'note.txt')))
+run('相对路径中的 .. 不再做越权拦截', () => {
+  const expected = path.resolve(workspaceDir, '../../../../outside.txt')
+  assert.equal(resolvePath('../../../../outside.txt', { ...ctx, sandboxLevel: 'strict' }), expected)
 })
 
-run('relaxed 读 data/ 下文件：放行（读项目源码）', () => {
-  const r = resolvePath('data/agents/registry.json', relaxedCtx)
-  assert.ok(r.includes('registry.json'))
+run('绝对路径直接放行', () => {
+  const outside = path.resolve(dataDir, '..', '..', 'outside.txt')
+  assert.equal(resolvePath(outside, { ...ctx, sandboxLevel: 'strict' }, { write: true }), outside)
+})
+
+run('data/ 相对路径仍基于 workspace，不再切换到项目根', () => {
+  const r = resolvePath('data/notes.txt', { ...ctx, sandboxLevel: 'relaxed' })
+  assert.equal(r, path.resolve(workspaceDir, 'data/notes.txt'))
 })
 
 console.log('ok')

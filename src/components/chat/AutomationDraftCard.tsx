@@ -25,7 +25,7 @@ export default function AutomationDraftCard({ pending, timestamp }: { pending: P
         <Row k="间隔" v={pending.schedule} />
         <Row k="次数" v={repeatText} warn={pending.perpetual} />
         {pending.selfLoop && <Row k="自循环" v="每轮会自改下轮目标" warn />}
-        <Row k="执行" v={`${pending.agentName} · 沙箱 ${pending.sandboxLevel}`} />
+        <Row k="执行" v={`${pending.agentName} · 统一权限策略`} />
         <Row k="文件" v={pending.canWriteFiles ? '⚠️ 该 Agent 可写/改文件' : '只读（无写文件工具）'} warn={pending.canWriteFiles} />
         <div style={promptBox}>{pending.promptPreview}</div>
       </div>

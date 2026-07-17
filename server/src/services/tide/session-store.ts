@@ -11,6 +11,8 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { atomicWriteFile } from '../../engine/shared/atomic-io.js';
+import { agentSessionsDir, agentTideSessionsDir } from '../data-paths.js';
 
 export interface TideMessage {
   id: string;
@@ -34,11 +36,11 @@ export interface TideSession {
 // ── 路径 ────────────────────────────────────────────────────────
 
 function seasonDir(dataDir: string, agentId: string): string {
-  return path.join(dataDir, 'agents', agentId, 'sessions');
+  return agentSessionsDir(dataDir, agentId);
 }
 
 function tideRootDir(dataDir: string, agentId: string): string {
-  return path.join(dataDir, 'agents', agentId, 'sessions-tide');
+  return agentTideSessionsDir(dataDir, agentId);
 }
 
 /** 任务子目录名：{任务名}_{taskId短}（剔除目录禁用字符） */
@@ -99,12 +101,6 @@ async function removeStrict(targetPath: string, opts?: { recursive?: boolean }):
 }
 
 /** 原子写：先写 .tmp 再 rename 覆盖，防止进程中途被杀（关软件）时留下半截 JSON 损坏会话/索引。 */
-async function atomicWrite(filePath: string, data: string): Promise<void> {
-  const tmp = `${filePath}.tmp`;
-  await fs.writeFile(tmp, data, 'utf-8');
-  await fs.rename(tmp, filePath);
-}
-
 // ── 旧结构迁移 ──────────────────────────────────────────────────
 
 /**
@@ -184,7 +180,7 @@ async function updateIndex(dir: string, sessionId: string): Promise<void> {
   const index = Array.isArray(existing) ? existing : [];
   if (!index.includes(sessionId)) {
     index.push(sessionId);
-    await atomicWrite(indexFile, JSON.stringify(index, null, 2));
+    await atomicWriteFile(indexFile, JSON.stringify(index, null, 2));
   }
 }
 
@@ -266,7 +262,7 @@ export async function writeTideSession(
 
   const dir = taskSessionDir(dataDir, session.agentId, taskId, taskName);
   await fs.mkdir(dir, { recursive: true });
-  await atomicWrite(path.join(dir, `${session.id}.json`), JSON.stringify(session, null, 2));
+  await atomicWriteFile(path.join(dir, `${session.id}.json`), JSON.stringify(session, null, 2));
   await updateIndex(dir, session.id);
 }
 
@@ -274,7 +270,7 @@ export async function writeTideSession(
 export async function writeSeasonSession(dataDir: string, session: TideSession): Promise<void> {
   const dir = seasonDir(dataDir, session.agentId);
   await fs.mkdir(dir, { recursive: true });
-  await atomicWrite(path.join(dir, `${session.id}.json`), JSON.stringify(session, null, 2));
+  await atomicWriteFile(path.join(dir, `${session.id}.json`), JSON.stringify(session, null, 2));
   await updateIndex(dir, session.id);
 }
 
@@ -291,7 +287,7 @@ export async function deleteTideSession(
   const index = await readJsonFile<string[]>(indexFile, '潮汐会话索引');
   if (Array.isArray(index)) {
     const updated = index.filter(id => id !== sessionId);
-    await atomicWrite(indexFile, JSON.stringify(updated, null, 2));
+    await atomicWriteFile(indexFile, JSON.stringify(updated, null, 2));
   }
   return true;
 }
@@ -380,7 +376,7 @@ export async function archiveIfNeeded(
     const roundLabel = `${roundSeq}`;
     const fname = `${session.id}_${formatDate(new Date())}_${roundLabel}.json.bak.${batch + 1}`;
     const bakSession: TideSession = { ...session, messages: [...session.messages] };
-    await fs.writeFile(path.join(bakDir, fname), JSON.stringify(bakSession, null, 2), 'utf-8');
+    await atomicWriteFile(path.join(bakDir, fname), JSON.stringify(bakSession, null, 2));
     session.messages = [];
     await writeTideSession(dataDir, session, taskId, taskName);
     return { archived: true, newRoundSeq: roundSeq, newBatch: batch + 1 };
@@ -412,7 +408,7 @@ export async function archiveIfNeeded(
   await fs.mkdir(bakDir, { recursive: true });
   const fname = `${session.id}_${formatDate(new Date())}_${startRound}-${endRound}.json.bak.${batch + 1}`;
   const bakSession: TideSession = { ...session, messages: archivedMsgs };
-  await fs.writeFile(path.join(bakDir, fname), JSON.stringify(bakSession, null, 2), 'utf-8');
+  await atomicWriteFile(path.join(bakDir, fname), JSON.stringify(bakSession, null, 2));
 
   // 活跃会话只留剩余
   session.messages = remaining;

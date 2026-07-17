@@ -14,6 +14,7 @@
 
 import type { ContextMessage, LLMOptions } from '../shared/types';
 import type { TokenUsage } from '../shared/llm-bridge';
+import type { ToolPreparationProgress } from '../shared/tool-progress';
 import { salvageToolArgs } from '../shared/tool-bridge';
 
 // ── 共享常量（native + text 双路径共用） ──────────────────────────
@@ -54,6 +55,7 @@ export interface LLMCaller {
     signal?: AbortSignal,
     tools?: import('../shared/tool-defs-loader').ToolDef[],
     onReasoning?: (chunk: string) => void,
+    onToolProgress?: (progress: ToolPreparationProgress) => void,
   ): Promise<{ content: string; finishReason: 'stop' | 'length' | 'tool_calls' | null; usage?: TokenUsage; toolCalls?: import('../shared/types').NativeToolCall[] }>;
 }
 
@@ -66,6 +68,7 @@ export interface ToolCaller {
 export type ReActStreamEvent =
   | { type: 'token'; chunk: string }
   | { type: 'reasoning'; chunk: string }
+  | ({ type: 'tool-progress' } & ToolPreparationProgress)
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string }
   | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
@@ -203,12 +206,18 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     const onReasoning = onEvent
       ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'reasoning', chunk }); }
       : undefined;
+    const onToolProgress = onEvent
+      ? (progress: ToolPreparationProgress) => {
+          tokenReceived = true;
+          onEvent({ type: 'tool-progress', ...progress });
+        }
+      : undefined;
 
     let content: string;
     let finishReason: 'stop' | 'length' | 'tool_calls' | null;
     let toolCalls: import('../shared/types').NativeToolCall[] | undefined;
     try {
-      const result = await llm.call(msgs, undefined, onChunk, abortCtrl.signal, toolDefs, onReasoning);
+      const result = await llm.call(msgs, undefined, onChunk, abortCtrl.signal, toolDefs, onReasoning, onToolProgress);
       content = result.content;
       finishReason = result.finishReason;
       toolCalls = result.toolCalls;

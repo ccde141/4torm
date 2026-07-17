@@ -7,6 +7,8 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { getAppContext } from '../services/app-context.js';
+import { skinDir as resolveSkinDir } from '../services/data-paths.js';
 
 const MIME_MAP: Record<string, string> = {
   '.png': 'image/png',
@@ -18,8 +20,8 @@ const MIME_MAP: Record<string, string> = {
 };
 
 export async function skinRoutes(app: FastifyInstance): Promise<void> {
-  const dataDir = (app as any).dataDir as string;
-  const skinDir = path.join(dataDir, 'skin');
+  const { dataDir } = getAppContext(app);
+  const skinRoot = resolveSkinDir(dataDir);
 
   // GET /skin/*
   app.get('/*', async (req, reply) => {
@@ -28,9 +30,9 @@ export async function skinRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: '缺少文件路径' });
     }
 
-    const filePath = path.resolve(skinDir, relativePath);
+    const filePath = path.resolve(skinRoot, relativePath);
     // 安全检查：不允许路径穿越
-    if (!filePath.startsWith(skinDir)) {
+    if (!filePath.startsWith(skinRoot)) {
       return reply.status(403).send({ error: '路径越界' });
     }
 

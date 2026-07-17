@@ -29,6 +29,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { agentRegistryFile } from '../../../services/data-paths.js';
 import type { WorkflowGraph, WorkflowEdge, WorkflowNode, WorkflowMode } from './types';
 import { autoModeSyncRules, checkAgentsNativeCapable } from './workflow-validator-auto';
 
@@ -131,7 +132,7 @@ async function buildContext(
 /** 读 Agent registry → agentId→model 映射（兼 agentId 存在性检查）；失败返回空表 */
 async function readAgentModelMap(dataDir: string): Promise<Map<string, string>> {
   try {
-    const raw = await fs.readFile(path.join(dataDir, 'agents', 'registry.json'), 'utf-8');
+    const raw = await fs.readFile(agentRegistryFile(dataDir), 'utf-8');
     const registry = JSON.parse(raw) as Record<string, { model?: string }>;
     return new Map(Object.entries(registry).map(([id, e]) => [id, e?.model ?? '']));
   } catch {

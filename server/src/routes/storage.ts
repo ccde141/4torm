@@ -8,6 +8,7 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { getAppContext } from '../services/app-context.js';
 import { resolveSafePath } from '../utils/path-guard.js';
 
 const MIME_MAP: Record<string, string> = {
@@ -27,10 +28,10 @@ function mimeFromExt(filePath: string): string {
 }
 
 export async function storageRoutes(app: FastifyInstance): Promise<void> {
-  // 注：本文件里 (req.query as any).path、req.body、(app as any).dataDir 的 as any 均为 Fastify
+  // 注：HTTP 请求载荷在进入业务逻辑前统一转换为运行时值。
   // HTTP / 装饰器边界的**有意转型**——请求载荷在校验前没有静态类型。安全性不靠类型，而靠
   // resolveSafePath 统一做路径越界防护（见每个 handler）。非"类型随意"。
-  const dataDir = (app as any).dataDir as string;
+  const { dataDir } = getAppContext(app);
 
   // GET /api/storage/read?path=xxx
   app.get('/read', async (req, reply) => {

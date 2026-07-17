@@ -75,6 +75,65 @@
   transform: translate(1px, -1px) scale(1.08);
 }
 
+.cyclone__seat-editor-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--space-6);
+}
+
+.cyclone__seat-editor {
+  width: min(100%, 680px);
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: var(--space-5);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-md);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.14);
+}
+
+.cyclone__seat-editor-title {
+  margin: 0 0 var(--space-5);
+  color: var(--color-text-primary);
+  font-size: var(--text-lg);
+  text-shadow: var(--text-halo);
+}
+
+.cyclone__seat-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--glass-border);
+}
+
+.cyclone__seat-editor-loading {
+  min-height: 160px;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.cyclone__seat-editor-error {
+  padding: var(--space-3);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: var(--border-radius-md);
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--color-error);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 720px) {
+  .cyclone__seat-editor-scroll { padding: var(--space-3); }
+  .cyclone__seat-editor { padding: var(--space-4); }
+  .cyclone__seat-editor-actions { flex-direction: column; align-items: stretch; }
+}
+
 /* ─── 工作室公告板（主区默认页）——页面本身透明，只有文字内容区做磨砂玻璃 ─── */
 
 /* 只有 textarea（文字内容底）是磨砂玻璃，不铺满整页 */

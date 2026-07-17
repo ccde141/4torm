@@ -64,11 +64,12 @@ export default function FileDiffCard({ toolCall, edit, actions, timestamp }: {
   const fileName = edit.path.split(/[\\/]/).pop() || edit.path;
   const dir = edit.path.slice(0, edit.path.length - fileName.length);
   const isError = toolCall.status === 'error';
+  const isRunning = toolCall.status === 'pending' || toolCall.status === 'running';
 
   return (
     <div className="chat__message chat__message--assistant chat__message--tool">
       <div className="chat__avatar" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>{edit.kind === 'edit' ? '✏️' : '📝'}</div>
-      <div className="chat__bubble" style={{ minWidth: '280px', maxWidth: '100%' }}>
+      <div className={`chat__bubble${isRunning ? ' chat__tool-running' : ''}`} style={{ minWidth: '280px', maxWidth: '100%' }}>
         <button
           onClick={() => setExpanded(!expanded)}
           aria-expanded={expanded}
@@ -83,7 +84,7 @@ export default function FileDiffCard({ toolCall, edit, actions, timestamp }: {
           </span>
           {add > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: '#2ea043' }}>+{add}</span>}
           {del > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: '#f85149' }}>−{del}</span>}
-          <span style={{ fontSize: 'var(--text-xs)' }}>{isError ? '❌' : toolCall.result ? '✅' : ''}</span>
+          <span style={{ fontSize: 'var(--text-xs)' }}>{isRunning ? '执行中' : isError ? '❌' : toolCall.result ? '✅' : ''}</span>
         </button>
         {expanded && (
           <div style={{ marginTop: 'var(--space-2)' }}>

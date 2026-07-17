@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { workshopBulletinFile, workshopBulletinHistoryFile } from './paths';
+import { atomicWriteFile } from '../shared/atomic-io';
 
 export interface BulletinEntry {
   id: string;
@@ -93,9 +94,7 @@ export async function readBulletin(dataDir: string, workshopId: string): Promise
 async function writeBulletin(dataDir: string, workshopId: string, b: Bulletin): Promise<void> {
   const fp = workshopBulletinFile(dataDir, workshopId);
   await fsp.mkdir(path.dirname(fp), { recursive: true });
-  const tmp = fp + '.tmp';
-  await fsp.writeFile(tmp, JSON.stringify(b, null, 2));
-  await fsp.rename(tmp, fp);   // 原子替换
+  await atomicWriteFile(fp, JSON.stringify(b, null, 2));
 }
 
 // ── 改动时间轴 ────────────────────────────────────────────────
@@ -111,9 +110,7 @@ export async function readBulletinHistory(dataDir: string, workshopId: string): 
 async function writeHistory(dataDir: string, workshopId: string, changes: BulletinChange[]): Promise<void> {
   const fp = workshopBulletinHistoryFile(dataDir, workshopId);
   await fsp.mkdir(path.dirname(fp), { recursive: true });
-  const tmp = fp + '.tmp';
-  await fsp.writeFile(tmp, JSON.stringify({ changes: changes.slice(-MAX_HISTORY) }, null, 2));
-  await fsp.rename(tmp, fp);
+  await atomicWriteFile(fp, JSON.stringify({ changes: changes.slice(-MAX_HISTORY) }, null, 2));
 }
 
 /**

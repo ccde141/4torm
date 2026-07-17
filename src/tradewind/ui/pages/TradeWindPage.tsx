@@ -2,7 +2,7 @@
  * 信风主页 — 画布编辑器 + 节点面板 + 工具栏 + 配置面板 + 工作流列表
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { TradeWindCanvas } from '../canvas/TradeWindCanvas';
 import { NodePalette } from '../panels/NodePalette';
@@ -16,6 +16,7 @@ import { HumanGatePanel } from '../chat/HumanGatePanel';
 import { WorkflowInfoPanel } from '../panels/WorkflowInfoPanel';
 import { useWorkflowStore } from '../hooks/useWorkflowStore';
 import { useExecution } from '../hooks/useExecution';
+import { scheduleAutoSave } from '../hooks/auto-save';
 import type { WorkflowGraph, WorkflowMode } from '../../types';
 
 export default function TradeWindPage() {
@@ -125,13 +126,16 @@ export default function TradeWindPage() {
   }, [execution.running]);
 
   // 5 分钟自动保存
+  const runAutoSave = useEffectEvent(() => store.save());
+  const markAutoSaved = useEffectEvent(() => setSaveTime(Date.now()));
+  const reportAutoSaveError = useEffectEvent((error: unknown) => {
+    console.error('[tradewind] 自动保存失败', error);
+  });
+
   useEffect(() => {
     if (store.workflowId === 'untitled') return;
-    const timer = setInterval(() => {
-      store.save().then(() => setSaveTime(Date.now()));
-    }, 5 * 60 * 1000);
-    return () => clearInterval(timer);
-  }, [store.workflowId, store]);
+    return scheduleAutoSave(runAutoSave, markAutoSaved, reportAutoSaveError);
+  }, [store.workflowId]);
 
   const handleRun = useCallback(async (mode: WorkflowMode = 'manual', profileId?: string) => {
     const graph = store.getGraph();

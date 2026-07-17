@@ -13,6 +13,7 @@
 
 import type { ContextMessage } from '../shared/types';
 import { callLLM, resolveNativeMode, type TokenUsage } from '../shared/llm-bridge';
+import type { ToolPreparationProgress } from '../shared/tool-progress';
 import { loadAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execToolUnified } from '../shared/exec-tool';
@@ -35,11 +36,14 @@ import { execContact } from './contact';
 import { listOtherSeats } from './contact-registry';
 import type { SeatData } from './types';
 import path from 'node:path';
+import { toSeatProgressEvent } from './loop-event-forwarder';
 
 /** 工位执行事件（流式推送用） */
 export type SeatEvent =
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
+  | ({ type: 'tool-progress' } & ToolPreparationProgress)
+  | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
   | { type: 'delegate-start'; task: string; delegateId: string }
@@ -64,8 +68,8 @@ export function wsRelPath(dataDir: string, workshopId: string): string {
 /** 构造工位的 LLM 调用器（落到 shared/callLLM） */
 export function makeLLM(dataDir: string, model: string, temperature: number): LLMCaller {
   return {
-    async call(msgs, _opts, onChunk, sig, tools, onReasoning) {
-      return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools, onReasoning });
+    async call(msgs, _opts, onChunk, sig, tools, onReasoning, onToolProgress) {
+      return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools, onReasoning, onToolProgress });
     },
   };
 }
@@ -199,8 +203,8 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
     ? await runReActLoopNative({
         messages, llm, tools: toolCaller, toolDefs: nativeToolDefs,
         onEvent: (ev) => {
-          if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
-          else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', content: ev.chunk });
+          const progress = toSeatProgressEvent(ev);
+          if (progress) onEvent(progress);
         },
         onToolError: (e) => e instanceof SuspendSignal ? { reason: 'ask', question: e.question, options: e.options } : null,
         signal,
@@ -208,8 +212,8 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
     : await runReActLoop({
         messages, llm, tools: toolCaller,
         onEvent: (ev) => {
-          if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
-          else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', content: ev.chunk });
+          const progress = toSeatProgressEvent(ev);
+          if (progress) onEvent(progress);
         },
         signal,
       });

@@ -7,26 +7,28 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { getAppContext } from '../services/app-context.js';
+import { skillDir, skillsDir as resolveSkillsDir } from '../services/data-paths.js';
 
 export async function skillsRoutes(app: FastifyInstance): Promise<void> {
-  const dataDir = (app as any).dataDir as string;
+  const { dataDir } = getAppContext(app);
 
   // GET /api/skills/list
   app.get('/list', async (_req, reply) => {
-    const skillsDir = path.join(dataDir, 'skills');
+    const skillsRoot = resolveSkillsDir(dataDir);
     try {
-      const entries = await fs.readdir(skillsDir, { withFileTypes: true })
+      const entries = await fs.readdir(skillsRoot, { withFileTypes: true })
         .catch(() => [] as Array<{ name: string; isDirectory(): boolean }>);
       const skills = [];
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
         try {
           const configRaw = await fs.readFile(
-            path.join(skillsDir, entry.name, 'config.json'), 'utf-8',
+            path.join(skillDir(dataDir, entry.name), 'config.json'), 'utf-8',
           );
           const meta = JSON.parse(configRaw);
           const hasTools = await fs.access(
-            path.join(skillsDir, entry.name, 'tools.json'),
+            path.join(skillDir(dataDir, entry.name), 'tools.json'),
           ).then(() => true).catch(() => false);
           skills.push({ id: entry.name, ...meta, hasTools });
         } catch { /* skip invalid skill dirs */ }

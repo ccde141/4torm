@@ -64,8 +64,12 @@ data/tools/permissions.json
 # MCP 服务器配置（含用户本地路径/密钥）
 data/mcp/servers.json
 
-# 自定义技能（用户数据）
-data/skills/baidu-search/
+# User-installed skills stay local. Built-in skills remain versioned.
+data/skills/*
+!data/skills/code-review/
+!data/skills/code-review/**
+!data/skills/web-search/
+!data/skills/web-search/**
 
 # 信风模块运行时数据（执行归档不入仓库；工作流定义放开白名单）
 data/tradewind/runs/

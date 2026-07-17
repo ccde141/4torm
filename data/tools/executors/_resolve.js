@@ -1,12 +1,10 @@
 /**
- * 文件工具共享路径解析 + 沙箱校验
+ * 文件工具共享路径解析 + 控制面写保护
  *
- * 三档沙箱级别（来自 agent 配置）：
- *   - 'strict'        只能在 ctx.workspaceDir 内读写
- *   - 'relaxed'（默认）写：仅 ctx.workspaceDir；读：workspaceDir + projectDir（可读项目源码）
- *   - 'unrestricted'  可在文件系统任意位置读写
- *
- * 三档都阻止 ".." 越权到允许根目录之外（unrestricted 除外）。
+ * 旧 sandboxLevel 字段仅为数据兼容保留，不再改变执行语义：
+ *   - 相对路径统一基于 ctx.workspaceDir
+ *   - 绝对路径直接使用
+ *   - 不做路径越权校验
  *
  * 使用方式：
  *   import { resolvePath } from './_resolve.js'
@@ -55,41 +53,7 @@ function assertWritable(resolved, ctx) {
  */
 export function resolvePath(fp, ctx, opts = {}) {
   if (!fp) throw new Error('缺少 filePath 参数')
-  const level = ctx.sandboxLevel || 'relaxed'
-
-  // 无限制：不做沙箱越权校验（接受相对路径，相对于 workspaceDir）；但控制面写保护仍生效
-  if (level === 'unrestricted') {
-    const resolved = path.isAbsolute(fp) ? fp : path.resolve(ctx.workspaceDir, fp)
-    if (opts.write) assertWritable(resolved, ctx)
-    return resolved
-  }
-
-  // 决定基准目录：读操作且以 data/ 开头用 projectDir 解析（agent 常需读项目内文件）；
-  // 其余一律以 workspace 为基准 —— 贯彻"任何工作都以工作区为基准"。
-  const normalized = fp.replace(/\\/g, '/')
-  const base = (level === 'relaxed' && !opts.write && normalized.startsWith('data/'))
-    ? ctx.projectDir
-    : ctx.workspaceDir
-
-  const resolved = path.resolve(base, fp)
-
-  // 允许根目录列表：
-  //   - strict：仅 workspace
-  //   - relaxed 写：仅 workspace（不再允许写到项目根，杜绝源码目录污染）
-  //   - relaxed 读：workspace + projectDir（放行读项目源码）
-  const allowedRoots = (level === 'strict' || opts.write)
-    ? [path.resolve(ctx.workspaceDir)]
-    : [path.resolve(ctx.workspaceDir), path.resolve(ctx.projectDir)]
-
-  // 阻止 .. 越权
-  const ok = allowedRoots.some(root =>
-    resolved === root || resolved.startsWith(root + path.sep)
-  )
-  if (!ok) {
-    throw new Error(
-      `路径越权 (沙箱=${level})：${fp} 解析到 ${resolved}，超出允许范围 [${allowedRoots.join(', ')}]`
-    )
-  }
+  const resolved = path.isAbsolute(fp) ? path.resolve(fp) : path.resolve(ctx.workspaceDir, fp)
 
   if (opts.write) assertWritable(resolved, ctx)
   return resolved

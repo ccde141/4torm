@@ -10,9 +10,10 @@ import path from 'node:path';
 import { atomicWriteFile } from './atomic-io';
 import type { AutoProfile } from '../tradewind/foundation/types';
 import type { LoopConfig } from '../tradewind/orchestrator';
+import { tradewindWorkflowsDir } from '../../services/data-paths.js';
 
 function profilesPath(dataDir: string, workflowId: string): string {
-  return path.join(dataDir, 'tradewind', 'workflows', workflowId, 'profiles.json');
+  return path.join(tradewindWorkflowsDir(dataDir), workflowId, 'profiles.json');
 }
 
 /** 读一个工作流的全部档案；文件缺失 / 损坏 → 空数组（不抛） */

@@ -14,13 +14,20 @@ import { llmProxyRoutes } from './routes/llm-proxy.js';
 import { skinRoutes } from './routes/skin.js';
 import { toolRoutes } from './routes/tools.js';
 import { skillsRoutes } from './routes/skills.js';
-import { tradewindRoutes } from './routes/tradewind.js';
+import { stopActiveTradewindExecution, tradewindRoutes } from './routes/tradewind.js';
 import { convectionRoutes } from './routes/convection.js';
 import { chatRoutes } from './routes/chat.js';
 import { delegateRoutes } from './routes/delegate.js';
 import { conversationRoutes } from './routes/conversation.js';
 import { tideRoutes } from './routes/tide.js';
-import { startScheduler } from './services/tide/scheduler.js';
+import { drainScheduler, startScheduler, stopScheduler } from './services/tide/scheduler.js';
+import { applyDeveloperMode } from './config/developer-mode.js';
+import { shouldLogRequest } from './config/request-log-policy.js';
+import { drainAtomicWrites } from './engine/shared/atomic-io.js';
+import { initMcpManager, shutdownMcpManager } from './engine/shared/mcp-manager.js';
+import { performGracefulShutdown } from './services/graceful-shutdown.js';
+
+applyDeveloperMode();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
@@ -32,10 +39,9 @@ const app = Fastify({
 });
 
 // 自定义请求日志：静默高频轮询路径，其余请求打印精简一行
-const SILENT_PREFIXES = ['/api/storage/read', '/api/tradewind/node-status', '/api/tide/tasks', '/api/convection/list', '/api/skills/list', '/api/tradewind/status'];
 app.addHook('onResponse', (req, reply, done) => {
   const url = req.url;
-  if (req.method === 'GET' && SILENT_PREFIXES.some(p => url.startsWith(p))) {
+  if (!shouldLogRequest(req.method, url, reply.statusCode)) {
     done();
     return;
   }
@@ -78,13 +84,18 @@ app.addContentTypeParser(
 import fs from 'node:fs';
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// 启动自愈：释放崩溃残留的 Agent 死锁
-import { healAgentLocks } from './engine/shared/agent-lock.js';
-healAgentLocks(DATA_DIR).then(released => {
-  if (released.length > 0) {
-    console.log(`[startup] 释放死锁 Agent: ${released.join(', ')}`);
-  }
-});
+// 启动自愈：释放 Agent 死锁，并把中断的信风运行标记为 crashed
+import { recoverStartupState } from './services/startup-recovery.js';
+const recovery = await recoverStartupState(DATA_DIR);
+if (recovery.releasedAgents.length > 0) {
+  console.log(`[startup] 释放死锁 Agent: ${recovery.releasedAgents.join(', ')}`);
+}
+if (recovery.crashedRuns > 0) {
+  console.log(`[startup] 标记异常中断的信风运行: ${recovery.crashedRuns}`);
+}
+if (recovery.removedTempFiles > 0) {
+  console.log(`[startup] 清理原子写残留临时文件: ${recovery.removedTempFiles}`);
+}
 
 // 注册路由
 await app.register(storageRoutes, { prefix: '/api/storage' });
@@ -109,7 +120,6 @@ await app.register(memoryRoutes, { prefix: '/api/memory' });
 startScheduler(DATA_DIR);
 
 // 初始化 MCP Manager（连接外部 MCP server）
-import { initMcpManager } from './engine/shared/mcp-manager';
 initMcpManager(DATA_DIR).catch(e => console.error('[MCP] init failed:', e.message));
 
 // 健康检查
@@ -148,6 +158,29 @@ if (SERVE_STATIC && fs.existsSync(DIST_DIR)) {
 }
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
+let shutdownPromise: Promise<void> | null = null;
+
+function requestShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
+  if (shutdownPromise) return;
+  console.log(`[shutdown] 收到 ${signal}，开始排空运行时写入`);
+  shutdownPromise = performGracefulShutdown({
+    stopScheduler,
+    stopTradewind: stopActiveTradewindExecution,
+    drainTide: drainScheduler,
+    drainWrites: drainAtomicWrites,
+    shutdownMcp: shutdownMcpManager,
+    closeServer: () => app.close(),
+  }).then(() => {
+    console.log('[shutdown] 排空完成');
+    process.exit(0);
+  }).catch((error) => {
+    console.error('[shutdown] 排空失败:', (error as Error).message);
+    process.exit(1);
+  });
+}
+
+process.once('SIGINT', () => requestShutdown('SIGINT'));
+process.once('SIGTERM', () => requestShutdown('SIGTERM'));
 
 try {
   await app.listen({ port: PORT, host: '0.0.0.0' });

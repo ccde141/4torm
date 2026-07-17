@@ -46,8 +46,8 @@ export default async function (args, ctx) {
     throw new Error(`(安全拦截) ${blocked}`)
   }
 
-  // cwd 起点一律为工作区：任何沙箱级别下命令的相对路径产物都落在 agent/工作流各自的
-  // workspace，不再污染项目根。unrestricted 若确需碰项目根，用绝对路径显式指定。
+  // cwd 起点一律为工作区：命令的相对路径产物落在 agent/工作流各自的 workspace。
+  // 若需操作其他目录，用绝对路径或在命令中显式 cd。
   // （注意：shell 内 `cd ..` 仍可越权，本工具只控起点，非硬隔离。）
   const cwd = ctx.workspaceDir || ctx.projectDir
   // 超时可由 agent 传参覆盖（毫秒），夹在 [1s, 10min]

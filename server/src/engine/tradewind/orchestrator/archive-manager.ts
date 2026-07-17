@@ -11,6 +11,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { atomicWriteFile } from '../../shared/atomic-io.js';
 
 export interface ExecutionMeta {
   executionId: string;
@@ -42,7 +43,7 @@ export class ArchiveManager {
   async writeStart(): Promise<void> {
     try {
       await fs.mkdir(this.runDir, { recursive: true });
-      await fs.writeFile(this.metaPath, JSON.stringify(this.meta, null, 2));
+      await atomicWriteFile(this.metaPath, JSON.stringify(this.meta, null, 2));
     } catch (err) {
       console.warn('[archive] writeStart failed:', (err as Error).message);
     }
@@ -55,7 +56,7 @@ export class ArchiveManager {
     this.meta.endTime = new Date().toISOString();
     this.meta.status = status;
     try {
-      await fs.writeFile(this.metaPath, JSON.stringify(this.meta, null, 2));
+      await atomicWriteFile(this.metaPath, JSON.stringify(this.meta, null, 2));
     } catch (err) {
       console.warn('[archive] writeEnd failed:', (err as Error).message);
     }
@@ -80,7 +81,7 @@ export class ArchiveManager {
             if (meta.status === 'running') {
               meta.status = 'crashed';
               meta.endTime = new Date().toISOString();
-              await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
+              await atomicWriteFile(metaPath, JSON.stringify(meta, null, 2));
               healed++;
             }
           } catch {

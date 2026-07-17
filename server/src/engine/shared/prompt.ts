@@ -30,8 +30,7 @@ export function buildSelfManagementSection(): string {
    - 格式: \`export default async function(args, ctx) { ... }\`
    - \`args\`: 工具调用参数字典
    - \`ctx\`: { dataDir, workspaceDir, projectDir, sandboxLevel }
-4. 将新工具定义追加到 \`data/tools/registry.json\`
-5. 新工具在下次 \`<action tool="工具名">\` 调用时自动可用，无需重启
+4. 工具注册表属于框架控制面，普通文件工具不能直接改写；完成执行器后，把注册需求交给用户处理
 
 ### 创建新技能（Skill）
 详细参考 \`docs/extend/skills.md\`，简要步骤：
@@ -45,7 +44,8 @@ export function buildSelfManagementSection(): string {
 
 ### 重要提示
 - 创建 executor 文件前先读取一个已有的执行器（如 \`data/tools/executors/read_file.js\`）作为模板
-- 上述路径的可访问性取决于你当前的沙箱级别（见上文「文件系统访问范围」段）`;
+- 相对路径统一基于工作区；访问项目目录时使用明确的绝对路径
+- Agent/工具注册表、潮汐任务表、工作流 graph/meta 属于控制面，不能用普通文件工具直接写`;
 }
 
 export function buildSystemPrompt(tools: ToolDef[]): string {

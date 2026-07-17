@@ -7,6 +7,7 @@
 
 import { useState, useEffect } from 'react';
 import type { Node } from '@xyflow/react';
+import { AGENTS_CHANGED_EVENT } from '../../../store/agent-events';
 
 interface AgentSummary {
   id: string;
@@ -142,19 +143,39 @@ function ConfigFields({ nodeId, nodeType, config, label, onUpdate, nodes, edges:
   }
 }
 
+function useTradewindAgents(): AgentSummary[] {
+  const [agents, setAgents] = useState<AgentSummary[]>([]);
+
+  useEffect(() => {
+    let disposed = false;
+    const load = async () => {
+      try {
+        const response = await fetch('/api/tradewind/agents');
+        if (!response.ok) return;
+        const data = await response.json() as { agents?: AgentSummary[] };
+        if (!disposed) setAgents(Array.isArray(data.agents) ? data.agents : []);
+      } catch { /* 保留上一次列表，等待下一次刷新 */ }
+    };
+    const refresh = () => { void load(); };
+    void load();
+    window.addEventListener(AGENTS_CHANGED_EVENT, refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      disposed = true;
+      window.removeEventListener(AGENTS_CHANGED_EVENT, refresh);
+      window.removeEventListener('focus', refresh);
+    };
+  }, []);
+
+  return agents;
+}
+
 // ── Agent 配置 ────────────────────────────────────────────────────
 
 function AgentFields({ config, onChange }: { config: Record<string, unknown>; onChange: (k: string, v: unknown) => void }) {
-  const [agents, setAgents] = useState<AgentSummary[]>([]);
+  const agents = useTradewindAgents();
   const agentId = (config.agentId as string) ?? '';
   const role = (config.role as string) ?? '';
-
-  useEffect(() => {
-    fetch('/api/tradewind/agents')
-      .then(r => r.json())
-      .then((d: { agents: AgentSummary[] }) => setAgents(d.agents))
-      .catch(() => {});
-  }, []);
 
   return (
     <>
@@ -211,17 +232,9 @@ interface MeetingFieldsProps {
 }
 
 function MeetingFields({ config, onChange, nodes, currentNodeId }: MeetingFieldsProps) {
-  const [agents, setAgents] = useState<AgentSummary[]>([]);
+  const agents = useTradewindAgents();
   const chairAgentId = (config.chairAgentId as string) ?? '';
   const participantNodeIds = (config.participantNodeIds as string[]) ?? [];
-
-  // 获取全局 Agent 池（会长选择用）
-  useEffect(() => {
-    fetch('/api/tradewind/agents')
-      .then(r => r.json())
-      .then((d: { agents: AgentSummary[] }) => setAgents(d.agents))
-      .catch(() => {});
-  }, []);
 
   // 画布上的 Agent 节点（排除自身）
   const agentNodes = nodes.filter(

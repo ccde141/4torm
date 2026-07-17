@@ -1,5 +1,12 @@
 import { readJson, writeJson, ensureDir, deleteFile } from '../api/storage';
 import type { Agent, ChatMessage } from '../types';
+import { MissingIndexReadCache } from './session-index-cache';
+import {
+  tokenUsageFromMeta,
+  tokenUsageToMeta,
+  type TokenUsage,
+  type TokenUsageMeta,
+} from './chat-token';
 
 export interface ChatSession {
   id: string;
@@ -14,7 +21,7 @@ export interface ChatSession {
   rolePrompt?: string;
   lastReadAt?: string;
   /** 累计 token 用量（真实 API 返回值） */
-  tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  tokenUsage?: TokenUsage;
   createdAt: string;
   updatedAt: string;
   /** 列表用：预计算的未读数（会话文件写入时由 saveSession 维护） */
@@ -22,13 +29,12 @@ export interface ChatSession {
 }
 
 /** _index.json 的条目格式（轻量元信息，不含 messages） */
-interface SessionMeta {
+interface SessionMeta extends TokenUsageMeta {
   i: string;   // id
   t: string;   // title
   u: string;   // updatedAt
   n?: string;  // agentName
   r?: string;  // lastReadAt
-  tk?: number; // tokens
   un?: number; // unreadCount
 }
 
@@ -49,7 +55,7 @@ function toMeta(s: ChatSession): SessionMeta {
     i: s.id, t: s.title, u: s.updatedAt,
     ...(s.agentName ? { n: s.agentName } : {}),
     ...(s.lastReadAt ? { r: s.lastReadAt } : {}),
-    ...(s.tokenUsage?.totalTokens ? { tk: s.tokenUsage.totalTokens } : {}),
+    ...tokenUsageToMeta(s.tokenUsage),
     ...(un ? { un } : {}),
   };
 }
@@ -59,7 +65,7 @@ function fromMeta(m: SessionMeta, agentId: string): ChatSession {
     id: m.i, agentId, agentName: m.n ?? '',
     title: m.t, updatedAt: m.u,
     lastReadAt: m.r,
-    tokenUsage: m.tk != null ? { promptTokens: 0, completionTokens: 0, totalTokens: m.tk } : undefined,
+    tokenUsage: tokenUsageFromMeta(m),
     unreadCount: m.un,
     messages: [], model: '', systemPrompt: '', createdAt: m.u,
   } as ChatSession;
@@ -77,6 +83,7 @@ function sessionPath(agentId: string, sessionId: string): string {
 }
 
 let cache: Record<string, ChatSession> | null = null;
+const indexReadCache = new MissingIndexReadCache<SessionMeta[] | string[]>();
 
 async function saveSessionToFile(s: ChatSession) {
   await ensureDir(`agents/${s.agentId}/sessions`);
@@ -123,7 +130,7 @@ export async function createSession(agent: Agent, model?: string): Promise<ChatS
 }
 
 export async function getSessionsByAgent(agentId: string): Promise<ChatSession[]> {
-  const raw = await readJson<SessionMeta[] | string[]>(metaPath(agentId));
+  const raw = await indexReadCache.read(agentId, () => readJson<SessionMeta[] | string[]>(metaPath(agentId)));
   if (!raw || raw.length === 0) return [];
   // 兼容旧格式（string[]）→ 一次性并行读全量文件，然后自动升级索引为新格式
   if (typeof raw[0] === 'string') {
@@ -174,6 +181,7 @@ export async function saveSession(session: ChatSession) {
 
   // 维护 _index.json 元信息
   const mp = metaPath(session.agentId);
+  indexReadCache.invalidate(session.agentId);
   const index = await readJson<SessionMeta[] | string[]>(mp) || [];
   if (index.length === 0 || typeof index[0] === 'string') {
     // 旧格式或无缓存：仍以旧格式维护 ID 列表，下次 getSessionsByAgent 时 migrate
@@ -198,6 +206,7 @@ export async function deleteSession(id: string) {
   msgCache.delete(id);
 
   const mp = metaPath(agentId);
+  indexReadCache.invalidate(agentId);
   const index = await readJson<SessionMeta[] | string[]>(mp);
   if (!index || index.length === 0) return;
   if (typeof index[0] === 'string') {

@@ -14,6 +14,7 @@
  */
 
 import type { ContextMessage } from '../../shared/types';
+import { atomicWriteFile } from '../../shared/atomic-io';
 import { callLLM } from '../../shared/llm-bridge';
 import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
 import {
@@ -63,6 +64,7 @@ export interface QueuedMessage {
 /** SSE 事件（推送给前端） */
 export type NodeRunnerEvent = (
   | { type: 'token'; content: string }
+  | { type: 'reasoning'; content: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
   | { type: 'delegate-start'; task: string; delegateId: string }
@@ -337,9 +339,7 @@ export class NodeRunner {
     try {
       await fs.mkdir(this.opts.persistDir, { recursive: true });
       const target = path.join(this.opts.persistDir, 'messages.json');
-      const tmp = target + '.tmp';
-      await fs.writeFile(tmp, JSON.stringify(this.messages, null, 2));
-      await fs.rename(tmp, target);
+      await atomicWriteFile(target, JSON.stringify(this.messages, null, 2));
     } catch { /* 持久化失败不阻塞 */ }
   }
 

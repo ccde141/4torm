@@ -13,6 +13,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { agentRegistryFile } from '../../services/data-paths.js';
 import { loadTasks, getTask, upsertTask } from '../../services/tide/store';
 import { parseInterval } from '../../services/tide/schedule-parser';
 import type { TideTask } from '../../services/tide/types';
@@ -73,7 +74,7 @@ function parseWindow(v: unknown): number | string {
 
 async function readAgentInfo(dataDir: string, agentId: string): Promise<{ name: string; sandboxLevel: string; canWriteFiles: boolean } | null> {
   try {
-    const reg = JSON.parse(await fs.readFile(path.join(dataDir, 'agents', 'registry.json'), 'utf-8')) as Record<string, {
+    const reg = JSON.parse(await fs.readFile(agentRegistryFile(dataDir), 'utf-8')) as Record<string, {
       name?: string; config?: { sandboxLevel?: string; tools?: string[] };
     }>;
     const a = reg[agentId];

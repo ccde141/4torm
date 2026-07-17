@@ -63,8 +63,9 @@ export default function SeatPanel({ mode, agents, workshopId, initial, onSubmit,
   }
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-6)', maxWidth: 640 }}>
-      <h2 style={{ margin: '0 0 var(--space-5)', fontSize: 'var(--text-lg)' }}>{mode === 'create' ? '添加工位' : `编辑工位 · ${initial?.title || ''}`}</h2>
+    <div className="cyclone__seat-editor-scroll">
+      <section className="cyclone__seat-editor mo-enter-fade-up" aria-labelledby="cyclone-seat-editor-title">
+      <h2 id="cyclone-seat-editor-title" className="cyclone__seat-editor-title">{mode === 'create' ? '添加工位' : `编辑工位 · ${initial?.title || ''}`}</h2>
 
       <label style={labelStyle}>绑定 agent</label>
       <select value={agentId} onChange={e => setAgentId(e.target.value)} disabled={mode === 'edit'} style={inputStyle}>
@@ -95,18 +96,19 @@ export default function SeatPanel({ mode, agents, workshopId, initial, onSubmit,
       <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'flex-start' }}>
         <input value={duty} onChange={e => setDuty(e.target.value)} placeholder="留空则用默认「补位协作者」"
           style={{ ...inputStyle, flex: 1, marginBottom: 0 }} />
-        <button onClick={genDuty} disabled={genning || !agentId} className="btn" style={{ whiteSpace: 'nowrap' }}>
+        <button onClick={genDuty} disabled={genning || !agentId} className="secondary-action-btn" style={{ whiteSpace: 'nowrap' }}>
           {genning ? '生成中…' : 'AI 生成'}
         </button>
       </div>
       <div style={hintStyle}>AI 生成基于上面的角色提示词 + agent 人设。</div>
 
-      <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-5)' }}>
-        <button onClick={submit} disabled={busy || !agentId || !title.trim()} className="btn btn--primary">
-          {busy ? '保存中…' : (mode === 'create' ? '添加' : '保存')}
+      <div className="cyclone__seat-editor-actions">
+        <button onClick={submit} disabled={busy || !agentId || !title.trim()} className="primary-cta-btn">
+          {busy ? '保存中…' : (mode === 'create' ? '+ 创建工位' : '保存工位')}
         </button>
-        <button onClick={onCancel} disabled={busy} className="btn">取消</button>
+        <button onClick={onCancel} disabled={busy} className="secondary-action-btn">取消</button>
       </div>
+      </section>
     </div>
   );
 }

@@ -121,29 +121,6 @@
   vertical-align: middle;
 }
 
-/* ─── Create Button ──────────────────────────────────────── */
-.dashboard__create-btn {
-  padding: var(--space-2) var(--space-4);
-  background: var(--color-accent);
-  color: var(--color-on-accent);
-  border: none;
-  border-radius: var(--border-radius-md);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  cursor: pointer;
-  font-family: inherit;
-  transition: all var(--duration-fast) var(--ease-out-expo);
-}
-
-.dashboard__create-btn:hover {
-  background: var(--color-accent-hover);
-  transform: scale(1.04);
-}
-
-.dashboard__create-btn:active {
-  transform: scale(0.96);
-}
-
 /* ─── Agent Grid ─────────────────────────────────────────── */
 .dashboard__agent-grid {
   display: grid;

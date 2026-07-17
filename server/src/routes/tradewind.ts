@@ -20,6 +20,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { atomicWriteFile } from '../engine/shared/atomic-io';
 import type { FastifyInstance } from 'fastify';
+import { getAppContext } from '../services/app-context.js';
 import type { WorkflowGraph, WorkflowMode } from '../engine/tradewind/foundation/types';
 import { Orchestrator, LoopController } from '../engine/tradewind/orchestrator';
 import type { LoopConfig } from '../engine/tradewind/orchestrator';
@@ -39,6 +40,7 @@ import { getEnvelopePending } from '../engine/tradewind/foundation/node-status-s
 import { getMeetingsDir, getMeetingFileName } from '../engine/tradewind/foundation/archive-paths';
 import { validateWorkflow } from '../engine/tradewind/foundation/workflow-validator';
 import { loadAgent } from '../engine/shared/agent-loader';
+import { agentRegistryFile, tradewindRunDir, tradewindWorkflowsDir } from '../services/data-paths.js';
 
 /** 获取会长的 model key（用于压缩摘要 LLM 调用） */
 async function getChairModel(dataDir: string, chairAgentId: string): Promise<string> {
@@ -56,8 +58,17 @@ function isExecutionRunning(): boolean {
   return !!(activeLoop?.isRunning() || activeOrchestrator?.isRunning());
 }
 
+export async function stopActiveTradewindExecution(): Promise<void> {
+  if (activeLoop?.isRunning()) {
+    await activeLoop.stop();
+    activeLoop = null;
+    return;
+  }
+  if (activeOrchestrator?.isRunning()) await activeOrchestrator.stop();
+}
+
 export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
-  const dataDir = (app as any).dataDir as string;
+  const { dataDir } = getAppContext(app);
 
   // 注册内置 executor
   const executors = new Map();
@@ -156,12 +167,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     if (!isExecutionRunning()) {
       return reply.status(404).send({ error: 'No running execution' });
     }
-    if (activeLoop) {
-      await activeLoop.stop();
-      activeLoop = null;
-    } else {
-      await activeOrchestrator!.stop();
-    }
+    await stopActiveTradewindExecution();
     return reply.send({ stopped: true });
   });
 
@@ -267,7 +273,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
 
   // ── Workflow CRUD ──────────────────────────────────────────────
 
-  const workflowsDir = path.join(dataDir, 'tradewind', 'workflows');
+  const workflowsDir = tradewindWorkflowsDir(dataDir);
 
   /** POST /workflow/save — 保存工作流 */
   app.post('/workflow/save', async (req, reply) => {
@@ -402,7 +408,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
 
   /** GET /agents — 返回全局 Agent 池摘要列表 */
   app.get('/agents', async (_req, reply) => {
-    const registryFile = path.join(dataDir, 'agents', 'registry.json');
+    const registryFile = agentRegistryFile(dataDir);
     try {
       const raw = await fs.readFile(registryFile, 'utf-8');
       const registry = JSON.parse(raw) as Record<string, { name?: string; model?: string }>;
@@ -529,7 +535,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     const execId = activeOrchestrator?.getExecutionId?.();
     const wfId = activeOrchestrator?.getWorkflowId?.();
     if (execId && wfId) {
-      const msgPath = path.join(dataDir, 'tradewind', 'runs', wfId, execId, 'nodes', nodeId, 'messages.json');
+      const msgPath = path.join(tradewindRunDir(dataDir, wfId, execId), 'nodes', nodeId, 'messages.json');
       try {
         const raw = await fs.readFile(msgPath, 'utf-8');
         return reply.send({ messages: JSON.parse(raw) });
@@ -564,7 +570,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     const execId = activeOrchestrator?.getExecutionId?.();
     const wfId = activeOrchestrator?.getWorkflowId?.();
     if (execId && wfId) {
-      const msgPath = path.join(dataDir, 'tradewind', 'runs', wfId, execId, 'nodes', nodeId, 'messages.json');
+      const msgPath = path.join(tradewindRunDir(dataDir, wfId, execId), 'nodes', nodeId, 'messages.json');
       try {
         const raw = await fs.readFile(msgPath, 'utf-8');
         const all = JSON.parse(raw) as Array<{ role: string; content: string }>;

@@ -6,6 +6,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { getAppContext } from '../services/app-context.js';
 import {
   createSession, loadSession, saveSession, listSessions,
   deleteSession, renameSession, tryAcquireSessionLock,
@@ -19,12 +20,13 @@ import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { atomicWriteFile } from '../engine/shared/atomic-io.js';
 
 /** 活跃的轮次 AbortController：sessionId → AbortController */
 const activeAborts = new Map<string, AbortController>();
 
 export async function convectionRoutes(app: FastifyInstance): Promise<void> {
-  const dataDir = (app as any).dataDir as string;
+  const { dataDir } = getAppContext(app);
 
   // POST /api/convection/create
   app.post('/create', async (req, reply) => {
@@ -206,9 +208,10 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
       try {
         await fs.mkdir(archiveDir, { recursive: true });
         const archiveTarget = path.join(archiveDir, archiveFileName);
-        const archiveTmp = `${archiveTarget}.tmp`;
-        await fs.writeFile(archiveTmp, JSON.stringify({ publicMessages: s.publicMessages, chairMessages: s.chairMessages }, null, 2));
-        await fs.rename(archiveTmp, archiveTarget);
+        await atomicWriteFile(
+          archiveTarget,
+          JSON.stringify({ publicMessages: s.publicMessages, chairMessages: s.chairMessages }, null, 2),
+        );
       } catch (e) {
         return reply.status(500).send({ error: `归档失败，已中止重置（消息未清空）：${(e as Error).message}` });
       }

@@ -12,6 +12,7 @@ import type { MeetingMessage, ToolStep } from './meeting-client';
 import { parseStructuredContent } from '../chat/parser';
 import { renderTextWithCode } from '../../../engine/markdown';
 import { lineDiff, diffStat, type DiffLine } from '../../../utils/diff';
+import { combineReasoning } from './meeting-reasoning';
 
 interface Props {
   msg: MeetingMessage;
@@ -208,6 +209,7 @@ export const MeetingMessageItem = memo(function MeetingMessageItem({ msg }: Prop
   // 流式态：标签闭合即定型（think 折叠 / note 块 / answer 主体）；未闭合标签静默
   if (msg.streaming) {
     const view = buildStreamView(msg.content);
+    const reasoning = combineReasoning(msg.reasoning, view.think);
     const tools = msg.toolCalls || [];
     // 兜底：content 中有已闭合 action 但 toolCalls 事件尚未到达时，解析显示
     let closedActionFallback: Array<{ tool: string }> = [];
@@ -222,7 +224,7 @@ export const MeetingMessageItem = memo(function MeetingMessageItem({ msg }: Prop
     return (
       <div className="tw-meeting-msg">
         <span className="tw-meeting-msg__speaker">{msg.speaker}</span>
-        {view.think && <ThinkBlock content={view.think} streaming={view.thinkStreaming} />}
+        {reasoning && <ThinkBlock content={reasoning} streaming />}
         {tools.length > 0
           ? tools.map((t, i) => <ToolBubble key={i} step={t} />)
           : closedActionFallback.map((t, i) => (
@@ -260,12 +262,13 @@ export const MeetingMessageItem = memo(function MeetingMessageItem({ msg }: Prop
   // 结束态：解析 think/answer/note 分块渲染（think 折叠，note 单独区块）
   const source = msg.rawContent || msg.content;
   const parsed = parseStructuredContent(source);
+  const reasoning = combineReasoning(msg.reasoning, parsed.think);
   const tools = msg.toolCalls || [];
   const answerText = parsed.answer || msg.content;
   return (
     <div className="tw-meeting-msg">
       <span className="tw-meeting-msg__speaker">{msg.speaker}</span>
-      {parsed.think && <ThinkBlock content={parsed.think} />}
+      {reasoning && <ThinkBlock content={reasoning} />}
       {tools.map((t, i) => <ToolBubble key={i} step={t} />)}
       {answerText && <span className="tw-meeting-msg__content">{renderTextWithCode(answerText, `mtg-a-${msg.timestamp}`)}</span>}
       {parsed.note && (

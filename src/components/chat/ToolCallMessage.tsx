@@ -9,6 +9,7 @@ export default function ToolCallMessage({ toolCall, actions, timestamp }: {
   timestamp?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const isRunning = toolCall.status === 'pending' || toolCall.status === 'running';
 
   // 文件改动类工具（edit_file / write_file）渲染成 diff 卡片，直观展示 AI 改了什么
   const fileEdit = parseFileEdit(toolCall);
@@ -22,7 +23,7 @@ export default function ToolCallMessage({ toolCall, actions, timestamp }: {
   return (
     <div className="chat__message chat__message--assistant chat__message--tool">
       <div className="chat__avatar" style={{ background: 'var(--color-accent)', color: 'var(--color-on-accent)' }}>🔧</div>
-      <div className="chat__bubble" style={{ minWidth: '200px' }}>
+      <div className={`chat__bubble${isRunning ? ' chat__tool-running' : ''}`} style={{ minWidth: '200px' }}>
         <button
           onClick={() => setExpanded(!expanded)}
           aria-expanded={expanded}
@@ -33,7 +34,7 @@ export default function ToolCallMessage({ toolCall, actions, timestamp }: {
             {toolCall.toolName}
           </span>
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>
-            {!expanded && toolCall.result ? summary : ''}
+            {isRunning ? '执行中' : (!expanded && toolCall.result ? summary : '')}
           </span>
         </button>
         {expanded && (

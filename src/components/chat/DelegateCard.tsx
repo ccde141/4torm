@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ChatMessage } from '../../types';
 import { formatTimestamp } from '../../utils/time';
+import { visibleDelegateProgress } from '../../engine/chat/delegate-progress';
 
 type Step = { type: 'tool' | 'thought'; tool?: string; args?: Record<string, string>; result?: string; ok?: boolean; text?: string };
 
@@ -25,6 +26,7 @@ export default function DelegateCard({ toolCall, content, actions, timestamp }: 
   const summary = toolCall.result || '';
   const steps: Step[] = (toolCall as any).steps || [];
   const durationMs = toolCall.durationMs || 0;
+  const thought = visibleDelegateProgress(content);
 
   const statusConfig = {
     success: { icon: '\u2713', color: '#22c55e', label: '完成' },
@@ -120,10 +122,10 @@ export default function DelegateCard({ toolCall, content, actions, timestamp }: 
               </div>
             )}
             {/* 思考过程 */}
-            {content && (
+            {thought && (
               <div style={{ marginTop: 'var(--space-2)' }}>
                 <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>思考过程</div>
-                <pre style={{ margin: 0, padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '200px', overflow: 'auto' }}>{content}</pre>
+                <pre style={{ margin: 0, padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '200px', overflow: 'auto' }}>{thought}</pre>
               </div>
             )}
             {/* 最终结果 */}

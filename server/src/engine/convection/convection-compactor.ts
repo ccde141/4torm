@@ -14,6 +14,7 @@ import type { ContextMessage } from '../shared/types';
 import { callLLM } from '../shared/llm-bridge';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { atomicWriteFile } from '../shared/atomic-io.js';
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ export interface ConvectionCompactOpts {
   participants: string[];
   /** 事件回调 */
   onEvent?: (ev: ConvectionCompactEvent) => void;
+  summarize?: (messages: ContextMessage[]) => Promise<string>;
 }
 
 export type ConvectionCompactEvent =
@@ -89,16 +91,20 @@ export async function compactConvectionIfNeeded(
 
   // 归档到磁盘
   const toArchive = toCompactCycles.flat();
-  state.archiveSeq++;
-  const archiveFileName = `${String(state.archiveSeq).padStart(3, '0')}.json`;
+  const nextArchiveSeq = state.archiveSeq + 1;
+  const archiveFileName = `${String(nextArchiveSeq).padStart(3, '0')}.json`;
 
   try {
     await fs.mkdir(opts.archiveDir, { recursive: true });
-    await fs.writeFile(
+    await atomicWriteFile(
       path.join(opts.archiveDir, archiveFileName),
       JSON.stringify(toArchive, null, 2),
     );
-  } catch { /* 归档写入失败不阻塞 */ }
+    state.archiveSeq = nextArchiveSeq;
+  } catch (error) {
+    opts.onEvent?.({ type: 'compact-warn', message: `对流归档失败，压缩已中止：${(error as Error).message}` });
+    return false;
+  }
 
   // 会长做摘要
   const summaryPrompt = buildConvectionSummaryPrompt(opts.participants);
@@ -109,16 +115,13 @@ export async function compactConvectionIfNeeded(
 
   let summary: string;
   try {
-    summary = await callSummaryLLM(summaryMessages, opts);
-  } catch (firstErr) {
-    // 重试一次
-    try {
-      summary = await callSummaryLLM(summaryMessages, opts);
-    } catch {
-      state.disabled = true;
-      opts.onEvent?.({ type: 'compact-warn', message: `对流压缩失败已禁用：${(firstErr as Error).message}` });
-      return false;
-    }
+    summary = opts.summarize
+      ? await opts.summarize(summaryMessages)
+      : await callSummaryLLM(summaryMessages, opts);
+  } catch (error) {
+    state.disabled = true;
+    opts.onEvent?.({ type: 'compact-warn', message: `对流压缩失败已禁用：${(error as Error).message}` });
+    return false;
   }
 
   // 重组：摘要条目 + 保留周期

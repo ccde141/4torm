@@ -10,6 +10,7 @@ import path from 'node:path';
 import { atomicWriteFile } from './atomic-io';
 import { validateWorkflow, type ValidationError } from './workflow-validator';
 import { autoLayout } from './workflow-layout';
+import { agentRegistryFile, tradewindWorkflowDir } from '../../services/data-paths.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ export type { GraphNode, GraphEdge };
 
 /** 列出所有已注册 agent，返回格式化字符串给 AI */
 export async function execListAgents(dataDir: string): Promise<string> {
-  const registryPath = path.join(dataDir, 'agents', 'registry.json');
+  const registryPath = agentRegistryFile(dataDir);
   try {
     const raw = await fs.readFile(registryPath, 'utf-8');
     const registry = JSON.parse(raw) as Record<string, {
@@ -137,7 +138,7 @@ export async function execCreateWorkflow(
   });
 
   // 2. 加载 agent 注册表（供校验）
-  const registryPath = path.join(dataDir, 'agents', 'registry.json');
+  const registryPath = agentRegistryFile(dataDir);
   let agentIds: Set<string>;
   try {
     const raw = await fs.readFile(registryPath, 'utf-8');
@@ -158,7 +159,7 @@ export async function execCreateWorkflow(
 
   // 6. 写入文件
   const workflowId = `wf-${genShortId()}`;
-  const wfDir = path.join(dataDir, 'tradewind', 'workflows', workflowId);
+  const wfDir = tradewindWorkflowDir(dataDir, workflowId);
   const wsDir = path.join(wfDir, 'workspace');
 
   try {

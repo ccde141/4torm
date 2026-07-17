@@ -35,6 +35,8 @@ import { extractAnswer } from '../../shared/answer-extractor';
 import { activeNodeRunners } from '../nodes/agent';
 import { runTradewindReActNative } from './native-adapter';
 import { buildVirtualToolDefs } from './virtual-tools';
+import { appendMeetingReasoning } from './meeting-reasoning';
+import { createMeetingIdleGuard, MEETING_IDLE_TIMEOUT_MS } from './meeting-idle-guard';
 
 /** 读取会议室元认知段（meeting-meta.md，与本文件同级）。读不到则静默跳过。 */
 function loadMeetingMeta(): string {
@@ -56,13 +58,15 @@ const HEARTBEAT_INTERVAL_MS = 5_000;
 export type MeetingStreamEvent =
   | { type: 'agent-start'; label: string }
   | { type: 'token'; label: string; chunk: string }
+  | { type: 'reasoning'; label: string; chunk: string }
   | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; label: string; tool: string; result: string; meta?: unknown }
   | { type: 'heartbeat'; label: string; phase: string; elapsed: number }
   | { type: 'contact-start'; label: string; target: string }
   | { type: 'contact-done'; label: string; target: string; result: string; ok: boolean }
-  | { type: 'agent-done'; label: string; content: string; rawContent?: string; toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>; noReply?: boolean }
+  | { type: 'agent-done'; label: string; content: string; rawContent?: string; reasoning?: string; toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>; noReply?: boolean }
   | { type: 'chair-token'; chunk: string }
+  | { type: 'chair-reasoning'; chunk: string }
   | { type: 'chair-done'; content: string }
   | { type: 'minutes-done'; content: string }
   | { type: 'error'; message: string };
@@ -180,7 +184,8 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       if (!agent) continue;
 
       const label = participant.label;
-      session.streamingCurrent = { speaker: label, content: '' };
+      const idleGuard = createMeetingIdleGuard(signal);
+      session.streamingCurrent = { speaker: label, content: '', reasoning: '' };
       onEvent?.({ type: 'agent-start', label });
 
       const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills);
@@ -226,7 +231,8 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           if (tool === 'contact') {
             const target = args.target || '';
             onEvent?.({ type: 'contact-start', label, target });
-            const result = await execMeetingContact(args, label, session.meetingLabel, signal);
+            const result = await execMeetingContact(args, label, session.meetingLabel, idleGuard.signal);
+            idleGuard.touch();
             const ok = !result.startsWith('联络失败') && !result.startsWith('联络被系统拒绝') && !result.includes('失败');
             onEvent?.({ type: 'contact-done', label, target, result, ok });
             return result;
@@ -235,7 +241,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           if (emitToolEvents) onEvent?.({ type: 'tool-call', label, tool, args });
           try {
             let meta: unknown;
-            const result = await execTool(tool, args, participant.agentId, workspace, signal, (m) => {
+            const result = await execTool(tool, args, participant.agentId, workspace, idleGuard.signal, (m) => {
               meta = m;
               onMeta?.(m);
             });
@@ -252,6 +258,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       // 双路径分流执行
       let result: { content: string; rawContent: string; toolCalls: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>; lastPromptTokens?: number };
 
+      try {
       if (nativeDecision.native) {
         // ── native 路径 ──
         // 虚拟工具 schema 注入（contact 必备；meeting 不允许 delegate）
@@ -273,13 +280,18 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           // adapter 自身只 emit token / error，这里只翻译这两类
           onEvent: (ev) => {
             if (ev.type === 'token') {
+              idleGuard.touch();
               if (session.streamingCurrent) session.streamingCurrent.content += ev.content;
               onEvent?.({ type: 'token', label, chunk: ev.content });
+            } else if (ev.type === 'reasoning') {
+              idleGuard.touch();
+              if (session.streamingCurrent) appendMeetingReasoning(session.streamingCurrent, ev.content);
+              onEvent?.({ type: 'reasoning', label, chunk: ev.content });
             } else if (ev.type === 'error') {
               onEvent?.({ type: 'error', message: ev.message });
             }
           },
-          signal,
+          signal: idleGuard.signal,
         });
 
         result = {
@@ -291,8 +303,8 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       } else {
         // ── text 路径（原有逻辑）──
         const llm: LLMCaller = {
-          async call(msgs, _opts, onChunk, sig) {
-            return callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal: sig });
+          async call(msgs, _opts, onChunk, sig, onReasoning) {
+            return callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal: sig, onReasoning });
           },
         };
 
@@ -303,14 +315,20 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           maxTurns: 100,
           onEvent: (ev) => {
             if (ev.type === 'token') {
+              idleGuard.touch();
               if (session.streamingCurrent) session.streamingCurrent.content += ev.chunk;
               onEvent?.({ type: 'token', label, chunk: ev.chunk });
+            }
+            if (ev.type === 'reasoning') {
+              idleGuard.touch();
+              if (session.streamingCurrent) appendMeetingReasoning(session.streamingCurrent, ev.chunk);
+              onEvent?.({ type: 'reasoning', label, chunk: ev.chunk });
             }
             if (ev.type === 'heartbeat') onEvent?.({ type: 'heartbeat', label, phase: ev.phase, elapsed: ev.elapsed });
             if (ev.type === 'tool-call') onEvent?.({ type: 'tool-call', label, tool: ev.tool, args: ev.args });
             if (ev.type === 'tool-result') onEvent?.({ type: 'tool-result', label, tool: ev.tool, result: ev.result, meta: ev.meta });
           },
-          signal,
+          signal: idleGuard.signal,
         });
         result = {
           content: textResult.content,
@@ -318,6 +336,9 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           toolCalls: textResult.toolCalls,
           lastPromptTokens: textResult.lastPromptTokens,
         };
+      }
+      } finally {
+        idleGuard.dispose();
       }
 
       // 记录最后一个 participant 的 promptTokens
@@ -327,7 +348,11 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       // - native 模式：直接取 result.content（无 <answer> 概念），仅 stripInternalTags 兜底
       // - text 模式：abort 时用流式累积内容 + extractAnswer/stripInternalTags 兜底
       const aborted = signal?.aborted;
+      if (idleGuard.timedOut()) {
+        onEvent?.({ type: 'error', message: `LLM 静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s 无响应）` });
+      }
       const streamedContent = session.streamingCurrent?.content?.trim() || '';
+      const reasoning = session.streamingCurrent?.reasoning || undefined;
       let finalContent: string;
       if (nativeDecision.native) {
         const source = aborted ? streamedContent : result.content;
@@ -345,6 +370,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           content: finalContent,
           timestamp: Date.now(),
           rawContent: result.rawContent || undefined,
+          reasoning,
           toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
         });
       } else if (!aborted) {
@@ -359,7 +385,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         });
       }
       session.streamingCurrent = undefined;
-      onEvent?.({ type: 'agent-done', label, content: finalContent, rawContent: result.rawContent, toolCalls: result.toolCalls, noReply: !hasContent && !aborted });
+      onEvent?.({ type: 'agent-done', label, content: finalContent, rawContent: result.rawContent, reasoning, toolCalls: result.toolCalls, noReply: !hasContent && !aborted });
 
       if (aborted) break;
     }
@@ -413,13 +439,29 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
   const onChunk = onEvent
     ? (chunk: string) => { onEvent({ type: 'chair-token', chunk }); }
     : undefined;
+  const onReasoning = onEvent
+    ? (chunk: string) => { onEvent({ type: 'chair-reasoning', chunk }); }
+    : undefined;
+  const idleGuard = createMeetingIdleGuard(signal);
 
   try {
-    const r = await callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal });
+    const r = await callLLM({
+      dataDir,
+      fullModelKey: agent.model,
+      messages: msgs,
+      onChunk: onChunk ? (chunk) => { idleGuard.touch(); onChunk(chunk); } : undefined,
+      onReasoning: onReasoning ? (chunk) => { idleGuard.touch(); onReasoning(chunk); } : undefined,
+      signal: idleGuard.signal,
+    });
     session.chairMessages.push({ role: 'assistant', content: r.content });
     onEvent?.({ type: 'chair-done', content: r.content });
   } catch (e) {
-    onEvent?.({ type: 'error', message: (e as Error).message });
+    const message = idleGuard.timedOut()
+      ? `LLM 静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s 无响应）`
+      : (e as Error).message;
+    onEvent?.({ type: 'error', message });
+  } finally {
+    idleGuard.dispose();
   }
 }
 
@@ -494,6 +536,7 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
       timestamp: Date.now(),
       streaming: true,
     });
+    const idleGuard = createMeetingIdleGuard(signal);
 
     try {
       let streamRaw = '';
@@ -502,13 +545,20 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
         fullModelKey: agent.model,
         messages,
         onChunk: (chunk) => {
+          idleGuard.touch();
           streamRaw += chunk;
           // 实时更新占位消息的内容（含 <think> 等原始流，前端可看到全过程）
           const slot = session.publicMessages[placeholderIdx];
           if (slot) slot.content = streamRaw;
           onEvent?.({ type: 'token', label, chunk });
         },
-        signal,
+        onReasoning: (chunk) => {
+          idleGuard.touch();
+          const slot = session.publicMessages[placeholderIdx];
+          if (slot) appendMeetingReasoning(slot, chunk);
+          onEvent?.({ type: 'reasoning', label, chunk });
+        },
+        signal: idleGuard.signal,
       });
       const answer = extractAnswer(r.content) ?? stripInternalTags(r.content).trim();
       const finalContent = answer || `（${label} 未给出有效入会发言）`;
@@ -520,16 +570,19 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
         slot.timestamp = Date.now();
         slot.streaming = false;
       }
-      onEvent?.({ type: 'agent-done', label, content: finalContent });
+      onEvent?.({ type: 'agent-done', label, content: finalContent, rawContent: r.content, reasoning: slot?.reasoning });
     } catch (e) {
-      if ((e as Error).name === 'AbortError') return;
-      const errText = `（${label} 入会摘要生成失败：${(e as Error).message}）`;
+      if ((e as Error).name === 'AbortError' && signal?.aborted) return;
+      const reason = idleGuard.timedOut() ? `静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s）` : (e as Error).message;
+      const errText = `（${label} 入会摘要生成失败：${reason}）`;
       const slot = session.publicMessages[placeholderIdx];
       if (slot) {
         slot.content = errText;
         slot.streaming = false;
       }
       onEvent?.({ type: 'agent-done', label, content: errText });
+    } finally {
+      idleGuard.dispose();
     }
   }
 

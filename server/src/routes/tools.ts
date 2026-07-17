@@ -6,10 +6,11 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { getAppContext } from '../services/app-context.js';
 import { executeTool } from '../services/tool-executor.js';
 
 export async function toolRoutes(app: FastifyInstance): Promise<void> {
-  const dataDir = (app as any).dataDir as string;
+  const { dataDir } = getAppContext(app);
 
   // POST /api/tools/exec
   app.post('/exec', async (req, reply) => {

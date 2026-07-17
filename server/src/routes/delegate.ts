@@ -6,12 +6,13 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { getAppContext } from '../services/app-context.js';
 import { runSubAgent } from '../engine/shared/sub-agent-runner.js';
 import type { SubAgentEvent } from '../engine/shared/sub-agent-types.js';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse.js';
 
 export async function delegateRoutes(app: FastifyInstance): Promise<void> {
-  const dataDir = (app as any).dataDir as string;
+  const { dataDir } = getAppContext(app);
 
   app.post('/', async (req, reply) => {
     const body = req.body as any;

@@ -11,8 +11,16 @@
  */
 
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import type { ContextMessage } from '../shared/types';
+import { atomicWriteFile } from '../shared/atomic-io';
+import {
+  convectionSessionFile,
+  convectionSessionDir,
+  convectionSessionIndexFile,
+  convectionSessionWorkspace,
+  convectionSessionsDir,
+} from '../../services/data-paths.js';
+import { readJsonFile } from '../../services/json-file-store.js';
 
 // ── 数据结构 ──────────────────────────────────────────────────
 
@@ -43,6 +51,8 @@ export interface ConvectionMessage {
   timestamp: number;
   /** Agent 回复的原始 LLM 输出（含标签），前端解析渲染用 */
   rawContent?: string;
+  /** Provider 原生 reasoning 旁路，不进入公共上下文。 */
+  reasoning?: string;
   /** 本轮工具调用记录 */
   toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }>;
 }
@@ -64,40 +74,12 @@ export interface ConvectionSessionSummary {
 
 // ── 持久化 Store ──────────────────────────────────────────────
 
-function sessionsDir(dataDir: string): string {
-  return path.join(dataDir, 'convection', 'sessions');
-}
-
-function sessionFile(dataDir: string, id: string): string {
-  return path.join(sessionsDir(dataDir), `${id}.json`);
-}
-
-function indexFile(dataDir: string): string {
-  return path.join(sessionsDir(dataDir), '_index.json');
-}
-
 export function sessionWorkspace(dataDir: string, id: string): string {
-  return path.join(sessionsDir(dataDir), id, 'workspace');
+  return convectionSessionWorkspace(dataDir, id);
 }
 
 async function readJsonSafe<T>(file: string): Promise<T | null> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(file, 'utf-8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    console.error(`[convection] 读取失败（非缺失，请检查权限/IO）：${file}`, e);
-    throw e;
-  }
-  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-  try {
-    return JSON.parse(raw) as T;
-  } catch (e) {
-    const quarantine = `${file}.corrupt-${Date.now().toString(36)}`;
-    try { await fs.rename(file, quarantine); } catch { /* 隔离失败也别让读崩，下面照样告警 */ }
-    console.error(`[convection] JSON 损坏，已隔离为 ${quarantine}（原文件保留可恢复）：${(e as Error).message}`);
-    return null;
-  }
+  return readJsonFile<T>(file, 'convection');
 }
 
 async function removeStrict(targetPath: string, opts?: { recursive?: boolean }): Promise<void> {
@@ -136,37 +118,31 @@ export async function createSession(
     createdAt: now,
     updatedAt: now,
   };
-  await ensureDir(sessionsDir(dataDir));
+  await ensureDir(convectionSessionsDir(dataDir));
   await ensureDir(sessionWorkspace(dataDir, id));
-  await atomicWrite(sessionFile(dataDir, id), JSON.stringify(session, null, 2));
+  await atomicWriteFile(convectionSessionFile(dataDir, id), JSON.stringify(session, null, 2));
   // 维护 index
-  const index = (await readJsonSafe<string[]>(indexFile(dataDir))) || [];
+  const index = (await readJsonSafe<string[]>(convectionSessionIndexFile(dataDir))) || [];
   index.push(id);
-  await atomicWrite(indexFile(dataDir), JSON.stringify(index));
+  await atomicWriteFile(convectionSessionIndexFile(dataDir), JSON.stringify(index));
   return session;
 }
 
 /** 原子写：先写临时文件，再 rename 覆盖目标，防止半截 JSON */
-async function atomicWrite(filePath: string, data: string): Promise<void> {
-  const tmp = filePath + '.tmp';
-  await fs.writeFile(tmp, data);
-  await fs.rename(tmp, filePath);
-}
-
 /** 保存会话（更新 updatedAt） */
 export async function saveSession(dataDir: string, session: ConvectionSessionData): Promise<void> {
   session.updatedAt = new Date().toISOString();
-  await atomicWrite(sessionFile(dataDir, session.id), JSON.stringify(session, null, 2));
+  await atomicWriteFile(convectionSessionFile(dataDir, session.id), JSON.stringify(session, null, 2));
 }
 
 /** 加载单个会话 */
 export async function loadSession(dataDir: string, id: string): Promise<ConvectionSessionData | null> {
-  return readJsonSafe<ConvectionSessionData>(sessionFile(dataDir, id));
+  return readJsonSafe<ConvectionSessionData>(convectionSessionFile(dataDir, id));
 }
 
 /** 列出所有会话（摘要 + token 估算，按 updatedAt 降序） */
 export async function listSessions(dataDir: string): Promise<ConvectionSessionSummary[]> {
-  const index = (await readJsonSafe<string[]>(indexFile(dataDir))) || [];
+  const index = (await readJsonSafe<string[]>(convectionSessionIndexFile(dataDir))) || [];
   const summaries: ConvectionSessionSummary[] = [];
   for (const id of index) {
     const s = await loadSession(dataDir, id);
@@ -199,11 +175,11 @@ function estimateTokens(text: string): number {
 
 /** 删除会话 */
 export async function deleteSession(dataDir: string, id: string): Promise<void> {
-  await removeStrict(sessionFile(dataDir, id));
-  await removeStrict(path.join(sessionsDir(dataDir), id), { recursive: true });
-  const index = (await readJsonSafe<string[]>(indexFile(dataDir))) || [];
+  await removeStrict(convectionSessionFile(dataDir, id));
+  await removeStrict(convectionSessionDir(dataDir, id), { recursive: true });
+  const index = (await readJsonSafe<string[]>(convectionSessionIndexFile(dataDir))) || [];
   const filtered = index.filter(x => x !== id);
-  await atomicWrite(indexFile(dataDir), JSON.stringify(filtered));
+  await atomicWriteFile(convectionSessionIndexFile(dataDir), JSON.stringify(filtered));
 }
 
 /** 重命名会话 */
@@ -220,7 +196,7 @@ export async function isAgentInAnySession(
   agentId: string,
   excludeSessionId?: string,
 ): Promise<boolean> {
-  const index = (await readJsonSafe<string[]>(indexFile(dataDir))) || [];
+  const index = (await readJsonSafe<string[]>(convectionSessionIndexFile(dataDir))) || [];
   for (const sid of index) {
     if (sid === excludeSessionId) continue;
     const s = await loadSession(dataDir, sid);

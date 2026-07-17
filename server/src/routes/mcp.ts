@@ -13,13 +13,15 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { getAppContext } from '../services/app-context.js';
 import { atomicWriteFile } from '../engine/shared/atomic-io';
 import type { McpServerConfig } from '../engine/shared/mcp-client';
 import { getMcpStatus, getMcpToolDefs, reconnectServer, disconnectServer } from '../engine/shared/mcp-manager';
+import { mcpServersFile } from '../services/data-paths.js';
 
 export async function mcpRoutes(app: FastifyInstance): Promise<void> {
-  const dataDir = (app as any).dataDir as string;
-  const configPath = path.join(dataDir, 'mcp', 'servers.json');
+  const { dataDir } = getAppContext(app);
+  const configPath = mcpServersFile(dataDir);
 
   async function readConfigs(): Promise<McpServerConfig[]> {
     try {

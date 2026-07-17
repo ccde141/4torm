@@ -27,12 +27,16 @@ import { listOtherSeats } from './contact-registry';
 import { loadSeat, saveSeat } from './seat-store';
 import { saveRoom } from './room-store';
 import type { RoomData, SeatData } from './types';
+import { toRoomProgressEvent } from './loop-event-forwarder';
+import type { ToolPreparationProgress } from '../shared/tool-progress';
 
 /** 群聊执行事件 */
 export type RoomEvent =
   | { type: 'seat-start'; speaker: string }
   | { type: 'token'; speaker: string; content: string }
   | { type: 'reasoning'; speaker: string; content: string }
+  | ({ type: 'tool-progress'; speaker: string } & ToolPreparationProgress)
+  | { type: 'heartbeat'; speaker: string; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | { type: 'tool-call'; speaker: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; speaker: string; tool: string; result: string; ok: boolean }
   | { type: 'seat-done'; speaker: string; content: string }
@@ -126,16 +130,18 @@ async function runSeatInRoom(
     ? await runReActLoopNative({
         messages, llm, tools: toolCaller, toolDefs: nativeToolDefs,
         onEvent: (ev) => {
-          if (ev.type === 'token') onEvent({ type: 'token', speaker: seat.title, content: ev.chunk });
-          else if (ev.type === 'reasoning') { reasoningAcc += ev.chunk; onEvent({ type: 'reasoning', speaker: seat.title, content: ev.chunk }); }
+          if (ev.type === 'reasoning') reasoningAcc += ev.chunk;
+          const progress = toRoomProgressEvent(seat.title, ev);
+          if (progress) onEvent(progress);
         },
         signal,
       })
     : await runReActLoop({
         messages, llm, tools: toolCaller,
         onEvent: (ev) => {
-          if (ev.type === 'token') onEvent({ type: 'token', speaker: seat.title, content: ev.chunk });
-          else if (ev.type === 'reasoning') { reasoningAcc += ev.chunk; onEvent({ type: 'reasoning', speaker: seat.title, content: ev.chunk }); }
+          if (ev.type === 'reasoning') reasoningAcc += ev.chunk;
+          const progress = toRoomProgressEvent(seat.title, ev);
+          if (progress) onEvent(progress);
         },
         signal,
       });

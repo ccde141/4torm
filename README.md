@@ -223,6 +223,15 @@ npm run build && npm run start:prod        # → http://localhost:3001
 npm run build && npm run electron:prod
 ```
 
+### 测试与检查
+
+```bash
+npm test                  # 前端与根项目 Node 测试
+npm run test:server       # Server Node 测试
+npm run test:all          # 根项目 + Server 全量测试
+npm run lint              # 源码 lint（排除构建产物、缓存与运行数据）
+```
+
 ### 首次配置
 
 1. **添加 LLM 提供商** — 控制台 → 提供商管理，填入 API endpoint 和 key（OpenAI 兼容格式）

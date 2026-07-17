@@ -22,6 +22,7 @@ import { loadSeatTaskboard, saveSeatTaskboard, type TaskBoard } from '../../../u
 import { contextToDisplay, type DisplayMessage, type DisplayBlock } from './messageDisplay';
 import type { SeatStreamRunners } from './useSeatStreamRunners';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
+import ExecutionStatusBar from '../../../components/chat/ExecutionStatusBar';
 
 interface SeatStatus {
   id: string; title: string;
@@ -39,6 +40,8 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
   const confirm = useConfirm();
   const [seat, setSeat] = useState<SeatStatus | null>(null);
   const [history, setHistory] = useState<DisplayMessage[]>([]);
+  const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
+  const [editMessageContent, setEditMessageContent] = useState('');
   // 草稿初值取自注册表：切走/重挂回来未发文本还在（内存级，硬退出不留）
   const [input, setInputRaw] = useState(() => runners.getDraft(seatId));
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -204,6 +207,46 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
     await reload(true);
   }
 
+  function startEditMessage(message: DisplayMessage) {
+    if (message.sourceIndex === undefined) return;
+    setEditingMessageIndex(message.sourceIndex);
+    setEditMessageContent(message.content);
+  }
+
+  function cancelEditMessage() {
+    setEditingMessageIndex(null);
+    setEditMessageContent('');
+  }
+
+  async function saveEditMessage() {
+    if (editingMessageIndex === null) return;
+    const url = isChair && chairBase
+      ? `${chairBase}/edit-message`
+      : `/api/cyclone/workshop/${workshopId}/seat/${seatId}/edit-message`;
+    const r = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index: editingMessageIndex, content: editMessageContent }),
+    });
+    if (!r.ok) { alert((await r.json().catch(() => ({})))?.error || '编辑消息失败'); return; }
+    cancelEditMessage();
+    await reload(true);
+  }
+
+  async function deleteMessage(message: DisplayMessage) {
+    if (message.sourceIndex === undefined) return;
+    if (!(await confirm({ title: '删除此消息？', message: '此操作不可撤销。', confirmText: '删除', danger: true }))) return;
+    const url = isChair && chairBase
+      ? `${chairBase}/delete-message`
+      : `/api/cyclone/workshop/${workshopId}/seat/${seatId}/delete-message`;
+    const r = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index: message.sourceIndex }),
+    });
+    if (!r.ok) { alert((await r.json().catch(() => ({})))?.error || '删除消息失败'); return; }
+    if (editingMessageIndex === message.sourceIndex) cancelEditMessage();
+    await reload(true);
+  }
+
   /** 实际派发一条文本：slash 指令优先，否则发起 chat 流。出队续发与即时发送共用。 */
   function dispatchText(text: string) {
     if (text === '/reset' || text === '/reset clear') { resetContext('clear'); return; }
@@ -243,8 +286,18 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
       {/* 有任务板且收起时：让出竖条宽度，滚动条落在竖条左侧可点可拖；展开态抽屉浮层覆盖，无需让位 */}
       <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginRight: (!isChair && !tbOpen) ? RAIL_W : 0 }}>
       <div className="chat__messages" ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)', ...(!isChair && tbOpen ? { paddingRight: 'calc(var(--space-4) + 30px)' } : {}) }}>
-        {history.map(m => <DisplayRow key={m.id} msg={m} />)}
-        {optimistic && <DisplayRow key={optimistic.id} msg={optimistic} />}
+        {history.map(m => <DisplayRow
+          key={m.id}
+          msg={m}
+          editing={editingMessageIndex === m.sourceIndex}
+          editContent={editMessageContent}
+          onEditContent={setEditMessageContent}
+          onStartEdit={() => startEditMessage(m)}
+          onSaveEdit={saveEditMessage}
+          onCancelEdit={cancelEditMessage}
+          onDelete={() => deleteMessage(m)}
+        />)}
+        {optimistic && <DisplayRow key={optimistic.id} msg={optimistic} editing={false} editContent="" onEditContent={() => {}} onStartEdit={() => {}} onSaveEdit={() => {}} onCancelEdit={() => {}} onDelete={() => {}} />}
         {live && (
           <>
             {live.reasoning && <ReasoningBlock reasoning={live.reasoning} isStreaming />}
@@ -268,6 +321,7 @@ export default function SeatChat({ workshopId, seatId, runners, onReloaded, chai
       </div>
 
       <div className="chat__input-area">
+        <ExecutionStatusBar label={streaming ? live?.phase : undefined} target={live?.activityTarget} />
         <QueuedChips items={queue} onRemove={i => runners.removeQueued(seatId, i)} />
         <div className="chat__input-wrapper">
           <textarea ref={inputRef} className="chat__input"
@@ -330,12 +384,38 @@ const inputHintStyle: React.CSSProperties = {
 };
 
 /** 单条已落库展示消息 */
-function DisplayRow({ msg }: { msg: DisplayMessage }) {
+function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onSaveEdit, onCancelEdit, onDelete }: {
+  msg: DisplayMessage;
+  editing: boolean;
+  editContent: string;
+  onEditContent: (value: string) => void;
+  onStartEdit: () => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+  onDelete: () => void;
+}) {
+  if (editing) {
+    return (
+      <div className={`chat__message chat__message--${msg.role === 'user' ? 'user' : 'assistant'}`}>
+        <div className="chat__avatar">{msg.role === 'user' ? '你' : msg.role === 'system' ? '档' : 'AI'}</div>
+        <div className="chat__bubble chat__bubble--editing">
+          <textarea className="chat__edit-textarea" value={editContent} onChange={e => onEditContent(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') onCancelEdit(); if (e.key === 'Enter' && e.ctrlKey) onSaveEdit(); }} rows={4} autoFocus />
+          <div className="chat__edit-actions"><button onClick={onSaveEdit}>保存</button><button onClick={onCancelEdit}>取消</button></div>
+        </div>
+      </div>
+    );
+  }
+  const actions = msg.sourceIndex === undefined ? null : (
+    <div className="chat__bubble-actions">
+      <button className="chat__msg-action-btn" title="编辑" onClick={onStartEdit}>✏</button>
+      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={onDelete}>🗑</button>
+    </div>
+  );
   if (msg.role === 'user') {
     return (
       <div className="chat__message chat__message--user">
         <div className="chat__avatar">你</div>
-        <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div></div>
+        <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>{actions}</div>
       </div>
     );
   }
@@ -343,7 +423,7 @@ function DisplayRow({ msg }: { msg: DisplayMessage }) {
     return (
       <div className="chat__message chat__message--assistant chat__message--archive-summary">
         <div className="chat__avatar">档</div>
-        <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div></div>
+        <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>{actions}</div>
       </div>
     );
   }
@@ -353,9 +433,10 @@ function DisplayRow({ msg }: { msg: DisplayMessage }) {
       {msg.content && (
         <div className="chat__message chat__message--assistant">
           <div className="chat__avatar">AI</div>
-          <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div></div>
+          <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>{actions}</div>
         </div>
       )}
+      {!msg.content && actions}
     </>
   );
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ChatMessage } from '../../../types';
+import { visibleDelegateProgress } from '../../../engine/chat/delegate-progress';
 
 type Step = {
   type: 'tool' | 'thought';
@@ -27,6 +28,7 @@ export default function DelegateCard({ toolCall, content }: {
   const summary = toolCall.result || '';
   const steps: Step[] = (toolCall as any).steps || [];
   const durationMs = toolCall.durationMs || 0;
+  const thought = visibleDelegateProgress(content);
 
   const isPending = status === 'pending';
   const isError = status === 'error';
@@ -105,11 +107,11 @@ export default function DelegateCard({ toolCall, content }: {
             )}
 
             {/* 思考过程 */}
-            {content && (
+            {thought && (
               <div>
                 <div className="tw-tool-card__section-label">思考过程</div>
                 <pre className="tw-tool-card__pre" style={{ maxHeight: '200px' }}>
-                  {content}
+                  {thought}
                 </pre>
               </div>
             )}

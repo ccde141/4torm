@@ -9,6 +9,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { agentTaskboardFile } from '../../services/data-paths.js';
 
 export type TaskStatus = 'todo' | 'doing' | 'done' | 'blocked';
 export interface Task { id: string; title: string; status: TaskStatus; note?: string }
@@ -17,7 +19,11 @@ export interface TaskBoard { goal: string; tasks: Task[]; updatedAt: number }
 const STATUSES: TaskStatus[] = ['todo', 'doing', 'done', 'blocked'];
 
 export function taskboardFile(dataDir: string, agentId: string, sessionId: string): string {
-  return path.join(dataDir, 'agents', agentId, 'sessions', `${sessionId}.taskboard.json`);
+  return agentTaskboardFile(dataDir, agentId, sessionId);
+}
+
+export function taskboardTempFile(filePath: string): string {
+  return `${filePath}.${process.pid}.${randomUUID()}.tmp`;
 }
 
 export function readTaskboard(fp: string): TaskBoard | null {
@@ -83,7 +89,7 @@ export function execTaskBoard(
   }
   fs.mkdirSync(path.dirname(fp), { recursive: true });
   // 原子写：先写 .tmp 再 renameSync 覆盖，防止进程中途被杀留下半截 JSON 损坏任务板。
-  const tmp = `${fp}.tmp`;
+  const tmp = taskboardTempFile(fp);
   fs.writeFileSync(tmp, JSON.stringify(board, null, 2), 'utf-8');
   fs.renameSync(tmp, fp);
   return { result: `任务板已更新：${summarizeTaskboard(board)}`, meta: { taskboard: board } };

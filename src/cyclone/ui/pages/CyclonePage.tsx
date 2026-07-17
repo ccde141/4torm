@@ -14,11 +14,14 @@ import RoomPanel from './RoomPanel';
 import CreateRoomPanel from './CreateRoomPanel';
 import CreateWorkshopPanel from './CreateWorkshopPanel';
 import SeatPanel, { type SeatDraft } from './SeatPanel';
+import SeatEditorLoading from './SeatEditorLoading';
+import { resolveLoadedSeatEditor } from './seat-editor-state';
 import SeatChat from './SeatChat';
 import ChairDrawer, { chairStreamKey } from './ChairDrawer';
 import BulletinBoard, { type BulletinEntry } from './BulletinBoard';
 import { useSeatStreamRunners } from './useSeatStreamRunners';
 import { useRoomStreamRunners } from './useRoomStreamRunners';
+import { createLatestRequestGuard } from '../../../lib/latest-request';
 import '../../../styles/components/cyclone.css';
 
 interface WorkshopSummary {
@@ -49,11 +52,13 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   const [chairOpen, setChairOpen] = useState(false);
   /** 工作室公告板条目（工作室级，全体工位可见）—— 作为工作室主区默认页 */
   const [bulletin, setBulletin] = useState<BulletinEntry[]>([]);
+  const workshopRequestGuard = useRef(createLatestRequestGuard());
   /** 右侧视图：私聊某工位 / 进入某群聊 / 创建群聊 / 创建工作室 / 创建工位 / 编辑工位 */
   const [view, setView] = useState<
     | { kind: 'seat'; id: string } | { kind: 'room'; id: string }
     | { kind: 'create-room' } | { kind: 'create-workshop' }
-    | { kind: 'create-seat' } | { kind: 'edit-seat'; id: string; draft: SeatDraft }
+    | { kind: 'create-seat' } | { kind: 'loading-seat'; id: string; error?: string }
+    | { kind: 'edit-seat'; id: string; draft: SeatDraft }
     | null
   >(null);
   /** 当前正在查看的会议（room）id —— 会长私聊绑定到它，换会议即换会长上下文 */
@@ -65,11 +70,13 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   }, []);
 
   const loadWorkshop = useCallback(async (wid: string) => {
+    const request = workshopRequestGuard.current.begin();
     // 侧栏只取轻量摘要（一次请求，服务端并行读），不拉每个工位/群聊的完整会话。
     // 完整内容由 SeatChat/RoomPanel 选中时各自加载。
     const r = await fetch(`/api/cyclone/workshop/${wid}/summary`);
-    if (!r.ok) { console.error(await readErrorMessage(r, '加载工作室失败')); return; }
+    if (!r.ok) { if (request.isCurrent()) console.error(await readErrorMessage(r, '加载工作室失败')); return; }
     const sum: { id: string; title: string; chairAgentId?: string; seats: Seat[]; rooms: RoomLite[]; bulletin?: { entries: BulletinEntry[] } } = await r.json();
+    if (!request.isCurrent()) return;
     setSeats(sum.seats);
     setRooms(sum.rooms);
     setChairAgentId(sum.chairAgentId ?? null);
@@ -79,6 +86,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
 
   useEffect(() => { if (!active) return; refreshAgents(); refreshWorkshops(); }, [active, refreshAgents, refreshWorkshops]);
   useEffect(() => { if (activeWid) loadWorkshop(activeWid); }, [activeWid, loadWorkshop]);
+  useEffect(() => { if (!activeWid) workshopRequestGuard.current.cancel(); }, [activeWid]);
 
   // 流式注册表：运行态从组件抽到此层（始终挂载），切工位不掐流、后台续跑、切回恢复
   const activeWidRef = useRef(activeWid);
@@ -173,13 +181,21 @@ export default function CyclonePage({ active }: { active?: boolean }) {
 
   async function openEditSeat(seatId: string) {
     if (!activeWid) return;
+    setView({ kind: 'loading-seat', id: seatId });
     const r = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/status`);
-    if (!r.ok) { alert(await readErrorMessage(r, '加载工位设置失败')); return; }
+    if (!r.ok) {
+      const error = await readErrorMessage(r, '加载工位设置失败');
+      setView(current => current?.kind === 'loading-seat' && current.id === seatId
+        ? { ...current, error }
+        : current);
+      return;
+    }
     const s = await r.json();
-    setView({ kind: 'edit-seat', id: seatId, draft: {
+    const draft: SeatDraft = {
       agentId: s.agentId, title: s.title, rolePrompt: s.rolePrompt || '',
       duty: s.duty || '', overrideAgentRole: !!s.overrideAgentRole,
-    } });
+    };
+    setView(current => resolveLoadedSeatEditor(current, seatId, draft));
   }
 
   async function submitEditSeat(seatId: string, d: SeatDraft) {
@@ -287,11 +303,19 @@ export default function CyclonePage({ active }: { active?: boolean }) {
           <CreateWorkshopPanel agents={agents} onCreate={handleCreateWorkshop} onCancel={() => setView(null)} />
         )}
         {view?.kind === 'create-seat' && activeWid && (
-          <SeatPanel mode="create" agents={agents} workshopId={activeWid}
+          <SeatPanel key="create-seat" mode="create" agents={agents} workshopId={activeWid}
             onSubmit={submitCreateSeat} onCancel={() => setView(null)} />
         )}
+        {view?.kind === 'loading-seat' && (
+          <SeatEditorLoading
+            key={`loading-seat-${view.id}`}
+            error={view.error}
+            onRetry={() => openEditSeat(view.id)}
+            onCancel={() => setView({ kind: 'seat', id: view.id })}
+          />
+        )}
         {view?.kind === 'edit-seat' && activeWid && (
-          <SeatPanel mode="edit" agents={agents} workshopId={activeWid} initial={view.draft}
+          <SeatPanel key={`edit-seat-${view.id}`} mode="edit" agents={agents} workshopId={activeWid} initial={view.draft}
             onSubmit={d => submitEditSeat(view.id, d)} onCancel={() => setView({ kind: 'seat', id: view.id })} />
         )}
         {view?.kind === 'create-room' && activeWid && (

@@ -10,6 +10,7 @@ import { parseInterval } from './schedule-parser';
 import { runTideTask } from './runner';
 import { lockAgent, unlockAgent, registerUnlockHook } from '../../engine/shared/agent-lock';
 import type { TideTask } from './types';
+import { PendingWorkTracker } from './pending-work';
 
 const TICK_MS = 15_000;
 
@@ -17,6 +18,8 @@ const TICK_MS = 15_000;
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let dataDir = '';
+let stopping = false;
+const pendingWork = new PendingWorkTracker();
 
 /** 正在执行的 taskId 集合，防止并发重入 */
 const runningTasks = new Set<string>();
@@ -32,15 +35,24 @@ let flushing = false;
 export function startScheduler(dir: string): void {
   dataDir = dir;
   if (timer) return;
+  stopping = false;
   // 注册解锁钩子：Agent 释放时检查 slot
   registerUnlockHook((agentId) => flushSlot(agentId));
-  timer = setInterval(() => tick().catch(console.error), TICK_MS);
+  timer = setInterval(() => {
+    pendingWork.track(tick()).catch(console.error);
+  }, TICK_MS);
   console.log('[tide] scheduler started, tick every 15s');
 }
 
 export function stopScheduler(): void {
+  stopping = true;
   if (timer) { clearInterval(timer); timer = null; }
+  pendingSlots.clear();
   console.log('[tide] scheduler stopped');
+}
+
+export async function drainScheduler(): Promise<void> {
+  await pendingWork.drain();
 }
 
 /**
@@ -48,6 +60,7 @@ export function stopScheduler(): void {
  * 检查 agent 是否有待投递的 slot，有则重读磁盘最新版本再 fire。
  */
 export async function flushSlot(agentId: string): Promise<void> {
+  if (stopping) return;
   if (flushing) return;
   const slotted = pendingSlots.get(agentId);
   pendingSlots.delete(agentId);
@@ -67,11 +80,13 @@ export async function fireManual(task: TideTask): Promise<void> {
 // ── 内部实现 ────────────────────────────────────────────────────
 
 async function tick(): Promise<void> {
-  if (!dataDir) return;
+  if (!dataDir || stopping) return;
   const tasks = await loadTasks(dataDir);
+  if (stopping) return;
   const now = Date.now();
 
   for (const snap of tasks) {
+    if (stopping) return;
     if (!snap.enabled) continue;
     if (snap.repeatCount === 0) continue;
     if (runningTasks.has(snap.id)) continue;
@@ -91,13 +106,18 @@ async function tick(): Promise<void> {
 
 /** 按 id 触发：重读磁盘最新版本，校验后 fire */
 async function fireById(taskId: string): Promise<void> {
+  if (stopping) return;
   const fresh = await getTask(dataDir, taskId);
   if (!fresh || !fresh.enabled || fresh.repeatCount === 0) return;
   await fire(fresh);
 }
 
 async function fire(task: TideTask, isManual = false): Promise<void> {
-  if (runningTasks.has(task.id)) return;
+  if (stopping || runningTasks.has(task.id)) return;
+  await pendingWork.track(runTask(task, isManual));
+}
+
+async function runTask(task: TideTask, isManual: boolean): Promise<void> {
   runningTasks.add(task.id);
 
   try {

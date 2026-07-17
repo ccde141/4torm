@@ -11,6 +11,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ServerResponse } from 'node:http';
 import path from 'node:path';
+import { getAppContext } from '../services/app-context.js';
 import { SessionRunner, type ConversationEvent, type SessionRunnerOpts } from '../engine/conversation/session-runner';
 import { loadAgent } from '../engine/shared/agent-loader';
 import { loadAgentToolDefs } from '../engine/shared/tool-defs-loader';
@@ -70,7 +71,7 @@ function pushSSE(raw: ServerResponse, ev: ConversationEvent): void {
 // ── 路由注册 ─────────────────────────────────────────────────────
 
 export async function conversationRoutes(app: FastifyInstance): Promise<void> {
-  const dataDir = (app as any).dataDir as string;
+  const { dataDir } = getAppContext(app);
 
   // ── POST /api/conversation/chat（SSE 流式） ──
   app.post('/chat', async (req, reply) => {

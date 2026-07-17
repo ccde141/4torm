@@ -16,6 +16,7 @@ import { loadAgentToolDefs, type ToolDef } from './tool-defs-loader.js';
 import { buildSandboxSection } from './sandbox-prompt.js';
 import type { ContextMessage } from './types.js';
 import type { SubAgentParams, SubAgentResult, SubAgentEvent } from './sub-agent-types.js';
+import { resolveSubAgentModel } from './sub-agent-model.js';
 import { runReActLoopNative, type LLMCaller, type ToolCaller } from '../conversation/react-loop.js';
 import path from 'node:path';
 
@@ -184,19 +185,20 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
     emitEvent({ type: 'error', data: r });
     return r;
   }
+  const effectiveModel = resolveSubAgentModel(params.model, agent.model);
 
   // 准备工具集
   const tools = await prepareTools(dataDir, agentId);
 
   // native 模式决议
-  const nativeDecision = await resolveNativeMode(dataDir, agent.model);
+  const nativeDecision = await resolveNativeMode(dataDir, effectiveModel);
 
   // 解析 workspace 路径（与母 Agent 一致）
   const workspaceRel = agent.workspace || `data/agents/${agentId}/.workspace/`;
   const projectDir = path.resolve(dataDir, '..');
   const workspaceAbs = path.resolve(projectDir, workspaceRel);
 
-  // 沙箱段（继承母 agent 级别）
+  // 统一执行策略段（旧级别字段仅兼容传递）
   const sandboxSection = buildSandboxSection({
     workspaceAbs,
     projectDir,
@@ -204,13 +206,11 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
     workspaceLabel: 'SubAgent 工作区（继承自母 Agent）',
   });
 
-  // 越权处理说明
-  const escalationNote = `\n\n## 越权错误处理
+  const escalationNote = `\n\n## 控制面写保护
 
-如果工具返回的结果中包含「路径越权」字样，说明你尝试访问的路径超出了沙箱允许范围。
-- **不要**反复尝试同一路径
-- **必须**在最终的 done 摘要中明确写出："越权失败：尝试访问 X，被沙箱拦截"，让委托方知情
-- 委托方会决定后续处理（修正路径或调整 agent 配置）`;
+如果工具返回「拒绝写入框架控制文件」，不要换路径反复尝试，也不要绕过专用工具。
+- 在最终 done 摘要中写明被保护的控制面目标
+- 让委托方改用对应专用工具或交由用户处理`;
 
   // 通用约束段（text/native 共享）
   const constraintsSection = [
@@ -223,7 +223,7 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
   // ── 双路径分流 ──
   if (nativeDecision.native) {
     return runSubAgentNative({
-      agent, tools, systemPrompt, task, context, dataDir,
+      agent, model: effectiveModel, tools, systemPrompt, task, context, dataDir,
       sandboxSection, escalationNote, constraintsSection,
       maxRounds, signal, emitEvent, parentSandboxLevel,
     });
@@ -282,7 +282,7 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
     try {
       const result = await callLLM({
         dataDir,
-        fullModelKey: agent.model,
+        fullModelKey: effectiveModel,
         messages,
         options: { temperature: agent.temperature },
         onChunk: (chunk) => emitEvent({ type: 'token', data: { t: chunk } }),
@@ -385,7 +385,7 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
   try {
     const finalResult = await callLLM({
       dataDir,
-      fullModelKey: agent.model,
+      fullModelKey: effectiveModel,
       messages,
       options: { temperature: agent.temperature },
       onChunk: (chunk) => emitEvent({ type: 'token', data: { t: chunk } }),
@@ -422,6 +422,7 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
 
 interface NativeSubAgentParams {
   agent: NonNullable<Awaited<ReturnType<typeof loadAgent>>>;
+  model: string;
   tools: ToolDef[];
   systemPrompt: string;
   task: string;
@@ -444,7 +445,7 @@ interface NativeSubAgentParams {
  */
 async function runSubAgentNative(p: NativeSubAgentParams): Promise<SubAgentResult> {
   const {
-    agent, tools, systemPrompt, task, context, dataDir,
+    agent, model, tools, systemPrompt, task, context, dataDir,
     sandboxSection, escalationNote, constraintsSection,
     maxRounds, signal, emitEvent, parentSandboxLevel,
   } = p;
@@ -506,7 +507,7 @@ async function runSubAgentNative(p: NativeSubAgentParams): Promise<SubAgentResul
     async call(msgs, _opts, onChunk, sig, llmTools) {
       return callLLM({
         dataDir,
-        fullModelKey: agent.model,
+        fullModelKey: model,
         messages: msgs,
         options: { temperature: agent.temperature },
         onChunk,

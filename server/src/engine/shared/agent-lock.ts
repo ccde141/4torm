@@ -10,6 +10,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { agentRegistryFile } from '../../services/data-paths.js';
 import { atomicWriteFile } from './atomic-io';
 
 interface AgentEntry {
@@ -23,7 +24,7 @@ interface RegistryFile {
 }
 
 async function readRegistry(dataDir: string): Promise<RegistryFile> {
-  const file = path.join(dataDir, 'agents', 'registry.json');
+  const file = agentRegistryFile(dataDir);
   try {
     const raw = await fs.readFile(file, 'utf-8');
     return JSON.parse(raw);
@@ -33,7 +34,7 @@ async function readRegistry(dataDir: string): Promise<RegistryFile> {
 }
 
 async function writeRegistry(dataDir: string, data: RegistryFile): Promise<void> {
-  const file = path.join(dataDir, 'agents', 'registry.json');
+  const file = agentRegistryFile(dataDir);
   await atomicWriteFile(file, JSON.stringify(data, null, 2));
 }
 

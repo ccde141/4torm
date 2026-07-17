@@ -39,7 +39,7 @@ function renderToolList(tools: ToolDef[]): string {
   }).join('\n\n');
 }
 
-function buildDelegateSection(parentSandboxLevel: SandboxLevel): string {
+function buildDelegateSection(): string {
   return `\n\n### delegate
   描述: 将子任务委托给独立的 SubAgent 执行。SubAgent 拥有与你相同的工具集，在隔离环境中独立完成任务后返回结果摘要。
   参数:
@@ -47,12 +47,12 @@ function buildDelegateSection(parentSandboxLevel: SandboxLevel): string {
     context: string [必填] — 必要的背景信息（SubAgent 看不到你的对话历史；**必须在此说明 SubAgent 需要工作的绝对路径或目录**）
     systemPrompt: string [必填] — SubAgent 的角色定义
 
-## 关于 SubAgent 的沙箱权限
+## 关于 SubAgent 的执行权限
 
-你派出的 SubAgent **继承你当前的沙箱级别（${parentSandboxLevel}）**。这意味着：
-- 你能访问的文件，SubAgent 也能访问；你不能访问的，SubAgent 同样不能。
+你派出的 SubAgent 使用相同的统一执行策略：
+- 相对路径基于它的工作区，绝对路径直接使用。
+- 框架控制面仍禁止通过普通文件工具直接改写。
 - 委托涉及具体文件/目录时，**必须在 context 中写明绝对路径**，因为 SubAgent 看不到你的上下文。
-- 如果 SubAgent 在结果摘要中报告"路径越权"错误，说明任务路径写错了，或确实需要更高沙箱权限——后者只能告知用户调整 agent 配置。
 
 ## 工作方法：先收集再综合
 
@@ -190,7 +190,7 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   }
 
   // 6. delegate 说明
-  parts.push(buildDelegateSection(opts.sandboxLevel));
+  parts.push(buildDelegateSection());
 
   // 7. ask 说明
   parts.push(buildAskSection());

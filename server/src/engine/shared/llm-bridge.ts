@@ -14,6 +14,8 @@ import path from 'node:path';
 import type { ContextMessage, LLMOptions, NativeToolCall } from './types';
 import type { ToolDef } from './tool-defs-loader';
 import { toProviderToolsWithMap, parseToolCalls, restoreToolName, makeToolCallAccumulator } from './tool-bridge';
+import { providersFile } from '../../services/data-paths.js';
+import { createToolProgressTracker, type ToolPreparationProgress } from './tool-progress.js';
 
 interface Provider {
   id: string;
@@ -69,7 +71,7 @@ function resolveProvider(providers: Provider[], fullKey: string): Provider | nul
 }
 
 async function loadProviders(dataDir: string): Promise<Provider[]> {
-  const file = path.join(dataDir, 'providers.json');
+  const file = providersFile(dataDir);
   try {
     const raw = await fs.readFile(file, 'utf-8');
     const parsed = JSON.parse(raw) as ProvidersFile;
@@ -123,6 +125,8 @@ export interface LLMCallParams {
   /** 原生思考流回调：模型吐 reasoning_content/reasoning/thinking 时调一次。
    *  与 onChunk 物理分开；不支持原生思考的模型永不触发（零副作用）。 */
   onReasoning?: (chunk: string) => void;
+  /** 原生工具参数生成进度；限频后回调，不包含参数正文。 */
+  onToolProgress?: (progress: ToolPreparationProgress) => void;
   /** 中止信号：runner stop 时 abort，截断正在进行的 LLM 请求 */
   signal?: AbortSignal;
   /**
@@ -336,7 +340,7 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
     }
 
     // 流式：解析 OpenAI SSE 格式
-    return parseSSEStream(res, params.onChunk!, !!params.tools, nameMap, params.onReasoning);
+    return parseSSEStream(res, params.onChunk!, !!params.tools, nameMap, params.onReasoning, params.onToolProgress);
   }
 
   throw lastError ?? new Error('LLM 调用失败（重试耗尽）');
@@ -382,6 +386,7 @@ async function parseSSEStream(
   native: boolean,
   nameMap: Map<string, string>,
   onReasoning?: (chunk: string) => void,
+  onToolProgress?: (progress: ToolPreparationProgress) => void,
 ): Promise<LLMResult> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error('LLM 流式响应无 body');
@@ -402,6 +407,11 @@ async function parseSSEStream(
   // 参数流，不在正文里，故必须一并回显才能看全 agent 在敲什么。设 LLM_STREAM_ECHO=0 关。
   const ECHO = process.env.LLM_STREAM_ECHO !== '0';
   const streamStart = Date.now();
+  const progressTracker = createToolProgressTracker({
+    startedAt: streamStart,
+    onProgress: onToolProgress,
+    restoreName: name => restoreToolName(name, nameMap),
+  });
   let chunkCount = 0;
   let lastLogAt = 0;
   let toolArgLen = 0;        // 工具参数累积字符数（判断是否在流式增长）
@@ -476,6 +486,7 @@ async function parseSSEStream(
         // 原生模式：累加 tool_calls 分片
         if (toolAcc && choice?.delta?.tool_calls) {
           const tcs = choice.delta.tool_calls as any[];
+          progressTracker.push(tcs);
           // 诊断：转储前 3 条原始 delta 结构，看 provider 到底怎么发 arguments
           if (DIAG && toolDeltaDumped < 3) {
             toolDeltaDumped++;

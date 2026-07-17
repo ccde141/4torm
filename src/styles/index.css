@@ -144,6 +144,59 @@ body::before {
   height: 24px;
 }
 
+/* 统一主操作按钮：Agent 创建与各功能区提交动作共用。 */
+.primary-cta-btn,
+.secondary-action-btn {
+  min-height: 36px;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--border-radius-md);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+
+.primary-cta-btn {
+  border: none;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.primary-cta-btn:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  transform: scale(1.04);
+}
+
+.primary-cta-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.secondary-action-btn {
+  border: 1px solid var(--border-color);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+}
+
+.secondary-action-btn:hover:not(:disabled) {
+  border-color: var(--border-color-hover);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  transform: translateY(-1px);
+}
+
+.primary-cta-btn:focus-visible,
+.secondary-action-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.primary-cta-btn:disabled,
+.secondary-action-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 /* ─── Entrance Animations ───────────────────────────────── */
 /* 实现接入 motion 层语义变量（variables/motion.css）：类名/keyframe 名不变，
  * 时长/缓动/位移统一由 --motion-* 单点控制。全应用非信风区经由 .animate-in/

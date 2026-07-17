@@ -226,7 +226,7 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
   const projectDir = path.resolve(dataDir, '..');
   const workspaceAbs = path.resolve(projectDir, workspaceRel);
 
-  // 沙箱段（继承母 agent 级别）
+  // 统一执行策略段（旧级别字段仅兼容传递）
   const sandboxSection = buildSandboxSection({
     workspaceAbs,
     projectDir,
@@ -234,12 +234,11 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
     workspaceLabel: 'SubAgent 工作区（继承自母 Agent）',
   });
 
-  const escalationNote = `## 越权错误处理
+  const escalationNote = `## 控制面写保护
 
-如果工具返回的 <result> 中包含「路径越权」字样，说明你尝试访问的路径超出了沙箱允许范围。
-- **不要**反复尝试同一路径
-- **必须**在最终的 done 摘要中明确写出："越权失败：尝试访问 X，被沙箱拦截"，让委托方知情
-- 委托方会决定后续处理（修正路径或调整 agent 配置）`;
+如果工具返回的 <result> 中包含「拒绝写入框架控制文件」，不要换路径反复尝试，也不要绕过专用工具。
+- 在最终 done 摘要中写明被保护的控制面目标
+- 让委托方改用对应专用工具或交由用户处理`;
 
   // 通用约束段（text/native 共享）
   const constraintsSection = [

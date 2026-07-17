@@ -13,6 +13,8 @@ import { loadTaskboard, saveTaskboard, type TaskBoard } from '../../utils/taskbo
 import { runStreamLoop } from '../../engine/chat/streamLoop';
 import { streamUrl } from '../../lib/apiBase';
 import { useDroppedPathInput } from '../../lib/useDroppedPathInput';
+import { formatTokenUsage } from '../../store/chat-token';
+import ExecutionStatusBar from './ExecutionStatusBar';
 import {
   getSession,
   saveSession,
@@ -340,6 +342,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       const assistantMsg: ChatMessage = {
         id: assistantMsgId, role: 'assistant', content: '',
         timestamp: new Date().toISOString(), agentId: selectedAgent.id,
+        streamingPhase: 'llm-waiting', phaseElapsed: 0,
       };
       let allMessages = [...updatedMessages, assistantMsg];
       emit([...allMessages]);
@@ -370,11 +373,21 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             // 推理模型（glm/deepseek）思考流：累积到 reasoningContent，与首答路径一致，
             // 否则续答轮的思考阶段界面全空白。节流复用 token 的刷新窗口。
             reasoningContent += ev.content;
-            allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, reasoningContent } : m);
+            allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, reasoningContent, streamingPhase: 'model-output', phaseElapsed: 0, streamingStatus: undefined, streamingTool: undefined, streamingArgumentChars: undefined } : m);
             scheduleFlush();
           } else if (ev.type === 'token') {
             streamContent += ev.content;
-            allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: streamContent } : m);
+            allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: streamContent, streamingPhase: 'model-output', phaseElapsed: 0, streamingStatus: undefined, streamingTool: undefined, streamingArgumentChars: undefined } : m);
+            scheduleFlush();
+          } else if (ev.type === 'tool-progress') {
+            allMessages = allMessages.map(m => m.id === assistantMsgId ? {
+              ...m,
+              streamingPhase: 'tool-preparing',
+              phaseElapsed: Math.round((ev.elapsed || 0) / 1000),
+              streamingStatus: undefined,
+              streamingTool: ev.tool,
+              streamingArgumentChars: ev.argumentChars,
+            } : m);
             scheduleFlush();
           } else if (ev.type === 'tool-call') {
             // 清理 assistant 流式内容中的 action/think 标签
@@ -391,6 +404,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             };
             const idx = allMessages.findIndex(m => m.id === assistantMsgId);
             allMessages.splice(idx, 0, toolMsg);
+            allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, streamingPhase: 'tool-exec', phaseElapsed: 0, streamingTool: ev.tool, streamingArgumentChars: undefined } : m);
             emit([...allMessages]);
           } else if (ev.type === 'tool-result') {
             // task_board 侧通道：结构化任务板即时刷新抽屉（收起时发光提醒）
@@ -410,6 +424,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                 break;
               }
             }
+            allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, streamingPhase: 'llm-waiting', phaseElapsed: 0, streamingTool: undefined, streamingArgumentChars: undefined } : m);
             emit([...allMessages]);
           } else if (ev.type === 'answer') {
             const finalMsg: ChatMessage = {
@@ -443,14 +458,25 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             allMessages.push(askMsg);
             emit([...allMessages]);
           } else if (ev.type === 'notice') {
-            // 系统提示（如强制 native 但探测不支持的警告）
-            const noticeMsg: ChatMessage = {
-              id: generateMessageId(), role: 'assistant',
-              content: ev.message,
-              timestamp: new Date().toISOString(), agentId: selectedAgent.id,
-            };
-            allMessages.push(noticeMsg);
+            const queued = typeof ev.message === 'string' && ev.message.includes('排队');
+            allMessages = allMessages.map(m => m.id === assistantMsgId ? {
+              ...m,
+              streamingPhase: queued ? 'queued' : m.streamingPhase,
+              streamingStatus: ev.message,
+            } : m);
             emit([...allMessages]);
+          } else if (ev.type === 'heartbeat') {
+            const phase = ev.phase === 'tool-exec' ? 'tool-exec' : 'llm-waiting';
+            allMessages = allMessages.map(m => m.id === assistantMsgId ? {
+              ...m, streamingPhase: phase, phaseElapsed: Math.round((ev.elapsed || 0) / 1000), streamingStatus: undefined,
+            } : m);
+            scheduleFlush();
+          } else if (ev.type === 'usage' && ev.usage) {
+            session.tokenUsage = {
+              promptTokens: ev.usage.promptTokens,
+              completionTokens: ev.usage.completionTokens,
+              totalTokens: ev.usage.totalTokens ?? (ev.usage.promptTokens + ev.usage.completionTokens),
+            };
           } else if (ev.type === 'done') {
             // 后端明确告知流结束 — 主动退出循环
             streamDone = true;
@@ -704,13 +730,12 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               {sessions.length === 0 && <div style={{ padding: 'var(--space-4)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center', textShadow: 'var(--text-halo)' }}>暂无会话，点击 + 创建</div>}
               {sessions.map(s => {
                 const unread = activeSessionId === s.id ? 0 : (s.unreadCount ?? 0);
-                const tokens = s.tokenUsage?.totalTokens ?? 0;
-                const tokenLabel = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}K` : `${tokens}`;
+                const tokenInfo = formatTokenUsage(s.tokenUsage);
                 return (
                 <div key={s.id} style={{ position: 'relative' }}>
                   <div className={`session-item${activeSessionId === s.id ? ' session-item--active' : ''}`} role="button" tabIndex={0} aria-current={activeSessionId === s.id ? 'true' : undefined} onClick={() => selectSession(s.id)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectSession(s.id); } }}>
                     <div className="session-item__title"><span className="text-truncate" style={{ maxWidth: '140px' }}>{s.title}</span>{unread > 0 && <span className="session-item__unread">{unread}</span>}</div>
-                    <div className="session-item__meta"><span className="text-truncate" style={{ maxWidth: '120px' }}>{s.id}</span><span className="session-item__tokens">{tokenLabel}</span></div>
+                    <div className="session-item__meta"><span className="text-truncate" style={{ maxWidth: '120px' }}>{s.id}</span><span className="session-item__tokens" title={tokenInfo.title}>{tokenInfo.label}</span></div>
                   </div>
                   <button onClick={async e => {
                     e.stopPropagation();
@@ -757,7 +782,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             {/* 收起态：让出竖条宽度，滚动条落在竖条左侧可点可拖；展开态：抽屉浮层覆盖，无需让位 */}
             <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginRight: taskboardOpen ? 0 : RAIL_W }}>
             <div className="chat__messages" ref={messagesContainerRef} style={{ paddingRight: taskboardOpen ? 'calc(var(--space-6) + 30px)' : 'var(--space-6)' }}>
-              {messages.filter(msg => msg.toolCall || msg.content.trim() || msg.reasoningContent || msg.toolSteps?.length).map(msg => (
+              {messages.filter((msg, index) => msg.toolCall || msg.content.trim() || msg.reasoningContent || msg.toolSteps?.length || (streaming && index === messages.length - 1)).map(msg => (
                 <div key={msg.id}>
                   <MessageItem
                     msg={msg}
@@ -773,7 +798,6 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                   />
                 </div>
               ))}
-              {streaming && <div className="chat__message chat__message--assistant"><div className="chat__avatar">AI</div><div className="chat__bubble"><div className="loading-spinner" /></div></div>}
               <div ref={messagesEndRef} />
             </div>
             {showJumpBtn && (
@@ -787,6 +811,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             </div>
 
             <div className="chat__input-area">
+              <ExecutionStatusBar message={streaming ? messages[messages.length - 1] : undefined} />
               <QueuedChips items={queue} onRemove={i => { if (activeSessionId) { streamRunners.removeQueued(activeSessionId, i); bumpQueue(t => t + 1); } }} />
               <div className="chat__input-wrapper">
                 <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} disabled={compacting} placeholder={compacting ? '正在压缩上下文…请稍候' : streaming ? '回复中…（可继续输入，发送将排队）' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} aria-label="输入消息" />

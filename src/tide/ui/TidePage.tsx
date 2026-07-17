@@ -4,8 +4,9 @@
  * 布局：左侧 Agent 选择 + 任务列表，右侧任务详情 + 运行历史
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { getAgents } from '../../store/agent';
+import { AGENTS_CHANGED_EVENT } from '../../store/agent-events';
 import {
   listTasks, toggleTask, runNow, deleteTask as apiDelete, getTaskDetail, updateTask,
   listTideSessions, getTideSession, deleteTideSession,
@@ -18,6 +19,8 @@ import { renderTextWithCode } from '../../engine/markdown';
 import StructuredMessage from '../../components/chat/StructuredMessage';
 import CreateForm from './TideCreateForm';
 import { formatRelative, formatSchedule, actionBtnStyle } from './tide-styles';
+import { reconcileSelectedAgent } from './agent-selection';
+import { createLatestRequestGuard } from '../../lib/latest-request';
 
 // ── 页面内样式 ─────────────────────────────────────────────────
 
@@ -73,8 +76,20 @@ export default function TidePage({ active = true }: { active?: boolean }) {
   const [sessionList, setSessionList] = useState<TideSessionSummary[]>([]);
   const [runs, setRuns] = useState<TideRunRecord[]>([]);
   const [runningTaskIds, setRunningTaskIds] = useState<Set<string>>(new Set());
+  const taskRequestGuard = useRef(createLatestRequestGuard());
 
-  useEffect(() => { getAgents().then(setAgents); }, []);
+  const refreshAgents = useCallback(async () => {
+    const list = await getAgents();
+    setAgents(list);
+    setSelectedAgent(current => reconcileSelectedAgent(current, list));
+  }, []);
+
+  useEffect(() => {
+    refreshAgents();
+    const onAgentsChanged = () => { refreshAgents(); };
+    window.addEventListener(AGENTS_CHANGED_EVENT, onAgentsChanged);
+    return () => window.removeEventListener(AGENTS_CHANGED_EVENT, onAgentsChanged);
+  }, [refreshAgents]);
 
   const refresh = useCallback(async () => {
     const all = await listTasks();
@@ -95,9 +110,9 @@ export default function TidePage({ active = true }: { active?: boolean }) {
   // 3s 轮询（仅当前页面活跃时跑，避免切走后后台持续刷请求）
   useEffect(() => {
     if (!active) return;
-    const id = setInterval(() => { refresh(); refreshSessions(); }, 3000);
+    const id = setInterval(() => { refreshAgents(); refresh(); refreshSessions(); }, 3000);
     return () => clearInterval(id);
-  }, [refresh, refreshSessions, active]);
+  }, [refresh, refreshAgents, refreshSessions, active]);
 
   // 正在查看的会话内容自动刷新
   useEffect(() => {
@@ -112,14 +127,17 @@ export default function TidePage({ active = true }: { active?: boolean }) {
   }, [viewingSession?.id, selectedAgent, active]);
 
   const selectAgent = (a: Agent) => {
+    taskRequestGuard.current.cancel();
     setSelectedAgent(prev => prev?.id === a.id ? null : a);
     setSelectedTask(null);
     setRuns([]);
   };
 
   const selectTask = async (t: TideTask) => {
+    const request = taskRequestGuard.current.begin();
     setSelectedTask(t);
     const detail = await getTaskDetail(t.id);
+    if (!request.isCurrent()) return;
     setRuns(detail.recent);
   };
 
@@ -128,6 +146,7 @@ export default function TidePage({ active = true }: { active?: boolean }) {
     await refresh();
   };
   const handleDelete = async (taskId: string) => {
+    taskRequestGuard.current.cancel();
     await apiDelete(taskId);
     setSelectedTask(null);
     await refresh();

@@ -11,6 +11,8 @@ export interface SubAgentParams {
   context: string;
   systemPrompt: string;
   agentId: string;
+  /** 本轮母会话的有效模型；缺省时回落到 Agent 注册模型。 */
+  model?: string;
   dataDir: string;
   signal: AbortSignal;
   timeout: number;

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   getSessionsByAgent,
   getSession,
@@ -11,6 +11,8 @@ import {
 import type { Agent, ChatMessage } from '../../types';
 import type { ChatSession } from '../../store/chat';
 import { streamUrl } from '../../lib/apiBase';
+import { createLatestRequestGuard } from '../../lib/latest-request';
+import { shouldApplySessionRefresh } from './session-list-state';
 
 /** 流注册表钩子（来自 useStreamRunners）：让切会话/删会话与后台流协同。 */
 interface StreamHooks {
@@ -34,22 +36,33 @@ export function useSessionList(
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState('');
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const sessionRequestGuard = useRef(createLatestRequestGuard());
+  const visibleAgentIdRef = useRef<string | null>(selectedAgent?.id ?? null);
+
+  useEffect(() => {
+    visibleAgentIdRef.current = selectedAgent?.id ?? null;
+  }, [selectedAgent?.id]);
 
   const refreshSessions = useCallback(async (agent: Agent) => {
-    setSessions(await getSessionsByAgent(agent.id));
+    const next = await getSessionsByAgent(agent.id);
+    if (shouldApplySessionRefresh(agent.id, visibleAgentIdRef.current)) setSessions(next);
   }, []);
 
   const selectAgent = useCallback((agent: Agent) => {
+    sessionRequestGuard.current.cancel();
     if (activeSessionId) streamHooks?.background(activeSessionId);
+    visibleAgentIdRef.current = agent.id;
     setSelectedAgent(agent);
     setActiveSessionId(null);
     setStreaming(false);
     setMessages([]);
+    setSessions([]);
     refreshSessions(agent);
   }, [activeSessionId, setSelectedAgent, setMessages, setStreaming, refreshSessions, streamHooks]);
 
   const selectSession = useCallback(async (sessionId: string) => {
     if (sessionId === activeSessionId) return;
+    const request = sessionRequestGuard.current.begin();
     // 切走：旧会话的流转入后台继续跑（不再 abort，杜绝丢数据 + 跨 origin Failed to fetch）
     // 切走前用户已看过旧会话，标记其为已读（推进 lastReadAt），避免切走后被自身回复标红
     if (activeSessionId) {
@@ -63,7 +76,7 @@ export function useSessionList(
     // 目标会话有活流 → 直接重连其缓冲，接着往下显示
     if (streamHooks?.reconnect(sessionId)) {
       getSession(sessionId).then(s => {
-        if (!s) return;
+        if (!s || !request.isCurrent()) return;
         if (s.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
         // 切入即已读：推进 lastReadAt 并清未读（reconnect 分支此前漏更新，导致活流会话红点清不掉）
         const lastReadAt = new Date().toISOString();
@@ -79,7 +92,7 @@ export function useSessionList(
     if (cachedMsgs) setMessages(cachedMsgs);
     // 后台读最新磁盘版本校准
     getSession(sessionId).then(s => {
-      if (!s) return;
+      if (!s || !request.isCurrent()) return;
       if (!cachedMsgs || s.messages !== cachedMsgs) setMessages(s.messages);
       if (s.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
       s.lastReadAt = new Date().toISOString();
@@ -220,9 +233,10 @@ export function useSessionList(
               receivedDone = true;
               const fresh = await getSession(session.id);
               if (fresh) {
+                await saveSession(fresh);
                 setMessages(fresh.messages);
                 setSessions(prev => prev.map(s =>
-                  s.id === session.id ? { ...s, updatedAt: new Date().toISOString() } : s,
+                  s.id === session.id ? { ...s, updatedAt: fresh.updatedAt, tokenUsage: fresh.tokenUsage } : s,
                 ));
               }
             } else if (evt.type === 'error') {
@@ -249,9 +263,10 @@ export function useSessionList(
       if (!receivedDone) {
         const fresh = await getSession(session.id);
         if (fresh) {
+          await saveSession(fresh);
           setMessages(fresh.messages);
           setSessions(prev => prev.map(s =>
-            s.id === session.id ? { ...s, updatedAt: new Date().toISOString() } : s,
+            s.id === session.id ? { ...s, updatedAt: fresh.updatedAt, tokenUsage: fresh.tokenUsage } : s,
           ));
         }
       }

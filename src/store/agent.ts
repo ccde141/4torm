@@ -2,6 +2,7 @@ import { readJson, writeJson, writeText, ensureDir, deleteFile } from '../api/st
 import { getAllModels, getProviderForModel } from '../llm';
 import type { Agent, AgentConfig } from '../types';
 import { canLock, ownsLock, type LockedStatus } from './statuses';
+import { notifyAgentsChanged } from './agent-events';
 
 const REGISTRY = 'agents/registry.json';
 
@@ -66,6 +67,7 @@ export async function createAgent(params: {
 
   await ensureDir(workspaceDir(id));
   await ensureDir(sessionsDir(id));
+  await writeJson(`${sessionsDir(id)}/_index.json`, []);
 
   if (params.config?.rolePrompt) {
     await writeText(`${workspaceDir(id)}/role-prompt.md`, params.config.rolePrompt);
@@ -82,6 +84,7 @@ export async function createAgent(params: {
   const all = await readRegistry();
   all[id] = agent;
   await writeRegistry(all);
+  notifyAgentsChanged();
   return agent;
 }
 
@@ -90,6 +93,7 @@ export async function updateAgent(id: string, patch: Partial<Agent>) {
   if (!all[id]) return;
   all[id] = { ...all[id], ...patch, updatedAt: new Date().toISOString() };
   await writeRegistry(all);
+  notifyAgentsChanged();
 }
 
 export async function updateAgentConfig(id: string, config: AgentConfig, model: string) {
@@ -161,6 +165,7 @@ export async function deleteAgent(id: string) {
   delete all[id];
   await writeRegistry(all);
   await deleteFile(agentDir(id));
+  notifyAgentsChanged();
 }
 
 export async function checkModelAvailable(modelKey: string): Promise<boolean> {

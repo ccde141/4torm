@@ -15,6 +15,8 @@
 import { useRef, useCallback } from 'react';
 import { streamUrl } from '../../../lib/apiBase';
 import { MAX_QUEUE } from '../../../components/chat/QueuedChips';
+import { readCycloneSSE } from './cyclone-sse';
+import { formatStreamStatus } from '../../../components/chat/stream-status';
 
 export interface FeedTool {
   tool: string; args: Record<string, string>; result?: string;
@@ -23,6 +25,7 @@ export interface FeedTool {
 
 /** 统一渲染项：历史消息 + 本轮实时消息共用（仿对流单数组模型） */
 export interface FeedMsg {
+  sourceIndex?: number;
   speaker: string;
   content: string;
   isHuman: boolean;
@@ -54,23 +57,42 @@ function applyEvent(ev: any, r: RoomRunner): void {
   switch (ev.type) {
     case 'seat-start':
       r.activeSpeaker = ev.speaker;
-      feed.push({ speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: '思考中...', tools: [] });
+      feed.push({ speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: formatStreamStatus('llm-waiting'), tools: [] });
       break;
     case 'token': {
       const m = feed[feed.length - 1];
-      if (m && m.speaker === r.activeSpeaker) { m.content += ev.content; m.phase = ''; }
+      if (m && m.speaker === r.activeSpeaker) { m.content += ev.content; m.phase = formatStreamStatus('model-output'); }
       break;
     }
     case 'reasoning': {
       const m = feed[feed.length - 1];
-      if (m && m.speaker === r.activeSpeaker) { m.reasoning = (m.reasoning || '') + ev.content; m.phase = ''; }
+      if (m && m.speaker === r.activeSpeaker) { m.reasoning = (m.reasoning || '') + ev.content; m.phase = formatStreamStatus('model-output'); }
+      break;
+    }
+    case 'tool-progress': {
+      const m = feed[feed.length - 1];
+      if (m && m.speaker === ev.speaker) {
+        m.phase = formatStreamStatus('tool-preparing', Math.round((ev.elapsed || 0) / 1000), ev.tool, ev.argumentChars);
+      }
       break;
     }
     case 'tool-call': {
       const m = feed[feed.length - 1];
       if (m && m.speaker === r.activeSpeaker) {
         m.tools.push({ tool: ev.tool, args: ev.args, status: 'running' });
-        m.phase = `调用 ${ev.tool}...`;
+        m.phase = formatStreamStatus('tool-exec', 0, ev.tool);
+      }
+      break;
+    }
+    case 'heartbeat': {
+      const m = feed[feed.length - 1];
+      if (m && m.speaker === ev.speaker) {
+        const tool = m.tools.findLast(t => t.status === 'running')?.tool;
+        m.phase = formatStreamStatus(
+          ev.phase === 'tool-exec' ? 'tool-exec' : 'llm-waiting',
+          Math.round((ev.elapsed || 0) / 1000),
+          tool,
+        );
       }
       break;
     }
@@ -80,7 +102,7 @@ function applyEvent(ev: any, r: RoomRunner): void {
         for (let k = m.tools.length - 1; k >= 0; k--) {
           if (m.tools[k].status === 'running') { m.tools[k] = { ...m.tools[k], result: ev.result, status: ev.ok ? 'success' : 'error' }; break; }
         }
-        m.phase = '';
+        m.phase = formatStreamStatus('llm-waiting');
       }
       break;
     }
@@ -99,29 +121,7 @@ function applyEvent(ev: any, r: RoomRunner): void {
 async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal: AbortSignal): Promise<void> {
   const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
   if (!res.ok) throw new Error(await res.text());
-  const reader = res.body?.getReader();
-  if (!reader) return;
-  const dec = new TextDecoder();
-  let buf = '';
-  const processLine = (line: string) => {
-    const t = line.trim();
-    if (!t.startsWith('data:')) return;
-    const p = t.slice(5).trim();
-    if (!p || p === '[DONE]') return;
-    try { onEvent(JSON.parse(p)); } catch (e) { console.warn('[cyclone] 群聊 SSE 事件解析失败', p, e); }
-  };
-  while (true) {
-    if (signal.aborted) { reader.cancel(); break; }
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const lines = buf.split('\n');
-    buf = lines.pop() ?? '';
-    for (const line of lines) processLine(line);
-  }
-  // 收尾：flush 解码器 + 处理末尾未换行终结的残留
-  buf += dec.decode();
-  if (buf) for (const line of buf.split('\n')) processLine(line);
+  await readCycloneSSE(res, onEvent, signal);
 }
 
 /**

@@ -6,7 +6,7 @@
  */
 
 import fs from 'node:fs/promises';
-import path from 'node:path';
+import { agentRegistryFile, agentRolePromptFile } from '../../services/data-paths.js';
 
 export interface LoadedAgent {
   id: string;
@@ -58,7 +58,7 @@ async function readTextSafe(file: string): Promise<string> {
  */
 export async function loadAgent(dataDir: string, agentId: string): Promise<LoadedAgent | null> {
   const registry = await readJsonSafe<Record<string, RegistryEntry>>(
-    path.join(dataDir, 'agents', 'registry.json'),
+    agentRegistryFile(dataDir),
   );
   if (!registry) return null;
 
@@ -67,7 +67,7 @@ export async function loadAgent(dataDir: string, agentId: string): Promise<Loade
 
   // role-prompt.md 是真理来源；registry 里的 config.rolePrompt 仅 UI 缓存
   const rolePrompt = await readTextSafe(
-    path.join(dataDir, 'agents', agentId, '.workspace', 'role-prompt.md'),
+    agentRolePromptFile(dataDir, agentId),
   );
 
   const cfg = entry.config ?? {};

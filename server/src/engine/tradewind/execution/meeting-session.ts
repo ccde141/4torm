@@ -19,6 +19,7 @@ export interface MeetingMessage {
   content: string;
   timestamp: number;
   rawContent?: string;
+  reasoning?: string;
   toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>;
   /** 入会摘要流式过程中为 true；定稿后为 false / undefined */
   streaming?: boolean;
@@ -60,7 +61,7 @@ export interface MeetingSessionData {
    */
   phase: 'opening' | 'discussion' | 'ended';
   /** 当前正在流式产出的消息（面板关了再开时 replay 用） */
-  streamingCurrent?: { speaker: string; content: string };
+  streamingCurrent?: { speaker: string; content: string; reasoning?: string };
 }
 
 // ── 工厂 ──────────────────────────────────────────────────────
