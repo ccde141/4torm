@@ -2,6 +2,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import test from 'node:test';
 
+test('normal install and desktop development prepare the documentation site', async () => {
+  const packageJson = JSON.parse(await fs.readFile(
+    new URL('../package.json', import.meta.url),
+    'utf8',
+  )) as { scripts?: Record<string, string> };
+
+  assert.equal(packageJson.scripts?.postinstall, 'npm run docs:build');
+  assert.equal(packageJson.scripts?.['preelectron:dev'], 'npm run docs:build');
+});
+
 test('documentation theme mounts one low-power ASCII background', async () => {
   const [theme, field, config, styles] = await Promise.all([
     fs.readFile(new URL('../docs/.vitepress/theme/index.ts', import.meta.url), 'utf8'),

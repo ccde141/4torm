@@ -10,6 +10,7 @@
     "dev:server": "cd server && npx tsx watch src/index.ts",
     "dev:vite": "vite",
     "electron": "electron electron/main.cjs",
+    "preelectron:dev": "npm run docs:build",
     "electron:dev": "concurrently -k -n server,vite,shell -c blue,green,magenta \"npm run dev:server\" \"npm run dev:vite\" \"wait-on tcp:127.0.0.1:5173 && electron electron/main.cjs\"",
     "start:prod": "cd server && cross-env SERVE_STATIC=1 NODE_ENV=production npx tsx src/index.ts",
     "electron:prod": "cross-env ELECTRON_PROD=1 electron electron/main.cjs",
@@ -22,6 +23,7 @@
     "docs:dev": "vitepress dev docs --port 5174 --strictPort",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs --port 5174 --strictPort",
+    "postinstall": "npm run docs:build",
     "_comment_postinstall": "已禁用自动下载 Chromium：下载常卡在解压阶段。需要时手动跑 npx playwright install chromium，或把下面的 key 改回 postinstall 即可恢复",
     "_postinstall_disabled": "npx playwright install chromium"
   },
