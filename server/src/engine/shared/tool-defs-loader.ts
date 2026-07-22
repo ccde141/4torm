@@ -55,26 +55,28 @@ async function loadSkillTools(dataDir: string, skillId: string): Promise<ToolDef
  * 加载某 Agent 实体可用的全部工具定义。
  *
  * 合并规则：
- * - tools[] 为空时默认加载 registry.json 中的框架内置工具
- * - tools[] 非空时只加载其中命中的工具（包括自定义工具）
+ * - toolMode=all 时加载 registry.json 中的框架内置工具（兼容旧空配置）
+ * - toolMode=selected 时只加载 tools[] 命中的工具，空数组表示不启用本地工具
  * - skills[] 携带的工具（去重，registry 优先）
- * - 若 skills.length > 0 且工具集中含 use_skill：动态改写其 description
+ * - skills[] 非空时自动补充 use_skill，并动态写入可用技能说明
  */
 export async function loadAgentToolDefs(
   dataDir: string,
   toolNames: string[] = [],
   skillIds: string[] = [],
+  toolMode: 'all' | 'selected' = toolNames.length === 0 ? 'all' : 'selected',
 ): Promise<ToolDef[]> {
   const result: ToolDef[] = [];
   const seenNames = new Set<string>();
 
   // 1) 从 registry 加载 toolNames（排除 mcp: 前缀的）
   const localNames = toolNames.filter(n => !n.startsWith('mcp:'));
+  if (skillIds.length > 0 && !localNames.includes('use_skill')) localNames.push('use_skill');
   const mcpNames = toolNames.filter(n => n.startsWith('mcp:'));
 
   const registryTools = await loadRegistryTools(
     dataDir,
-    toolNames.length === 0 ? undefined : localNames,
+    toolMode === 'all' ? undefined : localNames,
   );
   for (const t of registryTools) {
     if (!seenNames.has(t.name)) {

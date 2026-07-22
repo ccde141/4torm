@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { getAgents, setAgentStatus, getAgent, forceUnlock, getOfflineAgentIds } from '../../store/agent';
-import { LOCKED_STATUSES, LOCKED_STATUS_LABELS, SYSTEM_STATUSES, type LockedStatus } from '../../store/statuses';
+import { getAgents, getOfflineAgentIds } from '../../store/agent';
+import { SYSTEM_STATUSES } from '../../store/statuses';
 import { getAllModels } from '../../llm';
 import MessageItem from './MessageItem';
 import { useSessionList } from './useSessionList';
@@ -301,7 +301,6 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     if (!session) return;
 
     setStreaming(true);
-    setAgentStatus(selectedAgent.id, 'busy');
 
     const abortController = new AbortController();
     // 流归属 sessionId：切走不掐、后台续跑，emit 仅激活会话刷界面
@@ -521,7 +520,6 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     } finally {
       const stopped = streamRunners.runners.current.get(sid)?.userStopped ?? false;
       streamRunners.finalize(sid);
-      setAgentStatus(selectedAgent.id, 'idle');
       afterFinish(sid, stopped);
     }
   };
@@ -571,30 +569,6 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     requestAnimationFrame(() => scrollToBottom('smooth'));
     if (!fromQueue) setInput('');   // 出队续发不动当前正在输入的草稿
     setStreaming(true);
-    setAgentStatus(selectedAgent.id, 'busy');
-
-    // 占用锁拦截（重读磁盘状态，防止 React state 滞后于后端写入）。
-    // 放在上屏之后：它是防御性检查，晚一步无妨，但绝不能挡住消息显示。
-    const freshAgent = await getAgent(selectedAgent.id);
-    if (freshAgent && LOCKED_STATUSES.includes(freshAgent.status as LockedStatus)) {
-      const label = LOCKED_STATUS_LABELS[freshAgent.status as LockedStatus];
-      const ok = await confirm({
-        title: `此 Agent 正被「${label}」占用`,
-        message: '确定将直接释放占用并开始对话。',
-        confirmText: '释放并开始',
-        danger: true,
-      });
-      if (ok) {
-        await forceUnlock(selectedAgent.id);
-      } else {
-        // 用户取消：回退已上屏的消息和状态
-        setMessages(messagesRef.current.filter(m => m.id !== userMsg.id));
-        setStreaming(false);
-        setAgentStatus(selectedAgent.id, 'idle');
-        sendingRef.current = false;
-        return;
-      }
-    }
 
     // 会话准备 + 保存（后台进行，不阻塞已上屏的 UI）
     let sid = activeSessionId;
@@ -606,7 +580,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     }
 
     const session = await getSession(sid);
-    if (!session) { sendingRef.current = false; setStreaming(false); setAgentStatus(selectedAgent.id, 'idle'); return; }
+    if (!session) { sendingRef.current = false; setStreaming(false); return; }
 
     const title = session.titleManual ? session.title : autoTitle(updatedMessages);
     await saveSession({ ...session, messages: updatedMessages, title });
@@ -626,8 +600,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     abortRef.current = () => abortController.abort();
     sendingRef.current = false; // 流已托管给 runner，发送锁可释放（防同会话重发由 runner 存在性兜底）
 
-    // 复用上面占用锁检查时已读的 freshAgent，砍掉这里冗余的第二次 getAgent
-    const agent = freshAgent;
+    const agent = selectedAgent;
 
     // compact-marker 过滤：只发 marker 摘要 + marker 之后的消息给后端
     const lastMarkerIdx = updatedMessages.findLastIndex((m: any) => m.type === 'compact-marker');
@@ -683,7 +656,6 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       onFinish: () => {
         const stopped = streamRunners.runners.current.get(sid2)?.userStopped ?? false;
         streamRunners.finalize(sid2);
-        setAgentStatus(selectedAgent.id, 'idle');
         afterFinish(sid2, stopped);
       },
     });

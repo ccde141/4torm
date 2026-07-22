@@ -16,23 +16,30 @@ import { resolveNativeMode } from '../shared/llm-bridge';
 import { loadAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execToolUnified } from '../shared/exec-tool';
-import { withAgentTurn } from '../shared/agent-queue';
 import { runReActLoop, runReActLoopNative, type ToolCaller } from './react-loop';
 import { buildSeatRoomSystemPrompt } from './seat-prompt';
 import { execBulletin, readBulletinSync } from './bulletin';
 import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { makeLLM, wsRelPath } from './seat-runner';
 import { execContact } from './contact';
-import { listOtherSeats } from './contact-registry';
+import { listOtherSeats, listWorkshopSeats } from './contact-registry';
 import { loadSeat, saveSeat } from './seat-store';
 import { saveRoom } from './room-store';
 import type { RoomData, SeatData } from './types';
 import { toRoomProgressEvent } from './loop-event-forwarder';
 import type { ToolPreparationProgress } from '../shared/tool-progress';
+import type { CycloneDispatch } from './dispatch-store.js';
+import { kickDispatchQueue } from './dispatch-queue.js';
+import { createDispatchStartBuffer, type DispatchStartBuffer } from './dispatch-start-buffer.js';
+import { runFreshSeatTurn } from './room-seat-turn.js';
+import { expireDispatchDecisions } from './dispatch-store.js';
+import { genId } from './paths.js';
+import { createRoomDispatchRecord } from './room-dispatch.js';
 
 /** 群聊执行事件 */
 export type RoomEvent =
-  | { type: 'seat-start'; speaker: string }
+  | { type: 'seat-start'; speaker: string; turnId: string }
+  | { type: 'seat-waiting'; speaker: string }
   | { type: 'token'; speaker: string; content: string }
   | { type: 'reasoning'; speaker: string; content: string }
   | ({ type: 'tool-progress'; speaker: string } & ToolPreparationProgress)
@@ -40,6 +47,7 @@ export type RoomEvent =
   | { type: 'tool-call'; speaker: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; speaker: string; tool: string; result: string; ok: boolean }
   | { type: 'seat-done'; speaker: string; content: string }
+  | { type: 'dispatch-created'; dispatch: CycloneDispatch }
   | { type: 'error'; message: string };
 
 /** 把公共消息格式化成给工位看的上下文文本 */
@@ -55,8 +63,11 @@ function makeRoomToolCaller(opts: {
   dataDir: string; workshopId: string; seatId: string; seatTitle: string;
   agentId: string; sandboxLevel: string; wsDir: string;
   speaker: string; signal: AbortSignal | undefined; onEvent: (ev: RoomEvent) => void;
+  roomId: string; turnId: string; roundSeq: number; contextVersion: number;
+  dispatchStarts: DispatchStartBuffer;
 }): ToolCaller {
-  const { dataDir, workshopId, seatId, seatTitle, agentId, sandboxLevel, wsDir, speaker, signal, onEvent } = opts;
+  const { dataDir, workshopId, seatId, seatTitle, agentId, sandboxLevel, wsDir, speaker, signal, onEvent, roomId, turnId, roundSeq, contextVersion, dispatchStarts } = opts;
+  let dispatchOrder = 0;
   return {
     async call(tool, args) {
       // bulletin 假工具：群聊里也可改工作室公告板（落款为发言工位 title）
@@ -76,6 +87,23 @@ function makeRoomToolCaller(opts: {
         onEvent({ type: 'tool-result', speaker, tool, result, ok });
         return result;
       }
+      if (tool === 'dispatch') {
+        const target = (args.target || '').trim();
+        const task = (args.task || '').trim();
+        if (!target || !task) return '异步派发失败：缺少目标工位或任务内容';
+        try {
+          const dispatch = await createRoomDispatchRecord(dataDir, {
+            workshopId, roomId, sourceSeatId: seatId, sourceSeatTitle: seatTitle,
+            sourceTurnId: turnId, sourceRoundSeq: roundSeq, contextVersion,
+            dispatchOrder: dispatchOrder++, targetSeatTitle: target, task,
+          });
+          onEvent({ type: 'dispatch-created', dispatch });
+          dispatchStarts.enqueue(dispatch.targetSeatId);
+          return `异步任务已送达「${target}」，任务 ID：${dispatch.id}。无需等待，请继续当前讨论。`;
+        } catch (error) {
+          return `异步派发失败：${(error as Error).message}`;
+        }
+      }
       onEvent({ type: 'tool-call', speaker, tool, args });
       try {
         const result = await execToolUnified({ tool, args, agentId, workspaceDir: wsDir, sandboxLevel, signal });
@@ -94,13 +122,14 @@ function makeRoomToolCaller(opts: {
 async function runSeatInRoom(
   dataDir: string, workshopId: string, room: RoomData, seat: SeatData,
   signal: AbortSignal | undefined, onEvent: (ev: RoomEvent) => void,
+  turnId: string, roundSeq: number, dispatchStarts: DispatchStartBuffer,
 ): Promise<{ content: string; rawContent: string; reasoning?: string; toolCalls: Array<{ tool: string; args: Record<string, string>; result: string }> } | null> {
   const agent = await loadAgent(dataDir, seat.agentId);
   if (!agent) {
     onEvent({ type: 'error', message: `工位「${seat.title}」绑定的 agent 已删除，跳过` });
     return null;
   }
-  const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills);
+  const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode);
   // plan 模式：只放行只读工具（dangerous !== true），砍掉写工具（write/edit/delete/run_command）。
   // contact 是虚拟工具，单独热注入，不受此过滤影响。
   const planMode = room.mode === 'plan';
@@ -109,20 +138,30 @@ async function runSeatInRoom(
   const wsDir = wsRelPath(dataDir, workshopId);
   const llm = makeLLM(dataDir, agent.model, agent.temperature);
   const contactTargets = await listOtherSeats(dataDir, workshopId, seat.id);
+  const dispatchTargets = await listWorkshopSeats(dataDir, workshopId);
+  const virtualToolDefs = buildSeatVirtualToolDefs({
+    allowAsk: false, allowDelegate: false, allowDispatch: true, contactTargets, dispatchTargets,
+  });
   const toolCaller = makeRoomToolCaller({
     dataDir, workshopId, seatId: seat.id, seatTitle: seat.title,
     agentId: agent.id, sandboxLevel: agent.sandboxLevel, wsDir,
-    speaker: seat.title, signal, onEvent,
+    speaker: seat.title, signal, onEvent, roomId: room.id, turnId, roundSeq,
+    contextVersion: room.dispatchContextVersion ?? 0, dispatchStarts,
   });
 
   const system: ContextMessage = {
     role: 'system',
-    content: buildSeatRoomSystemPrompt({ dataDir, workshopId, seat, agent, toolDefs: effectiveToolDefs, native, wsRelPath: wsDir, topic: room.topic, bulletinSeenAt: seat.bulletinSeenAt }),
+    content: buildSeatRoomSystemPrompt({
+      dataDir, workshopId, seat, agent,
+      toolDefs: native ? effectiveToolDefs : [...effectiveToolDefs, ...virtualToolDefs],
+      native, wsRelPath: wsDir, topic: room.topic, dispatchTargets,
+      bulletinSeenAt: seat.bulletinSeenAt,
+    }),
   };
   const history: ContextMessage = { role: 'user', content: formatPublicContext(room) };
   const messages: ContextMessage[] = [system, history];
   // 群聊讨论场：剥 ask/delegate，保留 contact（热注入名单）
-  const nativeToolDefs = [...effectiveToolDefs, ...buildSeatVirtualToolDefs({ allowAsk: false, allowDelegate: false, contactTargets })];
+  const nativeToolDefs = [...effectiveToolDefs, ...virtualToolDefs];
   // toolCaller 恒提供：task_board / bulletin 是恒在的虚拟工具，即使没有真实工具/联络对象也要能调用
   // 累积本轮思考流：既实时推给前端，也攒下来随发言落盘（重载可恢复）
   let reasoningAcc = '';
@@ -150,7 +189,12 @@ async function runSeatInRoom(
   const seenAt = readBulletinSync(dataDir, workshopId).updatedAt;
   if (seat.bulletinSeenAt !== seenAt) { seat.bulletinSeenAt = seenAt; await saveSeat(dataDir, workshopId, seat); }
 
-  return { content: result.content, rawContent: result.rawContent, reasoning: reasoningAcc || undefined, toolCalls: result.toolCalls };
+  return {
+    content: result.content,
+    rawContent: result.rawContent,
+    reasoning: reasoningAcc || undefined,
+    toolCalls: result.toolCalls.filter(call => call.tool !== 'dispatch'),
+  };
 }
 
 /**
@@ -161,33 +205,54 @@ export async function speakInRoom(
   dataDir: string, workshopId: string, room: RoomData,
   humanMessage: string, onEvent: (ev: RoomEvent) => void, signal?: AbortSignal,
 ): Promise<void> {
-  room.publicMessages.push({ speaker: '人类', content: humanMessage, timestamp: Date.now() });
+  const roundSeq = (room.completedRoundSeq ?? 0) + 1;
+  const dispatchStarts = createDispatchStartBuffer(seatId => (
+    kickDispatchQueue(dataDir, workshopId, seatId)
+  ));
+  room.publicMessages.push({
+    id: genId('msg'), speaker: '人类', content: humanMessage, timestamp: Date.now(), roundSeq,
+  });
 
-  for (const seatId of room.participantSeatIds) {
-    if (signal?.aborted) break;
-    const seat = await loadSeat(dataDir, workshopId, seatId);
-    if (!seat) {
-      onEvent({ type: 'error', message: `工位 ${seatId} 不存在，跳过` });
-      continue;
-    }
-    onEvent({ type: 'seat-start', speaker: seat.title });
-    // 按-Agent 串行：该工位绑定的 agent 若正被其他工位/会话占用，排队等其空出（静默）
-    const r = await withAgentTurn(seat.agentId, () => runSeatInRoom(dataDir, workshopId, room, seat, signal, onEvent));
-    if (!r) continue;
-    const content = r.content;
-    if (content && !content.startsWith('[中止]') && !content.startsWith('[错误]')) {
-      room.publicMessages.push({
-        speaker: seat.title,
-        content,
-        timestamp: Date.now(),
-        rawContent: r.rawContent || undefined,
-        reasoning: r.reasoning,
-        toolCalls: r.toolCalls.length > 0 ? r.toolCalls : undefined,
+  try {
+    for (const seatId of room.participantSeatIds) {
+      if (signal?.aborted) break;
+      const queuedSeat = await loadSeat(dataDir, workshopId, seatId);
+      if (!queuedSeat) {
+        onEvent({ type: 'error', message: `工位 ${seatId} 不存在，跳过` });
+        continue;
+      }
+      const turnId = genId('turn');
+      onEvent({ type: 'seat-start', speaker: queuedSeat.title, turnId });
+      let currentSeat = queuedSeat;
+      const r = await runFreshSeatTurn(queuedSeat, {
+        load: () => loadSeat(dataDir, workshopId, seatId),
+        run: freshSeat => {
+          currentSeat = freshSeat;
+          return runSeatInRoom(
+            dataDir, workshopId, room, freshSeat, signal, onEvent, turnId, roundSeq, dispatchStarts,
+          );
+        },
       });
-      onEvent({ type: 'seat-done', speaker: seat.title, content });
+      if (!r) continue;
+      const content = r.content;
+      if (content && !content.startsWith('[中止]') && !content.startsWith('[错误]')) {
+        room.publicMessages.push({
+          id: genId('msg'), turnId, roundSeq,
+          speaker: currentSeat.title, content, timestamp: Date.now(),
+          rawContent: r.rawContent || undefined, reasoning: r.reasoning,
+          toolCalls: r.toolCalls.length > 0 ? r.toolCalls : undefined,
+        });
+        onEvent({ type: 'seat-done', speaker: currentSeat.title, content });
+      }
+      if (signal?.aborted) break;
     }
-    if (signal?.aborted) break;
-  }
 
-  await saveRoom(dataDir, workshopId, room);
+    if (!signal?.aborted) {
+      room.completedRoundSeq = roundSeq;
+      await expireDispatchDecisions(dataDir, workshopId, room.id, roundSeq);
+    }
+    await saveRoom(dataDir, workshopId, room);
+  } finally {
+    dispatchStarts.flush();
+  }
 }

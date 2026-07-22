@@ -31,6 +31,7 @@ import { loadAgent } from '../engine/shared/agent-loader';
 import { callLLM } from '../engine/shared/llm-bridge';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
 import { deleteContextMessage, editContextMessage } from '../engine/cyclone/message-mutations';
+import { completeAwaitingDispatch, kickDispatchQueue } from '../engine/cyclone/dispatch-queue';
 
 /** 活跃轮次 AbortController：`${workshopId}/${seatId}` 或 `${workshopId}/room/${roomId}` → ctrl */
 const activeAborts = new Map<string, AbortController>();
@@ -239,6 +240,12 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     const body = (req.body as any) || {};
     const lockKey = `${workshopId}/${seatId}`;
 
+    if (action === 'revision') {
+      const seat = await loadSeat(dataDir, workshopId, seatId);
+      if (!seat) return reply.status(404).send({ error: '工位不存在' });
+      return reply.send({ updatedAt: seat.updatedAt });
+    }
+
     if (action === 'status') {
       const seat = await loadSeat(dataDir, workshopId, seatId);
       if (!seat) return reply.status(404).send({ error: '工位不存在' });
@@ -246,12 +253,21 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (action === 'update-role') {
-      const updated = await updateSeatRole(dataDir, workshopId, seatId, {
-        title: body.title, rolePrompt: body.rolePrompt,
-        duty: body.duty, overrideAgentRole: body.overrideAgentRole,
-      });
-      if (!updated) return reply.status(404).send({ error: '工位不存在' });
-      return reply.send(updated);
+      if (body.agentId !== undefined && !await loadAgent(dataDir, body.agentId)) {
+        return reply.status(400).send({ error: '绑定的 Agent 不存在或已删除' });
+      }
+      const release = tryAcquireSeatLock(workshopId, seatId);
+      if (!release) return reply.status(409).send({ error: '该工位正在执行中，请在任务结束后更换 Agent' });
+      try {
+        const updated = await updateSeatRole(dataDir, workshopId, seatId, {
+          agentId: body.agentId, title: body.title, rolePrompt: body.rolePrompt,
+          duty: body.duty, overrideAgentRole: body.overrideAgentRole,
+        });
+        if (!updated) return reply.status(404).send({ error: '工位不存在' });
+        return reply.send(updated);
+      } finally {
+        release();
+      }
     }
 
     if (action === 'edit-message' || action === 'delete-message') {
@@ -321,12 +337,17 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
         if (action === 'chat') {
           await chatSeat(dataDir, workshopId, seatId, text, onEvent, abort.signal);
         } else {
-          await resumeSeat(dataDir, workshopId, seatId, text, onEvent, abort.signal);
+          const result = await resumeSeat(dataDir, workshopId, seatId, text, onEvent, abort.signal);
+          const resumedSeat = await loadSeat(dataDir, workshopId, seatId);
+          if (!resumedSeat?.pending) {
+            await completeAwaitingDispatch(dataDir, workshopId, seatId, result.content);
+          }
         }
       } catch (e) {
         pushSSE(reply, { type: 'error', message: (e as Error).message });
       } finally {
         activeAborts.delete(lockKey);
+        kickDispatchQueue(dataDir, workshopId, seatId);
         stopHB();
         endSSE(reply);
       }

@@ -1,166 +1,158 @@
-/**
- * MCP 管理路由
- *
- * 端点：
- *   GET  /api/mcp/list      — 列出所有 MCP server 配置 + 连接状态
- *   POST /api/mcp/add       — 添加新 MCP server
- *   POST /api/mcp/update    — 编辑现有 server 的 command/args/env
- *   POST /api/mcp/remove    — 移除 MCP server
- *   POST /api/mcp/toggle    — 启用/禁用
- *   POST /api/mcp/reconnect — 重新连接指定 server
- */
-
-import type { FastifyInstance } from 'fastify';
-import fs from 'node:fs/promises';
-import path from 'node:path';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { getAppContext } from '../services/app-context.js';
-import { atomicWriteFile } from '../engine/shared/atomic-io';
-import type { McpServerConfig } from '../engine/shared/mcp-client';
-import { getMcpStatus, getMcpToolDefs, reconnectServer, disconnectServer } from '../engine/shared/mcp-manager';
-import { mcpServersFile } from '../services/data-paths.js';
+import { normalizeMcpConfig } from '../engine/shared/mcp-config.js';
+import { readMcpConfigs, writeMcpConfigs } from '../engine/shared/mcp-config-store.js';
+import type { McpServerConfig } from '../engine/shared/mcp-types.js';
+import {
+  disconnectServer,
+  getMcpStatus,
+  getMcpToolDefs,
+  reconnectServer,
+} from '../engine/shared/mcp-manager.js';
+
+function badConfig(reply: FastifyReply, error: unknown): null {
+  reply.status(400).send({ error: (error as Error).message });
+  return null;
+}
+
+function parseConfig(value: unknown, reply: FastifyReply): McpServerConfig | null {
+  try { return normalizeMcpConfig(value); }
+  catch (error) { return badConfig(reply, error); }
+}
+
+function objectBody(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+async function reconnectEnabled(dataDir: string, config: McpServerConfig, reply: FastifyReply): Promise<boolean> {
+  if (!config.enabled) return true;
+  try { await reconnectServer(dataDir, config.name); return true; }
+  catch (error) {
+    reply.status(502).send({ error: `MCP 连接失败：${(error as Error).message}` });
+    return false;
+  }
+}
 
 export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   const { dataDir } = getAppContext(app);
-  const configPath = mcpServersFile(dataDir);
 
-  async function readConfigs(): Promise<McpServerConfig[]> {
-    try {
-      const raw = await fs.readFile(configPath, 'utf-8');
-      return JSON.parse(raw);
-    } catch {
-      return [];
-    }
-  }
-
-  async function writeConfigs(configs: McpServerConfig[]): Promise<void> {
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await atomicWriteFile(configPath, JSON.stringify(configs, null, 2));
-  }
-
-  // GET /api/mcp/list
   app.get('/list', async (_req, reply) => {
-    const configs = await readConfigs();
-    const statuses = getMcpStatus();
-    const statusMap = new Map(statuses.map(s => [s.name, s]));
-    const list = configs.map(cfg => ({
-      ...cfg,
-      connected: statusMap.get(cfg.name)?.connected ?? false,
-      toolCount: statusMap.get(cfg.name)?.toolCount ?? 0,
-    }));
-    return reply.send(list);
+    const configs = await readMcpConfigs(dataDir);
+    const statusMap = new Map(getMcpStatus().map(status => [status.name, status]));
+    return reply.send(configs.map(config => ({
+      ...config,
+      connected: statusMap.get(config.name)?.connected ?? false,
+      toolCount: statusMap.get(config.name)?.toolCount ?? 0,
+    })));
   });
 
-  // POST /api/mcp/add
   app.post('/add', async (req, reply) => {
-    const body = req.body as Partial<McpServerConfig>;
-    if (!body.name || !body.command) {
-      return reply.status(400).send({ error: '缺少 name 或 command' });
+    const config = parseConfig(req.body, reply);
+    if (!config) return;
+    const configs = await readMcpConfigs(dataDir);
+    if (configs.some(item => item.name === config.name)) {
+      return reply.status(409).send({ error: `名称已存在：${config.name}` });
     }
-    const configs = await readConfigs();
-    if (configs.some(c => c.name === body.name)) {
-      return reply.status(409).send({ error: `名称已存在：${body.name}` });
-    }
-    const newCfg: McpServerConfig = {
-      name: body.name,
-      enabled: body.enabled ?? true,
-      transport: 'stdio',
-      command: body.command,
-      args: body.args || [],
-      env: body.env || {},
-      ...(body.autoWorkspaces ? { autoWorkspaces: true } : {}),
-    };
-    configs.push(newCfg);
-    await writeConfigs(configs);
-    // 如果 enabled 则只连接这一个（不影响其他 server）
-    if (newCfg.enabled) {
-      await reconnectServer(dataDir, newCfg.name);
-    }
-    return reply.send({ ok: true, config: newCfg });
+    await writeMcpConfigs(dataDir, [...configs, config]);
+    if (!await reconnectEnabled(dataDir, config, reply)) return;
+    return reply.send({ ok: true, config });
   });
 
-  // POST /api/mcp/update — 编辑现有 server 的 command/args/env（name 为定位键，不可改）
   app.post('/update', async (req, reply) => {
-    const body = req.body as Partial<McpServerConfig> & { name: string };
-    if (!body.name || !body.command) {
-      return reply.status(400).send({ error: '缺少 name 或 command' });
-    }
-    const configs = await readConfigs();
-    const target = configs.find(c => c.name === body.name);
-    if (!target) return reply.status(404).send({ error: `未找到：${body.name}` });
-    target.command = body.command;
-    target.args = body.args || [];
-    target.env = body.env || {};
-    if (body.autoWorkspaces) target.autoWorkspaces = true;
-    else delete target.autoWorkspaces;
-    await writeConfigs(configs);
-    // 改了启动参数 → 若启用则重连使新配置生效
-    if (target.enabled) await reconnectServer(dataDir, target.name);
-    return reply.send({ ok: true, config: target });
+    const body = objectBody(req.body);
+    const name = typeof body.name === 'string' ? body.name : '';
+    const configs = await readMcpConfigs(dataDir);
+    const index = configs.findIndex(item => item.name === name);
+    if (index < 0) return reply.status(404).send({ error: `未找到：${name}` });
+    const config = parseConfig({ ...configs[index], ...body, name, enabled: configs[index].enabled }, reply);
+    if (!config) return;
+    configs[index] = config;
+    await writeMcpConfigs(dataDir, configs);
+    if (!await reconnectEnabled(dataDir, config, reply)) return;
+    return reply.send({ ok: true, config });
   });
 
-  // POST /api/mcp/remove
-  app.post('/remove', async (req, reply) => {
-    const { name } = req.body as { name: string };
-    if (!name) return reply.status(400).send({ error: '缺少 name' });
-    const configs = await readConfigs();
-    const filtered = configs.filter(c => c.name !== name);
-    if (filtered.length === configs.length) {
-      return reply.status(404).send({ error: '未找到' });
+  app.post('/import', async (req, reply) => {
+    const body = objectBody(req.body);
+    if (!Array.isArray(body.configs) || body.configs.length === 0) {
+      return reply.status(400).send({ error: 'configs 必须是非空数组' });
     }
-    await writeConfigs(filtered);
-    disconnectServer(name); // 只断这一个
+    let imported: McpServerConfig[];
+    try { imported = body.configs.map(normalizeMcpConfig); }
+    catch (error) { return reply.status(400).send({ error: (error as Error).message }); }
+    const configs = await readMcpConfigs(dataDir);
+    const names = new Set(configs.map(config => config.name));
+    for (const config of imported) {
+      if (names.has(config.name)) return reply.status(409).send({ error: `名称已存在：${config.name}` });
+      names.add(config.name);
+    }
+    await writeMcpConfigs(dataDir, [...configs, ...imported]);
+    const failures: string[] = [];
+    for (const config of imported) {
+      if (!config.enabled) continue;
+      try { await reconnectServer(dataDir, config.name); }
+      catch (error) { failures.push(`${config.name}: ${(error as Error).message}`); }
+    }
+    if (failures.length) return reply.status(502).send({ error: failures.join('\n'), imported: imported.length });
+    return reply.send({ ok: true, imported: imported.length });
+  });
+
+  app.post('/remove', async (req, reply) => {
+    const { name } = objectBody(req.body);
+    if (typeof name !== 'string' || !name) return reply.status(400).send({ error: '缺少 name' });
+    const configs = await readMcpConfigs(dataDir);
+    const filtered = configs.filter(item => item.name !== name);
+    if (filtered.length === configs.length) return reply.status(404).send({ error: '未找到' });
+    await writeMcpConfigs(dataDir, filtered);
+    disconnectServer(name);
     return reply.send({ ok: true });
   });
 
-  // POST /api/mcp/toggle
   app.post('/toggle', async (req, reply) => {
-    const { name, enabled } = req.body as { name: string; enabled: boolean };
-    if (!name || typeof enabled !== 'boolean') {
-      return reply.status(400).send({ error: '缺少 name 或 enabled' });
-    }
-    const configs = await readConfigs();
-    const target = configs.find(c => c.name === name);
-    if (!target) return reply.status(404).send({ error: '未找到' });
-    target.enabled = enabled;
-    await writeConfigs(configs);
-    // 只动这一个：启用→连接，停用→断开
-    if (enabled) await reconnectServer(dataDir, name);
-    else disconnectServer(name);
+    const body = objectBody(req.body);
+    const name = typeof body.name === 'string' ? body.name : '';
+    const enabled = body.enabled;
+    if (!name || typeof enabled !== 'boolean') return reply.status(400).send({ error: '缺少 name 或 enabled' });
+    const configs = await readMcpConfigs(dataDir);
+    const config = configs.find(item => item.name === name);
+    if (!config) return reply.status(404).send({ error: '未找到' });
+    config.enabled = enabled;
+    await writeMcpConfigs(dataDir, configs);
+    if (enabled && !await reconnectEnabled(dataDir, config, reply)) return;
+    if (!enabled) disconnectServer(name);
     return reply.send({ ok: true, enabled });
   });
 
-  // POST /api/mcp/reconnect — 传 name 只重连该 server；不传则逐个重连所有 enabled（非全量核爆）
   app.post('/reconnect', async (req, reply) => {
-    const { name } = (req.body || {}) as { name?: string };
-    if (name) {
-      await reconnectServer(dataDir, name);
-    } else {
-      const configs = await readConfigs();
-      for (const cfg of configs) {
-        if (cfg.enabled && cfg.transport === 'stdio') await reconnectServer(dataDir, cfg.name);
-      }
+    const { name } = objectBody(req.body);
+    if (typeof name === 'string' && name) {
+      try { await reconnectServer(dataDir, name); }
+      catch (error) { return reply.status(502).send({ error: (error as Error).message }); }
+      return reply.send({ ok: true });
     }
+    const failures: string[] = [];
+    for (const config of await readMcpConfigs(dataDir)) {
+      if (!config.enabled) continue;
+      try { await reconnectServer(dataDir, config.name); }
+      catch (error) { failures.push(`${config.name}: ${(error as Error).message}`); }
+    }
+    if (failures.length) return reply.status(502).send({ error: failures.join('\n') });
     return reply.send({ ok: true });
   });
 
-  // GET /api/mcp/tools — 返回所有 MCP 工具（按 server 分组）
   app.get('/tools', async (_req, reply) => {
-    const statuses = getMcpStatus();
-    const allTools = getMcpToolDefs();
-    // 按 server 分组
     const groups: Record<string, Array<{ name: string; fullName: string; description: string }>> = {};
-    for (const tool of allTools) {
-      // fullName: mcp:serverName:toolName
+    for (const tool of getMcpToolDefs()) {
       const parts = tool.name.split(':');
       const serverName = parts[1] || 'unknown';
-      const toolName = parts.slice(2).join(':');
       if (!groups[serverName]) groups[serverName] = [];
       groups[serverName].push({
-        name: toolName,
-        fullName: tool.name,
+        name: parts.slice(2).join(':'), fullName: tool.name,
         description: tool.description.replace(/^\[MCP:[^\]]*\]\s*/, ''),
       });
     }
-    return reply.send({ groups, servers: statuses });
+    return reply.send({ groups, servers: getMcpStatus() });
   });
 }

@@ -5,7 +5,7 @@
  * 只 import shared/。
  *
  * 各场景的虚拟工具组合（经验源自信风成熟设计）：
- * - 私聊：ask + delegate + contact（执行工位，有人类可问、可派子、可联络同事）
+ * - 私聊：ask + delegate + contact + dispatch（可同步联络，也可异步交办固定工位）
  * - 群聊：contact（讨论场，剥 ask/delegate 不阻塞串行循环，但保留联络）
  * - 被联络方一轮：delegate + contact（无人类在场，剥 ask，可继续嵌套联络）
  *
@@ -14,6 +14,7 @@
  */
 
 import type { ToolDef } from '../shared/tool-defs-loader';
+import { buildRegisterToolDef } from '../shared/tool-registration.js';
 import type { ContactTarget } from './contact-registry';
 
 export interface SeatVirtualToolOpts {
@@ -21,15 +22,28 @@ export interface SeatVirtualToolOpts {
   allowAsk?: boolean;
   /** 是否注入 delegate（拆子任务给 SubAgent）。群聊=false */
   allowDelegate?: boolean;
+  /** 是否注入 dispatch（把复杂工作异步派给固定工位） */
+  allowDispatch?: boolean;
+  /** 是否允许在有人类在场的工位私聊中确认并注册全局工具 */
+  allowToolRegistration?: boolean;
   /** 可联络的其他工位（去自身，带职责名片）。非空才注入 contact */
   contactTargets?: ContactTarget[];
+  /** 可异步派发的固定工位；群聊可包含自身。缺省沿用 contactTargets。 */
+  dispatchTargets?: ContactTarget[];
 }
 
 /**
  * 构建气旋工位原生模式的虚拟工具定义。
  */
 export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDef[] {
-  const { allowAsk = true, allowDelegate = true, contactTargets = [] } = opts;
+  const {
+    allowAsk = true,
+    allowDelegate = true,
+    allowDispatch = false,
+    allowToolRegistration = false,
+    contactTargets = [],
+  } = opts;
+  const dispatchTargets = opts.dispatchTargets ?? contactTargets;
   const defs: ToolDef[] = [
     {
       name: 'task_board',
@@ -103,6 +117,25 @@ export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDe
           message: { type: 'string', description: '你要传达的内容（问题、请求、交办事项等）' },
         },
         required: ['target', 'message'],
+      },
+    });
+  }
+
+  if (allowToolRegistration) defs.push(buildRegisterToolDef());
+
+  if (allowDispatch && dispatchTargets.length > 0) {
+    const nameList = dispatchTargets.map(target => target.title).join('、');
+    const roster = dispatchTargets.map(target => `  - ${target.title}：${target.duty}`).join('\n');
+    defs.push({
+      name: 'dispatch',
+      description: `把明确、可独立完成的工作异步派发给本工作室的固定工位。不必等待结果；在群聊中会于本轮结束后启动，在工位私聊中会立即进入后台队列。群聊副本可以派发给自己的固定工位，让讨论结论进入长期执行上下文。\n可选目标（工位：职责）：\n${roster}`,
+      parameters: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: `目标工位名称（可选值：${nameList}）` },
+          task: { type: 'string', description: '要交办的完整任务，包含目标、必要背景和交付要求' },
+        },
+        required: ['target', 'task'],
       },
     });
   }

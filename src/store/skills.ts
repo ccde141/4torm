@@ -1,4 +1,4 @@
-import { readJson, readText, writeJson, writeText, deleteFile, ensureDir } from '../api/storage';
+import { readJson, readText } from '../api/storage';
 import type { SkillMeta } from '../types';
 
 let cache: SkillMeta[] | null = null;
@@ -24,13 +24,23 @@ export async function readSkillToolDefs(skillId: string): Promise<Array<{ name: 
 }
 
 export async function createSkill(skillId: string, meta: SkillMeta, skillMd: string): Promise<void> {
-  await ensureDir(`skills/${skillId}`);
-  await writeJson(`skills/${skillId}/config.json`, meta);
-  await writeText(`skills/${skillId}/SKILL.md`, skillMd);
+  const res = await fetch('/api/skills/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: skillId, meta, content: skillMd }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `创建技能失败: ${res.status}`);
+  }
   cache = null;
 }
 
 export async function deleteSkill(skillId: string): Promise<void> {
-  await deleteFile(`skills/${skillId}`);
+  const res = await fetch(`/api/skills/${encodeURIComponent(skillId)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `删除技能失败: ${res.status}`);
+  }
   cache = null;
 }

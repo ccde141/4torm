@@ -16,13 +16,31 @@ import { SessionRunner, type ConversationEvent, type SessionRunnerOpts } from '.
 import { loadAgent } from '../engine/shared/agent-loader';
 import { loadAgentToolDefs } from '../engine/shared/tool-defs-loader';
 import { buildConversationSystemPrompt } from '../engine/conversation/prompt-builder';
+import { tryAcquireSessionLease } from '../engine/conversation/session-lease.js';
 import { resolveNativeMode } from '../engine/shared/llm-bridge';
-import { withAgentTurn } from '../engine/shared/agent-queue';
+import { withAgentActivity } from '../engine/shared/agent-activity.js';
 import type { ContextMessage } from '../engine/shared/types';
 
 // ── 活跃 runner 注册表（内存级） ─────────────────────────────────
 
 const activeRunners = new Map<string, SessionRunner>();
+const activeRunnerLeases = new Map<string, { runner: SessionRunner; release: () => void }>();
+
+function clearActiveRunner(sessionId: string, runner: SessionRunner): void {
+  if (activeRunners.get(sessionId) === runner) activeRunners.delete(sessionId);
+  const lease = activeRunnerLeases.get(sessionId);
+  if (lease?.runner !== runner) return;
+  activeRunnerLeases.delete(sessionId);
+  lease.release();
+}
+
+function ensureRunnerLease(sessionId: string, runner: SessionRunner): boolean {
+  if (activeRunnerLeases.get(sessionId)?.runner === runner) return true;
+  const release = tryAcquireSessionLease(runner.getAgentId(), sessionId);
+  if (!release) return false;
+  activeRunnerLeases.set(sessionId, { runner, release });
+  return true;
+}
 
 function getOrCreateRunner(sessionId: string, opts: SessionRunnerOpts): SessionRunner {
   let runner = activeRunners.get(sessionId);
@@ -111,6 +129,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       model: effectiveModel,
       temperature: agent.temperature,
       toolNames: agent.tools || [],
+      toolMode: agent.toolMode,
       skillIds: agent.skills || [],
       workspace: agent.workspace,
       sandboxLevel: agent.sandboxLevel,
@@ -126,7 +145,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     // 构建 system prompt
     const projectDir = path.resolve(dataDir, '..');
     const workspaceAbs = path.resolve(projectDir, agent.workspace);
-    const toolDefs = await loadAgentToolDefs(dataDir, opts.toolNames, opts.skillIds);
+    const toolDefs = await loadAgentToolDefs(dataDir, opts.toolNames, opts.skillIds, opts.toolMode);
     const lastUserMsg = body.messages.filter(m => m.role === 'user').pop();
     const systemPrompt = await buildConversationSystemPrompt({
       rolePrompt: agent.rolePrompt || '',
@@ -156,6 +175,10 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       })),
     ];
 
+    if (!ensureRunnerLease(body.sessionId, runner)) {
+      return reply.status(409).send({ error: '会话正在执行中' });
+    }
+
     // SSE 流式响应
     reply.hijack();
     const raw = reply.raw;
@@ -166,23 +189,21 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       pushSSE(raw, { type: 'notice', message: '⚠️ 该模型配置为强制原生工具调用（native），但探测显示其可能不支持。如遇工具调用异常，请在「模型提供商设置」中改为 auto 或 text 模式。' });
     }
 
-    // 按 Agent 串行：同一 Agent 被多个会话/功能区同时驱动时，自动排队依次执行，
-    // 避免并发读写同一 workspace / 记忆库。排队等待时推送一次提示。
-    withAgentTurn(body.agentId!, () => runner.chat(systemPrompt, chatMessages, (ev) => {
-      try { pushSSE(raw, ev); } catch { runner.abort(); }
-    }), {
-      onWait: () => { try { pushSSE(raw, { type: 'notice', message: '该 Agent 正被其他会话占用，已排队，轮到即自动开始…' }); } catch {} },
-    }).then(() => {
+    withAgentActivity(body.agentId!, 'conversation', () => (
+      runner.chat(systemPrompt, chatMessages, (ev) => {
+        try { pushSSE(raw, ev); } catch { runner.abort(); }
+      })
+    )).then(() => {
       try { raw.end(); } catch {}
       // 非挂起（ask 等 reply）才清出注册表，否则 /reply 找不到 runner。
       // 不清会导致 activeRunners 内存泄漏（每个聊过的 session 永久驻留）。
-      if (!runner.isSuspended()) activeRunners.delete(body.sessionId!);
+      if (!runner.isSuspended()) clearActiveRunner(body.sessionId!, runner);
     }).catch((e) => {
       try {
         pushSSE(raw, { type: 'error', message: (e as Error).message });
         raw.end();
       } catch {}
-      activeRunners.delete(body.sessionId!); // 出错必清
+      clearActiveRunner(body.sessionId!, runner); // 出错必清
     });
   });
 
@@ -202,7 +223,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     runner.abort();
     // 挂起中（等 reply）的 runner abort 是空操作、chat 的 catch 不会触发清理，
     // 这里显式删除避免永久驻留；正在流式的 runner catch 也会删（幂等无害）。
-    activeRunners.delete(body.sessionId);
+    clearActiveRunner(body.sessionId, runner);
     return reply.send({ ok: true });
   });
 
@@ -221,27 +242,29 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     if (!runner.isSuspended()) {
       return reply.status(409).send({ error: '会话未处于挂起状态' });
     }
+    if (!ensureRunnerLease(body.sessionId, runner)) {
+      return reply.status(409).send({ error: '会话正在执行中' });
+    }
 
     // SSE 流式响应（resume 后 agent 继续执行）
     reply.hijack();
     const raw = reply.raw;
     initSSE(raw, req.headers.origin);
 
-    // 同 /chat：恢复执行也走按-Agent 串行队列
-    withAgentTurn(runner.getAgentId(), () => runner.resume(body.answer!, (ev) => {
-      try { pushSSE(raw, ev); } catch { runner.abort(); }
-    }), {
-      onWait: () => { try { pushSSE(raw, { type: 'notice', message: '该 Agent 正被其他会话占用，已排队，轮到即自动开始…' }); } catch {} },
-    }).then(() => {
+    withAgentActivity(runner.getAgentId(), 'conversation', () => (
+      runner.resume(body.answer!, (ev) => {
+        try { pushSSE(raw, ev); } catch { runner.abort(); }
+      })
+    )).then(() => {
       try { raw.end(); } catch {}
       // resume 后可能再次挂起（嵌套 ask）；非挂起才清出注册表
-      if (!runner.isSuspended()) activeRunners.delete(body.sessionId!);
+      if (!runner.isSuspended()) clearActiveRunner(body.sessionId!, runner);
     }).catch((e) => {
       try {
         pushSSE(raw, { type: 'error', message: (e as Error).message });
         raw.end();
       } catch {}
-      activeRunners.delete(body.sessionId!); // 出错必清
+      clearActiveRunner(body.sessionId!, runner); // 出错必清
     });
   });
 }

@@ -57,7 +57,7 @@ export function parseStructuredContent(content: string): ParsedContent {
   while ((m = actionRe.exec(outside)) !== null) {
     const tool = m[1].trim();
     const jsonStr = m[2].trim();
-    let args: Record<string, string> = {};
+    let args: Record<string, string>;
     try { args = JSON.parse(jsonStr); } catch { args = { _raw: jsonStr }; }
     result.actions.push({ tool, args });
   }

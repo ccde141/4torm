@@ -28,7 +28,6 @@ import { NoteNode } from './nodes/NoteNode';
 import { HumanGateNode } from './nodes/HumanGateNode';
 import { TradeWindEdge } from './edges/TradeWindEdge';
 import { ContextMenu, type ContextMenuState } from './ContextMenu';
-import { useConfirm } from '../../../components/common/ConfirmDialog';
 import type { WorkflowStoreState, WorkflowStoreActions } from '../hooks/useWorkflowStore';
 
 interface TradeWindCanvasProps {
@@ -48,10 +47,9 @@ const edgeTypes: EdgeTypes = {
   tradewind: TradeWindEdge,
 };
 
-const MENU_INIT: ContextMenuState = { visible: false, x: 0, y: 0, nodeId: null, flowPosition: null };
+const MENU_INIT: ContextMenuState = { visible: false, x: 0, y: 0, nodeId: null, edgeId: null, flowPosition: null };
 
 export function TradeWindCanvas({ store }: TradeWindCanvasProps) {
-  const confirm = useConfirm();
   const rfInstance = useRef<ReactFlowInstance | null>(null);
   const [menu, setMenu] = useState<ContextMenuState>(MENU_INIT);
 
@@ -81,7 +79,7 @@ export function TradeWindCanvas({ store }: TradeWindCanvasProps) {
     (event: React.MouseEvent, node: { id: string }) => {
       event.preventDefault();
       const pos = getMenuPos(event.clientX, event.clientY);
-      setMenu({ visible: true, x: pos.x, y: pos.y, nodeId: node.id, flowPosition: null });
+      setMenu({ visible: true, x: pos.x, y: pos.y, nodeId: node.id, edgeId: null, flowPosition: null });
     },
     [getMenuPos],
   );
@@ -95,7 +93,7 @@ export function TradeWindCanvas({ store }: TradeWindCanvasProps) {
       const clientY = (event as MouseEvent).clientY;
       const flowPos = rfInstance.current.screenToFlowPosition({ x: clientX, y: clientY });
       const pos = getMenuPos(clientX, clientY);
-      setMenu({ visible: true, x: pos.x, y: pos.y, nodeId: null, flowPosition: flowPos });
+      setMenu({ visible: true, x: pos.x, y: pos.y, nodeId: null, edgeId: null, flowPosition: flowPos });
     },
     [getMenuPos],
   );
@@ -117,15 +115,14 @@ export function TradeWindCanvas({ store }: TradeWindCanvasProps) {
     event.dataTransfer.dropEffect = 'move';
   }, []);
 
-  /** 右键边：直接删除（带确认对话框） */
+  /** 右键边：打开与节点一致的上下文菜单 */
   const onEdgeContextMenu = useCallback(
-    async (event: React.MouseEvent, edge: { id: string }) => {
+    (event: React.MouseEvent, edge: { id: string }) => {
       event.preventDefault();
-      if (await confirm({ title: '删除这条连线？', confirmText: '删除', danger: true })) {
-        store.deleteEdge(edge.id);
-      }
+      const pos = getMenuPos(event.clientX, event.clientY);
+      setMenu({ visible: true, x: pos.x, y: pos.y, nodeId: null, edgeId: edge.id, flowPosition: null });
     },
-    [store, confirm],
+    [getMenuPos],
   );
 
   return (
@@ -165,6 +162,7 @@ export function TradeWindCanvas({ store }: TradeWindCanvasProps) {
         menu={menu}
         onClose={() => setMenu(MENU_INIT)}
         onDelete={(id) => store.deleteNode(id)}
+        onDeleteEdge={(id) => store.deleteEdge(id)}
         onClone={(id) => store.cloneNode(id)}
         onEdit={(id) => store.selectNode(id)}
         onAddNode={(type, pos) => store.addNode(type, pos)}

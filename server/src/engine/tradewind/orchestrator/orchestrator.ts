@@ -25,7 +25,7 @@ import { ContextBuilder } from './context-builder';
 import { ArchiveManager } from './archive-manager';
 import { clearExecution as clearNodeContextStore } from '../foundation/node-context-store';
 import { clearExecution as clearNodeStatusStore } from '../foundation/node-status-store';
-import { lockAgent, unlockAgent } from '../../shared/agent-lock';
+import { beginAgentActivity, type AgentActivityHandle } from '../../shared/agent-activity.js';
 import { initContactRegistry, clearContactRegistry } from '../execution/contact-registry';
 
 export interface OrchestratorOptions {
@@ -77,7 +77,7 @@ export class Orchestrator {
   private archive!: ArchiveManager;
   private abortController = new AbortController();
   private running = false;
-  private agentIds = new Set<string>();
+  private agentActivities = new Map<string, AgentActivityHandle>();
 
   /** 本圈结束信号：Output → 'done'；出错 → 'error'；外部 stop 未出 output → 'stopped'。供 LoopController 等待。 */
   private settledResolve!: (outcome: LapOutcome) => void;
@@ -180,16 +180,13 @@ export class Orchestrator {
       await fs.writeFile(snapshotPath, JSON.stringify(this.graph, null, 2));
     } catch { /* 非关键，静默 */ }
 
-    // 5.5 锁定所有 Agent 节点
+    // 5.5 登记本次工作流涉及的 Agent，供控制台显示运行来源。
     for (const node of this.graph.nodes) {
       if (node.type !== 'agent') continue;
       const agentId = (node.config as { agentId?: string }).agentId;
       if (!agentId) continue;
-      try {
-        await lockAgent(this.dataDir, agentId, 'tradewind');
-        this.agentIds.add(agentId);
-      } catch (e) {
-        console.warn(`[orchestrator] 无法锁定 Agent ${agentId}: ${(e as Error).message}`);
+      if (!this.agentActivities.has(agentId)) {
+        this.agentActivities.set(agentId, beginAgentActivity(agentId, 'tradewind'));
       }
     }
 
@@ -269,11 +266,9 @@ export class Orchestrator {
     // 0. 清理 Contact Registry
     clearContactRegistry();
 
-    // 0.1 释放所有 Agent 锁
-    for (const agentId of this.agentIds) {
-      try { await unlockAgent(this.dataDir, agentId, 'tradewind'); } catch { /* 忽略 */ }
-    }
-    this.agentIds.clear();
+    // 0.1 清理控制台活动状态。
+    for (const activity of this.agentActivities.values()) activity.end();
+    this.agentActivities.clear();
 
     // 0.5 主动 flush 所有活跃 NodeRunner 的 messages（防止 abort 后来不及 persist）
     for (const [, runner] of activeNodeRunners) {

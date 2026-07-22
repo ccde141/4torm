@@ -8,6 +8,7 @@
   --vp-c-brand-2: #1f7ac4;
   --vp-c-brand-3: #176aae;
   --vp-c-brand-soft: rgba(44, 139, 214, 0.14);
+  --ascii-field-color: #0047bd;
 
   --vp-c-tip-1: var(--vp-c-brand-1);
   --vp-c-tip-2: var(--vp-c-brand-2);
@@ -20,6 +21,7 @@
   --vp-c-brand-2: #3fa3e6;
   --vp-c-brand-3: #2c8bd6;
   --vp-c-brand-soft: rgba(92, 182, 240, 0.16);
+  --ascii-field-color: #7bc4ff;
 }
 
 /* 首页 hero:风暴渐变文字 + 光晕 */
@@ -55,4 +57,44 @@
 .VPFeature:hover {
   border-color: var(--vp-c-brand-1);
   transform: translateY(-2px);
+}
+
+/* 全站 ASCII 呼吸场：低对比度、无交互、正文页弱于首页 */
+.ascii-breathing-field {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  width: 100vw;
+  height: 100vh;
+  opacity: 0.8;
+  pointer-events: none;
+  user-select: none;
+}
+
+.ascii-breathing-field.is-home {
+  opacity: 0.86;
+}
+
+.dark .ascii-breathing-field {
+  opacity: 0.84;
+}
+
+.dark .ascii-breathing-field.is-home {
+  opacity: 0.9;
+}
+
+.VPContent,
+.VPFooter {
+  position: relative;
+  z-index: 1;
+}
+
+@media (max-width: 640px) {
+  .ascii-breathing-field {
+    opacity: 0.58;
+  }
+
+  .ascii-breathing-field.is-home {
+    opacity: 0.64;
+  }
 }

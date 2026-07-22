@@ -69,6 +69,8 @@
   font-size: var(--text-xs);
   font-weight: var(--font-medium);
   color: var(--color-text-tertiary);
+  margin-top: var(--space-1);
+  min-width: 0;
 }
 
 .agent-card__status-dot {
@@ -83,6 +85,12 @@
 .agent-card__status-dot--busy    { background: var(--status-busy); box-shadow: 0 0 6px var(--status-busy); }
 .agent-card__status-dot--offline { background: var(--status-offline); }
 .agent-card__status-dot--error   { background: var(--status-error); box-shadow: 0 0 6px var(--status-error); }
+
+.agent-card__status-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .agent-card__description {
   font-size: var(--text-sm);

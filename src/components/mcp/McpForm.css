@@ -1,0 +1,100 @@
+.mcp-add-form {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+}
+
+.mcp-add-form__row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mcp-add-form__row + .mcp-add-form__row { margin-top: 8px; }
+
+.mcp-add-form__field {
+  display: flex;
+  flex: 1;
+  min-width: 180px;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.mcp-add-form__field--wide { flex: 2; }
+.mcp-add-form__field--block { margin-top: 12px; }
+
+.mcp-add-form__input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 120px;
+  padding: 7px 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  background: rgba(0,0,0,0.15);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.mcp-add-form__input--wide { flex: 2; }
+.mcp-add-form__input:disabled { opacity: 0.55; cursor: not-allowed; }
+.mcp-add-form__input::placeholder { color: var(--color-text-muted); }
+.mcp-add-form__input:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+
+.mcp-add-form__section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--glass-border);
+}
+
+.mcp-add-form__section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.mcp-add-form__section .mcp-btn { min-height: 28px; padding: 3px 10px; }
+
+.mcp-add-form__empty {
+  padding: 4px 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.mcp-add-form__toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.mcp-add-form__textarea {
+  min-height: 180px;
+  resize: vertical;
+  font-family: var(--font-mono, monospace);
+  line-height: 1.5;
+}
+
+.mcp-add-form__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.mcp-add-form__error {
+  margin-right: auto;
+  color: var(--color-error);
+  font-size: var(--text-xs);
+}

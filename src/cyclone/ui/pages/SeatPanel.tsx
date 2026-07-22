@@ -1,7 +1,7 @@
 /**
  * 气旋工位配置面板（创建 + 编辑共用）
  *
- * 字段：绑定 agent（仅创建可选）、工位名、角色提示词、覆盖开关、职责名片（可 AI 生成）。
+ * 字段：绑定 agent、工位名、角色提示词、覆盖开关、职责名片（可 AI 生成）。
  * 替代三连 prompt；编辑模式由 ⚙ 设置按钮打开。
  */
 
@@ -68,10 +68,10 @@ export default function SeatPanel({ mode, agents, workshopId, initial, onSubmit,
       <h2 id="cyclone-seat-editor-title" className="cyclone__seat-editor-title">{mode === 'create' ? '添加工位' : `编辑工位 · ${initial?.title || ''}`}</h2>
 
       <label style={labelStyle}>绑定 agent</label>
-      <select value={agentId} onChange={e => setAgentId(e.target.value)} disabled={mode === 'edit'} style={inputStyle}>
+      <select value={agentId} onChange={e => setAgentId(e.target.value)} style={inputStyle}>
         {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
       </select>
-      {mode === 'edit' && <div style={hintStyle}>绑定 agent 创建后不可更改。</div>}
+      {mode === 'edit' && <div style={hintStyle}>更换后从下一轮开始生效，工位配置与现有会话记录保持不变。</div>}
 
       <label style={labelStyle}>工位名称</label>
       <input value={title} onChange={e => setTitle(e.target.value)} placeholder="如：后端、架构评审、测试" style={inputStyle} />

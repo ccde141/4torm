@@ -244,7 +244,6 @@ export async function runConvectionReAct(params: RunReActParams): Promise<AgentR
     if (actions.length === 0) {
       const answer = extractAnswer(reply);
       if (answer !== null) {
-        nudgeCount = 0;
         return { cleanContent: answer, rawContent: reply, toolCalls: allToolCalls, usage: latestUsage };
       }
       // A: 无 action 无 answer → 强制再问（配额内）

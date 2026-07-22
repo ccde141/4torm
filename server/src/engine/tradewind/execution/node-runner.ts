@@ -14,6 +14,7 @@
  */
 
 import type { ContextMessage } from '../../shared/types';
+import type { SandboxLevel } from '../../shared/sandbox-prompt';
 import { atomicWriteFile } from '../../shared/atomic-io';
 import { callLLM } from '../../shared/llm-bridge';
 import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
@@ -80,7 +81,7 @@ export type NodeRunnerEvent = (
   | { type: 'compact-done'; archivedRounds: number; summaryLength: number }
   | { type: 'compact-warn'; message: string }
   | { type: 'error'; message: string }
-  | { type: 'done' }
+  | { type: 'done'; outcome?: 'completed' | 'stopped' | 'error' }
   | { type: 'paused' }
 ) & {
   /** 进程级单调序号（emit 时注入），前端按此对账去重 */
@@ -110,10 +111,11 @@ export interface NodeRunnerOpts {
   /** LLM 采样温度（来自 agent 配置） */
   temperature: number;
   toolNames: string[];
+  toolMode?: 'all' | 'selected';
   skillIds: string[];
   workspace: string;
   /** 沙箱级别（用于 sub-agent 继承） */
-  sandboxLevel: 'strict' | 'relaxed' | 'unrestricted';
+  sandboxLevel: SandboxLevel;
   systemPrompt: string;
   signal: AbortSignal;
   /** 持久化路径（每轮对话后写入 messages.json） */
@@ -285,7 +287,7 @@ export class NodeRunner {
       this.messages.push({ role: 'assistant', content: result.rawContent });
 
       emit({ type: 'answer', content: result.content, rawContent: result.rawContent });
-      emit({ type: 'done' });
+      emit({ type: 'done', outcome: 'completed' });
       // 注意：不在此清空 roundLog。该轮已固化进 messages，
       // 但保留 roundLog 到下一轮 beginRound 才清——确保 done 后、下次 push 前
       // 新订阅者仍能从快照回放完整一轮（messages 提供历史，roundLog 提供本轮细节渲染）。
@@ -327,7 +329,7 @@ export class NodeRunner {
           : `[错误] ${(e as Error).message}`;
         msg.onComplete!(fallback);
       }
-      emit({ type: 'done' });
+      emit({ type: 'done', outcome: isAbort ? 'stopped' : 'error' });
     } finally {
       this.busy = false;
     }
@@ -378,7 +380,7 @@ export class NodeRunner {
    */
   private async runReAct(emit: (ev: NodeRunnerEvent) => void, source: MessageSource) {
     const { dataDir, model, temperature, signal } = this.opts;
-    const toolDefs = await loadAgentToolDefs(dataDir, this.opts.toolNames, this.opts.skillIds);
+    const toolDefs = await loadAgentToolDefs(dataDir, this.opts.toolNames, this.opts.skillIds, this.opts.toolMode);
 
     // 是否信封轮：决定挂不挂信封工具 + 终结门（见 isEnvelopeRound 的双平面分离说明）
     const envelopeRound = isEnvelopeRound(source, this.opts.native);

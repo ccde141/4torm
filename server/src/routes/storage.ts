@@ -8,6 +8,7 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { atomicWriteFile } from '../engine/shared/atomic-io.js';
 import { getAppContext } from '../services/app-context.js';
 import { resolveSafePath } from '../utils/path-guard.js';
 
@@ -73,16 +74,7 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
     // Fastify 自动解析 JSON body 为对象，需要 stringify 回 string
     const raw = req.body;
     const body = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
-    // 唯一临时名 + 原子 rename：并发写同一文件（如会话队列多次保存 _index.json）不能共用
-    // 同一个 .tmp，否则两次写交错后 rename 出「短内容盖长文件、尾部残留旧字节」的损坏 JSON。
-    const tmp = `${resolved}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-    try {
-      await fs.writeFile(tmp, body, 'utf-8');
-      await fs.rename(tmp, resolved);
-    } catch (e) {
-      await fs.rm(tmp, { force: true }).catch(() => {});
-      throw e;
-    }
+    await atomicWriteFile(resolved, body);
     return reply.send({ ok: true });
   });
 

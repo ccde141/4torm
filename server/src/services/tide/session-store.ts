@@ -13,6 +13,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { atomicWriteFile } from '../../engine/shared/atomic-io.js';
 import { agentSessionsDir, agentTideSessionsDir } from '../data-paths.js';
+import { updateSeasonSessionIndex } from './season-session-index.js';
 
 export interface TideMessage {
   id: string;
@@ -271,7 +272,7 @@ export async function writeSeasonSession(dataDir: string, session: TideSession):
   const dir = seasonDir(dataDir, session.agentId);
   await fs.mkdir(dir, { recursive: true });
   await atomicWriteFile(path.join(dir, `${session.id}.json`), JSON.stringify(session, null, 2));
-  await updateIndex(dir, session.id);
+  await updateSeasonSessionIndex(dir, session);
 }
 
 /** 删除潮汐活跃会话（不删 bak 归档） */

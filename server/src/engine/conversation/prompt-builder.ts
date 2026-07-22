@@ -199,7 +199,10 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   parts.push(buildWorkflowToolsSection());
 
   // 8.5 能力扩展（查看 / 创建工具、技能、MCP）— 与对流/气旋/信风共用 shared 单一来源
-  parts.push(buildSelfManagementSection());
+  parts.push(buildSelfManagementSection({
+    allowToolRegistration: Boolean(opts.sessionId),
+    native: opts.native,
+  }));
 
   // 9. 长期记忆（新机制：条目化 + 相关性召回，替代旧 MEMORY.md 全文注入）
   //    userMessage 作 taskHint：feedback 常驻档必带，情境档按相关性挑。召回失败静默降级。

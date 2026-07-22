@@ -18,6 +18,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { atomicWriteFile } from '../engine/shared/atomic-io';
 import type { FastifyInstance } from 'fastify';
 import { getAppContext } from '../services/app-context.js';
@@ -41,6 +42,7 @@ import { getMeetingsDir, getMeetingFileName } from '../engine/tradewind/foundati
 import { validateWorkflow } from '../engine/tradewind/foundation/workflow-validator';
 import { loadAgent } from '../engine/shared/agent-loader';
 import { agentRegistryFile, tradewindRunDir, tradewindWorkflowsDir } from '../services/data-paths.js';
+import { deleteTradewindWorkflowData } from '../services/tradewind-workflow-files.js';
 
 /** 获取会长的 model key（用于压缩摘要 LLM 调用） */
 async function getChairModel(dataDir: string, chairAgentId: string): Promise<string> {
@@ -293,6 +295,19 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /** GET /workflow/load/:id — 加载工作流 */
+  app.post('/workflow/:id/open-workspace', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const wfDir = path.join(workflowsDir, id);
+    try { await fs.access(path.join(wfDir, 'meta.json')); }
+    catch { return reply.status(404).send({ error: 'Workflow not found' }); }
+    const workspacePath = path.join(wfDir, 'workspace');
+    await fs.mkdir(workspacePath, { recursive: true });
+    if (process.platform === 'win32') spawn('explorer.exe', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
+    else if (process.platform === 'darwin') spawn('open', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
+    else spawn('xdg-open', [workspacePath], { detached: true, stdio: 'ignore' }).unref();
+    return reply.send({ ok: true, path: workspacePath });
+  });
+
   app.get('/workflow/load/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
     const wfDir = path.join(workflowsDir, id);
@@ -345,12 +360,15 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
   /** DELETE /workflow/:id — 删除工作流 */
   app.delete('/workflow/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const wfDir = path.join(workflowsDir, id);
+    if (isExecutionRunning() && activeOrchestrator?.getWorkflowId() === id) {
+      return reply.status(409).send({ error: '当前工作流正在运行，请先停止后再删除' });
+    }
     try {
-      await fs.rm(wfDir, { recursive: true });
+      const deleted = await deleteTradewindWorkflowData(dataDir, id);
+      if (!deleted) return reply.status(404).send({ error: 'Workflow not found' });
       return reply.send({ deleted: true });
-    } catch {
-      return reply.status(404).send({ error: 'Workflow not found' });
+    } catch (error) {
+      return reply.status(500).send({ error: (error as Error).message });
     }
   });
 

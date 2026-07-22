@@ -1,8 +1,8 @@
 /**
  * Agent 状态与标签系统
  *
- * status（系统互斥锁）：硬编码，不可由用户扩展。控制跨功能互斥。
- * label（用户分类标签）：持久化到 data/labels.json，纯展示，不影响锁。
+ * status：硬编码的三色运行状态，不参与调度。
+ * label：持久化到 data/labels.json 的用户分类标签。
  */
 
 import { readJson, writeJson } from '../api/storage';
@@ -23,24 +23,6 @@ export const SYSTEM_STATUSES: SystemStatusDef[] = [
 
 const SYS_MAP: Record<string, SystemStatusDef> = {};
 for (const s of SYSTEM_STATUSES) SYS_MAP[s.id] = s;
-
-/** 占用型状态：仅 busy 为真正互斥锁（LLM 流式输出期间） */
-export const LOCKED_STATUSES = ['busy'] as const;
-export type LockedStatus = (typeof LOCKED_STATUSES)[number];
-
-export const LOCKED_STATUS_LABELS: Record<LockedStatus, string> = {
-  busy: 'LLM 输出中',
-};
-
-/** Agent 是否可被锁定（busy=false 时可锁） */
-export function canLock(status: string): boolean {
-  return status !== 'busy';
-}
-
-/** 当前占用者是否为目标状态（释放时校验） */
-export function ownsLock(status: string, owner: LockedStatus): boolean {
-  return status === owner;
-}
 
 // ── 用户标签（持久化到 data/labels.json）───────────
 

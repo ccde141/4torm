@@ -272,7 +272,6 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
       // 无工具调用：用 extractAnswer 提取最终回复（含裸文本兜底）
       const answer = extractAnswer(reply);
       if (answer !== null) {
-        nudgeCount = 0;
         return { content: answer, rawContent: reply, toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage };
       }
       // A: 无 action 无 answer → 强制再问（配额内）

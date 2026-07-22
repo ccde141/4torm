@@ -24,8 +24,10 @@ import { drainScheduler, startScheduler, stopScheduler } from './services/tide/s
 import { applyDeveloperMode } from './config/developer-mode.js';
 import { shouldLogRequest } from './config/request-log-policy.js';
 import { drainAtomicWrites } from './engine/shared/atomic-io.js';
+import { drainCycloneDispatches, resumeCycloneDispatches } from './engine/cyclone/dispatch-queue.js';
 import { initMcpManager, shutdownMcpManager } from './engine/shared/mcp-manager.js';
 import { performGracefulShutdown } from './services/graceful-shutdown.js';
+import { agentActivityRoutes } from './routes/agent-activity.js';
 
 applyDeveloperMode();
 
@@ -96,6 +98,9 @@ if (recovery.crashedRuns > 0) {
 if (recovery.removedTempFiles > 0) {
   console.log(`[startup] 清理原子写残留临时文件: ${recovery.removedTempFiles}`);
 }
+if (recovery.failedCycloneDispatches > 0) {
+  console.log(`[startup] 标记异常中断的气旋派发: ${recovery.failedCycloneDispatches}`);
+}
 
 // 注册路由
 await app.register(storageRoutes, { prefix: '/api/storage' });
@@ -108,11 +113,14 @@ await app.register(convectionRoutes, { prefix: '/api/convection' });
 await app.register(chatRoutes, { prefix: '/api/chat' });
 await app.register(delegateRoutes, { prefix: '/api/delegate' });
 await app.register(conversationRoutes, { prefix: '/api/conversation' });
+await app.register(agentActivityRoutes, { prefix: '/api/agents' });
 await app.register(tideRoutes, { prefix: '/api/tide' });
 import { mcpRoutes } from './routes/mcp';
 await app.register(mcpRoutes, { prefix: '/api/mcp' });
 import { cycloneRoutes } from './routes/cyclone';
 await app.register(cycloneRoutes, { prefix: '/api/cyclone' });
+import { cycloneDispatchRoutes } from './routes/cyclone-dispatch';
+await app.register(cycloneDispatchRoutes, { prefix: '/api/cyclone' });
 import { memoryRoutes } from './routes/memory';
 await app.register(memoryRoutes, { prefix: '/api/memory' });
 
@@ -120,7 +128,10 @@ await app.register(memoryRoutes, { prefix: '/api/memory' });
 startScheduler(DATA_DIR);
 
 // 初始化 MCP Manager（连接外部 MCP server）
-initMcpManager(DATA_DIR).catch(e => console.error('[MCP] init failed:', e.message));
+initMcpManager(DATA_DIR)
+  .catch(e => console.error('[MCP] init failed:', e.message))
+  .finally(() => resumeCycloneDispatches(DATA_DIR)
+    .catch(e => console.error('[cyclone] 恢复异步派发失败:', e.message)));
 
 // 健康检查
 app.get('/api/health', async () => ({ status: 'ok', ts: Date.now() }));
@@ -167,6 +178,7 @@ function requestShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
     stopScheduler,
     stopTradewind: stopActiveTradewindExecution,
     drainTide: drainScheduler,
+    drainCyclone: drainCycloneDispatches,
     drainWrites: drainAtomicWrites,
     shutdownMcp: shutdownMcpManager,
     closeServer: () => app.close(),

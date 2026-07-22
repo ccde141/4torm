@@ -14,6 +14,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { WorkflowGraph, WorkflowMode } from '../../types';
+import { requestStop } from '../execution-client';
 
 export interface NodeStatus {
   busy: boolean;
@@ -120,11 +121,13 @@ export function useExecution(): ExecutionState & ExecutionActions {
 
   const stop = useCallback(async () => {
     try {
-      await fetch('/api/tradewind/stop', { method: 'POST' });
-    } catch { /* ignore */ }
-    setRunning(false);
-    setExecutionId(null);
-    abortRef.current?.abort();
+      await requestStop();
+      setRunning(false);
+      setExecutionId(null);
+      abortRef.current?.abort();
+    } catch (cause) {
+      setError((cause as Error).message || '停止工作流失败');
+    }
   }, []);
 
   return { running, executionId, error, lap, start, stop };

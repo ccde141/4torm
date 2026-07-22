@@ -15,7 +15,7 @@
 import { callLLM, resolveNativeMode } from '../../shared/llm-bridge';
 import { loadAgent } from '../../shared/agent-loader';
 import { loadAgentToolDefs, type ToolDef } from '../../shared/tool-defs-loader';
-import { buildSandboxSection } from '../../shared/sandbox-prompt';
+import { buildSandboxSection, type SandboxLevel } from '../../shared/sandbox-prompt';
 import type { ContextMessage } from '../../shared/types';
 import { runReActLoopNative, type LLMCaller, type ToolCaller } from '../../conversation/react-loop';
 import path from 'node:path';
@@ -31,8 +31,8 @@ export interface SubAgentParams {
   signal: AbortSignal;
   timeout?: number;
   maxRounds: number;
-  /** 母 Agent 的沙箱级别。Sub-agent 直接继承使用。缺省 'relaxed'。 */
-  parentSandboxLevel?: 'strict' | 'relaxed' | 'unrestricted';
+  /** 母 Agent 的文件工具权限。Sub-agent 直接继承使用。缺省项目级。 */
+  parentSandboxLevel?: SandboxLevel;
   emit?: (event: SubAgentEvent) => void;
   /** 归档用：执行目录（有值时自动归档 sub-agent context） */
   runDir?: string;
@@ -125,7 +125,7 @@ function error(msg: string, rounds: number): SubAgentResult {
 async function prepareTools(dataDir: string, agentId: string): Promise<ToolDef[]> {
   const agent = await loadAgent(dataDir, agentId);
   if (!agent) return [DONE_TOOL];
-  const tools = await loadAgentToolDefs(dataDir, agent.tools, agent.skills);
+  const tools = await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode);
   const filtered = tools.filter(t => t.name !== 'delegate');
   filtered.push(DONE_TOOL);
   return filtered;
@@ -207,7 +207,7 @@ ${list}`;
  */
 export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResult> {
   const { task, context, systemPrompt, agentId, dataDir, signal, maxRounds, emit } = params;
-  const parentSandboxLevel = params.parentSandboxLevel ?? 'relaxed';
+  const parentSandboxLevel = params.parentSandboxLevel ?? 'project';
   const emitEvent = (event: SubAgentEvent) => { if (emit) emit(event); };
 
   // 加载 Agent 获取 model key
@@ -441,7 +441,7 @@ interface NativeSubAgentParams {
   maxRounds: number;
   signal: AbortSignal;
   emitEvent: (event: SubAgentEvent) => void;
-  parentSandboxLevel: 'strict' | 'relaxed' | 'unrestricted';
+  parentSandboxLevel: SandboxLevel;
 }
 
 /**

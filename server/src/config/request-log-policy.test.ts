@@ -13,3 +13,15 @@ test('信风自动保存失败时仍打印请求日志', () => {
 test('其他非高频请求继续打印', () => {
   assert.equal(shouldLogRequest('POST', '/api/tradewind/workflow/run', 200), true);
 });
+
+test('气旋派发索引轮询成功时静默，失败时保留日志', () => {
+  const url = '/api/cyclone/workshop/cyc-a/dispatches';
+  assert.equal(shouldLogRequest('GET', url, 200), false);
+  assert.equal(shouldLogRequest('GET', url, 500), true);
+});
+
+test('Agent 活动轮询成功时静默，失败时保留日志', () => {
+  const url = '/api/agents/activity';
+  assert.equal(shouldLogRequest('GET', url, 200), false);
+  assert.equal(shouldLogRequest('GET', url, 500), true);
+});

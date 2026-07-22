@@ -52,19 +52,37 @@ export async function saveTools(tools: ToolDef[]): Promise<void> {
   await writeJson(REGISTRY_FILE, tools);
 }
 
+export function mergeBuiltinToolDefaults(existing: ToolDef[]): { tools: ToolDef[]; changed: boolean } {
+  const tools = [...existing];
+  let changed = false;
+  for (const builtin of BUILTIN_TOOLS) {
+    const index = tools.findIndex(tool => tool.name === builtin.name);
+    if (index < 0) {
+      tools.push(builtin);
+      changed = true;
+      continue;
+    }
+    if (builtin.name !== 'run_command') continue;
+    const current = tools[index];
+    const properties = current.parameters.properties as Record<string, unknown> | undefined;
+    if (properties?.timeout !== undefined) continue;
+    const defaults = builtin.parameters.properties as Record<string, unknown>;
+    tools[index] = {
+      ...current,
+      parameters: {
+        ...current.parameters,
+        properties: { ...properties, timeout: defaults.timeout },
+      },
+    };
+    changed = true;
+  }
+  return { tools, changed };
+}
+
 export async function seedTools() {
   const existing = await getTools();
-  const names = new Set(existing.map(t => t.name));
-  let changed = false;
-  for (const t of BUILTIN_TOOLS) {
-    if (!names.has(t.name)) {
-      existing.push(t);
-      changed = true;
-    }
-  }
-  if (changed || existing.length === 0) {
-    await saveTools(existing);
-  }
+  const merged = mergeBuiltinToolDefaults(existing);
+  if (merged.changed) await saveTools(merged.tools);
 }
 
 export async function getToolsByNames(names: string[]): Promise<ToolDef[]> {
@@ -101,7 +119,17 @@ export const BUILTIN_TOOLS: ToolDef[] = [
     name: 'run_command',
     description: '在终端执行一条系统命令',
     category: 'system', dangerous: true, executorType: 'builtin', executorFile: 'run_command',
-    parameters: { type: 'object', properties: { command: { type: 'string', description: '要执行的 shell 命令' } }, required: ['command'] },
+    parameters: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: '要执行的 shell 命令' },
+        timeout: {
+          type: 'integer',
+          description: '可选，超时毫秒数；范围 1000 至 600000，默认 120000',
+        },
+      },
+      required: ['command'],
+    },
   },
   {
     name: 'webfetch',

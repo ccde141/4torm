@@ -15,7 +15,9 @@ export interface DashboardSnapshot {
 export async function loadDashboardSnapshot(deps: DashboardDataDeps): Promise<DashboardSnapshot> {
   const [agents, sessions] = await Promise.all([deps.getAgents(), deps.getAllSessions()]);
   const offlineIds = await deps.getOfflineAgentIds(agents);
-  const onlineAgents = agents.filter(agent => agent.status === 'idle' && !offlineIds.has(agent.id)).length;
+  const onlineAgents = agents.filter(agent => (
+    agent.status === 'idle' && !agent.busy && !offlineIds.has(agent.id)
+  )).length;
   return {
     agents,
     offlineIds,

@@ -38,6 +38,14 @@ interface SessionMeta extends TokenUsageMeta {
   un?: number; // unreadCount
 }
 
+function isSessionMeta(value: unknown): value is SessionMeta {
+  if (!value || typeof value !== 'object') return false;
+  const meta = value as Partial<SessionMeta>;
+  return typeof meta.i === 'string'
+    && typeof meta.t === 'string'
+    && typeof meta.u === 'string';
+}
+
 /** 计算未读数：最后一条 assistant 消息之后、lastReadAt 之后的消息数量 */
 function computeUnread(s: ChatSession): number {
   const lastAssist = s.messages.findLastIndex(m => m.role === 'assistant');
@@ -132,17 +140,26 @@ export async function createSession(agent: Agent, model?: string): Promise<ChatS
 export async function getSessionsByAgent(agentId: string): Promise<ChatSession[]> {
   const raw = await indexReadCache.read(agentId, () => readJson<SessionMeta[] | string[]>(metaPath(agentId)));
   if (!raw || raw.length === 0) return [];
-  // 兼容旧格式（string[]）→ 一次性并行读全量文件，然后自动升级索引为新格式
-  if (typeof raw[0] === 'string') {
-    const loaded = await Promise.all((raw as string[]).map(sid => getSession(sid)));
-    const result = loaded.filter((s): s is ChatSession => s !== null && s.agentId === agentId);
-    // 立刻升级 _index.json 为新格式（下次切 agent 只读一个文件）
-    writeJson(metaPath(agentId), result.map(toMeta)).catch(() => {});
-    return result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const entries = raw as unknown[];
+  const metas = new Map(
+    entries.filter(isSessionMeta).map(meta => [meta.i, meta] as const),
+  );
+  const legacyIds = [...new Set(entries.filter((entry): entry is string => typeof entry === 'string'))]
+    .filter(id => !metas.has(id));
+  if (legacyIds.length > 0) {
+    const loaded = await Promise.all(legacyIds.map(id => getSession(id)));
+    for (const session of loaded) {
+      if (session?.agentId === agentId) metas.set(session.id, toMeta(session));
+    }
   }
-  // 新格式：纯元信息，只读 _index.json 一个文件（agentName 已存入 meta，无需额外请求）
-  return (raw as SessionMeta[]).map(m => fromMeta(m, agentId))
+  const result = [...metas.values()].map(meta => fromMeta(meta, agentId))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  if (metas.size !== entries.length || legacyIds.length > 0) {
+    writeJson(metaPath(agentId), result.map(toMeta)).catch(error => {
+      console.error('[chat] 修复会话索引失败', error);
+    });
+  }
+  return result;
 }
 
 export async function getSession(id: string): Promise<ChatSession | null> {

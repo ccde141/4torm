@@ -13,6 +13,8 @@ export default function SkillsPage() {
   const [newCategory, setNewCategory] = useState('通用');
   const [newDesc, setNewDesc] = useState('');
   const [newContent, setNewContent] = useState('# 新技能\n\n在这里编写技能提示词...\n');
+  const [error, setError] = useState('');
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
 
   useEffect(() => {
     listSkills().then(setSkills);
@@ -34,14 +36,26 @@ export default function SkillsPage() {
   };
 
   const handleDelete = async (skillId: string) => {
+    if (confirmingDelete !== skillId) {
+      setConfirmingDelete(skillId);
+      return;
+    }
     try {
       await deleteSkill(skillId);
       setSkills(await listSkills());
-    } catch { /* ignore */ }
+      setConfirmingDelete(null);
+      setError('');
+    } catch (e) {
+      setError((e as Error).message);
+      setConfirmingDelete(null);
+    }
   };
 
   const handleCreate = async () => {
-    if (!newId.trim() || !newName.trim()) return;
+    if (!newId.trim() || !newName.trim()) {
+      setError('技能 ID 和名称不能为空');
+      return;
+    }
     const meta: SkillMeta = {
       id: newId.trim().toLowerCase().replace(/\s+/g, '-'),
       name: newName.trim(),
@@ -51,10 +65,15 @@ export default function SkillsPage() {
       author: 'User',
       hasTools: false,
     };
-    await createSkill(meta.id, meta, newContent);
-    setNewId(''); setNewName(''); setNewDesc(''); setNewContent('# 新技能\n\n在这里编写技能提示词...\n');
-    setShowCreate(false);
-    setSkills(await listSkills());
+    try {
+      await createSkill(meta.id, meta, newContent);
+      setNewId(''); setNewName(''); setNewDesc(''); setNewContent('# 新技能\n\n在这里编写技能提示词...\n');
+      setShowCreate(false);
+      setSkills(await listSkills());
+      setError('');
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   return (
@@ -71,6 +90,8 @@ export default function SkillsPage() {
           </button>
         </div>
       </div>
+
+      {error && <div className="skills-error" role="alert">{error}</div>}
 
       {showCreate && (
         <div className="skill-create-section">
@@ -109,7 +130,7 @@ export default function SkillsPage() {
         {skills.length === 0 && (
           <div style={{ padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center', gridColumn: '1 / -1', textShadow: 'var(--text-halo)' }}>
             暂无技能。<br />
-            <span style={{ fontSize: 'var(--text-xs)' }}>小白模式：等待系统推送预置技能<br />开发者模式：点击「新建技能」手动创建<br />Agent 自注册：Agent 通过 write_file 自动创建</span>
+            <span style={{ fontSize: 'var(--text-xs)' }}>开发者模式：点击「新建技能」手动创建</span>
           </div>
         )}
         {skills.map(skill => (
@@ -126,7 +147,9 @@ export default function SkillsPage() {
             </div>
             <div className="skill-card__actions">
               <button className="skill-btn-preview" onClick={() => handlePreview(skill)}>预览 SKILL.md</button>
-              <button className="skill-btn-delete" onClick={() => handleDelete(skill.id)}>移除</button>
+              <button className="skill-btn-delete" onClick={() => handleDelete(skill.id)}>
+                {confirmingDelete === skill.id ? '确认移除？' : '移除'}
+              </button>
             </div>
           </div>
         ))}

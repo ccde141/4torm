@@ -18,8 +18,16 @@
  */
 
 import type { ContextMessage } from '../shared/types';
+import type { ToolRegistrationProposal } from '../shared/tool-registration';
 // 本模块作为气旋类型的入口，转出 ContextMessage 供 store 等同目录模块复用
 export type { ContextMessage };
+
+export interface SeatContextMessage extends ContextMessage {
+  kind?: 'dispatch-receipt';
+  dispatchId?: string;
+  /** 本轮原生思考流，仅供重载展示；LLM 请求仍只映射 ContextMessage 标准字段。 */
+  reasoning?: string;
+}
 
 /** 工位职责名片默认值（空 duty 兜底，借信风 DEFAULT_ROLE 同款语义） */
 export const DEFAULT_DUTY = '补位协作者，可处理任意交办事务。专业事务请交给对应专业工位。';
@@ -59,7 +67,7 @@ export interface SeatData {
   /** 绑定的框架内 agent 实体 id（data/agents/registry.json） */
   agentId: string;
   /** 私聊会话历史（= 该工位的 contact 收件箱） */
-  messages: ContextMessage[];
+  messages: SeatContextMessage[];
   tokenUsage?: CycloneTokenUsage;
   compactState?: CycloneCompactState;
   /** 本工位上次已读到的工作室公告板 updatedAt（变更注意力：晚于它的条目在下一轮标 🆕） */
@@ -76,6 +84,8 @@ export interface SeatData {
     pendingToolCallId?: string;
     /** 挂起时是否处于原生模式（resume 走对应回填方式） */
     native: boolean;
+    /** register_tool 的原始确认内容；普通 ask 不含此字段 */
+    toolRegistration?: ToolRegistrationProposal;
   };
   createdAt: string;
   updatedAt: string;
@@ -110,6 +120,12 @@ export interface WorkshopSummary {
 
 /** 群聊一条公共消息（发言者 = 工位 title 或「人类」） */
 export interface RoomMessage {
+  /** 稳定消息 ID；旧数据可缺省。 */
+  id?: string;
+  /** Agent 发言所属工位轮次，供异步派发卡锚定。 */
+  turnId?: string;
+  /** 人类发起的完整群聊轮次序号。 */
+  roundSeq?: number;
   /** 发言者显示名（工位 title 或「人类」） */
   speaker: string;
   content: string;
@@ -120,6 +136,10 @@ export interface RoomMessage {
   reasoning?: string;
   /** 本轮工具调用记录 */
   toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }>;
+  /** 时间线中的特殊系统对象。 */
+  kind?: 'dispatch-result';
+  /** 特殊系统对象关联的异步派发。 */
+  dispatchId?: string;
 }
 
 /**
@@ -155,6 +175,10 @@ export interface RoomData {
   chairTokenUsage?: CycloneTokenUsage;
   tokenUsage?: CycloneTokenUsage;
   compactState?: CycloneCompactState;
+  /** 公共上下文代次；reset 后旧代次的异步派发不再进入当前讨论。 */
+  dispatchContextVersion?: number;
+  /** 已完整结束的人类发言轮次；中止轮次不递增。 */
+  completedRoundSeq?: number;
   createdAt: string;
   updatedAt: string;
 }

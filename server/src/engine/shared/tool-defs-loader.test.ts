@@ -18,13 +18,20 @@ const custom = {
   executorFile: 'custom_tool',
 };
 
+const useSkill = {
+  name: 'use_skill',
+  description: 'load skill',
+  executorType: 'builtin',
+  executorFile: 'use_skill',
+};
+
 async function createDataDir(): Promise<string> {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-tools-'));
   await fs.mkdir(path.join(dataDir, 'tools'), { recursive: true });
   await fs.mkdir(path.join(dataDir, 'skills', 'demo'), { recursive: true });
   await fs.writeFile(
     path.join(dataDir, 'tools', 'registry.json'),
-    JSON.stringify([builtin, custom]),
+    JSON.stringify([builtin, custom, useSkill]),
   );
   await fs.writeFile(
     path.join(dataDir, 'skills', 'demo', 'tools.json'),
@@ -36,8 +43,14 @@ async function createDataDir(): Promise<string> {
 async function main(): Promise<void> {
   {
     const dataDir = await createDataDir();
-    const tools = await loadAgentToolDefs(dataDir, [], []);
-    assert.deepEqual(tools.map(tool => tool.name), ['read_file']);
+    const tools = await loadAgentToolDefs(dataDir, [], [], 'all');
+    assert.deepEqual(tools.map(tool => tool.name), ['read_file', 'use_skill']);
+  }
+
+  {
+    const dataDir = await createDataDir();
+    const tools = await loadAgentToolDefs(dataDir, [], [], 'selected');
+    assert.deepEqual(tools.map(tool => tool.name), []);
   }
 
   {
@@ -48,8 +61,8 @@ async function main(): Promise<void> {
 
   {
     const dataDir = await createDataDir();
-    const tools = await loadAgentToolDefs(dataDir, [], ['demo']);
-    assert.deepEqual(tools.map(tool => tool.name), ['read_file', 'skill_tool']);
+    const tools = await loadAgentToolDefs(dataDir, [], ['demo'], 'selected');
+    assert.deepEqual(tools.map(tool => tool.name), ['use_skill', 'skill_tool']);
   }
 
   console.log('tool-defs-loader: ok');

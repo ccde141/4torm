@@ -1,15 +1,15 @@
 import { useState, useEffect } from 'react';
 import { updateAgentConfig, createAgent } from '../../store/agent';
 import { getAllModels } from '../../llm';
-import { getTools, seedTools, buildToolsPrompt } from '../../store/tools';
-import { listSkills } from '../../store/skills';
-import { readSkillFile } from '../../store/skills';
+import { buildToolsPrompt } from '../../store/tools';
 import { getLabels, addLabel, getPresetColors } from '../../store/statuses';
 import type { Agent, AgentConfig } from '../../types';
-import type { ToolDef } from '../../store/tools';
-import type { SkillMeta } from '../../types';
 import type { UserLabel } from '../../store/statuses';
 import { getEffectiveLocalTools } from './agent-tool-selection';
+import AgentConfigTabs, { type AgentConfigTab } from './AgentConfigTabs';
+import AgentPermissionField from './AgentPermissionField';
+import { normalizeAgentPermission } from './agent-permission';
+import { useSkillSelection, useToolSelection } from './useAgentCapabilitySelection';
 import '../../styles/components/config-modal.css';
 
 interface McpToolItem { name: string; fullName: string; description: string; }
@@ -21,31 +21,26 @@ type Props = CreateMode | EditMode;
 
 const EXAMPLE_ROLE = '你是一个认真思考、注重质量的编程专家。';
 
-const TABS = ['基本', '提示词', '技能'] as const;
-type Tab = typeof TABS[number];
-
 export default function AgentConfigModal(props: Props) {
+  const { onClose } = props;
   const isCreate = props.mode === 'create';
   const agent = isCreate ? null : props.agent;
 
-  const [tab, setTab] = useState<Tab>('基本');
+  const [tab, setTab] = useState<AgentConfigTab>('基本');
   const [name, setName] = useState(agent?.name ?? '');
   const [role, setRole] = useState(agent?.role ?? '');
   const [description, setDescription] = useState(agent?.description ?? '');
   const [rolePrompt, setRolePrompt] = useState(agent?.config?.rolePrompt ?? (isCreate ? EXAMPLE_ROLE : ''));
   const [temperature, setTemperature] = useState(agent?.config?.temperature ?? 0.7);
   const [workspace, setWorkspace] = useState(agent?.config?.workspace ?? (isCreate ? '' : `data/agents/${(agent as Agent).id}/.workspace/`));
-  const sandboxLevel = agent?.config?.sandboxLevel ?? 'relaxed';
+  const [sandboxLevel, setSandboxLevel] = useState(() => normalizeAgentPermission(agent?.config?.sandboxLevel));
   const [model, setModel] = useState(agent?.model ?? '');
   const [label, setLabel] = useState(agent?.label ?? '');
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [allModels, setAllModels] = useState<{ key: string; label: string }[]>([]);
-  const [allTools, setAllTools] = useState<ToolDef[]>([]);
-  const [checkedTools, setCheckedTools] = useState<Set<string>>(new Set(agent?.config?.tools ?? []));
-  const [allSkills, setAllSkills] = useState<SkillMeta[]>([]);
-  const [checkedSkills, setCheckedSkills] = useState<Set<string>>(new Set(agent?.config?.skills ?? []));
-  const [skillPreviews, setSkillPreviews] = useState<Record<string, string>>({});
+  const { allTools, checkedTools, setCheckedTools } = useToolSelection(agent?.config, isCreate);
+  const { allSkills, checkedSkills, setCheckedSkills, skillPreviews } = useSkillSelection(agent?.config, isCreate);
   const [allLabels, setAllLabels] = useState<UserLabel[]>([]);
   const [newLabelName, setNewLabelName] = useState('');
   const [newLabelColor, setNewLabelColor] = useState('#a78bfa');
@@ -56,24 +51,9 @@ export default function AgentConfigModal(props: Props) {
 
   useEffect(() => {
     getAllModels().then(setAllModels);
-    seedTools().then(() => getTools().then(setAllTools));
-    listSkills().then(setAllSkills);
     getLabels().then(setAllLabels);
     fetch('/api/mcp/tools').then(r => r.json()).then((d: McpToolGroups) => setMcpGroups(d.groups || {})).catch(() => {});
   }, []);
-
-  useEffect(() => {
-    if (tab !== '技能' || allSkills.length === 0) return;
-    const ids = checkedSkills.size > 0 ? [...checkedSkills] : allSkills.map(s => s.id);
-    Promise.all(ids.map(async id => {
-      const content = await readSkillFile(id, 'SKILL.md');
-      return { id, content: content || '(空)' };
-    })).then(results => {
-      const map: Record<string, string> = {};
-      results.forEach(r => { map[r.id] = r.content; });
-      setSkillPreviews(map);
-    });
-  }, [tab, allSkills, checkedSkills]);
 
   const handleAddLabel = async () => {
     if (!newLabelName.trim()) return;
@@ -84,17 +64,17 @@ export default function AgentConfigModal(props: Props) {
     setShowAddLabel(false);
   };
 
-  const close = () => props.onClose();
+  const close = () => onClose();
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []);
+  }, [onClose]);
 
   const handleSave = async () => {
     if (saving || saved) return;
-    const config: AgentConfig = { masterPrompt: '', rolePrompt, temperature: temperature || undefined, tools: [...checkedTools], skills: [...checkedSkills], workspace: workspace || undefined, sandboxLevel };
+    const config: AgentConfig = { masterPrompt: '', rolePrompt, temperature: temperature || undefined, tools: [...checkedTools], toolMode: 'selected', skills: [...checkedSkills], workspace: workspace || undefined, sandboxLevel };
     setSaving(true);
     try {
       if (isCreate) {
@@ -125,18 +105,7 @@ export default function AgentConfigModal(props: Props) {
           <button className="config-modal-close" onClick={close}>✕</button>
         </div>
 
-        <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', padding: '0 var(--space-5)' }}>
-          {TABS.map(t => (
-            <button key={t} onClick={() => setTab(t)} style={{
-              padding: 'var(--space-3) var(--space-4)',
-              background: 'none', border: 'none',
-              borderBottom: tab === t ? '2px solid var(--color-accent)' : '2px solid transparent',
-              color: tab === t ? 'var(--color-text)' : 'var(--color-text-tertiary)',
-              fontSize: 'var(--text-sm)', fontWeight: tab === t ? 'var(--font-semibold)' : 'var(--font-normal)',
-              cursor: 'pointer', marginBottom: '-1px',
-            }}>{t}</button>
-          ))}
-        </div>
+        <AgentConfigTabs active={tab} onChange={setTab} />
 
         <div className="config-modal-body" style={{ overflowY: 'auto' }}>
           {tab === '基本' && (
@@ -190,15 +159,7 @@ export default function AgentConfigModal(props: Props) {
                   style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}
                   placeholder={`data/agents/${agent?.id || '{id}'}/.workspace/`} />
               </div>
-              <div className="config-field" style={{ marginBottom: 'var(--space-4)' }}>
-                <label className="config-label">
-                  执行权限
-                  <span className="config-hint">统一策略，不再区分权限档</span>
-                </label>
-                <div style={{ marginTop: 'var(--space-2)', padding: 'var(--space-3)', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius-sm)', color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
-                  相对路径以工作区为基准，绝对路径直接使用；仅禁止普通文件工具直接改写 Agent、潮汐、工作流等框架控制面数据。
-                </div>
-              </div>
+              <AgentPermissionField value={sandboxLevel} onChange={setSandboxLevel} />
               <div className="config-field">
                 <label className="config-label">Temperature<span className="config-value-display">{temperature}</span></label>
                 <input type="range" className="config-slider" min={0} max={2} step={0.1} value={temperature} onChange={e => setTemperature(Number(e.target.value))} />
@@ -209,13 +170,13 @@ export default function AgentConfigModal(props: Props) {
 
           {tab === '技能' && (
             <div className="config-field" style={{ marginTop: 'var(--space-4)' }}>
-              <label className="config-label">已安装技能<span className="config-hint">勾选后 Agent 可调用 use_skill 按需加载。技能内容不注入系统提示词，由工具调用时动态返回</span></label>
+              <label className="config-label">已安装技能<span className="config-hint">创建 Agent 时默认全部启用，可按需取消。技能内容由 use_skill 按需加载，不会长期占用上下文</span></label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: 'var(--space-3)' }}>
                 {allSkills.length === 0 && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>暂无技能 — 去「技能」页创建或安装</span>}
                 {allSkills.map(s => {
                   const on = checkedSkills.has(s.id);
                   return (
-                    <button key={s.id} onClick={() => { const next = new Set(checkedSkills); on ? next.delete(s.id) : next.add(s.id); setCheckedSkills(next); }}
+                    <button key={s.id} onClick={() => { const next = new Set(checkedSkills); if (on) next.delete(s.id); else next.add(s.id); setCheckedSkills(next); }}
                       style={{ ...toolTagStyle, background: on ? 'var(--color-accent)' : 'var(--color-bg)', color: on ? 'var(--color-on-accent)' : 'var(--color-text)', border: `1px solid ${on ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
                       {on ? '✓ ' : ''}{s.name}{s.hasTools && <span style={{ fontSize: '10px', marginLeft: '2px' }}>🔧</span>}
                       <span style={{ fontSize: '10px', marginLeft: 'var(--space-1)', opacity: 0.6 }}>{s.category}</span>
@@ -251,7 +212,7 @@ export default function AgentConfigModal(props: Props) {
             <>
 
               <div className="config-field" style={{ marginTop: 'var(--space-4)' }}>
-                <label className="config-label">工具<span className="config-hint">未勾选时默认启用全部框架内置工具；勾选任意工具后仅启用所选工具。MCP 与自定义工具需显式勾选</span></label>
+                <label className="config-label">工具<span className="config-hint">创建 Agent 时默认启用全部框架内置工具；清空后仅保留会话能力。MCP 与自定义工具需显式勾选</span></label>
 
                 {/* 本地工具 */}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: 'var(--space-3)' }}>
@@ -259,7 +220,7 @@ export default function AgentConfigModal(props: Props) {
                   {allTools.map(t => {
                     const on = checkedTools.has(t.name);
                     return (
-                      <button key={t.name} onClick={() => { const next = new Set(checkedTools); on ? next.delete(t.name) : next.add(t.name); setCheckedTools(next); }}
+                      <button key={t.name} onClick={() => { const next = new Set(checkedTools); if (on) next.delete(t.name); else next.add(t.name); setCheckedTools(next); }}
                         title={t.description || t.name}
                         style={{ ...toolTagStyle, background: on ? 'var(--color-accent)' : 'var(--color-bg)', color: on ? 'var(--color-on-accent)' : 'var(--color-text)', border: `1px solid ${on ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
                         {on ? '✓ ' : ''}{t.name}{t.dangerous && <span style={{ fontSize: '10px', marginLeft: '2px' }}>⚠</span>}
@@ -276,7 +237,7 @@ export default function AgentConfigModal(props: Props) {
                   return (
                     <div key={serverName} style={{ marginBottom: '8px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', background: 'var(--color-bg)', cursor: 'pointer', userSelect: 'none' }}
-                        onClick={() => { const next = new Set(mcpExpanded); expanded ? next.delete(serverName) : next.add(serverName); setMcpExpanded(next); }}>
+                        onClick={() => { const next = new Set(mcpExpanded); if (expanded) next.delete(serverName); else next.add(serverName); setMcpExpanded(next); }}>
                         <span style={{ fontSize: '11px', width: '14px' }}>{expanded ? '▼' : '▶'}</span>
                         <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600 }}>MCP: {serverName}</span>
                         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>{tools.length} 工具</span>
@@ -291,7 +252,7 @@ export default function AgentConfigModal(props: Props) {
                             const on = checkedTools.has(t.fullName);
                             return (
                               <label key={t.fullName} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', cursor: 'pointer', padding: '3px 0', fontSize: 'var(--text-xs)' }}>
-                                <input type="checkbox" checked={on} onChange={() => { const next = new Set(checkedTools); on ? next.delete(t.fullName) : next.add(t.fullName); setCheckedTools(next); }}
+                                <input type="checkbox" checked={on} onChange={() => { const next = new Set(checkedTools); if (on) next.delete(t.fullName); else next.add(t.fullName); setCheckedTools(next); }}
                                   style={{ marginTop: '2px', accentColor: 'var(--color-accent)' }} />
                                 <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 500, flexShrink: 0 }}>{t.name}</span>
                                 <span style={{ color: 'var(--color-text-tertiary)', lineHeight: 1.3 }}>{t.description}</span>

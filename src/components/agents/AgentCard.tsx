@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { getAllModels } from '../../llm';
 import { checkModelAvailable } from '../../store/agent';
-import { getStatusColor, getStatusLabel } from '../../store/statuses';
 import type { Agent } from '../../types';
+import { getAgentRuntimeStatus } from './agent-runtime-status';
 import '../../styles/components/agent-card.css';
 
 interface AgentCardProps {
@@ -17,8 +17,6 @@ export default function AgentCard({ agent, onClick, onConfig, onMemory, onDelete
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [modelAvailable, setModelAvailable] = useState<boolean | null>(null);
   const [modelName, setModelName] = useState('');
-  const [dotColor, setDotColor] = useState('#6b7280');
-  const [displayLabel, setDisplayLabel] = useState('');
 
   useEffect(() => {
     if (agent.model) {
@@ -30,29 +28,15 @@ export default function AgentCard({ agent, onClick, onConfig, onMemory, onDelete
       const m = models.find(o => o.key === agent.model);
       setModelName(m?.label || agent.model || '未选择');
     });
-    getStatusColor(agent.busy ? 'busy' : agent.status).then(setDotColor);
-    getStatusLabel(agent.busy ? 'busy' : agent.status).then(label => {
-      setDisplayLabel(agent.label ? `${label} · ${agent.label}` : label);
-    });
-  }, [agent.model, agent.status, agent.busy]);
+  }, [agent.model]);
 
-  const effectiveColor = (agent.status === 'idle' || !agent.status) && modelAvailable === false
-    ? 'var(--color-error)'
-    : dotColor;
+  const runtimeStatus = getAgentRuntimeStatus(agent, modelAvailable === false);
+  const statusTitle = [runtimeStatus.label, runtimeStatus.surfaces, agent.label]
+    .filter(Boolean)
+    .join(' · ');
 
   return (
     <div className="agent-card" onClick={() => onClick?.(agent)} style={{ position: 'relative' }}>
-      <div
-        title={displayLabel}
-        style={{
-          position: 'absolute',
-          top: 'var(--space-3)',
-          left: 'var(--space-3)',
-          width: 10, height: 10, borderRadius: '50%',
-          background: effectiveColor,
-          boxShadow: `0 0 6px ${effectiveColor}80`,
-        }}
-      />
       {onConfig && (
         <button className="agent-card__config-btn" title="配置 Agent" onClick={e => { e.stopPropagation(); onConfig(agent); }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -69,11 +53,18 @@ export default function AgentCard({ agent, onClick, onConfig, onMemory, onDelete
           </svg>
         </button>
       )}
-      <div className="agent-card__header" style={{ paddingLeft: 'var(--space-3)' }}>
+      <div className="agent-card__header">
         <div className="agent-card__avatar">{agent.name[0]}</div>
         <div className="agent-card__info">
           <div className="agent-card__name">{agent.name}</div>
           <div className="agent-card__role">{agent.role}</div>
+          <div className="agent-card__status" title={statusTitle}>
+            <span className={`agent-card__status-dot agent-card__status-dot--${runtimeStatus.tone}`} />
+            <span>{runtimeStatus.label}</span>
+            {runtimeStatus.surfaces && (
+              <span className="agent-card__status-source">· {runtimeStatus.surfaces}</span>
+            )}
+          </div>
         </div>
       </div>
       <p className="agent-card__description">{agent.description}</p>

@@ -64,6 +64,16 @@ export function roomsDir(dataDir: string, workshopId: string): string {
   return path.join(workshopDir(dataDir, workshopId), 'rooms');
 }
 
+/** 异步派发目录：data/cyclone/{id}/dispatches/ */
+export function dispatchesDir(dataDir: string, workshopId: string): string {
+  return path.join(workshopDir(dataDir, workshopId), 'dispatches');
+}
+
+/** 单条异步派发记录：data/cyclone/{id}/dispatches/{dispatchId}.json */
+export function dispatchFile(dataDir: string, workshopId: string, dispatchId: string): string {
+  return path.join(dispatchesDir(dataDir, workshopId), `${dispatchId}.json`);
+}
+
 /** 归档目录：data/cyclone/{id}/bak/ */
 export function workshopBakDir(dataDir: string, workshopId: string): string {
   return path.join(workshopDir(dataDir, workshopId), 'bak');

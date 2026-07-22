@@ -16,6 +16,7 @@ import { buildChairPrompt } from './seat-prompt';
 import type { SeatEvent } from './seat-runner';
 import { loadWorkshop } from './workshop-store';
 import { loadRoom, saveRoom, tryAcquireRoomLock } from './room-store';
+import { withAgentActivity } from '../shared/agent-activity.js';
 
 /**
  * 人类给某场会议的会长发消息 → 会长纯文本响应（流式）。
@@ -53,10 +54,10 @@ export async function chatChair(
 
     let content = '';
     try {
-      const r = await callLLM({
+      const r = await withAgentActivity(agent.id, 'cyclone', () => callLLM({
         dataDir, fullModelKey: agent.model, messages,
         options: { temperature: agent.temperature }, onChunk, signal,
-      });
+      }));
       content = r.content;
       if (r.usage) {
         room.chairTokenUsage = {

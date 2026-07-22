@@ -24,6 +24,7 @@ import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { loadSeat, saveSeat, tryAcquireSeatLock } from './seat-store';
 import { findSeatIdByTitle, listOtherSeats, tryRegisterWait, clearWait } from './contact-registry';
 import { workshopWorkspace } from './paths';
+import type { SeatData } from './types';
 import path from 'node:path';
 
 /** 嵌套联络深度上限（A→B→C→…），超过即拒绝，防失控递归 */
@@ -39,6 +40,14 @@ export interface ContactCtx {
   /** 当前嵌套深度（顶层=0） */
   depth: number;
   signal?: AbortSignal;
+}
+
+export async function persistContactMessage(
+  dataDir: string, workshopId: string, seat: SeatData,
+  fromTitle: string, message: string,
+): Promise<void> {
+  seat.messages.push({ role: 'user', content: `[系统信息：来自工位「${fromTitle}」的联络]\n\n${message}` });
+  await saveSeat(dataDir, workshopId, seat);
 }
 
 function wsRel(dataDir: string, workshopId: string): string {
@@ -111,7 +120,7 @@ async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: 
   const agent = await loadAgent(dataDir, seat.agentId);
   if (!agent) throw new Error(`「${seat.title}」绑定的 agent 已删除`);
 
-  const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills);
+  const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode);
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
   const wsDir = wsRel(dataDir, workshopId);
   const llm = makeLLM(dataDir, agent.model, agent.temperature);
@@ -151,7 +160,8 @@ async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: 
   };
 
   // 联络消息进目标会话（收件箱语义）
-  seat.messages.push({ role: 'user', content: `[系统信息：来自工位「${fromTitle}」的联络]\n\n${message}` });
+  // 先落盘入站气泡，再启动模型；目标工位页面可在处理期间看到消息。
+  await persistContactMessage(dataDir, workshopId, seat, fromTitle, message);
 
   const system: ContextMessage = {
     role: 'system',

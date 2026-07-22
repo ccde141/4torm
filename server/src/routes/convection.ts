@@ -21,9 +21,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { atomicWriteFile } from '../engine/shared/atomic-io.js';
-
-/** 活跃的轮次 AbortController：sessionId → AbortController */
-const activeAborts = new Map<string, AbortController>();
+import {
+  abortActiveConvectionRound,
+  clearActiveConvectionRound,
+  getActiveConvectionRound,
+  registerActiveConvectionRound,
+} from './convection-active-round.js';
 
 export async function convectionRoutes(app: FastifyInstance): Promise<void> {
   const { dataDir } = getAppContext(app);
@@ -53,7 +56,7 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
     if (action === 'status') {
       const s = await loadSession(dataDir, sessionId);
       if (!s) return reply.status(404).send({ error: '会话不存在' });
-      return reply.send(s);
+      return reply.send({ ...s, activeRound: getActiveConvectionRound(sessionId) });
     }
 
     if (action === 'speak') {
@@ -66,7 +69,7 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
       initSSE(reply);
       const stopHB = startHeartbeat(reply);
       const abort = new AbortController();
-      activeAborts.set(sessionId, abort);
+      registerActiveConvectionRound(sessionId, 'public', abort);
       const onEvent = (ev: ConvectionStreamEvent) => { pushSSE(reply, ev); };
       try {
         await handleSpeak(dataDir, s, body.message.trim(), onEvent, abort.signal);
@@ -74,7 +77,7 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
       } catch (e) {
         pushSSE(reply, { type: 'error', message: (e as Error).message });
       } finally {
-        activeAborts.delete(sessionId);
+        clearActiveConvectionRound(sessionId, abort);
         release();
         stopHB();
         endSSE(reply);
@@ -92,7 +95,7 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
       initSSE(reply);
       const stopHB = startHeartbeat(reply);
       const abort = new AbortController();
-      activeAborts.set(`${sessionId}:chair`, abort);
+      registerActiveConvectionRound(sessionId, 'chair', abort);
       const onEvent = (ev: ConvectionStreamEvent) => { pushSSE(reply, ev); };
       try {
         await handleChair(dataDir, s, body.message.trim(), onEvent, abort.signal);
@@ -100,7 +103,7 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
       } catch (e) {
         pushSSE(reply, { type: 'error', message: (e as Error).message });
       } finally {
-        activeAborts.delete(`${sessionId}:chair`);
+        clearActiveConvectionRound(sessionId, abort);
         release();
         stopHB();
         endSSE(reply);
@@ -109,10 +112,9 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (action === 'abort') {
-      // 中断 speak 或 chair（speak 优先）
-      const ctrl = activeAborts.get(sessionId) || activeAborts.get(`${sessionId}:chair`);
-      if (!ctrl) return reply.status(409).send({ error: 'No active round' });
-      ctrl.abort();
+      if (!abortActiveConvectionRound(sessionId)) {
+        return reply.status(409).send({ error: 'No active round' });
+      }
       return reply.send({ ok: true });
     }
 

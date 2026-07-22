@@ -201,7 +201,7 @@ export async function revertBulletinChange(
 
 function summarize(b: Bulletin): string {
   if (!b.entries.length) return '（公告板为空）';
-  return b.entries.map(e => `- [${e.id}] ${e.text}　(by ${e.author})`).join('\n');
+  return b.entries.map(e => `- [${e.id}] ${e.text} (by ${e.author})`).join('\n');
 }
 
 /**
@@ -254,7 +254,7 @@ export function buildBulletinSection(b: Bulletin, opts?: { seenAt?: number; read
   const seenAt = opts?.seenAt;
   const changedCount = seenAt != null ? b.entries.filter(e => e.updatedAt > seenAt).length : 0;
   const lines = b.entries
-    .map(e => `- ${(seenAt != null && e.updatedAt > seenAt) ? '🆕 ' : ''}[${e.id}] ${e.text}　(by ${e.author})`)
+    .map(e => `- ${(seenAt != null && e.updatedAt > seenAt) ? '🆕 ' : ''}[${e.id}] ${e.text} (by ${e.author})`)
     .join('\n');
 
   const attention = changedCount > 0

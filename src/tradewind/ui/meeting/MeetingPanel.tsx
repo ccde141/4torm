@@ -17,7 +17,7 @@ import {
 } from './meeting-client';
 import { MeetingMessageItem } from './MeetingMessageItem';
 import { renderTextWithCode } from '../../../engine/markdown';
-import { appendReasoning } from './meeting-reasoning';
+import { appendChairStreamChunk, appendReasoning } from './meeting-reasoning';
 
 interface MeetingPanelProps {
   nodeId: string;
@@ -314,8 +314,11 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         streamRef.current.pendingTools = [];
         break;
       case 'chair-token':
-      case 'chair-reasoning':
-        stream.streamContent += ev.chunk;
+        stream.streamContent = appendChairStreamChunk(
+          { content: stream.streamContent, reasoning: stream.reasoningContent },
+          ev.type,
+          ev.chunk,
+        ).content;
         setChairMsgs(prev => {
           const msgs = [...prev];
           if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {
@@ -325,7 +328,11 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         });
         break;
       case 'chair-reasoning':
-        stream.reasoningContent = appendReasoning(stream.reasoningContent, ev.chunk);
+        stream.reasoningContent = appendChairStreamChunk(
+          { content: stream.streamContent, reasoning: stream.reasoningContent },
+          ev.type,
+          ev.chunk,
+        ).reasoning;
         setChairMsgs(prev => {
           const msgs = [...prev];
           if (msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant') {

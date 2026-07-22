@@ -116,7 +116,7 @@ function ToolForm({ initial, onSave, onCancel }: {
 
   const handleSave = () => {
     if (!name.trim()) return;
-    let params: Record<string, unknown> = {};
+    let params: Record<string, unknown>;
     try { params = JSON.parse(paramsJson); setJsonError(''); } catch {
       setJsonError('JSON 格式无效，请检查语法');
       return;

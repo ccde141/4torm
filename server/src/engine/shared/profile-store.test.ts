@@ -46,6 +46,16 @@ async function main() {
     console.log('  ✓ round-trip 等值 + 落点正确');
   }
 
+  // 损坏文件必须真实失败，不能伪装成“暂无档案”
+  {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-prof-'));
+    const file = path.join(dir, 'tradewind', 'workflows', 'wf1', 'profiles.json');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, '{broken', 'utf8');
+    await assert.rejects(loadProfiles(dir, 'wf1'), SyntaxError);
+    console.log('  ✓ 损坏文件真实抛错');
+  }
+
   // findProfile
   {
     assert.equal(findProfile([relProfile, absProfile], 'p2'), absProfile);

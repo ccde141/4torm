@@ -12,20 +12,103 @@ import { SessionRunner, type ConversationEvent, type SessionRunnerOpts } from '.
 import { loadAgent } from '../../engine/shared/agent-loader';
 import { resolveNativeMode } from '../../engine/shared/llm-bridge';
 import { buildConversationSystemPrompt } from '../../engine/conversation/prompt-builder';
+import { tryAcquireSessionLease } from '../../engine/conversation/session-lease.js';
 import { loadAgentToolDefs } from '../../engine/shared/tool-defs-loader';
 import type { ContextMessage } from '../../engine/shared/types';
 import type { TideTask, TideRunRecord } from './types';
 import type { TideMessage } from './session-store';
 import { saveRunRecord, upsertTask, getTask } from './store';
 import { parseInterval } from './schedule-parser';
-import { resolveTarget, saveTurn } from './session-resolver';
+import { resolveTarget, resolveTargetSessionId, saveTurn } from './session-resolver';
 import { SELF_LOOP_INSTRUCTION, extractNextPrompt } from './self-loop';
+import { withAgentActivity } from '../../engine/shared/agent-activity.js';
 
 /** 10 分钟硬超时 */
 const TIMEOUT_MS = 10 * 60 * 1000;
 
-/** 运行单次潮汐任务。调用方负责锁/解锁。返回归档记录。 */
+/** 运行单次潮汐任务。designated 模式与目标季风会话互斥。 */
 export async function runTideTask(dataDir: string, task: TideTask, isManual = false): Promise<TideRunRecord> {
+  const run = () => withAgentActivity(
+    task.agentId,
+    'tide',
+    () => runWithFailureBoundary(dataDir, task, isManual),
+  );
+  if (task.pushMode !== 'designated') return run();
+
+  const sessionId = resolveTargetSessionId(task);
+  const release = tryAcquireSessionLease(task.agentId, sessionId);
+  if (!release) {
+    const timestamp = new Date().toISOString();
+    return recordFailure(dataDir, task, {
+      timestamp,
+      startedAt: Date.now(),
+      sessionId,
+      error: `指定的季风会话正在执行中：${sessionId}`,
+      toolCalls: [],
+      turns: 0,
+    }, false);
+  }
+  try {
+    return await run();
+  } finally {
+    release();
+  }
+}
+
+async function runWithFailureBoundary(
+  dataDir: string, task: TideTask, isManual: boolean,
+): Promise<TideRunRecord> {
+  const startedAt = Date.now();
+  const timestamp = new Date().toISOString();
+  try {
+    return await executeTideTask(dataDir, task, isManual);
+  } catch (error) {
+    return recordFailure(dataDir, task, {
+      timestamp,
+      startedAt,
+      sessionId: resolveTargetSessionId(task),
+      error: error instanceof Error ? error.message : String(error),
+      toolCalls: [],
+      turns: 0,
+    });
+  }
+}
+
+interface FailureDetails {
+  timestamp: string;
+  startedAt: number;
+  sessionId: string;
+  error: string;
+  toolCalls: TideRunRecord['toolCalls'];
+  turns: number;
+}
+
+async function recordFailure(
+  dataDir: string,
+  task: TideTask,
+  details: FailureDetails,
+  countFailure = true,
+): Promise<TideRunRecord> {
+  const record: TideRunRecord = {
+    taskId: task.id, timestamp: details.timestamp, status: 'error', sessionId: details.sessionId,
+    answer: '', rawContent: '', toolCalls: details.toolCalls, turns: details.turns,
+    durationMs: Date.now() - details.startedAt, error: details.error,
+  };
+  await saveRunRecord(dataDir, record);
+  const fresh = await getTask(dataDir, task.id);
+  if (!fresh) return record;
+  fresh.lastRun = details.timestamp;
+  fresh.nextRun = new Date(Date.now() + parseInterval(fresh.schedule)).toISOString();
+  if (countFailure) fresh.consecutiveErrors = (fresh.consecutiveErrors ?? 0) + 1;
+  if (countFailure && fresh.consecutiveErrors >= 3) {
+    fresh.enabled = false;
+    console.error(`[tide] 任务 ${fresh.id} 连续失败 ${fresh.consecutiveErrors} 次，已自动暂停`);
+  }
+  await upsertTask(dataDir, fresh);
+  return record;
+}
+
+async function executeTideTask(dataDir: string, task: TideTask, isManual: boolean): Promise<TideRunRecord> {
   const startedAt = Date.now();
   const timestamp = new Date().toISOString();
   const toolCalls: TideRunRecord['toolCalls'] = [];
@@ -33,11 +116,7 @@ export async function runTideTask(dataDir: string, task: TideTask, isManual = fa
 
   const agent = await loadAgent(dataDir, task.agentId);
   if (!agent) {
-    return {
-      taskId: task.id, timestamp, status: 'error', sessionId: '',
-      answer: '', rawContent: '', toolCalls: [], turns: 0,
-      durationMs: Date.now() - startedAt, error: `Agent 不存在: ${task.agentId}`,
-    };
+    throw new Error(`Agent 不存在: ${task.agentId}`);
   }
 
   // 解析推送目标 + 历史上下文
@@ -49,14 +128,14 @@ export async function runTideTask(dataDir: string, task: TideTask, isManual = fa
   const nativeDecision = await resolveNativeMode(dataDir, agent.model);
   const opts: SessionRunnerOpts = {
     dataDir, agentId: agent.id, model: agent.model,
-    temperature: agent.temperature, toolNames: agent.tools, skillIds: agent.skills,
+    temperature: agent.temperature, toolNames: agent.tools, toolMode: agent.toolMode, skillIds: agent.skills,
     workspace: agent.workspace, sandboxLevel: agent.sandboxLevel,
     native: nativeDecision.native,
   };
 
   const projectDir = path.resolve(dataDir, '..');
   const workspaceAbs = path.resolve(projectDir, agent.workspace);
-  const toolDefs = await loadAgentToolDefs(dataDir, opts.toolNames, opts.skillIds);
+  const toolDefs = await loadAgentToolDefs(dataDir, opts.toolNames, opts.skillIds, opts.toolMode);
   const rolePrompt = task.selfLoop ? agent.rolePrompt + SELF_LOOP_INSTRUCTION : agent.rolePrompt;
   const systemPrompt = await buildConversationSystemPrompt({
     rolePrompt, toolDefs,
@@ -81,7 +160,7 @@ export async function runTideTask(dataDir: string, task: TideTask, isManual = fa
   const runner = new SessionRunner(opts);
   const timer = setTimeout(() => runner.abort(), TIMEOUT_MS);
 
-  let answer = ''; let rawContent = '';
+  let answer: string; let rawContent: string;
   // 收集完整中间消息链（tool-call / tool-result），对齐季风体验
   const intermediate: TideMessage[] = [];
   let pendingArgs: Record<string, string> = {};
@@ -115,25 +194,10 @@ export async function runTideTask(dataDir: string, task: TideTask, isManual = fa
     answer = result.content; rawContent = result.rawContent;
   } catch (e) {
     clearTimeout(timer);
-    // error 路径：推迟 nextRun + 累计连续失败 + 达阈值自动暂停
-    const errRecord: TideRunRecord = {
-      taskId: task.id, timestamp, status: 'error', sessionId,
-      answer: '', rawContent: '', toolCalls, turns,
-      durationMs: Date.now() - startedAt, error: (e as Error).message,
-    };
-    await saveRunRecord(dataDir, errRecord);
-    const fresh = await getTask(dataDir, task.id);
-    if (fresh) {
-      fresh.lastRun = timestamp;
-      fresh.nextRun = new Date(Date.now() + parseInterval(fresh.schedule)).toISOString();
-      fresh.consecutiveErrors = (fresh.consecutiveErrors ?? 0) + 1;
-      if (fresh.consecutiveErrors >= 3) {
-        fresh.enabled = false;
-        console.error(`[tide] 任务 ${fresh.id} 连续失败 ${fresh.consecutiveErrors} 次，已自动暂停`);
-      }
-      await upsertTask(dataDir, fresh);
-    }
-    return errRecord;
+    return recordFailure(dataDir, task, {
+      timestamp, startedAt, sessionId, toolCalls, turns,
+      error: (e as Error).message,
+    });
   }
   clearTimeout(timer);
 

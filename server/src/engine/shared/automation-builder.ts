@@ -12,6 +12,7 @@
  */
 
 import fs from 'node:fs/promises';
+import { normalizeSandboxLevel } from '../../services/execution-context.js';
 import path from 'node:path';
 import { agentRegistryFile } from '../../services/data-paths.js';
 import { loadTasks, getTask, upsertTask } from '../../services/tide/store';
@@ -81,7 +82,7 @@ async function readAgentInfo(dataDir: string, agentId: string): Promise<{ name: 
     if (!a) return null;
     return {
       name: a.name || agentId,
-      sandboxLevel: a.config?.sandboxLevel || 'relaxed',
+      sandboxLevel: normalizeSandboxLevel(a.config?.sandboxLevel),
       canWriteFiles: (a.config?.tools || []).some(t => WRITE_TOOLS.includes(t)),
     };
   } catch { return null; }

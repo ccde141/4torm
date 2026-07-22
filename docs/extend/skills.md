@@ -1,10 +1,14 @@
-# 技能制作
+# 技能 · 使用与制作
 
-Skill 是 Agent 的**领域专长模块**,向 Agent 提供专业提示词和(可选的)专属工具。Skill = `SKILL.md`(提示词注入)+ `tools.json`(专属工具定义,可选)+ `executors/`(工具执行器,可选)。
+技能是可以反复分配给不同 Agent 的领域知识与工作方法。它主要由一份 `SKILL.md` 提示词组成，也可以附带完成该类任务所需的专用脚本工具。
 
-> **代码坐标说明**:运行时逻辑现位于服务端 `server/`。本文引用当前文件路径,不锁定行号。
+## 使用技能
 
-**生命周期:** 创建 → 写入 `data/skills/{skillId}/` → 分配给 Agent → 运行时 Agent 通过 `use_skill` 工具按需加载 SKILL.md 提示词 + 合并 tools.json 工具列表。
+在控制台的 Agent 配置页面中选择技能即可启用。新建 Agent 时，当前已安装的技能默认处于选中状态，也可以在保存前手动取消；编辑已有 Agent 时，系统会保留原来的选择。
+
+技能说明不会一直占用 Agent 的上下文。Agent 会在判断任务需要时主动加载对应技能，因此启用技能代表允许它使用这份知识，并不意味着每次对话都会完整注入。
+
+技能可以附带专用工具。启用技能后，这些工具会自动加入 Agent 的可用工具列表，不需要再从全局工具中重复选择。工具本身的读写、删除或命令执行能力仍按工具配置生效，启用前可以在技能预览中查看其说明和附带工具。
 
 ## SkillMeta 接口
 
@@ -54,33 +58,17 @@ data/skills/
 每条问题:`[严重程度] 文件:行号 — 问题描述 + 修复建议`
 ```
 
-## 创建新技能
+## 创建和管理技能
 
-### 方式一:UI 创建(推荐)
+在 Skills 管理页面中点击「新建技能」，填写技能文件夹名、显示名称、分类、描述和 `SKILL.md` 内容后即可创建。
 
-1. 进入 **Skills 管理页面**(`/skills`)
-2. 填写 Skill ID(目录名,字母数字)/ 名称 / 分类 / 描述 / SKILL.md
-3. 点击创建 → 写入 `config.json` + `SKILL.md`
+技能文件夹名是本地保存时使用的稳定名称，只能包含小写字母、数字、连字符和下划线。
 
-客户端 store(`src/store/skills.ts`):
+Agent 自己也可以根据任务需要创建技能。它会在 `data/skills/` 下写入完整的技能目录；至少包含 `config.json` 和 `SKILL.md`。系统自动扫描热装载，不需要再经过单独的注册确认。技能附带额外脚本工具时，还需要提供 `tools.json` 和对应的 `executors/`。
 
-```typescript
-async function createSkill(skillId, meta, skillMd) {
-  await ensureDir(`skills/${skillId}`);
-  await writeJson(`skills/${skillId}/config.json`, meta);
-  await writeText(`skills/${skillId}/SKILL.md`, skillMd);
-}
-```
+创建成功后，技能会出现在 Agent 配置页面中。已有 Agent 不会自动启用新技能，需要在控制台中手动选择；之后新建的 Agent 会默认选中当前已经安装的技能。
 
-### 方式二:文件系统直接创建
-
-直接在 `data/skills/` 下创建目录和文件,刷新页面或调用 `listSkills()` 即可发现:
-
-```bash
-mkdir -p data/skills/my-skill/executors
-# config.json: {"name":"My Skill","description":"...","category":"custom","version":"1.0.0","author":"Me"}
-# SKILL.md:    # My Skill\n\n你是...
-```
+移除技能需要再次确认。若技能仍被某个 Agent 使用，系统会拒绝移除并列出相关 Agent；先取消关联，再回到 Skills 页面移除。
 
 ## 技能工具(Skill Tools)
 
@@ -151,11 +139,10 @@ Skill 可通过 `tools.json` 和 `executors/` 目录携带专属工具。
 
 ### 提示词加载 — `use_skill` 按需注入
 
-Skill 的提示词通过内置 `use_skill` 工具按需加载。Agent 被分配 Skill 后**不会**自动注入 SKILL.md 到系统提示词,而是由 Agent 自行判断何时需要并主动调用(ReAct 里走 JSON 参数:`<action tool="use_skill">{"skill":"技能名"}</action>`)。
+Skill 的提示词通过内置 `use_skill` 工具按需加载。Agent 被分配 Skill 后**不会**自动注入 SKILL.md 到系统提示词,而是由 Agent 自行判断何时需要并主动调用。
 
 - **省 Token** —— Skill 指令仅在调用时以 `<result>` 形式出现,`/compact` 后可压缩,不永久占用上下文
 - **按需触发** —— 与任务无关的 Skill 不会被加载
-- **复用机制** —— 所有协作模式共用同一套 `use_skill` 执行器
 
 执行器路径:`data/tools/executors/use_skill.js` —— 读取 `data/skills/{name}/SKILL.md` 并返回内容。**安全检查**:拦截技能名中的 `/`、`\`、`..`(防路径遍历);连字符等普通字符放行(故 `code-review` 这类名称可用)。
 

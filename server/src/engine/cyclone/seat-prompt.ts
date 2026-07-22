@@ -10,7 +10,7 @@ import path from 'node:path';
 import type { LoadedAgent } from '../shared/agent-loader';
 import type { ToolDef } from '../shared/tool-defs-loader';
 import type { ContextMessage } from '../shared/types';
-import { buildSystemPrompt } from '../shared/prompt';
+import { buildSelfManagementSection, buildSystemPrompt } from '../shared/prompt';
 import { buildSandboxSection } from '../shared/sandbox-prompt';
 import { buildTaskBoardSection, readTaskboard } from '../shared/taskboard';
 import { buildBulletinSection, readBulletinSync } from './bulletin';
@@ -18,6 +18,7 @@ import { seatTaskboardFile } from './paths';
 import type { SeatData, WorkshopData, RoomData } from './types';
 import { DEFAULT_DUTY } from './types';
 import { loadSeat } from './seat-store';
+import type { ContactTarget } from './contact-registry';
 
 // ── 气旋原生准则文案（边界铁律：自写，不复用季风/对流） ──────────────
 
@@ -146,11 +147,12 @@ export function buildSeatSystemPrompt(opts: {
   agent: LoadedAgent;
   toolDefs: ToolDef[];
   native: boolean;
+  contactTargets?: ContactTarget[];
   wsRelPath: string;
   /** 本工位上次已读到的公告板 updatedAt（变更注意力标 🆕） */
   bulletinSeenAt?: number;
 }): string {
-  const { dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath, bulletinSeenAt } = opts;
+  const { dataDir, workshopId, seat, agent, toolDefs, native, contactTargets = [], wsRelPath, bulletinSeenAt } = opts;
   const projectDir = path.resolve(dataDir, '..');
   const wsAbs = path.resolve(projectDir, wsRelPath);
   const parts: string[] = [];
@@ -172,13 +174,24 @@ export function buildSeatSystemPrompt(opts: {
   // 3.2 基础协作准则（私聊场景）
   parts.push(buildBaselineSection('solo'));
 
+  if (contactTargets.length > 0) {
+    const roster = contactTargets.map(target => `- ${target.title}：${target.duty}`).join('\n');
+    parts.push(`## 工位协作
+
+可用 contact 向其他工位同步询问并等待回复；可用 dispatch 把完整、可独立完成的任务异步交办，派发后继续当前工作，不要原地等待。两者的目标都必须使用以下工位名称：
+
+${roster}
+
+dispatch 参数：target=目标工位名称，task=包含目标、必要背景和交付要求的完整任务。`);
+  }
+
   // 3.5 工作室公告板（全体工位共享，人与工位皆可写；带本工位变更注意力标记）
   parts.push(buildBulletinSection(readBulletinSync(dataDir, workshopId), { seenAt: bulletinSeenAt }));
 
-  // 4. 协议段
-  if (toolDefs.length > 0) {
-    parts.push(native ? buildNativeProtocol(toolDefs) : buildSystemPrompt(toolDefs));
-  }
+  // 4. 协议段。即使显式清空普通工具，工位虚拟工具和能力扩展仍然可用。
+  parts.push(native
+    ? `${buildNativeProtocol(toolDefs)}\n\n${buildSelfManagementSection({ allowToolRegistration: true, native: true })}`
+    : buildSystemPrompt(toolDefs, { allowToolRegistration: true }));
 
   // 5. 场景上下文（工位=执行工位，干实事）
   parts.push(`## 当前场景\n你是气旋工作室里的「${seat.title}」工位，正在与老板（人类）一对一私聊。这是执行工位——把交代的事做实、做完。需要用户决策或信息不足时用 ask 提问；可拆分的重活用 delegate 派给 SubAgent。完成后用自然语言给出结论。`);
@@ -281,10 +294,11 @@ export function buildSeatRoomSystemPrompt(opts: {
   native: boolean;
   wsRelPath: string;
   topic: string;
+  dispatchTargets?: ContactTarget[];
   /** 本工位上次已读到的公告板 updatedAt（变更注意力标 🆕，跨频道共享同一水位） */
   bulletinSeenAt?: number;
 }): string {
-  const { dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath, topic, bulletinSeenAt } = opts;
+  const { dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath, topic, dispatchTargets = [], bulletinSeenAt } = opts;
   const projectDir = path.resolve(dataDir, '..');
   const wsAbs = path.resolve(projectDir, wsRelPath);
   const parts: string[] = [];
@@ -300,6 +314,7 @@ export function buildSeatRoomSystemPrompt(opts: {
 
   parts.push(...buildRoleParts(seat, agent));
   parts.push(buildBaselineSection('room'));
+  if (dispatchTargets.length > 0) parts.push(buildRoomDispatchGuidance(seat.title, dispatchTargets));
   parts.push(buildBulletinSection(readBulletinSync(dataDir, workshopId), { seenAt: bulletinSeenAt }));
   if (toolDefs.length > 0) {
     parts.push(native ? buildNativeProtocol(toolDefs) : buildSystemPrompt(toolDefs));
@@ -348,4 +363,25 @@ export function buildSeatContactSystemPrompt(opts: {
   parts.push(`## 当前场景\n你是气旋工作室里的「${seat.title}」工位。同事工位「${fromTitle}」刚刚联络你，需要你处理一件事。\n\n请在你自己的会话上下文里完整处理这条联络消息，把活干完，然后用自然语言给出可直接回传给「${fromTitle}」的结论。注意：此刻没有人类在场，不要发起需要人类回答的提问；信息不足时基于现有上下文做合理判断或直接说明无法完成的原因。`);
 
   return parts.join('\n\n');
+}
+
+export function buildRoomDispatchGuidance(
+  seatTitle: string,
+  targets: ContactTarget[],
+): string {
+  const roster = targets.map(target => `- ${target.title}：${target.duty}`).join('\n');
+  return `## 让讨论进入执行
+
+群聊里的你是工位参与讨论时的临时副本；固定工位保存长期私聊上下文并承担持续执行。讨论中一旦形成明确、可独立完成的执行事项，或出现应沉淀到固定工位继续处理的重要结论，应主动调用 dispatch，而不是只建议人类稍后安排。
+
+- 指代规则：用户说“交给工位”“同步到工位”“让工位继续”等话、但没有点名目标时，“工位”默认指你自己的固定工位「${seatTitle}」，不是群聊里的其他参与者；不要自行挑选另一个 Agent
+- 只有用户明确点名某个工位，或事项明显属于另一工位的职责时，才把它派发给对应工位
+- 事项属于你的职责时，优先派发给自己的固定工位「${seatTitle}」
+- 用户要求把重要信息、结论或背景带回工位时，即使暂时没有重任务，也用 dispatch 交给自己的固定工位吸收和保留
+- 需要其他工位立即提供信息、并且本轮必须等待答复时才用 contact
+- 纯观点交流、尚未形成共识的设想、目标不清的事项和一句话即可完成的小事，不要 dispatch
+- 派发后继续完成当前群聊发言，不等待工位结果
+
+可派发工位：
+${roster}`;
 }

@@ -72,8 +72,9 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
   function matchesFilter(agent: Agent): boolean {
     if (filter === 'all') return true;
     if (filter === 'idle') {
-      return agent.status === 'idle' && !offlineIds.has(agent.id);
+      return agent.status === 'idle' && !agent.busy && !offlineIds.has(agent.id);
     }
+    if (filter === 'busy') return !!agent.busy;
     if (agent.status === filter) return true;
     if (agent.label === filter) return true;
     return false;

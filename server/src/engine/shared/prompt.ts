@@ -11,7 +11,20 @@ export interface ToolDef {
  * 注意：路径相关说明已迁移至 sandbox-prompt.ts buildSandboxSection。
  * 本段仅描述「能力」本身，不再提及「路径」「工作区位置」。
  */
-export function buildSelfManagementSection(): string {
+export interface SelfManagementOptions {
+  allowToolRegistration?: boolean;
+  native?: boolean;
+}
+
+export function buildSelfManagementSection(options: SelfManagementOptions = {}): string {
+  const toolRegistration = options.allowToolRegistration
+    ? options.native
+      ? `4. 调用 \`register_tool\` 提交工具名称、描述、危险性、执行器文件名和参数 JSON Schema
+5. 系统校验通过后会向人类显示「注册 / 取消」，确认前不会修改全局注册表`
+      : `4. 调用 \`register_tool\` 提交工具定义，例如：
+\`<action tool="register_tool">{"name":"my_tool","description":"用途","dangerous":"false","executorFile":"my_tool","parameters":"{\\"type\\":\\"object\\",\\"properties\\":{}}"}</action>\`
+5. 系统校验通过后会向人类显示「注册 / 取消」，确认前不会修改全局注册表`
+    : '4. 当前入口不提供独立全局工具注册；可以完成执行器和定义草稿，交由季风会话或气旋工位私聊注册';
   return `
 ## 能力扩展（工具 / 技能 / MCP）
 
@@ -30,7 +43,7 @@ export function buildSelfManagementSection(): string {
    - 格式: \`export default async function(args, ctx) { ... }\`
    - \`args\`: 工具调用参数字典
    - \`ctx\`: { dataDir, workspaceDir, projectDir, sandboxLevel }
-4. 工具注册表属于框架控制面，普通文件工具不能直接改写；完成执行器后，把注册需求交给用户处理
+${toolRegistration}
 
 ### 创建新技能（Skill）
 详细参考 \`docs/extend/skills.md\`，简要步骤：
@@ -48,7 +61,7 @@ export function buildSelfManagementSection(): string {
 - Agent/工具注册表、潮汐任务表、工作流 graph/meta 属于控制面，不能用普通文件工具直接写`;
 }
 
-export function buildSystemPrompt(tools: ToolDef[]): string {
+export function buildSystemPrompt(tools: ToolDef[], options: SelfManagementOptions = {}): string {
   const toolList = tools.map(t => {
     const requiredSet = new Set<string>(
       Array.isArray((t.parameters as any)?.required) ? (t.parameters as any).required as string[] : [],
@@ -188,5 +201,5 @@ ${params}`;
 ## 可用工具
 
 ${toolList}
-${buildSelfManagementSection()}`;
+${buildSelfManagementSection(options)}`;
 }

@@ -7,6 +7,7 @@
 
 import fs from 'node:fs/promises';
 import { agentRegistryFile, agentRolePromptFile } from '../../services/data-paths.js';
+import { normalizeSandboxLevel, type SandboxLevel } from '../../services/execution-context.js';
 
 export interface LoadedAgent {
   id: string;
@@ -15,11 +16,12 @@ export interface LoadedAgent {
   rolePrompt: string;       // 来自 .workspace/role-prompt.md，可能为空
   temperature: number;
   tools: string[];
+  toolMode: 'all' | 'selected';
   skills: string[];
   /** 工作区相对路径（项目根相对，缺省 `data/agents/{id}/.workspace/`） */
   workspace: string;
-  /** 沙箱级别（缺省 'relaxed'） */
-  sandboxLevel: 'strict' | 'relaxed' | 'unrestricted';
+  /** 内置文件工具权限（缺省项目级） */
+  sandboxLevel: SandboxLevel;
 }
 
 interface RegistryEntry {
@@ -31,6 +33,7 @@ interface RegistryEntry {
     rolePrompt?: string;
     temperature?: number;
     tools?: unknown;
+    toolMode?: string;
     skills?: unknown;
     workspace?: string;
     sandboxLevel?: string;
@@ -71,9 +74,11 @@ export async function loadAgent(dataDir: string, agentId: string): Promise<Loade
   );
 
   const cfg = entry.config ?? {};
-  const sb = cfg.sandboxLevel;
-  const sandboxLevel: 'strict' | 'relaxed' | 'unrestricted' =
-    sb === 'strict' || sb === 'unrestricted' ? sb : 'relaxed';
+  const tools = Array.isArray(cfg.tools) ? cfg.tools.filter(t => typeof t === 'string') : [];
+  const toolMode: 'all' | 'selected' = cfg.toolMode === 'selected'
+    ? 'selected'
+    : cfg.toolMode === 'all' || tools.length === 0 ? 'all' : 'selected';
+  const sandboxLevel = normalizeSandboxLevel(cfg.sandboxLevel);
 
   return {
     id: agentId,
@@ -81,7 +86,8 @@ export async function loadAgent(dataDir: string, agentId: string): Promise<Loade
     model: typeof entry.model === 'string' ? entry.model : '',
     rolePrompt,
     temperature: typeof cfg.temperature === 'number' ? cfg.temperature : 0.7,
-    tools: Array.isArray(cfg.tools) ? cfg.tools.filter(t => typeof t === 'string') : [],
+    tools,
+    toolMode,
     skills: Array.isArray(cfg.skills) ? cfg.skills.filter(s => typeof s === 'string') : [],
     workspace: typeof cfg.workspace === 'string' && cfg.workspace
       ? cfg.workspace

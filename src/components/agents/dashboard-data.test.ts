@@ -7,6 +7,7 @@ test('Dashboard 一次刷新生成完整快照且不重复读取', async () => {
   const agents = [
     { id: 'agent-a', status: 'idle' },
     { id: 'agent-b', status: 'idle' },
+    { id: 'agent-c', status: 'idle', busy: true, activeSurfaces: ['tide'] },
   ] as Agent[];
   const sessions = [{ id: 'session-a' }];
   const calls: string[] = [];
@@ -18,7 +19,7 @@ test('Dashboard 一次刷新生成完整快照且不重复读取', async () => {
   });
 
   assert.deepEqual(calls, ['agents', 'sessions', 'offline']);
-  assert.equal(snapshot.stats.totalAgents, 2);
+  assert.equal(snapshot.stats.totalAgents, 3);
   assert.equal(snapshot.stats.onlineAgents, 1);
   assert.equal(snapshot.stats.totalSessions, 1);
   assert.deepEqual([...snapshot.offlineIds], ['agent-b']);

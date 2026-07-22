@@ -952,9 +952,9 @@
   animation: tw-gate-waiting-pulse 1.2s ease-in-out infinite;
 }
 
-/* 完成正反馈：busy 结束的下降沿触发一次性绿色 pop（缩放弹一下 + 绿光扩散后收敛）。
+/* 完成正反馈：busy 结束的下降沿触发一次性绿色提示，持续 15 秒，方便长流程中回看。
    由 AgentNode 挂 .tw-node--just-done，animationName 匹配后 JS 自动移除类。
-   时长/缓动走 motion 层的 emphasize 语义变量，统一调节。 */
+   只延长完成提示，不改变 busy / envelope 的运行态动画。 */
 @keyframes tw-node-done-pop {
   0% {
     transform: scale(1);
@@ -972,7 +972,21 @@
   }
 }
 .tw-node--just-done {
-  animation: tw-node-done-pop var(--motion-emphasize-duration) var(--motion-emphasize-ease);
+  animation: tw-node-done-pop 15s var(--motion-emphasize-ease);
+}
+
+/* Keep stopped and failed nodes visible as red terminal states. */
+.tw-node--stopped,
+.tw-node--failed {
+  border-color: rgba(239, 68, 68, 0.85) !important;
+  box-shadow:
+    0 0 0 3px rgba(239, 68, 68, 0.35),
+    0 0 24px 5px rgba(239, 68, 68, 0.28);
+}
+
+.tw-node--stopped.tw-node--busy,
+.tw-node--failed.tw-node--busy {
+  animation: none !important;
 }
 
 .tw-node--gate .tw-handle {

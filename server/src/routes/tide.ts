@@ -8,7 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { getAppContext } from '../services/app-context.js';
 import { loadTasks, getTask, upsertTask, deleteTask, listRunRecords } from '../services/tide/store';
 import { parseInterval } from '../services/tide/schedule-parser';
-import { fireManual } from '../services/tide/scheduler';
+import { fireManual, tideTaskRuns } from '../services/tide/scheduler';
 import { readTideSession, readSeasonSession, listTideSessions, deleteTideSession, deleteTaskSessionDir } from '../services/tide/session-store';
 import type { TideTask } from '../services/tide/types';
 
@@ -131,9 +131,15 @@ export async function tideRoutes(app: FastifyInstance): Promise<void> {
     const { taskId } = req.params as { taskId: string };
     const task = await getTask(dataDir, taskId);
     if (!task) return reply.status(404).send({ error: '任务不存在' });
-    // 先清会话目录（含 bak 归档），再删任务 + 运行记录
-    await deleteTaskSessionDir(dataDir, task.agentId, task.id, task.name);
-    await deleteTask(dataDir, taskId);
+    const deleted = await tideTaskRuns.run(taskId, async () => {
+      // 先清会话目录（含 bak 归档），再删任务 + 运行记录
+      await deleteTaskSessionDir(dataDir, task.agentId, task.id, task.name);
+      await deleteTask(dataDir, taskId);
+      return true;
+    });
+    if (!deleted) {
+      return reply.status(409).send({ error: '任务正在执行，请等待本轮结束后再删除' });
+    }
     return reply.send({ ok: true });
   });
 

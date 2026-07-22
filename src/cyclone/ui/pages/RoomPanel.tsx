@@ -10,43 +10,30 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { renderTextWithCode } from '../../../engine/markdown';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
-import ToolCallMessage from '../../../components/chat/ToolCallMessage';
-import ReasoningBlock from '../../../components/chat/ReasoningBlock';
-import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
-import ExecutionStatusBar from '../../../components/chat/ExecutionStatusBar';
 import type { RoomStreamRunners, FeedMsg } from './useRoomStreamRunners';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
+import DispatchIndex from './DispatchIndex';
+import RoomTimeline from './RoomTimeline';
+import RoomComposer from './RoomComposer';
+import RoomConfigBar from './RoomConfigBar';
+import type { CycloneDispatch } from './dispatch-timeline';
+import type { DispatchAction } from './useWorkshopDispatches';
+import { publicToFeed, readRoomError, type RoomData } from './room-messages';
 import '../../../styles/components/convection.css';
+import { useSmartChatScroll } from './useSmartChatScroll';
 
-interface RoomToolCall { tool: string; args: Record<string, string>; result: string; }
-interface RoomMsg { speaker: string; content: string; timestamp: number; rawContent?: string; reasoning?: string; toolCalls?: RoomToolCall[]; }
-interface Room { id: string; title: string; topic: string; mode?: 'build' | 'plan'; participantSeatIds: string[]; publicMessages: RoomMsg[]; }
 interface SeatLite { id: string; title: string; }
 
-async function readErrorMessage(r: Response, fallback: string): Promise<string> {
-  const e = await r.json().catch(() => ({}));
-  return e?.error || `${fallback}（HTTP ${r.status}）`;
-}
-
-function publicToFeed(msgs: RoomMsg[]): FeedMsg[] {
-  return msgs.map((m, sourceIndex) => ({
-    sourceIndex,
-    speaker: m.speaker === 'system' ? '归档摘要' : m.speaker,
-    content: m.content,
-    isHuman: m.speaker === '人类',
-    isArchiveSummary: m.speaker === 'system' || m.content.includes('重置前的群聊摘要'),
-    reasoning: m.reasoning,
-    tools: (m.toolCalls || []).map(t => ({ tool: t.tool, args: t.args, result: t.result, status: 'success' as const })),
-  }));
-}
-
-export default function RoomPanel({ workshopId, roomId, seats, runners, onChanged, active = true }: {
-  workshopId: string; roomId: string; seats: SeatLite[]; runners: RoomStreamRunners; onChanged?: () => void; active?: boolean;
+export default function RoomPanel({ workshopId, roomId, seats, runners, dispatches,
+  onDispatchAction, onChanged, onOpenSeat, active = true }: {
+  workshopId: string; roomId: string; seats: SeatLite[]; runners: RoomStreamRunners;
+  dispatches: CycloneDispatch[];
+  onDispatchAction: (roomId: string, dispatchId: string, action: DispatchAction) => Promise<CycloneDispatch>;
+  onChanged?: () => void; onOpenSeat: (seatId: string) => void; active?: boolean;
 }) {
   const confirm = useConfirm();
-  const [room, setRoom] = useState<Room | null>(null);
+  const [room, setRoom] = useState<RoomData | null>(null);
   const [history, setHistory] = useState<FeedMsg[]>([]);
   // 草稿初值取自注册表：切走/重挂回来未发文本还在（内存级）
   const [input, setInputRaw] = useState(() => runners.getDraft(roomId));
@@ -55,11 +42,14 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
   const [editMessageContent, setEditMessageContent] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [dispatchNotice, setDispatchNotice] = useState<CycloneDispatch | null>(null);
+  const [highlightedDispatchId, setHighlightedDispatchId] = useState<string | null>(null);
   /** 订阅 tick：runner 每次 notify 自增，触发本组件重渲染读取最新 roundFeed 缓冲 */
   const [, forceTick] = useState(0);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const onChangedRef = useRef(onChanged);
+  const knownDispatchesRef = useRef(new Map<string, CycloneDispatch['status']>());
+  const mountedAtRef = useRef(Date.now());
   onChangedRef.current = onChanged;
   // 写穿草稿：每次改动同步进注册表，组件卸载/重挂不丢
   const setInput = useCallback((v: string | ((p: string) => string)) => {
@@ -77,17 +67,25 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
   const queue = runners.getQueue(roomId);
   // 即使 done 也继续显示 roundFeed，直到 reload 完成 + clearIfDone 删除 runner，避免终答闪空
   const roundFeed = runner?.roundFeed ?? null;
-
+  const roomLiveSignal = roundFeed?.map(message => (
+    `${message.key}:${message.content.length}:${message.reasoning?.length ?? 0}:${message.phase ?? ''}`
+  )).join('|') ?? '';
+  const { scrollRef, showJumpButton, scrollToBottom } = useSmartChatScroll({
+    scopeKey: roomId,
+    enabled: !!room,
+    content: history,
+    liveContent: roomLiveSignal,
+  });
   const reload = useCallback(async (notify = false) => {
     const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/status`);
     if (!r.ok) {
-      const msg = await readErrorMessage(r, '加载群聊失败');
+      const msg = await readRoomError(r, '加载群聊失败');
       console.error('[cyclone] 群聊加载失败', msg);
       setLoadError(msg);
       return;
     }
     setLoadError(null);
-    const data: Room = await r.json();
+    const data: RoomData = await r.json();
     setRoom(data);
     setHistory(publicToFeed(data.publicMessages));
     if (notify) onChangedRef.current?.();
@@ -123,19 +121,31 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
     })();
   }, [doneRoomId, reload, runners]);
 
+  const roomDispatches = dispatches.filter(item => item.sourceRoomId === roomId);
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 150) el.scrollTop = el.scrollHeight;
-  }, [history, roundFeed, streaming]);
+    const currentDispatches = dispatches.filter(item => item.sourceRoomId === roomId);
+    const previous = knownDispatchesRef.current;
+    const completed = currentDispatches.find(item => {
+      const terminal = item.status === 'completed' || item.status === 'failed';
+      const wasTerminal = previous.get(item.id) === 'completed' || previous.get(item.id) === 'failed';
+      const createdHere = Date.parse(item.createdAt) >= mountedAtRef.current;
+      return terminal && !wasTerminal && (previous.has(item.id) || createdHere);
+    });
+    knownDispatchesRef.current = new Map(currentDispatches.map(item => [item.id, item.status]));
+    if (completed) setDispatchNotice(completed);
+  }, [dispatches, roomId]);
 
-  const seatName = (id: string) => seats.find(s => s.id === id)?.title || id;
-
+  useEffect(() => {
+    if (!dispatchNotice) return;
+    const timer = window.setTimeout(() => setDispatchNotice(null), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [dispatchNotice]);
   // ── 工位管理（替代 prompt）──
   async function postAction(action: string, body: Record<string, unknown>, fallback: string): Promise<boolean> {
     const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/${action}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
-    if (!r.ok) { alert(await readErrorMessage(r, fallback)); return false; }
+    if (!r.ok) { alert(await readRoomError(r, fallback)); return false; }
     await reload(true);
     return true;
   }
@@ -213,15 +223,34 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
     runners.abortRoom(workshopId, roomId);
   }
 
+  function focusDispatch(item: CycloneDispatch) {
+    if (item.readState === 'unread') {
+      void onDispatchAction(roomId, item.id, 'read')
+        .catch(error => console.error('[cyclone] 标记派发已读失败', error));
+    }
+    setHighlightedDispatchId(item.id);
+    requestAnimationFrame(() => {
+      scrollRef.current?.querySelector<HTMLElement>(`#dispatch-${CSS.escape(item.id)}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    window.setTimeout(() => setHighlightedDispatchId(current => current === item.id ? null : current), 1_600);
+  }
+
+  async function handleDispatchAction(dispatchId: string, action: DispatchAction) {
+    try {
+      await onDispatchAction(roomId, dispatchId, action);
+      if (action === 'include') await reload(true);
+    } catch (error) {
+      alert((error as Error).message);
+    }
+  }
+
   if (!room) {
     if (loadError) return <div style={{ opacity: .65, margin: 'auto', padding: 'var(--space-4)', textAlign: 'center', color: 'var(--color-danger)' }}>{loadError}</div>;
     return <div style={{ opacity: .5, margin: 'auto' }}>加载群聊…</div>;
   }
-  const inRoom = new Set(room.participantSeatIds);
-  const candidates = seats.filter(s => !inRoom.has(s.id));
-
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
+    <div className="cyclone-room" style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
       {/* Header */}
       <div className="conv__header">
         {editingTitle ? (
@@ -231,6 +260,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
           <span className="conv__header-title" title="双击重命名" onDoubleClick={() => { setEditingTitle(true); setTitleDraft(room.title); }}># {room.title}</span>
         )}
         <span className="conv__header-id">{room.topic}</span>
+        <DispatchIndex dispatches={roomDispatches} onSelect={focusDispatch} />
         <button
           onClick={toggleMode}
           title={room.mode === 'plan' ? 'plan 模式：只读 + 联络，不动文件。点击切回 build' : 'build 模式：可读写工作区。点击切到 plan'}
@@ -245,135 +275,36 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, onChange
         </button>
       </div>
 
-      {/* Config bar：在场工位（流式中禁改，避免中途增删工位扰乱在跑的轮） */}
-      <div className="conv__config">
-        <span className="conv__config-label">在场:</span>
-        {room.participantSeatIds.length === 0 && <span style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--text-xs)', textShadow: 'var(--text-halo)' }}>（空，从右侧添加工位）</span>}
-        {room.participantSeatIds.map((id, idx) => (
-          <span key={id} className="conv__tag">
-            <button onClick={() => moveSeat(idx, -1)} disabled={streaming || idx === 0} className="conv__tag-move">↑</button>
-            <button onClick={() => moveSeat(idx, 1)} disabled={streaming || idx === room.participantSeatIds.length - 1} className="conv__tag-move">↓</button>
-            {seatName(id)}
-            <button onClick={() => leaveSeat(id)} disabled={streaming} className="conv__tag-remove">×</button>
-          </span>
-        ))}
-        {candidates.length > 0 && (
-          <select value="" disabled={streaming} onChange={e => { if (e.target.value) joinSeat(e.target.value); }} className="conv__config-select">
-            <option value="">+</option>
-            {candidates.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
-          </select>
+      <RoomConfigBar participantIds={room.participantSeatIds} seats={seats} streaming={streaming}
+        onMove={moveSeat} onJoin={joinSeat} onLeave={leaveSeat} />
+
+      {/* Messages：已落库 history + 本轮 roundFeed（流式中 history 不含本轮；done 后 reload 带回、clearIfDone 清 roundFeed，无重影） */}
+      <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>
+        <div ref={scrollRef} className="chat__messages conv__messages" style={{ flex: 1, overflowY: 'auto' }}>
+          <RoomTimeline history={history} roundFeed={roundFeed} dispatches={roomDispatches}
+            highlightedId={highlightedDispatchId} editingMessageIndex={editingMessageIndex}
+            editMessageContent={editMessageContent} onEditContent={setEditMessageContent}
+            onStartEdit={startEditMessage} onSaveEdit={saveEditMessage} onCancelEdit={cancelEditMessage}
+            onDelete={deleteMessage} onDispatchAction={handleDispatchAction} onOpenSeat={onOpenSeat} />
+        </div>
+        {showJumpButton && (
+          <button className="chat__jump-bottom" onClick={() => scrollToBottom('smooth')}
+            aria-label="回到底部" title="回到最新消息">↓</button>
         )}
       </div>
 
-      {/* Messages：已落库 history + 本轮 roundFeed（流式中 history 不含本轮；done 后 reload 带回、clearIfDone 清 roundFeed，无重影） */}
-      <div ref={scrollRef} className="chat__messages conv__messages" style={{ flex: 1, overflowY: 'auto' }}>
-        {history.map((m, i) => <FeedRow
-          key={`h-${i}`}
-          m={m}
-          idx={i}
-          prefix="h"
-          editing={editingMessageIndex === m.sourceIndex}
-          editContent={editMessageContent}
-          onEditContent={setEditMessageContent}
-          onStartEdit={() => startEditMessage(m)}
-          onSaveEdit={saveEditMessage}
-          onCancelEdit={cancelEditMessage}
-          onDelete={() => deleteMessage(m)}
-        />)}
-        {roundFeed?.map((m, i) => <FeedRow key={`r-${i}`} m={m} idx={i} prefix="r" editing={false} editContent="" onEditContent={() => {}} onStartEdit={() => {}} onSaveEdit={() => {}} onCancelEdit={() => {}} onDelete={() => {}} />)}
-      </div>
+      {dispatchNotice && (
+        <button type="button" className="cyclone-dispatch-toast" role="status"
+          onClick={() => { focusDispatch(dispatchNotice); setDispatchNotice(null); }}>
+          <span className="cyclone-dispatch__dot" />
+          {dispatchNotice.targetSeatTitle}{dispatchNotice.status === 'completed' ? '已完成异步任务' : '异步任务失败'}
+        </button>
+      )}
 
-      {/* Input */}
-      <div className="chat__input-area">
-        <ExecutionStatusBar label={streaming ? roundFeed?.[roundFeed.length - 1]?.phase : undefined} />
-        <QueuedChips items={queue} onRemove={i => runners.removeQueued(roomId, i)} />
-        <div className="chat__input-wrapper">
-          <textarea ref={inputRef} className="chat__input" value={input}
-            onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); speak(); } }}
-            placeholder={streaming ? '工位讨论中…（可继续输入，发送将排队）' : '在群里说点什么…（Enter 发送，Shift+Enter 换行）'}
-            rows={1} aria-label="群聊发言" />
-          {streaming ? (
-            <>
-              <button className="chat__send-btn" onClick={speak}
-                disabled={!input.trim() || queue.length >= MAX_QUEUE}
-                title={queue.length >= MAX_QUEUE ? '队列已满（最多 3 条）' : '加入队列'}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
-              </button>
-              <button className="chat__stop-btn" onClick={stop} title="停止生成">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
-              </button>
-            </>
-          ) : (
-            <button className="chat__send-btn" onClick={speak} disabled={!input.trim()} title="发送">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
-            </button>
-          )}
-        </div>
-        <div style={inputHintStyle}>
-          <span>快捷指令：</span>
-          <code>/reset</code>
-          <span>清空公共上下文</span>
-          <code>/reset summary</code>
-          <span>摘要重置公共上下文</span>
-          <code>/reset all</code>
-          <span>连同会长私聊一起清空</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const inputHintStyle: React.CSSProperties = {
-  fontSize: 'var(--text-xs)',
-  color: 'var(--color-text-tertiary)',
-  paddingTop: 'var(--space-2)',
-};
-
-/** 单条群聊消息（人类气泡 / 工位气泡，历史 + 本轮实时共用） */
-function FeedRow({ m, idx, prefix, editing, editContent, onEditContent, onStartEdit, onSaveEdit, onCancelEdit, onDelete }: {
-  m: FeedMsg; idx: number; prefix: string; editing: boolean; editContent: string;
-  onEditContent: (value: string) => void; onStartEdit: () => void; onSaveEdit: () => void;
-  onCancelEdit: () => void; onDelete: () => void;
-}) {
-  if (editing) {
-    return (
-      <div className={`chat__message chat__message--${m.isHuman ? 'user' : 'assistant'}`}>
-        <div className="chat__avatar">{m.isHuman ? '你' : m.speaker.slice(0, 2)}</div>
-        <div className="chat__bubble chat__bubble--editing">
-          <textarea className="chat__edit-textarea" value={editContent} onChange={e => onEditContent(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') onCancelEdit(); if (e.key === 'Enter' && e.ctrlKey) onSaveEdit(); }} rows={4} autoFocus />
-          <div className="chat__edit-actions"><button onClick={onSaveEdit}>保存</button><button onClick={onCancelEdit}>取消</button></div>
-        </div>
-      </div>
-    );
-  }
-  const actions = m.sourceIndex === undefined ? null : (
-    <div className="chat__bubble-actions">
-      <button className="chat__msg-action-btn" title="编辑" onClick={onStartEdit}>✏</button>
-      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={onDelete}>🗑</button>
-    </div>
-  );
-  if (m.isHuman) {
-    return (
-      <div className="chat__message chat__message--user">
-        <div className="chat__avatar">你</div>
-        <div className="chat__bubble"><div className="chat__content">{renderTextWithCode(m.content, `room-${prefix}u-${idx}`)}</div>{actions}</div>
-      </div>
-    );
-  }
-  return (
-    <div className={`chat__message chat__message--assistant${m.isArchiveSummary ? ' chat__message--archive-summary' : ''}`}>
-      <div className="chat__avatar">{m.isArchiveSummary ? '档' : m.speaker.slice(0, 2)}</div>
-      <div className="chat__bubble">
-        <div className="conv__speaker-label">{m.speaker}</div>
-        {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} defaultOpen={false} />}
-        {m.tools.map((t, ti) => (
-          <ToolCallMessage key={ti} toolCall={{ toolName: t.tool, params: t.args, result: t.result, status: t.status }} />
-        ))}
-        {m.phase && <div className="chat__streaming-phase">{m.phase}</div>}
-        {m.content && <div className="chat__content" style={{ whiteSpace: 'pre-wrap' }}>{renderTextWithCode(m.content, `room-${prefix}s-${idx}`)}{m.streaming ? '▍' : ''}</div>}
-        {!m.streaming && actions}
-      </div>
+      <RoomComposer inputRef={inputRef} input={input} streaming={streaming}
+        phase={roundFeed?.[roundFeed.length - 1]?.phase} queue={queue}
+        onInput={setInput} onSend={speak} onStop={stop}
+        onRemoveQueued={index => runners.removeQueued(roomId, index)} />
     </div>
   );
 }

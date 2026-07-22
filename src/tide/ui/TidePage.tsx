@@ -146,10 +146,14 @@ export default function TidePage({ active = true }: { active?: boolean }) {
     await refresh();
   };
   const handleDelete = async (taskId: string) => {
-    taskRequestGuard.current.cancel();
-    await apiDelete(taskId);
-    setSelectedTask(null);
-    await refresh();
+    try {
+      await apiDelete(taskId);
+      taskRequestGuard.current.cancel();
+      setSelectedTask(null);
+      await refresh();
+    } catch (e) {
+      alert((e as Error).message);
+    }
   };
   const handleRunNow = async (taskId: string) => {
     if (runningTaskIds.has(taskId)) return;

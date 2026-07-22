@@ -21,13 +21,19 @@ import {
 } from './react-loop';
 import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import type { ToolPreparationProgress } from '../shared/tool-progress';
+import type { SandboxLevel } from '../shared/sandbox-prompt';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execListAgents, execCreateWorkflow } from '../shared/workflow-builder';
 import { execListWorkflows, execUpdateWorkflow } from '../shared/workflow-editor';
-import { buildVirtualToolDefs } from './virtual-tools';
+import { buildVirtualToolDefs, shouldAttachToolCaller } from './virtual-tools';
 import { execMemoryTool, MEMORY_TOOL_NAMES, buildMemoryToolDefs } from '../shared/agent-memory';
 import { execCreateAutomation, execUpdateAutomation, execListAutomations } from '../shared/automation-builder';
 import { execTaskBoard, taskboardFile } from '../shared/taskboard';
+import {
+  prepareToolRegistration,
+  type ToolRegistrationProposal,
+} from '../shared/tool-registration.js';
+import { applyToolRegistrationAnswer } from '../shared/tool-registration-response.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -82,10 +88,11 @@ export interface SessionRunnerOpts {
   /** LLM 采样温度（来自 agent 配置） */
   temperature: number;
   toolNames: string[];
+  toolMode?: 'all' | 'selected';
   skillIds: string[];
   workspace: string;
   /** 沙箱级别（用于 sub-agent 继承） */
-  sandboxLevel: 'strict' | 'relaxed' | 'unrestricted';
+  sandboxLevel: SandboxLevel;
   /** 会话 ID：task_board 假工具据此按会话落盘任务板 */
   sessionId?: string;
   signal?: AbortSignal;
@@ -110,6 +117,7 @@ export class SessionRunner {
   private suspended = false;
   /** 挂起时保存的上下文（messages + systemPrompt），用于 resume */
   private suspendedState: { messages: ContextMessage[]; systemPrompt: string; pendingToolCallId?: string } | null = null;
+  private pendingToolRegistration: ToolRegistrationProposal | null = null;
 
   constructor(opts: SessionRunnerOpts) {
     this.opts = opts;
@@ -147,9 +155,18 @@ export class SessionRunner {
 
     const { messages, systemPrompt, pendingToolCallId } = this.suspendedState;
     this.suspendedState = null;
-
-    // 把人类回复作为工具结果追加：原生 role:'tool' 配对 / 文本 <result> 兜底
-    if (pendingToolCallId) {
+    const registration = this.pendingToolRegistration;
+    this.pendingToolRegistration = null;
+    if (registration) {
+      await applyToolRegistrationAnswer({
+        dataDir: this.opts.dataDir,
+        proposal: registration,
+        answer,
+        messages,
+        pendingToolCallId,
+        onEvent,
+      });
+    } else if (pendingToolCallId) {
       messages.push({ role: 'tool', toolCallId: pendingToolCallId, content: answer });
     } else {
       messages.push({ role: 'user', content: `<result tool="ask">${answer}</result>` });
@@ -196,11 +213,15 @@ export class SessionRunner {
     // 仅内存、仅本次运行（一个用户回合内的多次编辑），不落盘、不跨回合。
     const changeLedger: FileChange[] = [];
 
-    const toolDefs = await loadAgentToolDefs(dataDir, this.opts.toolNames, this.opts.skillIds);
+    const toolDefs = await loadAgentToolDefs(dataDir, this.opts.toolNames, this.opts.skillIds, this.opts.toolMode);
     // 原生模式：把虚拟工具（ask/delegate/list_agents/create_workflow）也作为 schema
     // 注入 tools 参数，否则模型在原生通道看不见它们。执行端 toolCaller 按 name 拦截不变。
     // create_automation 仅在可交互会话（有 sessionId）注入：潮汐无人值守运行不给，避免自我繁殖。
-    const nativeToolDefs = [...toolDefs, ...buildVirtualToolDefs(true, !!this.opts.sessionId), ...buildMemoryToolDefs()];
+    const nativeToolDefs = [
+      ...toolDefs,
+      ...buildVirtualToolDefs(true, !!this.opts.sessionId, !!this.opts.sessionId),
+      ...buildMemoryToolDefs(),
+    ];
 
     const llm: LLMCaller = {
       async call(msgs, _options, onChunk, sig, tools, onReasoning, onToolProgress) {
@@ -227,6 +248,28 @@ export class SessionRunner {
             try { options = JSON.parse(args.options); } catch {}
           }
           throw new SuspendSignal(question, options);
+        }
+        if (tool === 'register_tool') {
+          if (!this.opts.sessionId) {
+            const result = '工具注册失败：当前入口不支持人类确认。请改用季风会话或气旋工位私聊。';
+            onEvent({ type: 'tool-call', tool, args });
+            onEvent({ type: 'tool-result', tool, result, ok: false });
+            return result;
+          }
+          try {
+            const proposal = await prepareToolRegistration(dataDir, args);
+            this.pendingToolRegistration = proposal;
+            throw new SuspendSignal(
+              `注册全局工具「${proposal.tool.name}」？\n${proposal.tool.description}`,
+              ['注册', '取消'],
+            );
+          } catch (error) {
+            if (error instanceof SuspendSignal) throw error;
+            const result = `工具注册失败：${(error as Error).message}`;
+            onEvent({ type: 'tool-call', tool, args });
+            onEvent({ type: 'tool-result', tool, result, ok: false });
+            return result;
+          }
         }
         if (tool === 'delegate') {
           return await this.execDelegate(args, onEvent);
@@ -325,7 +368,7 @@ export class SessionRunner {
       },
     };
 
-    const enableTools = toolDefs.length > 0 || !!this.opts.interceptTool;
+    const enableTools = shouldAttachToolCaller(nativeToolDefs, !!this.opts.interceptTool);
     // 原生模式（native=true）走 runReActLoopNative（结构化 tool_calls）；
     // 文本模式走 runReActLoop（<action> 协议）。
     const result = this.opts.native

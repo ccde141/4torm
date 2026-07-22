@@ -1,3 +1,5 @@
+import type { SandboxLevel } from './sandbox-prompt.js';
+
 /**
  * SubAgent 类型定义
  *
@@ -19,9 +21,9 @@ export interface SubAgentParams {
   maxRounds: number;
   /**
    * 母 Agent 的沙箱级别。Sub-agent 直接继承使用，不读自己的配置。
-   * 缺省 'relaxed'（向后兼容）。
+   * 缺省项目级。
    */
-  parentSandboxLevel?: 'strict' | 'relaxed' | 'unrestricted';
+  parentSandboxLevel?: SandboxLevel;
   /** 流式回调：每个关键节点 emit */
   emit?: (event: SubAgentEvent) => void;
 }

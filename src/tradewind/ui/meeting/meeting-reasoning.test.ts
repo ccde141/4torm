@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { appendReasoning, combineReasoning } from './meeting-reasoning.js';
+import { appendChairStreamChunk, appendReasoning, combineReasoning } from './meeting-reasoning.js';
+
+test('chair token and reasoning stay in separate fields', () => {
+  const initial = { content: '', reasoning: '' };
+  const withReasoning = appendChairStreamChunk(initial, 'chair-reasoning', 'private thought');
+  const complete = appendChairStreamChunk(withReasoning, 'chair-token', 'public answer');
+
+  assert.deepEqual(complete, {
+    content: 'public answer',
+    reasoning: 'private thought',
+  });
+});
 
 test('会议 reasoning 分片按顺序累积', () => {
   assert.equal(appendReasoning('第一段', '第二段'), '第一段第二段');

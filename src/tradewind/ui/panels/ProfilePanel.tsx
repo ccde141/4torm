@@ -10,17 +10,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import type { WorkflowMode } from '../../types';
-
-interface AutoProfile {
-  id: string;
-  name: string;
-  cadence: { kind: 'relative'; gapSec: number };
-  overlap: 'skip' | 'queue';
-  lapBound: number | null;
-  carryOver: 'accumulate' | 'reset' | 'summary';
-  loopNote?: string;
-  summaryPrompt?: string;
-}
+import { deleteProfile, listProfiles, saveProfiles } from '../profile-client';
+import type { AutoProfile } from '../profile-client';
 
 interface ProfilePanelProps {
   visible: boolean;
@@ -45,16 +36,16 @@ export function ProfilePanel({ visible, workflowId, onClose, onRun }: ProfilePan
   const [profiles, setProfiles] = useState<AutoProfile[]>([]);
   const [editing, setEditing] = useState<AutoProfile | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!workflowId) return;
     setLoading(true);
+    setError(null);
     try {
-      const res = await fetch(`/api/tradewind/workflow/${workflowId}/profiles`);
-      if (res.ok) {
-        const data = await res.json() as { profiles: AutoProfile[] };
-        setProfiles(data.profiles ?? []);
-      }
+      setProfiles(await listProfiles(workflowId));
+    } catch (cause) {
+      setError((cause as Error).message || '加载循环档案失败');
     } finally {
       setLoading(false);
     }
@@ -66,12 +57,8 @@ export function ProfilePanel({ visible, workflowId, onClose, onRun }: ProfilePan
 
   // 整存：把当前 profiles 数组覆盖写回后端
   const persist = useCallback(async (next: AutoProfile[]) => {
+    await saveProfiles(workflowId, next);
     setProfiles(next);
-    await fetch(`/api/tradewind/workflow/${workflowId}/profiles`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profiles: next }),
-    });
   }, [workflowId]);
 
   const saveEdited = useCallback(async (p: AutoProfile) => {
@@ -79,13 +66,23 @@ export function ProfilePanel({ visible, workflowId, onClose, onRun }: ProfilePan
     const next = idx >= 0
       ? profiles.map(x => x.id === p.id ? p : x)
       : [...profiles, p];
-    await persist(next);
-    setEditing(null);
+    try {
+      await persist(next);
+      setError(null);
+      setEditing(null);
+    } catch (cause) {
+      setError((cause as Error).message || '保存循环档案失败');
+    }
   }, [profiles, persist]);
 
   const remove = useCallback(async (id: string) => {
-    await fetch(`/api/tradewind/workflow/${workflowId}/profiles/${id}`, { method: 'DELETE' });
-    setProfiles(prev => prev.filter(p => p.id !== id));
+    try {
+      await deleteProfile(workflowId, id);
+      setProfiles(prev => prev.filter(p => p.id !== id));
+      setError(null);
+    } catch (cause) {
+      setError((cause as Error).message || '删除循环档案失败');
+    }
   }, [workflowId]);
 
   if (!visible) return null;
@@ -97,6 +94,7 @@ export function ProfilePanel({ visible, workflowId, onClose, onRun }: ProfilePan
         <button className="tw-profile__close" onClick={onClose}>×</button>
       </div>
       <div className="tw-profile__body">
+        {error && <div className="tw-profile__hint">{error}</div>}
         {editing
           ? <ProfileForm draft={editing} onChange={setEditing} onSave={saveEdited} onCancel={() => setEditing(null)} />
           : <ProfileList

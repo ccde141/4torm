@@ -1,5 +1,11 @@
+import { h } from 'vue'
 import DefaultTheme from 'vitepress/theme'
+import AsciiBreathingField from './AsciiBreathingField.vue'
 import './custom.css'
 
-// 4torm 文档站:沿用默认主题 + 品牌色覆盖
-export default DefaultTheme
+export default {
+  extends: DefaultTheme,
+  Layout: () => h(DefaultTheme.Layout, null, {
+    'layout-top': () => h(AsciiBreathingField),
+  }),
+}

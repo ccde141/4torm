@@ -43,6 +43,14 @@ function resolveUrl(baseUrl: string, path: string): string {
   return `${baseUrl}${path}`;
 }
 
+export function wrapRequestError(err: unknown, url: string): Error {
+  if (err instanceof LLMError) return err;
+  if ((err as Error).name === 'AbortError') {
+    return new Error(`LLM 请求超时 (${TIMEOUT_MS / 1000}s): ${url}`, { cause: err });
+  }
+  return err instanceof Error ? err : new Error(String(err), { cause: err });
+}
+
 export async function request<T>(
   path: string,
   opts: RequestOptions,
@@ -75,11 +83,7 @@ export async function request<T>(
 
     return res.json();
   } catch (err) {
-    if (err instanceof LLMError) throw err;
-    if ((err as Error).name === 'AbortError') {
-      throw new Error(`LLM 请求超时 (${TIMEOUT_MS / 1000}s): ${url}`);
-    }
-    throw err;
+    throw wrapRequestError(err, url);
   } finally {
     clearTimeout(timer);
   }

@@ -128,13 +128,18 @@ export async function deleteSeat(
   }
 }
 
-/** 更新工位角色提示词 / 标题 / 职责 / 覆盖开关（运行中可改，仅更新传入字段） */
+/** 更新工位绑定 / 角色提示词 / 标题 / 职责 / 覆盖开关（仅更新传入字段） */
 export async function updateSeatRole(
   dataDir: string, workshopId: string, seatId: string,
-  patch: { title?: string; rolePrompt?: string; duty?: string; overrideAgentRole?: boolean },
+  patch: { agentId?: string; title?: string; rolePrompt?: string; duty?: string; overrideAgentRole?: boolean },
 ): Promise<SeatData | null> {
   const seat = await loadSeat(dataDir, workshopId, seatId);
   if (!seat) return null;
+  if (patch.agentId !== undefined) {
+    const agentId = patch.agentId.trim();
+    if (!agentId) throw new Error('绑定 Agent 不能为空');
+    seat.agentId = agentId;
+  }
   if (patch.title !== undefined && patch.title !== seat.title) {
     if (await titleExists(dataDir, workshopId, patch.title, seatId)) {
       throw new Error(`工位名「${patch.title}」已存在，请换一个`);

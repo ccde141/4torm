@@ -12,6 +12,14 @@
  */
 
 import type { ToolDef } from '../shared/tool-defs-loader';
+import { buildRegisterToolDef } from '../shared/tool-registration.js';
+
+export function shouldAttachToolCaller(
+  visibleToolDefs: readonly ToolDef[],
+  hasIntercept: boolean,
+): boolean {
+  return visibleToolDefs.length > 0 || hasIntercept;
+}
 
 /**
  * 构建季风原生模式的虚拟工具定义。
@@ -19,7 +27,11 @@ import type { ToolDef } from '../shared/tool-defs-loader';
  * @param allowAutomation 是否注入潮汐自动化工具（create_automation）。仅在可交互会话（有 sessionId）注入；
  *        潮汐无人值守运行不注入，避免自我繁殖。
  */
-export function buildVirtualToolDefs(allowWorkflow = true, allowAutomation = false): ToolDef[] {
+export function buildVirtualToolDefs(
+  allowWorkflow = true,
+  allowAutomation = false,
+  allowToolRegistration = false,
+): ToolDef[] {
   const defs: ToolDef[] = [
     {
       name: 'ask',
@@ -65,6 +77,8 @@ export function buildVirtualToolDefs(allowWorkflow = true, allowAutomation = fal
       parameters: { type: 'object', properties: {}, required: [] },
     },
   ];
+
+  if (allowToolRegistration) defs.push(buildRegisterToolDef());
 
   if (allowAutomation) {
     defs.push(

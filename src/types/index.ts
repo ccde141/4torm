@@ -1,8 +1,4 @@
-/**
- * Agent 系统运行状态（互斥锁）。
- * 仅限系统内部修改，用户不可手动改写。
- * 合法值见 SystemStatus 枚举。
- */
+/** Agent 的持久化可用状态；实时 busy 由服务端活动表覆盖。 */
 export type AgentStatus = string;
 
 /**
@@ -17,8 +13,10 @@ export interface Agent {
   name: string;
   role: string;
   status: AgentStatus;
-  /** LLM 流式输出中（短暂互斥锁） */
+  /** 至少有一个运行实例仍然活动；仅用于展示，不参与互斥。 */
   busy?: boolean;
+  /** 当前运行来源，仅由服务端运行态覆盖，不持久化。 */
+  activeSurfaces?: Array<'conversation' | 'convection' | 'cyclone' | 'tradewind' | 'tide'>;
   /** 用户自定义分类标签（纯展示，不影响锁） */
   label?: AgentLabel;
   model: string;
@@ -161,12 +159,12 @@ export interface AgentConfig {
   rolePrompt?: string;
   temperature?: number;
   tools?: string[];
+  /** 缺省仅兼容旧数据；新配置始终保存为 selected，空数组即不启用本地工具。 */
+  toolMode?: 'all' | 'selected';
   skills?: string[];
   workspace?: string;
-  /**
-   * 旧权限档字段，仅为历史数据兼容保留；当前执行策略不再按此分支。
-   */
-  sandboxLevel?: 'strict' | 'relaxed' | 'unrestricted';
+  /** 文件工具权限；strict/relaxed 仅用于读取旧配置。 */
+  sandboxLevel?: 'project' | 'unrestricted' | 'strict' | 'relaxed';
 }
 
 /** 导航项 */

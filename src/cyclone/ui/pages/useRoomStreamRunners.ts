@@ -25,7 +25,9 @@ export interface FeedTool {
 
 /** 统一渲染项：历史消息 + 本轮实时消息共用（仿对流单数组模型） */
 export interface FeedMsg {
+  key: string;
   sourceIndex?: number;
+  turnId?: string;
   speaker: string;
   content: string;
   isHuman: boolean;
@@ -34,6 +36,8 @@ export interface FeedMsg {
   phase?: string;
   /** 原生思考流（流式当轮显示；不进上下文，重载不保留） */
   reasoning?: string;
+  kind?: 'dispatch-result';
+  dispatchId?: string;
   tools: FeedTool[];
 }
 
@@ -57,8 +61,13 @@ function applyEvent(ev: any, r: RoomRunner): void {
   switch (ev.type) {
     case 'seat-start':
       r.activeSpeaker = ev.speaker;
-      feed.push({ speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: formatStreamStatus('llm-waiting'), tools: [] });
+      feed.push({ key: ev.turnId, turnId: ev.turnId, speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: formatStreamStatus('llm-waiting'), tools: [] });
       break;
+    case 'seat-waiting': {
+      const m = feed[feed.length - 1];
+      if (m && m.speaker === ev.speaker) m.phase = '等待同一 Agent 的当前任务结束';
+      break;
+    }
     case 'token': {
       const m = feed[feed.length - 1];
       if (m && m.speaker === r.activeSpeaker) { m.content += ev.content; m.phase = formatStreamStatus('model-output'); }
@@ -113,7 +122,7 @@ function applyEvent(ev: any, r: RoomRunner): void {
       break;
     }
     case 'error':
-      feed.push({ speaker: '系统', content: ev.message, isHuman: false, tools: [] });
+      feed.push({ key: `error-${feed.length}`, speaker: '系统', content: ev.message, isHuman: false, tools: [] });
       break;
   }
 }
@@ -217,7 +226,7 @@ export function useRoomStreamRunners(onRoomFinished: (roomId: string) => void) {
     const ctrl = new AbortController();
     const runner: RoomRunner = {
       // 人类发言乐观上屏（落库前先展示，存进 runner 避免切走丢失）
-      roundFeed: [{ speaker: '人类', content: text, isHuman: true, tools: [] }],
+      roundFeed: [{ key: `human-${Date.now()}`, speaker: '人类', content: text, isHuman: true, tools: [] }],
       activeSpeaker: '',
       streaming: true,
       done: false,
@@ -251,7 +260,7 @@ export function useRoomStreamRunners(onRoomFinished: (roomId: string) => void) {
         );
       } catch (e) {
         if (!ctrl.signal.aborted) {
-          runner.roundFeed.push({ speaker: '系统', content: `[请求失败] ${(e as Error).message}`, isHuman: false, tools: [] });
+          runner.roundFeed.push({ key: `error-${runner.roundFeed.length}`, speaker: '系统', content: `[请求失败] ${(e as Error).message}`, isHuman: false, tools: [] });
         }
       } finally {
         if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }

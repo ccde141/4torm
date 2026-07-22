@@ -11,6 +11,11 @@ node_modules
 dist
 dist-ssr
 *.local
+*.tsbuildinfo
+opencode.json
+__pycache__/
+*.py[cod]
+/.workspace/
 
 # Environment files
 .env
@@ -51,6 +56,10 @@ data/sandbox/_index.json
 
 # 用户界面主题偏好
 data/skin-config.json
+data/skin-textures/
+
+# 用户自定义 Agent 标签
+data/labels.json
 
 # 工作流输出目录（output 节点默认输出地址）
 data/workflow_output/

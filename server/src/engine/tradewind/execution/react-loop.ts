@@ -293,7 +293,6 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
     if (actions.length === 0 || !tools) {
       const answer = extractAnswer(reply);
       if (answer !== null) {
-        nudgeCount = 0;
         return { content: answer, rawContent: reply, toolCalls: allToolCalls, turns: turn + 1, lastPromptTokens };
       }
       // A: 无 action 无 answer → 强制再问（配额内）

@@ -17,7 +17,9 @@ import { WorkflowInfoPanel } from '../panels/WorkflowInfoPanel';
 import { useWorkflowStore } from '../hooks/useWorkflowStore';
 import { useExecution } from '../hooks/useExecution';
 import { scheduleAutoSave } from '../hooks/auto-save';
-import type { WorkflowGraph, WorkflowMode } from '../../types';
+import { deleteWorkflow, openWorkflowWorkspace } from '../workflow-client';
+import { validateGraph } from '../workflow-validation';
+import type { WorkflowMode } from '../../types';
 
 export default function TradeWindPage() {
   const store = useWorkflowStore();
@@ -32,6 +34,7 @@ export default function TradeWindPage() {
   const openedMeetingsRef = useRef<Map<string, { nodeId: string; label: string }>>(new Map());
   const [, forceUpdate] = useState(0); // 触发重渲染
   const [saveTime, setSaveTime] = useState<number | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // 本次工作流是否已结束（结束后面板/侧板转只读"封存"，内容保留不清）
   const [sessionEnded, setSessionEnded] = useState(false);
@@ -67,14 +70,14 @@ export default function TradeWindPage() {
       if (lastId && lastId !== 'untitled') {
         const res = await fetch(`/api/tradewind/workflow/load/${lastId}`);
         if (res.ok) {
-          const data = await res.json() as { workflowId: string; graph: import('../../types').WorkflowGraph };
-          store.loadGraph(data.graph, data.workflowId);
+          const data = await res.json() as { workflowId: string; name?: string; graph: import('../../types').WorkflowGraph };
+          store.loadGraph(data.graph, data.workflowId, data.name);
           return;
         }
       }
       // 没有可恢复的工作流，开一张空白画布（仅内存，不落盘；加了节点保存/运行时才创建目录）
       const newId = `wf-${Date.now().toString(36)}`;
-      store.loadGraph({ nodes: [], edges: [] }, newId);
+      store.loadGraph({ nodes: [], edges: [] }, newId, '未命名工作流');
     };
     init();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -126,15 +129,19 @@ export default function TradeWindPage() {
   }, [execution.running]);
 
   // 5 分钟自动保存
-  const runAutoSave = useEffectEvent(() => store.save());
-  const markAutoSaved = useEffectEvent(() => setSaveTime(Date.now()));
+  const runAutoSave = useEffectEvent(async () => {
+    if (await store.save()) {
+      setSaveError(null);
+      setSaveTime(Date.now());
+    }
+  });
   const reportAutoSaveError = useEffectEvent((error: unknown) => {
-    console.error('[tradewind] 自动保存失败', error);
+    setSaveError((error as Error).message || '自动保存失败');
   });
 
   useEffect(() => {
     if (store.workflowId === 'untitled') return;
-    return scheduleAutoSave(runAutoSave, markAutoSaved, reportAutoSaveError);
+    return scheduleAutoSave(runAutoSave, () => {}, reportAutoSaveError);
   }, [store.workflowId]);
 
   const handleRun = useCallback(async (mode: WorkflowMode = 'manual', profileId?: string) => {
@@ -145,8 +152,16 @@ export default function TradeWindPage() {
       return;
     }
     // 运行前先保存：确保后端工作流目录 / workspace 已创建（新建后未手动保存也能直接跑）
-    await store.save();
-    execution.start(graph, store.workflowId, undefined, mode, profileId);
+    try {
+      if (!await store.save()) {
+        setSaveError('空工作流尚未创建工作区');
+        return;
+      }
+      setSaveError(null);
+      execution.start(graph, store.workflowId, undefined, mode, profileId);
+    } catch (error) {
+      setSaveError((error as Error).message || '保存工作流失败');
+    }
   }, [store, execution]);
 
   const handleStop = useCallback(() => {
@@ -154,21 +169,39 @@ export default function TradeWindPage() {
   }, [execution]);
 
   const handleSave = useCallback(async () => {
-    await store.save();
-    setSaveTime(Date.now());
+    try {
+      if (await store.save()) setSaveTime(Date.now());
+      setSaveError(null);
+    } catch (error) {
+      setSaveError((error as Error).message || '保存工作流失败');
+    }
+  }, [store]);
+
+  const handleOpenWorkspace = useCallback(async () => {
+    try {
+      await store.save();
+      await openWorkflowWorkspace(store.workflowId);
+      setSaveError(null);
+    } catch (error) {
+      setSaveError((error as Error).message || '打开工作流工作区失败');
+    }
   }, [store]);
 
   const handleNew = useCallback(() => {
     clearPanels();
     setSessionEnded(false);
     const newId = `wf-${Date.now().toString(36)}`;
-    store.loadGraph({ nodes: [], edges: [] }, newId);
+    store.loadGraph({ nodes: [], edges: [] }, newId, '未命名工作流');
     // 不立即落盘：空工作流无内容，等加了节点保存/运行时才创建目录（避免 0 节点幽灵 + 列表噪声）
   }, [store, clearPanels]);
 
   const handleDelete = useCallback(async (id: string) => {
-    await fetch(`/api/tradewind/workflow/${id}`, { method: 'DELETE' });
-  }, []);
+    if (execution.running && id === store.workflowId) {
+      throw new Error('当前工作流正在运行，请先停止后再删除');
+    }
+    await deleteWorkflow(id);
+    if (id === store.workflowId) handleNew();
+  }, [execution.running, store.workflowId, handleNew]);
 
   const selectedNode = useMemo(
     () => store.nodes.find((n) => n.id === store.selectedNodeId) ?? null,
@@ -190,13 +223,15 @@ export default function TradeWindPage() {
     <div className="tw-page">
       <Toolbar
         workflowId={store.workflowId}
+        workflowName={store.workflowName}
         running={execution.running}
         saveTime={saveTime}
         onRun={handleRun}
         onOpenProfiles={() => setProfileVisible(true)}
         onStop={handleStop}
         onSave={handleSave}
-        onSetWorkflowId={store.setWorkflowId}
+        onOpenWorkspace={handleOpenWorkspace}
+        onSetWorkflowName={store.setWorkflowName}
         onLoadList={() => setListVisible(!listVisible)}
       />
       <div className="tw-page__body">
@@ -234,8 +269,8 @@ export default function TradeWindPage() {
           lap={execution.lap}
         />
       </div>
-      {execution.error && (
-        <div className="tw-page__error">{execution.error}</div>
+      {(execution.error || saveError) && (
+        <div className="tw-page__error">{execution.error || saveError}</div>
       )}
       {/* Agent 聊天面板：曾打开过的持久挂载，只隐藏不卸载 */}
       {[...openedChatsRef.current.values()].map(({ nodeId, label }) => (
@@ -269,42 +304,4 @@ export default function TradeWindPage() {
       )}
     </div>
   );
-}
-
-// ── 运行前校验 ────────────────────────────────────────────────────
-
-function validateGraph(graph: WorkflowGraph, mode: WorkflowMode = 'manual'): string[] {
-  const errors: string[] = [];
-
-  // 自动模式否决手动专属节点（即时否决，无需往返后端；后端仍是最终事实源）
-  if (mode === 'auto') {
-    for (const n of graph.nodes) {
-      if (n.type === 'meeting') errors.push(`自动模式不支持会议室节点「${n.label}」——会议需人类在场，请改用手动运行或移除`);
-      if (n.type === 'human-gate') errors.push(`自动模式不支持暂停点节点「${n.label}」——全自动无人恢复，请改用手动运行或移除`);
-    }
-  }
-
-  // Output 只能有一个
-  const outputs = graph.nodes.filter(n => n.type === 'output');
-  if (outputs.length === 0) errors.push('缺少出口节点');
-  if (outputs.length > 1) errors.push(`出口节点只能有一个，当前有 ${outputs.length} 个`);
-
-  // Agent 节点 agentId 不能为空
-  for (const n of graph.nodes) {
-    if (n.type === 'agent') {
-      const agentId = (n.config as any)?.agentId;
-      if (!agentId) errors.push(`Agent「${n.label}」未选择 Agent 实体`);
-    }
-    if (n.type === 'meeting') {
-      const cfg = n.config as any;
-      if (!cfg?.chairAgentId) errors.push(`会议室「${n.label}」未选择会长`);
-      if (!cfg?.participantNodeIds?.length) errors.push(`会议室「${n.label}」未选择参与者`);
-    }
-  }
-
-  // Entry 至少一个
-  const entries = graph.nodes.filter(n => n.type === 'entry');
-  if (entries.length === 0) errors.push('缺少入口节点');
-
-  return errors;
 }

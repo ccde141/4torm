@@ -90,9 +90,11 @@ export async function resetRoomContext(
     tokenUsage: room.tokenUsage || null,
     chairTokenUsage: room.chairTokenUsage || null,
     compactState: room.compactState || null,
+    dispatchContextVersion: room.dispatchContextVersion || 0,
   }, null, 2));
 
   if (opts.scope === 'public' || opts.scope === 'both') {
+    room.dispatchContextVersion = (room.dispatchContextVersion ?? 0) + 1;
     room.publicMessages = opts.publicSummary
       ? [{ speaker: '系统', content: `以下是重置前的群聊摘要，请作为后续群聊上下文参考：\n\n${opts.publicSummary}`, timestamp: Date.now() }]
       : [];

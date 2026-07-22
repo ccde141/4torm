@@ -45,7 +45,7 @@
 |  | `ALL /workshop/:workshopId/seat/:seatId/:action` | 工位 action | JSON 或 SSE |
 |  | `ALL /workshop/:workshopId/room/:roomId/:action` | 房间 action | JSON 或 SSE |
 | `/api/mcp` | `GET /list`、`GET /tools` | 无 | MCP 状态/工具数组 |
-|  | `POST /add`、`/update`、`/remove`、`/toggle`、`/reconnect` | MCP 配置或名称 | 配置/状态 |
+|  | `POST /add`、`/update`、`/import`、`/remove`、`/toggle`、`/reconnect` | MCP 配置、配置列表或名称 | 配置/状态 |
 | `/api/memory` | `GET /list`、`POST /create`、`POST /update`、`POST /delete` | agent/记忆字段 | 记忆数组或 `{ok:true}` |
 | `/api/delegate` | `POST /` | delegate 任务字段 | delegate 结果 |
 
@@ -74,21 +74,20 @@
 
 未知本地工具返回“未知工具”文本，不抛 HTTP 500；executor 文件缺失或未知 executor 类型抛异常。工具结果通过 `{result,meta?}` 返回，`meta` 不进入 LLM 结果正文。
 
-## 当前三级权限语义
+## 当前两级文件权限语义
 
-代码中的正式名称是 `strict`、`relaxed`、`unrestricted`；前端历史文案中的“工作区级/项目级/无限制”只是对应说明。
+代码中的正式名称是 `project` 和 `unrestricted`，前端显示为「项目级」和「无限制」。旧值在读取时会映射为项目级，不需要迁移已有 Agent 数据。
 
-| 级别 | 文件读取 | 文件写入/删除 | 命令 cwd | 当前已知限制 |
+| 级别 | 内置文件工具读取 | 内置文件工具写入/删除 | 命令 cwd | 当前已知限制 |
 |---|---|---|---|---|
-| `strict` | 仅 `workspaceDir` | 仅 `workspaceDir`，且禁止控制面文件 | `workspaceDir` | shell 内可自行 `cd`，不是硬隔离 |
-| `relaxed`（默认） | `workspaceDir`；以 `data/` 开头的读路径可按项目根解析；其他项目文件可读 | 仅 `workspaceDir`，禁止控制面/工作流控制文件 | `workspaceDir` | 不是完整项目级 shell 隔离 |
-| `unrestricted` | 相对 workspace；允许绝对路径 | 任意解析路径仍禁止控制面文件 | `workspaceDir` | `cd ..`、子进程和 junction/symlink 未统一防护 |
+| `project`（默认） | 4torm 项目与当前 `workspaceDir` | 同读取范围，并禁止控制面文件 | `workspaceDir` | Shell、MCP 与自定义执行器不受此路径守卫自动限制 |
+| `unrestricted` | 相对路径基于 `workspaceDir`，同时允许其他外部路径 | 任意路径仍禁止控制面文件 | `workspaceDir` | Shell、MCP 与自定义执行器按各自能力运行 |
 
-所有本地文件 builtin 复用 `_resolve.js`；HTTP storage API 使用 `resolveSafePath`，两者边界目前不同。`run_command` 还有危险命令黑名单和 15 秒/工具自身超时层。MCP 工具目前绕过本地路径守卫。HTTP 请求体可传 `sandboxLevelOverride`，当前没有独立的人工确认层。
+所有内置文件工具复用 `_resolve.js`，路径判断会归一化相对路径、绝对路径以及符号链接或 junction 的真实目标。HTTP storage API 使用自己的路径解析，两者边界不同。`run_command` 只从工作区启动，并另有危险命令黑名单和超时限制；Shell 可以自行 `cd`，MCP 与自定义执行器也不会自动经过本地文件守卫。`/api/tools/exec` 请求体仍可传 `sandboxLevelOverride` 供内部执行链使用，当前没有独立的鉴权或人工确认层。
 
 ## 状态转换
 
-- Agent：注册表中不存在 → 创建/启用 → 空闲；执行时进入 busy，完成/错误/中止回到空闲；崩溃残留锁由启动 heal 释放。
+- Agent：注册表中不存在 → 创建 → 空闲；模型不可用时显示离线。运行期间由进程内活动状态显示工作中及所在功能区，所有活动结束后恢复空闲；应用重启后活动状态自然清空。
 - 普通会话：不存在 → 创建 → 空闲；`chat` 进入运行，可能 `suspended`（`ask`），`reply` 恢复；完成/错误/abort 回到空闲；删除后不可轮询。
 - Convection：创建会话 → 空闲；`speak`/`chair` 逐轮运行并写回 public/chair messages；可压缩归档；删除移除 JSON、workspace 和 index 项。
 - Cyclone：创建 workshop → 添加 seat/room；seat/room 的 chat/speak 运行、可挂起等待回答；消息编辑/删除只改目标持久化数组；workshop 删除不主动清理历史备份之外的数据。
@@ -123,7 +122,7 @@
 | `skills/{skillId}/` | Skill 管理与加载器 | `config.json`、`SKILL.md`、tools/executors |
 | `mcp/servers.json`、`providers.json` | MCP/LLM 设置 | 可能含密钥，已 gitignore |
 
-当前已知的多写风险：各 session/index store 通过原子写保护单文件完整性，但跨进程并发合并仍未统一；symlink/junction、shell 子进程和 MCP 的权限边界仍是后续 Phase 2 的待冻结事项。
+当前已知的多写风险：各 session/index store 通过原子写保护单文件完整性，但跨进程并发合并仍未统一；内置文件工具已处理 symlink/junction，Shell 子进程、MCP 和自定义执行器仍属于各自独立的权限边界。
 
 ## 最小特征测试
 

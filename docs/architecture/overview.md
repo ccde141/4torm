@@ -1,106 +1,147 @@
 # 总体架构
 
-4torm 是单仓库的前后端分离应用:浏览器前端(React 19 + Vite)经 HTTP / SSE 访问服务端(Fastify),服务端统一驱动所有 Agent 协作模式,数据全部落在本地文件系统。
+4torm 由界面、服务端、运行数据和外部模型服务共同组成。界面负责操作与状态展示，服务端负责 Agent 运行、工具执行、任务调度和数据写入，长期数据保存在 `data/` 及各 Agent 配置的工作区中
 
-## 分层架构
+## 运行时组成
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                  浏览器 (Vite + React 19)                 │
-│                                                           │
-│  季风 │ 对流 │ 气旋 │ 信风 │ 潮汐 │ 控制台 │ 工具/技能/MCP   │
-└────────────────────────┬────────────────────────────────┘
-                         │ HTTP / SSE
-┌────────────────────────┴────────────────────────────────┐
-│                服务端 (Fastify 5 + TypeScript)            │
-│                                                           │
-│  路由层: /api/chat · /api/convection · /api/cyclone ·     │
-│          /api/tradewind · /api/tide · /api/mcp ...        │
-│                                                           │
-│  引擎层: conversation · convection · cyclone ·            │
-│          tradewind · services/tide                        │
-│                                                           │
-│  共享层: llm-bridge · agent-queue · agent-lock ·          │
-│          tool-defs-loader · mcp-manager · prompt          │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────┴────────────────────────────────┐
-│              LLM 提供商 (OpenAI 兼容接口)                  │
-│              DeepSeek / OpenAI / Claude / 本地            │
-└─────────────────────────────────────────────────────────┘
-```
+| 部分 | 负责内容 |
+|------|----------|
+| 浏览器界面 | 控制台、五个功能区、工具、技能与 MCP 管理 |
+| Electron 桌面端 | 启动同一套服务与界面，并向前端提供拖入文件的真实路径 |
+| Fastify 服务端 | 接收请求、运行 Agent、调用模型和工具、维护调度与实时状态 |
+| `data/` | 保存 Agent 配置、会话、任务、工作流、运行记录和扩展能力 |
+| Agent 工作区 | 保存 Agent 或功能区任务产生的文件，可以位于 4torm 目录内外 |
+| 模型提供商 | 接收模型请求并返回文本、思考内容或工具调用 |
+| MCP Server | 向 Agent 提供外部工具，其数据范围由对应服务决定 |
 
-## 模块间关系
+浏览器开发模式下，Vite 提供前端页面，Fastify 运行在独立端口；生产模式下，Fastify 同时托管构建后的前端与文档站。Electron 会启动 Fastify，再在桌面窗口中打开应用
 
-所有协作模式共享同一套 Agent 实体与 ReAct 引擎,区别只在「如何组织这批 Agent」:
+## 一次 Agent 任务如何执行
 
-```
-                    ┌──────────┐
-                    │  Agent   │  ← 所有模式共享同一套 Agent 实体 + ReAct
-                    └────┬─────┘
-      ┌──────────┬───────┼───────┬──────────┐
-      │          │       │       │          │
- ┌────▼───┐ ┌───▼───┐ ┌─▼────┐ ┌▼──────┐ ┌─▼─────┐
- │  季风  │ │  对流 │ │ 气旋 │ │ 信风  │ │ 潮汐  │
- │ 1对1   │ │ 会议  │ │工作室│ │工作流 │ │自动化 │
- └────────┘ └───────┘ └──────┘ └───────┘ └───────┘
-```
+1. 用户在某个功能区发送消息或启动任务
+2. 前端向对应的 `/api/*` 接口提交请求
+3. 服务端读取当前 Agent、模型、工具、技能、执行权限、会话和工作区
+4. 服务端将当前任务与上下文发送给模型提供商
+5. 模型返回文本时，服务端通过 SSE 持续更新界面
+6. 模型请求工具时，服务端执行对应工具，并将结果交回模型继续处理
+7. 功能区保存消息、任务状态、工具过程或运行记录
+8. 任务结束后，界面载入最终状态，Agent 活动状态恢复为空闲
 
-- **季风** 是基础——所有模式的 Agent 执行都复用 `SessionRunner` + ReAct 循环
-- **对流** 是季风的多人版——多个 Agent 共享公共上下文,串行发言,会长私聊参谋
-- **气旋** 是常驻工作室——工位私聊(季风式延续性)+ 群聊房间(对流式讨论)+ 会长参谋,共享工作区
-- **信风** 是编排层——通过 DAG 定义 Agent 间的数据流转顺序,信封流转
-- **潮汐** 是时间驱动层——复用季风的执行能力,加上调度器和滚动归档
+不同功能区使用各自的会话、工作区和运行规则，但都从控制台读取当前 Agent 配置。功能区的具体行为见季风、对流、气旋、信风和潮汐章节
 
-## 共享基础设施
+## 数据与状态
 
-| 组件 | 职责 | 位置 |
-|------|------|------|
-| `llm-bridge` | 统一的 LLM 调用层(流式 / 非流式,token 统计;全局 3 路并发信号量) | `server/src/engine/shared/` |
-| `agent-queue` | 按-Agent 串行队列(withAgentTurn):同一 Agent 被多处驱动时排队依次执行 | `server/src/engine/shared/` |
-| `agent-lock` | Agent busy 短锁(产出期防重入) | `server/src/engine/shared/` |
-| `tool-executor` | 工具执行派发(注册表查找 → 执行器加载 → 沙箱校验) | `server/src/services/` |
-| `tool-defs-loader` | 工具装配(registry + skill + MCP 合并去重) | `server/src/engine/shared/` |
-| `mcp-manager` | MCP 服务器连接与工具注入 | `server/src/engine/shared/` |
-| `prompt` | 系统提示词构建(角色 + 工具列表 + 输出模板) | `server/src/engine/shared/` |
+4torm 的数据可以分为四类：
 
-## 技术栈
+| 类型 | 内容 | 保存方式 |
+|------|------|----------|
+| 配置数据 | Agent、模型提供商、工具、技能、MCP、潮汐任务和工作流定义 | JSON、Markdown 与执行器文件 |
+| 会话与运行记录 | 季风会话、会议记录、工位私聊、工作流运行和潮汐历史 | JSON 或 JSONL |
+| 工作区文件 | Agent、会议室、工作室和工作流产生的文件 | 保存在对应工作区 |
+| 运行时状态 | 当前活动位置、实时输出、队列和正在执行的任务 | 主要保存在服务端进程内 |
 
-| 层 | 技术 |
-|----|------|
-| 前端 | React 19 + Vite + XY Flow(画布) |
-| 服务端 | Fastify 5 + TypeScript + tsx |
-| 桌面 | Electron 42(可选外壳,原生文件路径 + 生产自托管) |
-| LLM 通信 | 原生 fetch,OpenAI Chat Completions 兼容格式 |
-| 流式 | SSE(`text/event-stream`)全程推送 |
-| 扩展协议 | MCP(stdio + JSON-RPC,手写客户端,无额外 SDK 依赖) |
-| 数据存储 | 文件系统 JSON,无数据库依赖 |
-| 进程模型 | 开发态 `concurrently` 并发起服务端 + Vite;生产态 Fastify(`@fastify/static`)单进程自托管 |
+配置数据应通过控制台、专用页面或对应接口修改。框架内置文件工具不能直接改写 Agent 注册表、工具注册表、潮汐任务表和工作流控制文件
 
-## 项目结构
+会话、运行记录与工作区文件会根据功能区的执行过程写入磁盘。详细目录见[数据目录](./data-layout)，文件访问范围见[安全与隔离](./security)
 
-```
+## 页面刷新
+
+刷新或关闭浏览器页面不会关闭 Fastify 服务端，已经在服务端运行的任务可以继续执行
+
+重新进入页面后，功能区会读取已经保存的消息和状态；支持活动同步的功能区还会查询当前任务是否仍在运行。刷新前已经发送到浏览器的实时 token、思考过程和工具动画不会重新播放，任务完成后会载入最终保存结果
+
+## 程序关闭与重新启动
+
+收到正常退出信号时，服务端会停止潮汐调度和信风执行，等待潮汐运行、气旋派发及原子写入队列排空，然后断开 MCP 并关闭服务。退出排空最多等待十秒
+
+强制结束进程或系统断电时，排空流程不会执行。已经完成原子替换的文件仍然保留，尚未写入的实时输出和当前执行结果可能丢失
+
+下一次启动时，服务端会：
+
+- 清理框架控制目录中残留的临时文件
+- 释放上次遗留的 Agent 活动锁
+- 将未正常结束的信风运行标记为 `crashed`
+- 将执行中断的气旋异步派发标记为失败
+- 继续处理尚未开始的气旋异步派发
+- 重新连接已启用的 MCP Server
+- 重新启动潮汐调度器
+
+Agent 的活动位置属于进程内状态，程序重新启动后会恢复为空闲。4torm 关闭期间，潮汐任务不会执行
+
+## 开发者入口
+
+| 要修改的内容 | 主要位置 |
+|--------------|----------|
+| 页面与交互 | `src/` 下对应功能区的 `ui/`、公共组件及 store |
+| HTTP 与 SSE 接口 | `server/src/routes/` |
+| Agent 与功能区执行逻辑 | `server/src/engine/` |
+| 潮汐调度、数据路径和运行服务 | `server/src/services/` |
+| 模型、工具、活动状态与原子写入 | `server/src/engine/shared/` |
+| 桌面窗口与文件路径桥接 | `electron/` |
+| 运行数据 | `data/` |
+| 文档站 | `docs/` |
+
+排查问题时，可以先按现象确定入口：
+
+- 页面显示或切换异常，从对应 `src/*/ui/` 和 store 开始
+- 请求返回错误或状态码不符，从 `server/src/routes/` 开始
+- 模型回复、工具调用或运行状态异常，从对应功能区的 engine 开始
+- 文件、索引或恢复异常，从 store、`data-paths`、`atomic-io` 和启动恢复逻辑开始
+- MCP 连接或工具发现异常，从 MCP 页面、路由和 manager 开始
+- 关闭或重启后的状态异常，从 `startup-recovery` 与 `graceful-shutdown` 开始
+
+## 相关文档
+
+- [数据目录](./data-layout)
+- [安全与隔离](./security)
+- [桌面化](./desktop)
+- [行为冻结与接口基线](./behavior-freeze)
+
+## 代码目录
+
+以下目录不包含运行数据，`data/` 的内容单独见[数据目录](./data-layout)
+
+```text
 4torm/
-├── electron/                     ← 桌面外壳(main.cjs + preload.cjs,原生文件路径)
-├── src/                          ← 前端 (React 19 + Vite)
-│   ├── engine/                   ← 客户端引擎(解析、prompt、流式)
-│   ├── convection/ui/            ← 对流会议页面
-│   ├── cyclone/ui/               ← 气旋工作室页面(工位 / 群聊房间 / 会长抽屉)
-│   ├── tradewind/ui/             ← 信风画布 + 节点 + 面板
-│   ├── tide/ui/                  ← 潮汐管理面板
-│   └── components/               ← 控制台、工具、技能、MCP 管理页
-├── server/                       ← 服务端 (Fastify 5 + TypeScript)
+├── src/                              前端代码
+│   ├── api/                          存储、记忆、潮汐与工具请求
+│   ├── components/                   控制台、季风、工具、技能、MCP 与公共组件
+│   ├── convection/ui/                对流会议室界面
+│   ├── cyclone/ui/                   气旋工作室界面
+│   ├── tradewind/ui/                 信风画布、节点与运行面板
+│   ├── tide/ui/                      潮汐任务管理界面
+│   ├── engine/                       前端消息解析与季风会话辅助逻辑
+│   ├── store/                        Agent、会话、活动状态和扩展能力状态
+│   ├── llm/                          模型提供商与请求适配
+│   ├── types/                        前端共享类型
+│   ├── styles/                       全局样式与主题
+│   └── utils/                        前端通用辅助函数
+│
+├── server/
 │   └── src/
+│       ├── index.ts                  服务端启动、路由注册与关闭流程
+│       ├── routes/                   HTTP、SSE 与功能区接口
 │       ├── engine/
-│       │   ├── shared/           ← 共享层(llm-bridge, agent-queue, agent-lock, tool-defs-loader, mcp-manager)
-│       │   ├── conversation/     ← 季风对话引擎(SessionRunner + ReAct)
-│       │   ├── convection/       ← 对流会议引擎
-│       │   ├── cyclone/          ← 气旋工作室引擎(seat / room / chair / contact runner)
-│       │   └── tradewind/        ← 信风工作流引擎(orchestrator + 节点)
-│       ├── services/             ← tool-executor、tide 调度器 + runner
-│       └── routes/               ← HTTP 路由层(含 /api/mcp)
-├── data/                         ← 运行时数据(JSON 文件存储,无数据库)
-└── docs/                         ← 本文档站(VitePress)
+│       │   ├── conversation/         季风会话执行
+│       │   ├── convection/           对流会议执行
+│       │   ├── cyclone/              气旋工位、群聊与异步派发
+│       │   ├── tradewind/            信风编排、节点执行与运行归档
+│       │   └── shared/               模型、工具、活动状态与原子写入
+│       ├── services/
+│       │   └── tide/                 潮汐调度与任务运行
+│       ├── config/                   开发模式与日志策略
+│       ├── types/                    服务端共享类型
+│       └── utils/                    路径检查与 SSE 辅助函数
+│
+├── electron/
+│   ├── main.cjs                      桌面窗口与服务启动
+│   └── preload.cjs                   文件路径白名单接口
+│
+├── docs/                              VitePress 文档源码
+├── public/                            图标、截图与静态资源
+├── package.json                       根项目命令与依赖
+├── vite.config.ts                     前端开发与构建配置
+└── tsconfig*.json                     TypeScript 配置
 ```
 
-> 数据目录细节见[数据目录](./data-layout),安全机制见[安全与隔离](./security),桌面端见[桌面化](./desktop)。
+测试文件通常与对应模块放在同一目录，文件名以 `.test.ts` 或 `.test.mjs` 结尾

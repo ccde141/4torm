@@ -1,10 +1,11 @@
 import { readJson, writeJson, writeText, ensureDir, deleteFile } from '../api/storage';
 import { getAllModels, getProviderForModel } from '../llm';
 import type { Agent, AgentConfig } from '../types';
-import { canLock, ownsLock, type LockedStatus } from './statuses';
 import { notifyAgentsChanged } from './agent-events';
 
 const REGISTRY = 'agents/registry.json';
+type AgentSurface = NonNullable<Agent['activeSurfaces']>[number];
+type AgentActivities = Record<string, { busy: boolean; surfaces: AgentSurface[] }>;
 
 function agentDir(id: string) { return `agents/${id}`; }
 function workspaceDir(id: string) { return `${agentDir(id)}/.workspace`; }
@@ -27,9 +28,31 @@ function nextId(): string {
   return `agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
+async function readAgentActivities(): Promise<AgentActivities> {
+  try {
+    const response = await fetch('/api/agents/activity');
+    if (!response.ok) return {};
+    return await response.json() as AgentActivities;
+  } catch {
+    return {};
+  }
+}
+
+export function mergeAgentActivities(agents: Agent[], activities: AgentActivities): Agent[] {
+  return agents.map(agent => {
+    const activity = activities[agent.id];
+    return {
+      ...agent,
+      busy: activity?.busy ?? false,
+      activeSurfaces: activity?.surfaces ?? [],
+    };
+  });
+}
+
 export async function getAgents(): Promise<Agent[]> {
-  const all = await readRegistry();
-  return Object.values(all).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const [all, activities] = await Promise.all([readRegistry(), readAgentActivities()]);
+  return mergeAgentActivities(Object.values(all), activities)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 export async function getAgent(id: string): Promise<Agent | null> {
@@ -76,6 +99,7 @@ export async function createAgent(params: {
   const configObj = {
     temperature: params.config?.temperature,
     tools: params.config?.tools || [],
+    toolMode: params.config?.toolMode,
     skills: params.config?.skills || [],
     model: agent.model,
   };
@@ -107,57 +131,13 @@ export async function updateAgentConfig(id: string, config: AgentConfig, model: 
   const configObj = {
     temperature: config.temperature,
     tools: config.tools || [],
+    toolMode: config.toolMode,
     skills: config.skills || [],
     model,
   };
   await writeJson(`${wd}/config.json`, configObj);
 
   await updateAgent(id, { config, model });
-}
-
-// ── 互斥锁 ──────────────────────────────────────
-
-/**
- * 抢占 Agent 互斥锁。
- * 仅 idle → lockedStatus 单向有效。
- * 非 idle 时抛错，调用方应提前用 canLock() 检查。
- */
-export async function lockAgent(id: string, status: LockedStatus): Promise<void> {
-  const agent = await getAgent(id);
-  if (!agent) throw new Error(`Agent ${id} 不存在`);
-  if (!canLock(agent.status)) {
-    throw new Error(`Agent 正被「${agent.status}」占用，无法锁定为「${status}」`);
-  }
-  await updateAgent(id, { status });
-}
-
-/**
- * 释放 Agent 互斥锁回 idle。
- * 仅当前占用者与 owner 一致时有效，防止跨功能误释放。
- */
-export async function unlockAgent(id: string, owner: LockedStatus): Promise<void> {
-  const agent = await getAgent(id);
-  if (!agent) return;
-  if (!ownsLock(agent.status, owner)) {
-    throw new Error(`Agent 当前占用者为「${agent.status}」，不是「${owner}」，无法释放`);
-  }
-  await updateAgent(id, { status: 'idle' });
-}
-
-/**
- * 暴力释放——不校验当前占用者。
- * 仅用于启动自愈等管理场景。
- */
-export async function forceUnlock(id: string): Promise<void> {
-  const agent = await getAgent(id);
-  if (!agent) return;
-  if (agent.status === 'idle' || agent.status === 'offline') return;
-  await updateAgent(id, { status: 'idle' });
-}
-
-/** 兼容旧版 ChatPage 直接设 busy/idle（不经过 lockAgent） */
-export async function setAgentStatus(id: string, status: string) {
-  await updateAgent(id, { status });
 }
 
 export async function deleteAgent(id: string) {

@@ -21,6 +21,7 @@ import ChairDrawer, { chairStreamKey } from './ChairDrawer';
 import BulletinBoard, { type BulletinEntry } from './BulletinBoard';
 import { useSeatStreamRunners } from './useSeatStreamRunners';
 import { useRoomStreamRunners } from './useRoomStreamRunners';
+import { useWorkshopDispatches } from './useWorkshopDispatches';
 import { createLatestRequestGuard } from '../../../lib/latest-request';
 import '../../../styles/components/cyclone.css';
 
@@ -90,7 +91,8 @@ export default function CyclonePage({ active }: { active?: boolean }) {
 
   // 流式注册表：运行态从组件抽到此层（始终挂载），切工位不掐流、后台续跑、切回恢复
   const activeWidRef = useRef(activeWid);
-  activeWidRef.current = activeWid;
+  useEffect(() => { activeWidRef.current = activeWid; }, [activeWid]);
+  const { dispatches, refresh: refreshDispatches, act: dispatchAction } = useWorkshopDispatches(activeWid, !!active);
   const seatRunners = useSeatStreamRunners(useCallback(() => {
     // 任一工位流结束 → 刷新侧栏 pending 标记
     if (activeWidRef.current) loadWorkshop(activeWidRef.current);
@@ -99,7 +101,8 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   // 群聊流式注册表：同理，切走房间不掐流、后台续跑、切回读 roundFeed 恢复
   const roomRunners = useRoomStreamRunners(useCallback(() => {
     if (activeWidRef.current) loadWorkshop(activeWidRef.current);
-  }, [loadWorkshop]));
+    void refreshDispatches().catch(error => console.error('[cyclone] 刷新异步派发失败', error));
+  }, [loadWorkshop, refreshDispatches]));
 
   // 切走当前工位时把它的流转后台（不掐流）
   const prevViewRef = useRef<string | null>(null);
@@ -202,7 +205,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     if (!activeWid) return;
     const r = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/update-role`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: d.title, rolePrompt: d.rolePrompt, duty: d.duty, overrideAgentRole: d.overrideAgentRole }),
+      body: JSON.stringify(d),
     });
     if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.error || '保存失败'); return; }
     await loadWorkshop(activeWid);
@@ -279,6 +282,9 @@ export default function CyclonePage({ active }: { active?: boolean }) {
               <div key={s.id} onClick={() => { setActiveSeatId(s.id); setView({ kind: 'seat', id: s.id }); }}
                 style={{ ...itemStyle, display: 'flex', alignItems: 'center', gap: 4, ...(view?.kind === 'seat' && view.id === s.id ? itemActiveStyle : null) }}>
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title}{s.pending ? ' ❓' : ''}</span>
+                {dispatches.some(item => item.targetSeatId === s.id && (item.status === 'queued' || item.status === 'running')) && (
+                  <span className="cyclone-room__dispatch-mark cyclone-room__dispatch-mark--active" title="异步任务执行中" />
+                )}
                 <button onClick={e => { e.stopPropagation(); openEditSeat(s.id); }} style={delBtnStyle} title="工位设置">⚙</button>
                 <button onClick={e => { e.stopPropagation(); deleteSeat(s.id, s.title); }} style={delBtnStyle} title="删除工位">×</button>
               </div>
@@ -287,12 +293,18 @@ export default function CyclonePage({ active }: { active?: boolean }) {
               <span style={sectionLabelStyle}>群聊</span>
               <button onClick={() => setView({ kind: 'create-room' })} className="icon-add-btn icon-add-btn--sm" title="新建群聊">+</button>
             </div>
-            {rooms.map(rm => (
-              <div key={rm.id} onClick={() => setView({ kind: 'room', id: rm.id })}
-                style={{ ...itemStyle, ...(view?.kind === 'room' && view.id === rm.id ? itemActiveStyle : null) }}>
-                # {rm.title}
-              </div>
-            ))}
+            {rooms.map(rm => {
+              const items = dispatches.filter(item => item.sourceRoomId === rm.id);
+              const running = items.some(item => item.status === 'queued' || item.status === 'running');
+              const unread = items.some(item => item.readState === 'unread' && (item.status === 'completed' || item.status === 'failed'));
+              return (
+                <div key={rm.id} onClick={() => setView({ kind: 'room', id: rm.id })}
+                  style={{ ...itemStyle, display: 'flex', alignItems: 'center', gap: 8, ...(view?.kind === 'room' && view.id === rm.id ? itemActiveStyle : null) }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}># {rm.title}</span>
+                  {(running || unread) && <span className={`cyclone-room__dispatch-mark${running ? ' cyclone-room__dispatch-mark--active' : ''}`} title={running ? '异步任务执行中' : '有未读异步结果'} />}
+                </div>
+              );
+            })}
           </>
         )}
       </div>
@@ -326,7 +338,11 @@ export default function CyclonePage({ active }: { active?: boolean }) {
           />
         )}
         {view?.kind === 'room' && activeWid && (
-          <RoomPanel key={view.id} workshopId={activeWid} roomId={view.id} seats={seats.map(s => ({ id: s.id, title: s.title }))} runners={roomRunners} onChanged={() => loadWorkshop(activeWid)} active={active} />
+          <RoomPanel key={view.id} workshopId={activeWid} roomId={view.id}
+            seats={seats.map(s => ({ id: s.id, title: s.title }))} runners={roomRunners}
+            dispatches={dispatches} onDispatchAction={dispatchAction}
+            onOpenSeat={seatId => { setActiveSeatId(seatId); setView({ kind: 'seat', id: seatId }); }}
+            onChanged={() => loadWorkshop(activeWid)} active={active} />
         )}
         {!activeWid && (view === null || (view.kind === 'seat' && !activeSeat)) && <div style={{ color: 'var(--color-text-secondary)', margin: 'auto', textShadow: 'var(--text-halo)' }}>选择或创建一个工作室</div>}
         {activeWid && (view === null || (view.kind === 'seat' && !activeSeat)) && (
@@ -339,7 +355,9 @@ export default function CyclonePage({ active }: { active?: boolean }) {
           />
         )}
         {view?.kind === 'seat' && activeSeat && activeWid && (
-          <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id} runners={seatRunners} onReloaded={() => loadWorkshop(activeWid)} active={active} />
+          <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id}
+            runners={seatRunners} dispatches={dispatches}
+            onReloaded={() => loadWorkshop(activeWid)} active={active} />
         )}
       </div>
 

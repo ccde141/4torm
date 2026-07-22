@@ -13,7 +13,7 @@
 import { callLLM, resolveNativeMode } from './llm-bridge.js';
 import { loadAgent } from './agent-loader.js';
 import { loadAgentToolDefs, type ToolDef } from './tool-defs-loader.js';
-import { buildSandboxSection } from './sandbox-prompt.js';
+import { buildSandboxSection, type SandboxLevel } from './sandbox-prompt.js';
 import type { ContextMessage } from './types.js';
 import type { SubAgentParams, SubAgentResult, SubAgentEvent } from './sub-agent-types.js';
 import { resolveSubAgentModel } from './sub-agent-model.js';
@@ -94,7 +94,7 @@ function error(msg: string, rounds: number): SubAgentResult {
 async function prepareTools(dataDir: string, agentId: string): Promise<ToolDef[]> {
   const agent = await loadAgent(dataDir, agentId);
   if (!agent) return [DONE_TOOL];
-  const tools = await loadAgentToolDefs(dataDir, agent.tools, agent.skills);
+  const tools = await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode);
   // 移除 delegate（禁止递归），注入 done
   const filtered = tools.filter(t => t.name !== 'delegate');
   filtered.push(DONE_TOOL);
@@ -174,7 +174,7 @@ ${list}`;
  */
 export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResult> {
   const { task, context, systemPrompt, agentId, dataDir, signal, maxRounds, emit } = params;
-  const parentSandboxLevel = params.parentSandboxLevel ?? 'relaxed';
+  const parentSandboxLevel = params.parentSandboxLevel ?? 'project';
 
   const emitEvent = (event: SubAgentEvent) => { if (emit) emit(event); };
 
@@ -434,7 +434,7 @@ interface NativeSubAgentParams {
   maxRounds: number;
   signal: AbortSignal;
   emitEvent: (event: SubAgentEvent) => void;
-  parentSandboxLevel: 'strict' | 'relaxed' | 'unrestricted';
+  parentSandboxLevel: SandboxLevel;
 }
 
 /**

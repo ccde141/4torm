@@ -9,6 +9,8 @@ import { useState, useCallback } from 'react';
 import type { Node, Edge, OnNodesChange, OnEdgesChange, OnConnect, Connection } from '@xyflow/react';
 import { applyNodeChanges, applyEdgeChanges, addEdge } from '@xyflow/react';
 import type { WorkflowGraph, WorkflowNode, WorkflowEdge, EdgeKind } from '../../types';
+import { saveWorkflow } from '../workflow-client';
+import { deserializeWorkflowNode, serializeWorkflowNode } from '../workflow-node-serialization';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -17,6 +19,7 @@ export interface WorkflowStoreState {
   edges: Edge[];
   selectedNodeId: string | null;
   workflowId: string;
+  workflowName: string;
 }
 
 export interface WorkflowStoreActions {
@@ -32,10 +35,10 @@ export interface WorkflowStoreActions {
   updateNodeData: (nodeId: string, data: Record<string, unknown>) => void;
   syncReworkEdge: (gateNodeId: string, targetNodeId: string | null) => void;
   getGraph: () => WorkflowGraph;
-  loadGraph: (graph: WorkflowGraph, workflowId: string) => void;
-  save: (name?: string) => Promise<void>;
+  loadGraph: (graph: WorkflowGraph, workflowId: string, workflowName?: string) => void;
+  save: (name?: string) => Promise<boolean>;
   load: (workflowId: string) => Promise<void>;
-  setWorkflowId: (id: string) => void;
+  setWorkflowName: (name: string) => void;
 }
 
 // ── ID 生成 ───────────────────────────────────────────────────────
@@ -52,6 +55,7 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [workflowId, setWorkflowId] = useState('untitled');
+  const [workflowName, setWorkflowName] = useState('未命名工作流');
 
   const onNodesChange: OnNodesChange = useCallback(
     (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
@@ -161,13 +165,7 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
   }, []);
 
   const getGraph = useCallback((): WorkflowGraph => {
-    const wfNodes: WorkflowNode[] = nodes.map((n) => ({
-      id: n.id,
-      type: n.type ?? 'agent',
-      label: (n.data as any)?.label ?? n.id,
-      position: n.position,
-      config: (n.data as any)?.config ?? {},
-    }));
+    const wfNodes: WorkflowNode[] = nodes.map(serializeWorkflowNode);
     const wfEdges: WorkflowEdge[] = edges.map((e) => {
       const data = (e.data ?? {}) as { kind?: EdgeKind; rework?: boolean; sourcePort?: number };
       return {
@@ -183,14 +181,10 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
     return { nodes: wfNodes, edges: wfEdges };
   }, [nodes, edges]);
 
-  const loadGraph = useCallback((graph: WorkflowGraph, wfId: string) => {
+  const loadGraph = useCallback((graph: WorkflowGraph, wfId: string, name?: string) => {
     setWorkflowId(wfId);
-    setNodes(graph.nodes.map((n) => ({
-      id: n.id,
-      type: n.type,
-      position: n.position,
-      data: { label: n.label, config: n.config },
-    })));
+    setWorkflowName(name?.trim() || wfId);
+    setNodes(graph.nodes.map(deserializeWorkflowNode));
     setEdges(graph.edges.map((e) => ({
       id: e.id,
       source: e.source,
@@ -205,27 +199,24 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
     const graph = getGraph();
     // 空工作流（0 节点）不落盘：新建/自动保存若把空图写盘，会在目录里堆出一堆 0 节点幽灵条目。
     // 空工作流无内容可丢，等真正加了节点（运行/保存时）才创建目录。
-    if (graph.nodes.length === 0) return;
-    await fetch('/api/tradewind/workflow/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workflowId, graph, name: name || workflowId }),
-    });
-  }, [workflowId, getGraph]);
+    if (graph.nodes.length === 0) return false;
+    await saveWorkflow({ workflowId, graph, name: name?.trim() || workflowName });
+    return true;
+  }, [workflowId, workflowName, getGraph]);
 
   const load = useCallback(async (id: string) => {
     const res = await fetch(`/api/tradewind/workflow/load/${id}`);
     if (!res.ok) return;
-    const data = await res.json() as { workflowId: string; graph: WorkflowGraph };
-    loadGraph(data.graph, data.workflowId);
+    const data = await res.json() as { workflowId: string; name?: string; graph: WorkflowGraph };
+    loadGraph(data.graph, data.workflowId, data.name);
   }, [loadGraph]);
 
   return {
-    nodes, edges, selectedNodeId, workflowId,
+    nodes, edges, selectedNodeId, workflowId, workflowName,
     onNodesChange, onEdgesChange, onConnect,
     selectNode, addNode, removeSelected, deleteNode, deleteEdge, cloneNode, updateNodeData,
     syncReworkEdge,
-    getGraph, loadGraph, save, load, setWorkflowId,
+    getGraph, loadGraph, save, load, setWorkflowName,
   };
 }
 

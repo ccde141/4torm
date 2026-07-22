@@ -49,6 +49,20 @@ export async function listOtherSeats(
   return out;
 }
 
+/** 列出全部固定工位；群聊 dispatch 可把任务落回当前副本对应的自身工位。 */
+export async function listWorkshopSeats(
+  dataDir: string, workshopId: string,
+): Promise<ContactTarget[]> {
+  const w = await loadWorkshop(dataDir, workshopId);
+  if (!w) return [];
+  const out: ContactTarget[] = [];
+  for (const sid of w.seatIds) {
+    const seat = await loadSeat(dataDir, workshopId, sid);
+    if (seat) out.push({ title: seat.title, duty: seat.duty?.trim() || DEFAULT_DUTY });
+  }
+  return out;
+}
+
 // ── 等待图 + 环检测（按 workshopId 隔离） ─────────────────────────
 
 /** workshopId → (sourceSeatId → targetSeatId)，source 正在等 target 回复 */

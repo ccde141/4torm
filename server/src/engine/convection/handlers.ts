@@ -12,7 +12,7 @@ import type { ContextMessage } from '../shared/types';
 import type { ConvectionSessionData } from './session';
 import { saveSession, sessionWorkspace } from './session';
 import { callLLM, resolveNativeMode, type TokenUsage } from '../shared/llm-bridge';
-import { withAgentTurn } from '../shared/agent-queue';
+import { withAgentActivity } from '../shared/agent-activity.js';
 import { loadAgent, type LoadedAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs, type ToolDef } from '../shared/tool-defs-loader';
 import { buildSystemPrompt } from '../shared/prompt';
@@ -84,7 +84,7 @@ async function buildAgentMessages(
   native?: boolean,
 ): Promise<{ messages: ContextMessage[]; agent: LoadedAgent; toolDefs: ToolDef[] }> {
   const agent = await getAgent(dataDir, agentId);
-  const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills);
+  const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode);
   const wsPath = sessionWorkspace(dataDir, session.id);
   const projectDir = path.resolve(dataDir, '..');
 
@@ -161,11 +161,9 @@ export async function handleSpeak(
       onEvent?.({ type: 'notice', message: `⚠️ ${agent.name} 的模型配置为强制原生工具调用，但探测显示可能不支持。如遇异常请调整模式。` });
     }
 
-    let result: { cleanContent: string; rawContent: string; toolCalls: ToolCallRecord[]; usage?: TokenUsage };
     let reasoningContent = '';
 
-    // 按-Agent 串行：该参与者若正被其他会话/功能区占用，排队等其空出再发言
-    result = await withAgentTurn(agentId, async () => {
+    const result = await withAgentActivity(agentId, 'convection', async () => {
       if (nativeDecision.native) {
         // 原生模式：adapter 注入共享 runReActLoopNative
         const { messages, agent: loadedAgent, toolDefs } = await buildAgentMessages(dataDir, session, agentId, true);
@@ -214,7 +212,7 @@ export async function handleSpeak(
           signal,
         });
       }
-    }, { onWait: () => onEvent?.({ type: 'notice', message: `${agent.name} 正被其他会话占用，已排队…` }) });
+    });
 
     // abort 时保留已流式产出的有效内容
     const aborted = signal?.aborted;
@@ -330,7 +328,9 @@ export async function handleChair(
 
   let reply: string;
   try {
-    const r = await callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal: abortCtrl.signal, onReasoning });
+    const r = await withAgentActivity(session.chairAgentId, 'convection', () => (
+      callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal: abortCtrl.signal, onReasoning })
+    ));
     reply = r.content;
     updateSessionUsage(session, r.usage);
   } catch (e) {

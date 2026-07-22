@@ -22,8 +22,12 @@ export interface DisplayMessage {
   id: string;
   sourceIndex?: number;
   role: 'user' | 'assistant' | 'system';
+  kind?: 'dispatch-receipt';
+  dispatchId?: string;
   /** 文本气泡内容（已剥工具调用标签） */
   content: string;
+  /** 已落库的原生思考流，仅用于折叠展示。 */
+  reasoning?: string;
   /** 该 assistant 消息触发的卡片块（工具/委托/联络） */
   blocks?: DisplayBlock[];
 }
@@ -33,6 +37,9 @@ interface StoredMsg {
   content: string;
   toolCalls?: Array<{ id: string; name: string; arguments: string }>;
   toolCallId?: string;
+  kind?: 'dispatch-receipt';
+  dispatchId?: string;
+  reasoning?: string;
 }
 
 function parseArgs(raw: string): Record<string, unknown> {
@@ -85,6 +92,13 @@ export function contextToDisplay(stored: StoredMsg[]): DisplayMessage[] {
     if (m.role === 'tool') continue;
     if (m.role === 'system') {
       const text = stripTags(m.content);
+      if (m.kind === 'dispatch-receipt') {
+        out.push({
+          id: `d${seq++}`, sourceIndex, role: 'system', kind: m.kind,
+          dispatchId: m.dispatchId, content: text,
+        });
+        continue;
+      }
       if (text.includes('重置前') || text.includes('摘要')) {
         out.push({ id: `d${seq++}`, sourceIndex, role: 'system', content: text });
       }
@@ -115,7 +129,10 @@ export function contextToDisplay(stored: StoredMsg[]): DisplayMessage[] {
       const text = stripTags(m.content);
       // 跳过纯工具调用且无文本的空壳（卡片已单列），但保留有文本或有卡片的
       if (!text && blocks.length === 0) continue;
-      out.push({ id: `d${seq++}`, sourceIndex, role: 'assistant', content: text, blocks: blocks.length ? blocks : undefined });
+      out.push({
+        id: `d${seq++}`, sourceIndex, role: 'assistant', content: text,
+        reasoning: m.reasoning, blocks: blocks.length ? blocks : undefined,
+      });
     } else if (m.role === 'user') {
       out.push({ id: `d${seq++}`, sourceIndex, role: 'user', content: m.content });
     }

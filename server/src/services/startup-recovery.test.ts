@@ -5,6 +5,9 @@ import path from 'node:path';
 import test from 'node:test';
 import { agentRegistryFile, tradewindRunDir } from './data-paths.js';
 import { recoverStartupState } from './startup-recovery.js';
+import { createDispatch, loadDispatch, updateDispatch } from '../engine/cyclone/dispatch-store.js';
+import { createWorkshop } from '../engine/cyclone/workshop-store.js';
+import { drainCycloneDispatches } from '../engine/cyclone/dispatch-queue.js';
 
 test('启动恢复释放 Agent 残留锁并标记 Tradewind 运行记录为 crashed', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-startup-recovery-'));
@@ -62,4 +65,47 @@ test('启动恢复释放 Agent 残留锁并标记 Tradewind 运行记录为 cras
   ]);
   assert.equal(await fs.readFile(ordinaryTemp, 'utf8'), 'keep');
   assert.equal(await fs.readFile(workspaceTemp, 'utf8'), 'keep');
+});
+
+test('启动恢复将中断的气旋派发标为失败且不自动重试', async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-startup-recovery-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const workshop = await createWorkshop(dataDir, { title: '恢复测试' });
+  const dispatch = await createDispatch(dataDir, {
+    workshopId: workshop.id,
+    sourceRoomId: 'room-a',
+    sourceSeatId: 'seat-a',
+    sourceSeatTitle: '调度',
+    sourceTurnId: 'turn-a',
+    sourceRoundSeq: 1,
+    dispatchOrder: 0,
+    targetSeatId: 'seat-b',
+    targetSeatTitle: '执行',
+    task: '处理中断任务',
+  });
+  await updateDispatch(dataDir, workshop.id, dispatch.id, { status: 'running' });
+
+  const result = await recoverStartupState(dataDir);
+  const recovered = await loadDispatch(dataDir, workshop.id, dispatch.id);
+
+  assert.equal(result.failedCycloneDispatches, 1);
+  assert.equal(recovered?.status, 'failed');
+  assert.match(recovered?.error || '', /未自动重试/);
+});
+
+test('启动自愈阶段不在运行依赖就绪前消费排队派发', async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-startup-recovery-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const workshop = await createWorkshop(dataDir, { title: '恢复测试' });
+  const queued = await createDispatch(dataDir, {
+    workshopId: workshop.id, sourceRoomId: 'room-a', sourceSeatId: 'seat-a',
+    sourceSeatTitle: '调度', sourceTurnId: 'turn-a', sourceRoundSeq: 1,
+    dispatchOrder: 0, targetSeatId: 'missing-seat', targetSeatTitle: '执行', task: '等待启动',
+  });
+
+  await recoverStartupState(dataDir);
+  await drainCycloneDispatches();
+  const recovered = await loadDispatch(dataDir, workshop.id, queued.id);
+
+  assert.equal(recovered?.status, 'queued');
 });

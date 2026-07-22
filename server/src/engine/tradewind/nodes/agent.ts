@@ -75,7 +75,7 @@ export class AgentExecutor implements NodeExecutor {
     const downstreamLabels: string[] = (ctx.nodeConfig as any)._downstreamLabels ?? [];
 
     // 加载工具定义
-    const toolDefs = await loadAgentToolDefs(ctx.dataDir, agent.tools ?? [], agent.skills ?? []);
+    const toolDefs = await loadAgentToolDefs(ctx.dataDir, agent.tools ?? [], agent.skills ?? [], agent.toolMode);
 
     // 工作流共享 workspace（相对项目根的路径，tool-executor 会 resolve 为绝对路径）
     const nodeWorkspace = `data/tradewind/workflows/${ctx.workflowId}/workspace`;
@@ -145,6 +145,7 @@ export class AgentExecutor implements NodeExecutor {
       model: agent.model,
       temperature: agent.temperature,
       toolNames: agent.tools ?? [],
+      toolMode: agent.toolMode,
       skillIds: agent.skills ?? [],
       workspace: nodeWorkspace,
       sandboxLevel: agent.sandboxLevel,

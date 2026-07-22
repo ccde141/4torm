@@ -52,7 +52,7 @@ export function parseActions(text: string): ParsedAction[] {
   while ((m = re.exec(text)) !== null) {
     const tool = m[1].trim();
     const body = m[2].trim();
-    let args: Record<string, string> = {};
+    const args: Record<string, string> = {};
     let parseError: string | undefined;
     if (body) {
       try {
@@ -231,7 +231,6 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
     if (actions.length === 0 || !tools) {
       const answer = extractAnswer(reply);
       if (answer !== null) {
-        nudgeCount = 0;
         return { content: answer, rawContent: reply, toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage };
       }
       if (nudgeCount < MAX_NUDGES) {

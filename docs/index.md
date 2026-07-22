@@ -4,7 +4,7 @@ layout: home
 hero:
   name: "4torm"
   text: "多 Agent 协作平台"
-  tagline: 让 AI 像公司员工一样长期存在,按需协作。本地部署。
+  tagline: 让 AI 像公司员工一样长期存在，按需协作
   image:
     src: /favicon.svg
     alt: 4torm
@@ -13,7 +13,7 @@ hero:
       text: 快速开始
       link: /guide/getting-started
     - theme: alt
-      text: 设计哲学
+      text: 了解 4torm
       link: /guide/introduction
     - theme: alt
       text: GitHub
@@ -22,48 +22,50 @@ hero:
 features:
   - icon: 🌬️
     title: 季风 Chat · 对话
-    details: 单 Agent 多轮对话 + 工具调用 + 子任务委托。要 Agent 帮你做一件事,就用季风。
+    details: 与单个 Agent 持续对话，让它调用工具或委托子任务
     link: /modes/chat
     linkText: 进入引导
   - icon: 🌀
     title: 对流 Convection · 会议
-    details: 一次性多 Agent 圆桌会议,人类主持,会长在侧栏私聊参谋。要几个 Agent 临时讨论出结论。
+    details: 让多个 Agent 围绕同一议题依次发言，由会长在侧栏提供私聊建议
     link: /modes/convection
     linkText: 进入引导
   - icon: 🏢
     title: 气旋 Cyclone · 工作室
-    details: 常驻工作室:角色「工位」可单独私聊,按需开多个群聊房间,共享工作区。一批固定角色长期协作。
+    details: 让一批固定工位长期协作，既能单独交流，也能按需组成群聊
     link: /modes/cyclone
     linkText: 进入引导
   - icon: 🔀
     title: 信风 TradeWind · 工作流
-    details: 可视化画布编排 DAG,节点串/并联执行,信封流转。多个 Agent 按顺序接力完成。
+    details: 在可视化画布上编排节点，让任务和结果按照连线逐步流转
     link: /modes/tradewind
     linkText: 进入引导
   - icon: 🌊
     title: 潮汐 Tide · 自动化
-    details: 定时触发,Agent 自主执行,滚动归档,支持自循环。让 Agent 定时自动巡检 / 汇报。
+    details: 按照设定时间唤醒 Agent，持续执行巡检、整理和汇报等任务
     link: /modes/tide
     linkText: 进入引导
   - icon: 🧩
     title: 工具 · 技能 · MCP
-    details: 工具、技能跨模式通用,MCP 接入外部能力。给 Agent 配一次能力,哪里需要往哪里调。
+    details: 为 Agent 补充本地工具、专业技能和外部服务能力
     link: /extend/tools
     linkText: 扩展开发
 ---
 
-## 一批人,五种协作方式
+## 一批人，五种协作方式
 
-4torm 的出发点很简单:**Agent 更像是员工,而不是用完就扔的对话窗口。**
+4torm 的出发点很简单：**Agent 更像是长期协作的员工，而不是用完就扔的对话窗口。**
 
-一家公司里,老板招的人长期存在——有的活儿一个人干,有的得开会讨论,有的按流程接力,有的定时巡查。人是固定的那批人,变的只是协作方式。4torm 让 AI Agent 也这样工作:创建一次,能力配一次,哪里需要往哪里调。
+一家公司里，成员通常会长期存在。有的工作由一个人独立完成，有的需要临时开会，有的按照固定流程接力，还有一些需要定时巡查。人是相对固定的，变化的是每次采用的协作方式。
+
+4torm 让 AI Agent 也以类似的方式工作：创建一次，配置好模型、工具和技能，之后便可以根据任务需要进入不同功能区。
 
 ```
-要 Agent 帮你做一件事?               → 季风(对话)
-要几个 Agent 临时开会讨论出结论?     → 对流(会议室)
-要一批固定角色长期协作、能单聊也能开群? → 气旋(工作室)
-要多个 Agent 按顺序接力完成?         → 信风(工作流)
-要 Agent 定时自动巡检 / 汇报?        → 潮汐(自动化)
+让一个 Agent 帮你完成任务              → 季风（对话）
+让几个 Agent 临时讨论并形成结论        → 对流（会议室）
+让一批固定角色长期协作                 → 气旋（工作室）
+让多个 Agent 按照流程接力              → 信风（工作流）
+让 Agent 按照时间自动巡检或汇报        → 潮汐（自动化）
 ```
 
-> 五种模式不是五个产品,是组织同一批 Agent 的五种方式。按任务性质选最合适的就行。
+> 五种模式不是五套彼此独立的 Agent，而是组织同一批 Agent 的五种方式。

@@ -188,7 +188,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       session.streamingCurrent = { speaker: label, content: '', reasoning: '' };
       onEvent?.({ type: 'agent-start', label });
 
-      const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills);
+      const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode);
 
       // native 模式决议（按 agent.model 决定，每个参与者独立判断）
       const nativeDecision = await resolveNativeMode(dataDir, agent.model);

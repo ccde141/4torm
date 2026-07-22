@@ -16,14 +16,15 @@ function profilesPath(dataDir: string, workflowId: string): string {
   return path.join(tradewindWorkflowsDir(dataDir), workflowId, 'profiles.json');
 }
 
-/** 读一个工作流的全部档案；文件缺失 / 损坏 → 空数组（不抛） */
+/** 读一个工作流的全部档案；仅文件缺失时返回空数组。 */
 export async function loadProfiles(dataDir: string, workflowId: string): Promise<AutoProfile[]> {
   try {
     const raw = await fs.readFile(profilesPath(dataDir, workflowId), 'utf-8');
     const parsed = JSON.parse(raw) as { profiles?: AutoProfile[] };
     return Array.isArray(parsed.profiles) ? parsed.profiles : [];
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
   }
 }
 

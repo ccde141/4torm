@@ -7,21 +7,23 @@ import type { WorkflowMode } from '../../types';
 
 interface ToolbarProps {
   workflowId: string;
+  workflowName: string;
   running: boolean;
   saveTime: number | null;
   onRun: (mode: WorkflowMode) => void;
   onOpenProfiles: () => void;
   onStop: () => void;
   onSave: () => void;
-  onSetWorkflowId: (id: string) => void;
+  onOpenWorkspace: () => void;
+  onSetWorkflowName: (name: string) => void;
   onLoadList: () => void;
 }
 
 export function Toolbar({
-  workflowId, running, saveTime, onRun, onOpenProfiles, onStop, onSave, onSetWorkflowId, onLoadList,
+  workflowId, workflowName, running, saveTime, onRun, onOpenProfiles, onStop, onSave, onOpenWorkspace, onSetWorkflowName, onLoadList,
 }: ToolbarProps) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(workflowId);
+  const [draft, setDraft] = useState(workflowName);
   const [showSaved, setShowSaved] = useState(false);
 
   // saveTime 变化时显示提示，3 秒后淡出
@@ -33,13 +35,14 @@ export function Toolbar({
   }, [saveTime]);
 
   const startEdit = () => {
-    setDraft(workflowId);
+    setDraft(workflowName);
     setEditing(true);
   };
 
   const commitEdit = () => {
     setEditing(false);
-    if (draft && draft !== workflowId) onSetWorkflowId(draft);
+    const name = draft.trim();
+    if (name && name !== workflowName) onSetWorkflowName(name);
   };
 
   const formatTime = (ts: number) => {
@@ -61,7 +64,7 @@ export function Toolbar({
           />
         ) : (
           <div className="tw-toolbar__name-group" onDoubleClick={startEdit}>
-            <span className="tw-toolbar__title">{workflowId || '未命名工作流'}</span>
+            <span className="tw-toolbar__title">{workflowName || '未命名工作流'}</span>
             <span className="tw-toolbar__id">{workflowId}</span>
           </div>
         )}
@@ -72,6 +75,9 @@ export function Toolbar({
       <div className="tw-toolbar__actions">
         <button className="tw-toolbar__btn tw-toolbar__btn--save" onClick={onSave}>
           保存
+        </button>
+        <button className="tw-toolbar__btn tw-toolbar__btn--ghost" onClick={onOpenWorkspace} title="打开当前工作流的共享工作区">
+          打开工作区
         </button>
         {showSaved && saveTime && (
           <span className="tw-toolbar__saved-hint">已保存 {formatTime(saveTime)}</span>

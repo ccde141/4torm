@@ -41,13 +41,13 @@ npm run build && npm run electron:prod
 ## 首次配置
 
 1. **添加 LLM 提供商** —— 控制台 → 提供商管理,填入 API endpoint 和 key(OpenAI 兼容格式)
-2. **创建 Agent** —— 控制台 → 新建 Agent → 选模型、写角色提示词、勾选工具和技能
+2. **创建 Agent** —— 控制台 → 新建 Agent → 选择模型、填写角色提示词，并确认默认启用的工具和技能。完整说明见[控制台与 Agent 管理](./agents)
 3. **开始对话** —— 侧栏切到「季风」→ 选 Agent → 发消息
 
 > 预设支持 OpenAI 兼容服务。使用 Anthropic / 国内厂商等非标准 API,可通过 [one-api](https://github.com/songquanpeng/one-api) 或 [LiteLLM](https://github.com/BerriAI/litellm) 作翻译层。
 
 ## 接下来
 
-- 想了解 Agent、ReAct、工具、技能这些底层概念 → [核心概念](./concepts)
+- 想了解 Agent、工具、技能等核心概念 → [核心概念](./concepts)
 - 想直接上手某个模式 → [季风对话](../modes/chat)、[气旋工作室](../modes/cyclone) 等
 - 想给 Agent 加新能力 → [工具制作](../extend/tools)、[技能制作](../extend/skills)、[MCP 接入](../extend/mcp)

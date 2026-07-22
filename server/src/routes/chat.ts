@@ -199,7 +199,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     pushSSE(reply, { type: 'start', compressedCount });
 
     // 流式调 LLM 生成摘要
-    let summary = '';
+    let summary: string;
     try {
       const result = await callLLM({
         dataDir,

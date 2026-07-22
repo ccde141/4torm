@@ -24,6 +24,11 @@ function newSessionId(task: TideTask, suffix: string): string {
   return `${task.agentId}-tide-${task.id.slice(0, 8)}-${suffix}`;
 }
 
+export function resolveTargetSessionId(task: TideTask): string {
+  const suffix = task.pushMode === 'designated' ? 'designated' : 'acc';
+  return task.targetSessionId || newSessionId(task, suffix);
+}
+
 /** 会话 messages → ContextMessage[]（剔除 system，只留对话轮） */
 function toContext(msgs: TideMessage[]): ContextMessage[] {
   return msgs
@@ -43,7 +48,7 @@ export async function resolveTarget(
 ): Promise<ResolvedTarget> {
   // designated：读季风会话（已删则降级重建）
   if (task.pushMode === 'designated') {
-    const sid = task.targetSessionId || newSessionId(task, 'designated');
+    const sid = resolveTargetSessionId(task);
     const existing = task.targetSessionId
       ? await readSeasonSession(dataDir, task.agentId, sid)
       : null;
@@ -51,7 +56,7 @@ export async function resolveTarget(
   }
 
   // accumulate（含旧 'new' 任务，统一降级到这里）
-  const sid = task.targetSessionId || newSessionId(task, 'acc');
+  const sid = resolveTargetSessionId(task);
   const existing = task.targetSessionId
     ? await readTideSession(dataDir, task.agentId, sid)
     : null;

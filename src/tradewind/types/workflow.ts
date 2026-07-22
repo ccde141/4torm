@@ -44,8 +44,15 @@ export interface WorkflowNode {
   /** 节点显示名（画布唯一，引擎校验不允许同名） */
   label: string;
 
+  /** 仅供人类在画布中识别的备注，不进入 Agent 提示词 */
+  memo?: string;
+
   /** 画布坐标 */
   position: { x: number; y: number };
+
+  /** 用户调整后的节点尺寸 */
+  width?: number;
+  height?: number;
 
   /** 节点配置，结构由 Executor.configSchema 决定，类型层不约束 */
   config: Record<string, unknown>;

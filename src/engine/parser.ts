@@ -127,7 +127,7 @@ export function parseStructuredOutput(
     }
 
     if (round.actions.length === 0) {
-      const legacyRegex = /[🔧📋]\s*(\w[\w_-]*)\s*\(\s*(\{(?:[^{}]|\{[^{}]*\})*\})\s*\)/g;
+      const legacyRegex = /[🔧📋]\s*(\w[\w_-]*)\s*\(\s*(\{(?:[^{}]|\{[^{}]*\})*\})\s*\)/gu;
       while ((m = legacyRegex.exec(outside)) !== null) {
         const tool = m[1].trim();
         const jsonStr = m[2].trim();

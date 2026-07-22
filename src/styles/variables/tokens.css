@@ -45,9 +45,9 @@
 
   /* 状态色（Agent status） */
   --status-online:       #4ade80;
-  --status-idle:         #a1a1aa;
+  --status-idle:         #4ade80;
   --status-busy:         #fbbf24;
-  --status-offline:      #6b7280;
+  --status-offline:      #ef4444;
   --status-error:        #ef4444;
 
   /* ─── 边框 ──────────────────────────────────────────── */

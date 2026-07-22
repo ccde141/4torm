@@ -4,7 +4,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   lang: 'zh-CN',
   title: '4torm',
-  description: '本地部署的多 Agent 协作平台 —— 让 AI 像公司员工一样长期存在,按需协作',
+  description: '多 Agent 协作框架 —— 让 AI 像公司员工一样长期存在，按需协作',
   // 由 Fastify 自托管在 /docs/ 路径下(应用内「文档」按钮 → /docs/)
   base: '/docs/',
   lastUpdated: true,
@@ -44,8 +44,9 @@ export default defineConfig({
         {
           text: '开始',
           items: [
-            { text: '介绍与设计哲学', link: '/guide/introduction' },
+            { text: '介绍', link: '/guide/introduction' },
             { text: '快速开始', link: '/guide/getting-started' },
+            { text: '控制台与 Agent 管理', link: '/guide/agents' },
             { text: '核心概念', link: '/guide/concepts' },
           ],
         },

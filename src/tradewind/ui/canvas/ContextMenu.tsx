@@ -3,12 +3,14 @@
  */
 
 import { useEffect, useRef } from 'react';
+import { CANVAS_NODE_ITEMS, contextMenuKind } from './context-menu-model';
 
 export interface ContextMenuState {
   visible: boolean;
   x: number;
   y: number;
   nodeId: string | null;
+  edgeId: string | null;
   flowPosition: { x: number; y: number } | null;
 }
 
@@ -16,20 +18,13 @@ interface ContextMenuProps {
   menu: ContextMenuState;
   onClose: () => void;
   onDelete: (nodeId: string) => void;
+  onDeleteEdge: (edgeId: string) => void;
   onClone: (nodeId: string) => void;
   onEdit: (nodeId: string) => void;
   onAddNode: (type: string, position: { x: number; y: number }) => void;
 }
 
-const NODE_TYPES = [
-  { type: 'entry', label: '入口', icon: '▶' },
-  { type: 'agent', label: 'Agent', icon: '⚡' },
-  { type: 'meeting', label: '会议室', icon: '◎' },
-  { type: 'note', label: 'Note', icon: '📝' },
-  { type: 'output', label: '出口', icon: '◼' },
-] as const;
-
-export function ContextMenu({ menu, onClose, onDelete, onClone, onEdit, onAddNode }: ContextMenuProps) {
+export function ContextMenu({ menu, onClose, onDelete, onDeleteEdge, onClone, onEdit, onAddNode }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -42,6 +37,7 @@ export function ContextMenu({ menu, onClose, onDelete, onClone, onEdit, onAddNod
   }, [menu.visible, onClose]);
 
   if (!menu.visible) return null;
+  const kind = contextMenuKind(menu);
 
   return (
     <div
@@ -49,14 +45,16 @@ export function ContextMenu({ menu, onClose, onDelete, onClone, onEdit, onAddNod
       className="tw-ctxmenu"
       style={{ left: menu.x, top: menu.y }}
     >
-      {menu.nodeId ? (
+      {kind === 'node' ? (
         <NodeMenu
-          nodeId={menu.nodeId}
+          nodeId={menu.nodeId!}
           onDelete={onDelete}
           onClone={onClone}
           onEdit={onEdit}
           onClose={onClose}
         />
+      ) : kind === 'edge' ? (
+        <EdgeMenu edgeId={menu.edgeId!} onDelete={onDeleteEdge} onClose={onClose} />
       ) : (
         <PaneMenu
           position={menu.flowPosition!}
@@ -65,6 +63,21 @@ export function ContextMenu({ menu, onClose, onDelete, onClone, onEdit, onAddNod
         />
       )}
     </div>
+  );
+}
+
+function EdgeMenu({ edgeId, onDelete, onClose }: {
+  edgeId: string;
+  onDelete: (id: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <button
+      className="tw-ctxmenu__item tw-ctxmenu__item--danger"
+      onClick={() => { onDelete(edgeId); onClose(); }}
+    >
+      <span className="tw-ctxmenu__icon">✕</span> 删除连线
+    </button>
   );
 }
 
@@ -103,7 +116,7 @@ function PaneMenu({ position, onAddNode, onClose }: {
   return (
     <>
       <div className="tw-ctxmenu__title">添加节点</div>
-      {NODE_TYPES.map((item) => (
+      {CANVAS_NODE_ITEMS.map((item) => (
         <button
           key={item.type}
           className="tw-ctxmenu__item"

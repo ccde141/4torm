@@ -1,6 +1,26 @@
 type ConvectionEvent = { type?: string; message?: string; [key: string]: unknown };
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+export class ConvectionHttpError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ConvectionHttpError';
+    this.status = status;
+  }
+}
+
+async function readHttpError(response: Response): Promise<string> {
+  const text = await response.text();
+  try {
+    const data = JSON.parse(text) as { error?: string };
+    return data.error || text || `HTTP ${response.status}`;
+  } catch {
+    return text || `HTTP ${response.status}`;
+  }
+}
+
 export async function streamConvectionSSE(
   url: string,
   body: Record<string, unknown>,
@@ -14,7 +34,7 @@ export async function streamConvectionSSE(
     body: JSON.stringify(body),
     signal,
   });
-  if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+  if (!response.ok) throw new ConvectionHttpError(await readHttpError(response), response.status);
   const reader = response.body?.getReader();
   if (!reader) throw new Error('SSE 响应缺少数据流');
 

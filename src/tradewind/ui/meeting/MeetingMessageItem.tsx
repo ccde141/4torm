@@ -212,7 +212,7 @@ export const MeetingMessageItem = memo(function MeetingMessageItem({ msg }: Prop
     const reasoning = combineReasoning(msg.reasoning, view.think);
     const tools = msg.toolCalls || [];
     // 兜底：content 中有已闭合 action 但 toolCalls 事件尚未到达时，解析显示
-    let closedActionFallback: Array<{ tool: string }> = [];
+    const closedActionFallback: Array<{ tool: string }> = [];
     if (tools.length === 0) {
       const closedRe = /<action\s+[^>]*?\btool\s*=\s*["']([^"']+)["'][^>]*>[\s\S]*?<\/action>/gi;
       let cm: RegExpExecArray | null;

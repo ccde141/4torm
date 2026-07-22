@@ -8,7 +8,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { resolveExecutionContext } from './execution-context.js';
+import { resolveExecutionContext, type SandboxLevelInput } from './execution-context.js';
 import { skillDir, toolExecutorDir, toolRegistryFile } from './data-paths.js';
 
 // 热重载缓存：文件路径 → { mtime, module }
@@ -143,7 +143,7 @@ export async function executeTool(
   args: Record<string, string>,
   agentId: string,
   workspaceDirOverride?: string,
-  sandboxLevelOverride?: 'strict' | 'relaxed' | 'unrestricted',
+  sandboxLevelOverride?: SandboxLevelInput,
   // UI 侧通道：执行器可返回 { result, meta } 携带展示用元数据（如覆盖写入的旧内容）。
   // meta 仅通过此回调外溢给调用方转发前端，绝不进入 LLM 结果字符串。不传则丢弃 meta。
   onMeta?: (meta: unknown) => void,

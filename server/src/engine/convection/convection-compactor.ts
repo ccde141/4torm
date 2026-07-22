@@ -7,7 +7,7 @@
  * - 压缩前 150K 区间 → 25-30K 摘要，保留最近 50K 原文不动
  * - 会长用自身 model 做摘要（主持人整理笔记，质量更高）
  * - 归档原文到 workspace/bak/{seq}.json
- * - 失败策略：重试一次 → 禁用
+ * - 摘要失败策略：显式报错并禁用后续自动压缩，不重试
  */
 
 import type { ContextMessage } from '../shared/types';

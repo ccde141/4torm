@@ -3,11 +3,13 @@ import path from 'node:path';
 import { healAgentLocks } from '../engine/shared/agent-lock.js';
 import { ArchiveManager } from '../engine/tradewind/orchestrator/archive-manager.js';
 import { tradewindRunsDir } from './data-paths.js';
+import { recoverCycloneDispatches } from '../engine/cyclone/dispatch-queue.js';
 
 export interface StartupRecoveryResult {
   releasedAgents: string[];
   crashedRuns: number;
   removedTempFiles: number;
+  failedCycloneDispatches: number;
 }
 
 const CONTROL_DIRS = ['agents', 'convection', 'tide', 'cyclone', 'tradewind', 'mcp', 'tools'];
@@ -56,10 +58,11 @@ export async function cleanupFrameworkTempFiles(dataDir: string): Promise<number
 }
 
 export async function recoverStartupState(dataDir: string): Promise<StartupRecoveryResult> {
-  const [releasedAgents, crashedRuns, removedTempFiles] = await Promise.all([
+  const [releasedAgents, crashedRuns, removedTempFiles, failedCycloneDispatches] = await Promise.all([
     healAgentLocks(dataDir),
     ArchiveManager.healCrashed(tradewindRunsDir(dataDir)),
     cleanupFrameworkTempFiles(dataDir),
+    recoverCycloneDispatches(dataDir),
   ]);
-  return { releasedAgents, crashedRuns, removedTempFiles };
+  return { releasedAgents, crashedRuns, removedTempFiles, failedCycloneDispatches };
 }

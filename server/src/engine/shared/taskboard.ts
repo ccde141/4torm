@@ -125,12 +125,12 @@ export function buildTaskBoardSection(board: TaskBoard | null): string {
 
   if (!board?.tasks?.length) return usage;
 
-  const lines = board.tasks.map(t => `- ${STATUS_MARK[t.status] ?? '[ ]'} ${t.title}${t.note ? `　（${t.note}）` : ''}`).join('\n');
+  const lines = board.tasks.map(t => `- ${STATUS_MARK[t.status] ?? '[ ]'} ${t.title}${t.note ? ` （${t.note}）` : ''}`).join('\n');
   return `${usage}
 
 #### 当前任务板状态
 ${board.goal ? `目标：${board.goal}\n` : ''}${lines}
 
-标记含义：[x] 已完成　[~] 进行中　[ ] 待办　[!] 受阻
+标记含义：[x] 已完成 [~] 进行中 [ ] 待办 [!] 受阻
 **推进前先看板子确认下一项；每当开始或完成一项，及时用 task_board(action:"set") 覆盖更新整个板子，别让它停在过期状态。**`;
 }

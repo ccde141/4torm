@@ -16,8 +16,14 @@ import { formatTimestamp } from '../../../utils/time';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import { getConvectionCreateError } from './convection-guards';
 import { shouldLoadConvectionSession } from './convection-session-guards';
-import { streamConvectionSSE } from './convection-sse';
+import { ConvectionHttpError, streamConvectionSSE } from './convection-sse';
 import { restoreConvectionMessage } from './convection-message-map';
+import {
+  getConvectionComposerMode,
+  normalizeConvectionRound,
+  shouldBlockConvectionSessionSwitch,
+  type ConvectionRound,
+} from './convection-round-state';
 import { createLatestRequestGuard } from '../../../lib/latest-request';
 import '../../../styles/components/convection.css';
 import type { Agent } from '../../../types';
@@ -44,8 +50,9 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   const [cMsgs, setCMsgs] = useState<CMsg[]>([]);
   const [input, setInput] = useState('');
   const [cInput, setCInput] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [cBusy, setCBusy] = useState(false);
+  const [activeRound, setActiveRound] = useState<ConvectionRound>(null);
+  const busy = activeRound === 'public';
+  const cBusy = activeRound === 'chair';
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -100,13 +107,18 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
 
   const activeSession = sessions.find(s => s.id === activeId);
   const getName = (id: string) => agents.find(a => a.id === id)?.name || id;
+  const publicComposerMode = getConvectionComposerMode(activeRound, 'public');
+  const chairComposerMode = getConvectionComposerMode(activeRound, 'chair');
 
   // 加载会话消息
   const loadSession = useCallback(async (id: string) => {
+    const hasLocalRound = abortRef.current !== null || cAbortRef.current !== null;
+    if (shouldBlockConvectionSessionSwitch(activeId, id, hasLocalRound)) return;
     if (!shouldLoadConvectionSession(id, activeId, loadingSessionRef.current)) return;
     const request = sessionRequestGuard.current.begin();
     loadingSessionRef.current = id;
     setActiveId(id);
+    setActiveRound(null);
     localStorage.setItem(ACTIVE_SESSION_KEY, id);
     try {
       const r = await fetch(`/api/convection/session/${id}/status`);
@@ -126,9 +138,36 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
       if (!request.isCurrent()) return;
       setMsgs((d.publicMessages || []).map(restoreConvectionMessage));
       setCMsgs(d.chairMessages || []);
+      setActiveRound(normalizeConvectionRound(d.activeRound));
     } catch (e) { if (request.isCurrent()) { console.error('[convection] 加载对流会话失败', e); alert(`加载对流会话失败：${(e as Error).message}`); } }
     finally { if (loadingSessionRef.current === id) loadingSessionRef.current = null; }
   }, [activeId]);
+
+  // 刷新或跨窗口进入正在运行的会议时，没有本地 SSE 可接管；轮询权威状态直到落定。
+  useEffect(() => {
+    if (!active || !activeId || !activeRound || abortRef.current || cAbortRef.current) return;
+    let cancelled = false;
+    const sync = async () => {
+      try {
+        const r = await fetch(`/api/convection/session/${activeId}/status`);
+        if (!r.ok || cancelled) return;
+        const d = await r.json();
+        if (cancelled) return;
+        const next = normalizeConvectionRound(d.activeRound);
+        setActiveRound(next);
+        if (!next) {
+          setMsgs((d.publicMessages || []).map(restoreConvectionMessage));
+          setCMsgs(d.chairMessages || []);
+          refreshSessions();
+        }
+      } catch (e) {
+        if (!cancelled) console.error('[convection] 同步运行状态失败', e);
+      }
+    };
+    const timer = setInterval(sync, 1000);
+    sync();
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [active, activeId, activeRound, refreshSessions]);
 
   // 恢复上次活跃会话
   useEffect(() => {
@@ -269,12 +308,13 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
       if (enqueueMsg(activeId, msg)) setInput('');
       return;
     }
+    if (cBusy) return;
     if (!fromQueue) setInput('');
 
     // 指令拦截
     if (msg === '/reset' || msg === '/reset summary') {
       const mode = msg === '/reset summary' ? 'summary' : 'clean';
-      setBusy(true);
+      setActiveRound('public');
       try {
         const resetResp = await fetch(`/api/convection/session/${activeId}/reset-context`, {
           method: 'POST',
@@ -294,17 +334,22 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         } else {
           alert(await readErrorMessage(r, '重载对流会话失败'));
         }
-      } catch (e) { console.error('[convection] 重置对流失败', e); alert(`重置对流失败：${(e as Error).message}`); }
-      setBusy(false);
+      } catch (e) {
+        console.error('[convection] 重置对流失败', e);
+        alert(`重置对流失败：${(e as Error).message}`);
+      } finally {
+        setActiveRound(null);
+      }
       return;
     }
 
-    setBusy(true);
+    setActiveRound('public');
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     const now = new Date().toISOString();
     setMsgs(prev => [...prev, { speaker: '人类', content: msg, timestamp: now }]);
     console.log(`[${now}] 人类发言 → 对流: ${msg.slice(0, 80)}`);
+    let preserveServerRound = false;
     try {
       let currentLabel = '';
       let streamContent = '';
@@ -370,6 +415,17 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         }
       }, ctrl.signal);
     } catch (e: any) {
+      if (e instanceof ConvectionHttpError && e.status === 409) {
+        preserveServerRound = true;
+        setMsgs(p => p.filter(m => !(m.speaker === '人类' && m.timestamp === now)));
+        setActiveRound(null);
+        const status = await fetch(`/api/convection/session/${activeId}/status`).catch(() => null);
+        if (status?.ok) {
+          const d = await status.json();
+          setActiveRound(normalizeConvectionRound(d.activeRound));
+        }
+        return;
+      }
       setMsgs(p => p.map((m, i) => i === p.length - 1 && m.streaming
         ? { ...m, streaming: false, waitingInfo: undefined }
         : m));
@@ -381,8 +437,12 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
           timestamp: new Date().toISOString(),
         }]);
       }
-    } finally { abortRef.current = null; setBusy(false); refreshSessions(); }
-  }, [input, busy, activeId, refreshSessions]);
+    } finally {
+      abortRef.current = null;
+      if (!preserveServerRound) setActiveRound(null);
+      refreshSessions();
+    }
+  }, [input, busy, cBusy, activeId, refreshSessions]);
 
   // 始终持有最新 handleSpeak，供 busy 落定 effect 调用（避开闭包里过期的 busy）
   speakRef.current = handleSpeak;
@@ -409,15 +469,18 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   }, [busy, activeId]);
 
   const handleChair = useCallback(async () => {
-    if (!cInput.trim() || cBusy || !activeId) return;
-    const msg = cInput.trim(); setCInput(''); setCBusy(true);
+    if (!cInput.trim() || activeRound !== null || !activeId) return;
+    const msg = cInput.trim(); setCInput(''); setActiveRound('chair');
     const ctrl = new AbortController();
     cAbortRef.current = ctrl;
-    setCMsgs(prev => [...prev, { role: 'user', content: msg, timestamp: new Date().toISOString() }]);
+    const now = new Date().toISOString();
+    setCMsgs(prev => [...prev, { role: 'user', content: msg, timestamp: now }]);
+    const assistantTimestamp = new Date().toISOString();
+    let preserveServerRound = false;
     try {
       let acc = '';
       let cReasoning = '';
-      setCMsgs(prev => [...prev, { role: 'assistant', content: '', streaming: true, timestamp: new Date().toISOString() }]);
+      setCMsgs(prev => [...prev, { role: 'assistant', content: '', streaming: true, timestamp: assistantTimestamp }]);
       await streamConvectionSSE(`/api/convection/session/${activeId}/chair`, { message: msg }, (ev: any) => {
         if (ev.type === 'heartbeat') {
           const info: WaitingInfo = { phase: ev.phase, elapsed: ev.elapsed };
@@ -435,6 +498,17 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         }
       }, ctrl.signal);
     } catch (e: any) {
+      if (e instanceof ConvectionHttpError && e.status === 409) {
+        preserveServerRound = true;
+        setCMsgs(p => p.filter(m => m.timestamp !== now && m.timestamp !== assistantTimestamp));
+        setActiveRound(null);
+        const status = await fetch(`/api/convection/session/${activeId}/status`).catch(() => null);
+        if (status?.ok) {
+          const d = await status.json();
+          setActiveRound(normalizeConvectionRound(d.activeRound));
+        }
+        return;
+      }
       setCMsgs(p => p.map((m, i) => i === p.length - 1 && (m as any).streaming
         ? {
             ...m,
@@ -443,8 +517,11 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
             waitingInfo: undefined,
           }
         : m));
-    } finally { cAbortRef.current = null; setCBusy(false); }
-  }, [cInput, cBusy, activeId]);
+    } finally {
+      cAbortRef.current = null;
+      if (!preserveServerRound) setActiveRound(null);
+    }
+  }, [cInput, activeRound, activeId]);
 
   return (
     <div className="conv" ref={convRef}>
@@ -685,8 +762,12 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
             <div className="chat__input-area">
               <QueuedChips items={queue} onRemove={i => { if (activeId) removeQueuedMsg(activeId, i); }} />
               <div className="chat__input-wrapper">
-                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder={busy ? '发言中…（可继续输入，发送将排队）' : '发言...（Shift+Enter 换行）'} rows={1} />
-                {busy ? (
+                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder={publicComposerMode === 'blocked' ? '会长私聊进行中…' : busy ? '发言中…（可继续输入，发送将排队）' : '发言...（Shift+Enter 换行）'} rows={1} />
+                {publicComposerMode === 'blocked' ? (
+                  <button className="chat__send-btn" disabled title="会长私聊进行中">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
+                  </button>
+                ) : busy ? (
                   <>
                     <button className="chat__send-btn" onClick={() => handleSpeak()} disabled={!input.trim() || queue.length >= MAX_QUEUE} title={queue.length >= MAX_QUEUE ? '队列已满（最多 3 条）' : '加入队列'}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
@@ -750,13 +831,17 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         </div>
         <div className="chat__input-area">
           <div className="chat__input-wrapper">
-            <textarea className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={activeId ? '私聊会长...（Shift+Enter 换行）' : ''} disabled={cBusy || !activeId} rows={1} />
+            <textarea className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={!activeId ? '' : chairComposerMode === 'blocked' ? '公共讨论进行中…' : '私聊会长...（Shift+Enter 换行）'} disabled={!activeId} rows={1} />
             {cBusy ? (
               <button className="chat__stop-btn" onClick={() => {
                 cAbortRef.current?.abort();
                 if (activeId) fetch(`/api/convection/session/${activeId}/abort`, { method: 'POST' }).catch(() => {});
               }} title="停止生成">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+              </button>
+            ) : chairComposerMode === 'blocked' ? (
+              <button className="chat__send-btn" disabled title="公共讨论进行中">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
               </button>
             ) : (
               <button className="chat__send-btn" onClick={handleChair} disabled={!cInput.trim() || !activeId}>

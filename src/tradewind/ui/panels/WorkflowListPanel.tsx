@@ -19,7 +19,7 @@ interface WorkflowListPanelProps {
   onClose: () => void;
   onLoad: (workflowId: string) => void;
   onNew: () => void;
-  onDelete: (workflowId: string) => void;
+  onDelete: (workflowId: string) => Promise<void>;
 }
 
 export function WorkflowListPanel({
@@ -28,6 +28,7 @@ export function WorkflowListPanel({
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -43,6 +44,17 @@ export function WorkflowListPanel({
       setLoading(false);
     }
   }, []);
+
+  const deleteItem = async (workflowId: string) => {
+    setConfirmingDeleteId(null);
+    setError(null);
+    try {
+      await onDelete(workflowId);
+      await refresh();
+    } catch (cause) {
+      setError((cause as Error).message || '删除工作流失败');
+    }
+  };
 
   useEffect(() => {
     if (visible) refresh();
@@ -60,6 +72,7 @@ export function WorkflowListPanel({
         <button className="tw-wflist__new" onClick={() => { onNew(); onClose(); }}>
           + 新建工作流
         </button>
+        {error && <div className="tw-wflist__hint">{error}</div>}
         {loading && <div className="tw-wflist__hint">加载中...</div>}
         {!loading && workflows.length === 0 && (
           <div className="tw-wflist__hint">暂无已保存的工作流</div>
@@ -83,7 +96,7 @@ export function WorkflowListPanel({
               <button
                 className="tw-wflist__item-del"
                 style={{ color: '#fff', background: '#ef4444', borderRadius: '4px', fontSize: '11px', padding: '1px 6px' }}
-                onClick={(e) => { e.stopPropagation(); setConfirmingDeleteId(null); onDelete(wf.workflowId); refresh(); }}
+                onClick={(e) => { e.stopPropagation(); void deleteItem(wf.workflowId); }}
                 title="工作流及运行数据将被清空"
               >确认?</button>
             ) : (
