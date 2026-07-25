@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { isBlocked } from './run_command.js'
+import { isBlocked, runCommand } from './run_command.js'
 
 function run(name, fn) { fn(); console.log(`  ✓ ${name}`) }
 
@@ -40,4 +40,68 @@ run('正常命令放行', () => {
   assert.equal(isBlocked('go build ./...'), null)
 })
 
+await runAsync('长命令不阻塞事件循环，并可由 AbortSignal 中止', async () => {
+  const controller = new AbortController()
+  const executable = JSON.stringify(process.execPath)
+  const pending = runCommand(`${executable} -e "setTimeout(() => {}, 10000)"`, {
+    cwd: process.cwd(),
+    timeout: 30_000,
+    signal: controller.signal,
+  })
+
+  await new Promise(resolve => setImmediate(resolve))
+  controller.abort()
+  await assert.rejects(pending, error => error?.name === 'AbortError' && /已中止/.test(error.message))
+})
+
+await runAsync('超时与非零退出都真实抛错', async () => {
+  const executable = JSON.stringify(process.execPath)
+  await assert.rejects(
+    runCommand(`${executable} -e "setTimeout(() => {}, 10000)"`, {
+      cwd: process.cwd(), timeout: 50,
+    }),
+    /执行超时 50ms/,
+  )
+  await assert.rejects(
+    runCommand(`${executable} -e "process.exit(7)"`, {
+      cwd: process.cwd(), timeout: 5_000,
+    }),
+    /退出码 7/,
+  )
+})
+
+await runAsync('Windows shell 将中文路径原样传给子进程', async () => {
+  const executable = JSON.stringify(process.execPath)
+  const expected = String.raw`G:\思考的快与慢\第一部分\文稿初版.docx`
+  const output = await runCommand(`${executable} -e "process.stdout.write(process.argv[1])" "${expected}"`, {
+    cwd: process.cwd(), timeout: 5_000,
+  })
+  assert.equal(output, expected)
+})
+
+await runAsync('子进程统一继承 Python UTF-8 输出环境', async () => {
+  const executable = JSON.stringify(process.execPath)
+  const script = "process.stdout.write([process.env.PYTHONUTF8,process.env.PYTHONIOENCODING].join('|'))"
+  const output = await runCommand(`${executable} -e "${script}"`, {
+    cwd: process.cwd(), timeout: 5_000,
+  })
+  assert.equal(output, '1|utf-8')
+})
+
+await runAsync('失败时同时保留 stdout 与 stderr 并清理终端颜色码', async () => {
+  const executable = JSON.stringify(process.execPath)
+  const script = "process.stdout.write('FIRST\\n');process.stderr.write('\\u001b[31mFINAL\\u001b[0m');process.exit(9)"
+  await assert.rejects(
+    runCommand(`${executable} -e "${script}"`, { cwd: process.cwd(), timeout: 5_000 }),
+    error => /FIRST/.test(error.message)
+      && /FINAL/.test(error.message)
+      && !error.message.includes('\u001b['),
+  )
+})
+
 console.log('ok')
+
+async function runAsync(name, fn) {
+  await fn()
+  console.log(`  ✓ ${name}`)
+}

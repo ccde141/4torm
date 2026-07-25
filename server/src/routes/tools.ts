@@ -19,15 +19,24 @@ export async function toolRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: '缺少 tool 参数' });
     }
     const { tool, args, agentId, workspaceDirOverride, sandboxLevelOverride } = body;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    req.raw.once('aborted', abort);
+    reply.raw.once('close', abort);
     try {
       let meta: unknown;
       const result = await executeTool(
         dataDir, tool, args || {}, agentId || '', workspaceDirOverride, sandboxLevelOverride,
         (m) => { meta = m; },
+        controller.signal,
       );
       return reply.send({ result, meta });
     } catch (e) {
+      if (controller.signal.aborted) return;
       return reply.status(500).send({ error: (e as Error).message });
+    } finally {
+      req.raw.removeListener('aborted', abort);
+      reply.raw.removeListener('close', abort);
     }
   });
 }

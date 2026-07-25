@@ -31,6 +31,23 @@ export interface Agent {
 /** 消息角色 */
 export type MessageRole = 'user' | 'assistant' | 'system';
 
+/** 会话持久化的图片索引；二进制内容由本地附件接口管理。 */
+export interface ImageAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
+export interface NativeContextMessage {
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  images?: ImageAttachment[];
+  reasoningContent?: string;
+  toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+  toolCallId?: string;
+}
+
 /** 单条消息 */
 export interface ChatMessage {
   id: string;
@@ -38,6 +55,8 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   agentId?: string;
+  /** 用户随消息发送的本地图片。 */
+  images?: ImageAttachment[];
   toolCall?: ToolCall;
   /** 运行时类型标记（如 'compact-marker'） */
   type?: string;
@@ -51,9 +70,7 @@ export interface ChatMessage {
   };
   /**
    * 内嵌工具步骤（工具名/参数/结果/状态）。
-   * 原生模式下 rawContent 不含 <action>，故此字段是工具调用的唯一源数据，
-   * 需持久化：既用于重载渲染，也用于跨轮次历史回灌（见 ChatPage 历史重建）。
-   * 文本模式下亦可由 parseStructuredOutput(rawContent) 重生成。
+   * 这是工具调用的唯一展示数据，需持久化用于重载渲染与跨轮次历史回灌。
    */
   toolSteps?: ToolStep[];
   /** 流式阶段标识（运行时字段，不持久化） */
@@ -71,11 +88,10 @@ export interface ChatMessage {
    * 不在 rawContent 里，故需持久化，否则重载丢失。无原生思考的模型为空。
    */
   reasoningContent?: string;
+  /** 服务端返回的精确原生消息增量，用于下一轮无损回灌。 */
+  nativeContext?: NativeContextMessage[];
   /**
-   * 该回复是否由原生工具调用模式（native tool_calls）产生。持久化：重载后仍需据此
-   * 决定前端是否扫描正文里的 <action> 文本标签——native 模式正文不该有真实调用，
-   * 扫描只会把模型幻觉/引用的 <action> 误判成调用（见 parseStructuredOutput opts.native）。
-   * 老会话为 undefined → 按文本模式处理（安全兜底）。
+   * 该回复是否由原生工具调用模式产生，持久化用于诊断和历史展示。
    */
   native?: boolean;
 }

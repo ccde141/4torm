@@ -1,9 +1,36 @@
 const BASE = '/api/storage';
 
 export class StorageError extends Error {
-  constructor(message: string) {
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
     super(message);
     this.name = 'StorageError';
+    this.status = status;
+  }
+}
+
+const WRITE_RETRY_DELAYS = [250, 750, 1500] as const;
+const RETRYABLE_WRITE_STATUS = new Set([502, 503, 504]);
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function writeWithRetry(request: () => Promise<Response>): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const response = await request();
+      if (response.ok) return;
+      const error = new StorageError(`写入失败: ${response.status}`, response.status);
+      if (!RETRYABLE_WRITE_STATUS.has(response.status) || attempt >= WRITE_RETRY_DELAYS.length) {
+        throw error;
+      }
+    } catch (error) {
+      const transientNetworkError = error instanceof TypeError;
+      if (!transientNetworkError || attempt >= WRITE_RETRY_DELAYS.length) throw error;
+    }
+    await wait(WRITE_RETRY_DELAYS[attempt]);
   }
 }
 
@@ -59,20 +86,19 @@ export async function readJson<T>(filePath: string): Promise<T | null> {
 }
 
 export async function writeText(filePath: string, content: string): Promise<void> {
-  const res = await fetch(`${BASE}/write?path=${encodeURIComponent(filePath)}`, {
+  await writeWithRetry(() => fetch(`${BASE}/write?path=${encodeURIComponent(filePath)}`, {
     method: 'PUT',
     body: content,
-  });
-  if (!res.ok) throw new StorageError(`写入失败: ${res.status}`);
+  }));
 }
 
 export async function writeJson<T>(filePath: string, data: T): Promise<void> {
-  const res = await fetch(`${BASE}/write?path=${encodeURIComponent(filePath)}`, {
+  const body = JSON.stringify(data, null, 2);
+  await writeWithRetry(() => fetch(`${BASE}/write?path=${encodeURIComponent(filePath)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data, null, 2),
-  });
-  if (!res.ok) throw new StorageError(`写入失败: ${res.status}`);
+    body,
+  }));
 }
 
 export async function deleteFile(filePath: string): Promise<void> {

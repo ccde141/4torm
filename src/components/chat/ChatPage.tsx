@@ -11,16 +11,31 @@ import QueuedChips, { MAX_QUEUE } from './QueuedChips';
 import TaskBoardDrawer, { RAIL_W } from './TaskBoardDrawer';
 import { loadTaskboard, saveTaskboard, type TaskBoard } from '../../utils/taskboard';
 import { runStreamLoop } from '../../engine/chat/streamLoop';
+import { applyDelegateStreamEvent, finalizeStreamAnswer, isDelegateStreamEvent } from '../../engine/chat/delegate-stream-events';
+import { buildConversationHistory } from '../../engine/chat/conversation-history';
 import { streamUrl } from '../../lib/apiBase';
 import { useDroppedPathInput } from '../../lib/useDroppedPathInput';
 import { formatTokenUsage } from '../../store/chat-token';
 import ExecutionStatusBar from './ExecutionStatusBar';
+import { ImageDrafts } from './MessageImages';
+import {
+  createImageDraft,
+  IMAGE_ACCEPT,
+  type ImageDraft,
+  uploadImageDraft,
+} from '../../engine/chat/image-attachments';
+import {
+  DESKTOP_FILES_DROPPED,
+  type DesktopFilesDroppedEvent,
+  type DroppedFile,
+} from '../desktop/DesktopDropLayer';
 import {
   getSession,
   saveSession,
   createSession,
   generateMessageId,
   autoTitle,
+  type ChatSession,
 } from '../../store/chat';
 import type { Agent, ChatMessage } from '../../types';
 import '../../styles/components/chat.css';
@@ -29,6 +44,7 @@ import '../../styles/components/loading.css';
 
 const STATUS_COLOR_MAP: Record<string, string> = {};
 for (const s of SYSTEM_STATUSES) STATUS_COLOR_MAP[s.id] = s.color;
+const IS_NOT_IMAGE = (file: DroppedFile) => !file.type.startsWith('image/');
 
 function AgentWorkspaceButton({ agent }: { agent: Agent | null }) {
   async function openWorkspace() {
@@ -58,6 +74,8 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [messages, setMessagesRaw] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
+  const [imageDrafts, setImageDrafts] = useState<ImageDraft[]>([]);
+  const [imageError, setImageError] = useState('');
   const [streaming, setStreaming] = useState(false);
   /** 队列变更后强制重渲染 chips（队列存于注册表 ref，不自动触发渲染） */
   const [, bumpQueue] = useState(0);
@@ -71,6 +89,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<(() => void) | null>(null);
   // 同步发送锁：streaming state 是异步的，挡不住"卡顿期间快速二次点击"，
   // 用 ref 在 handleSend 入口同步置位，从根上杜绝重复发送（两条消息 bug）
@@ -101,6 +120,10 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   } = useSessionList(selectedAgent, selectedModel, models, setSelectedAgent, setMessages, setStreaming, setSelectedModel, streamRunners);
   // 同步 activeSessionId 到 ref 供 emit 读最新值（effect 中写，避免 render 期改 ref）
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
+  useEffect(() => {
+    setImageDrafts([]);
+    setImageError('');
+  }, [activeSessionId, selectedAgent?.id]);
 
   // 切会话时载入该会话的任务板（后端 task_board 假工具落盘的同一文件）；切换不算“更新”，不发光
   useEffect(() => {
@@ -133,8 +156,37 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     if (sid) saveTaskboard(sid, next).catch(e => console.error('[taskboard] 保存失败', e));
   }, []);
 
-  // 桌面端：拖入文件 → 把真实磁盘路径追加进输入框（仅当前可见对话生效）
-  useDroppedPathInput(setInput, inputRef, active !== false);
+  const addImageFiles = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+    setImageError('');
+    const added: ImageDraft[] = [];
+    let count = imageDrafts.length;
+    for (const file of files) {
+      try {
+        const draft = await createImageDraft(file, count);
+        added.push(draft);
+        count += 1;
+      } catch (error) {
+        setImageError((error as Error).message);
+        break;
+      }
+    }
+    if (added.length) setImageDrafts(previous => [...previous, ...added]);
+  }, [imageDrafts.length]);
+
+  // 图片进入附件预览；其他文件仍按原行为把本地路径写进输入框。
+  useDroppedPathInput(setInput, inputRef, active !== false, IS_NOT_IMAGE);
+  useEffect(() => {
+    if (active === false) return;
+    const onDrop = (event: Event) => {
+      const files = (event as DesktopFilesDroppedEvent).detail.files
+        .filter(file => file.type.startsWith('image/'))
+        .map(file => file.file);
+      void addImageFiles(files);
+    };
+    window.addEventListener(DESKTOP_FILES_DROPPED, onDrop);
+    return () => window.removeEventListener(DESKTOP_FILES_DROPPED, onDrop);
+  }, [active, addImageFiles]);
 
   const {
     editingMsgId, editContent, setEditContent,
@@ -390,10 +442,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             scheduleFlush();
           } else if (ev.type === 'tool-call') {
             // 清理 assistant 流式内容中的 action/think 标签
-            const cleanContent = streamContent
-              .replace(/<action[^>]*>[\s\S]*?<\/action>/g, '')
-              .replace(/<think>[\s\S]*?<\/think>/g, '')
-              .trim();
+            const cleanContent = streamContent.trim();
             allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: cleanContent } : m);
             const toolMsg: ChatMessage = {
               id: generateMessageId(), role: 'assistant',
@@ -425,17 +474,11 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             }
             allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, streamingPhase: 'llm-waiting', phaseElapsed: 0, streamingTool: undefined, streamingArgumentChars: undefined } : m);
             emit([...allMessages]);
+          } else if (isDelegateStreamEvent(ev)) {
+            allMessages = applyDelegateStreamEvent(allMessages, assistantMsgId, ev);
+            scheduleFlush();
           } else if (ev.type === 'answer') {
-            const finalMsg: ChatMessage = {
-              id: assistantMsgId, role: 'assistant',
-              content: ev.rawContent || ev.content,
-              timestamp: new Date().toISOString(), agentId: selectedAgent.id,
-              // 思考流跨 answer 事件保留（与首答路径 streamLoop 对齐），否则思考块被抹掉
-              ...(reasoningContent ? { reasoningContent } : {}),
-              // 模式标志：与 streamLoop 对齐，重载后据此决定是否扫描正文 <action>
-              native: (ev as any).native,
-            };
-            allMessages = allMessages.map(m => m.id === assistantMsgId ? finalMsg : m);
+            allMessages = finalizeStreamAnswer(allMessages, assistantMsgId, ev, selectedAgent.id);
             emit([...allMessages]);
           } else if (ev.type === 'ask') {
             // 嵌套 ask：保留 assistantMsg 的描述性内容，追加 ask 消息
@@ -445,10 +488,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               timestamp: new Date().toISOString(), agentId: selectedAgent.id,
               ask: { question: ev.question, options: ev.options, answered: false },
             };
-            const cleanContent = streamContent
-              .replace(/<action[^>]*>[\s\S]*?<\/action>/g, '')
-              .replace(/<think>[\s\S]*?<\/think>/g, '')
-              .trim();
+            const cleanContent = streamContent.trim();
             if (cleanContent) {
               allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: cleanContent } : m);
             } else {
@@ -528,10 +568,15 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     const fromQueue = typeof textArg === 'string';   // 出队续发：文本显式传入，不读输入框
     const text = (textArg ?? input).trim();
     const cmd = text;
+    const drafts = fromQueue ? [] : imageDrafts;
 
-    if (!text || !selectedAgent) return;
+    if ((!text && drafts.length === 0) || !selectedAgent) return;
     // 运行期交互发送 → 入队，不打断当前流（drain 调用 fromQueue=true 时跳过，直接发）
     if (!fromQueue && streaming) {
+      if (drafts.length) {
+        setImageError('图片需等待当前回复结束后发送');
+        return;
+      }
       if (activeSessionId && streamRunners.enqueue(activeSessionId, text)) { setInput(''); bumpQueue(t => t + 1); }
       return;
     }
@@ -540,7 +585,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     // 同步锁：入口立即置位，挡住 await 期间（getAgent/getSession 读大文件慢）的二次点击
     if (sendingRef.current) return;
     sendingRef.current = true;
-    if (cmd === '/compact') {
+    if (cmd === '/compact' && drafts.length === 0) {
       sendingRef.current = false;
       if (!fromQueue) setInput('');
       if (!activeSessionId) return;
@@ -557,10 +602,37 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       return;
     }
 
-    // 立即上屏：在任何 await 之前同步完成，按下发送的瞬间消息就显示、输入框就清空。
+    let sid = activeSessionId;
+    const isNewSession = !sid;
+    let session: ChatSession | null = null;
+    let attachedImages: ChatMessage['images'];
+    if (drafts.length) {
+      try {
+        if (!sid) {
+          const created = await createSession(selectedAgent);
+          sid = created.id;
+          setActiveSessionId(sid);
+        }
+        session = await getSession(sid);
+        if (!session) throw new Error('会话不存在');
+        attachedImages = await Promise.all(
+          drafts.map(draft => uploadImageDraft(selectedAgent.id, sid!, draft)),
+        );
+      } catch (error) {
+        setImageError((error as Error).message);
+        sendingRef.current = false;
+        return;
+      }
+    }
+
+    // 纯文本仍在任何 await 前立即上屏；图片需先完成本地附件落盘，再显示稳定引用。
     // （之前 setMessages 被前面的 await getAgent 挡住，连接堵车时要等 1~2s 才上屏，
     //  造成"按了没反应"的错觉 → 用户二次点击 → 双发。）
-    const userMsg: ChatMessage = { id: generateMessageId(), role: 'user', content: text, timestamp: new Date().toISOString(), agentId: selectedAgent.id };
+    const userMsg: ChatMessage = {
+      id: generateMessageId(), role: 'user', content: text,
+      timestamp: new Date().toISOString(), agentId: selectedAgent.id,
+      ...(attachedImages?.length ? { images: attachedImages } : {}),
+    };
     console.log(`[${userMsg.timestamp}] 人类 → ${selectedAgent.name}: ${userMsg.content.slice(0, 80)}`);
     const updatedMessages = [...messagesRef.current, userMsg];
     setMessages(updatedMessages);
@@ -568,18 +640,18 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     followRef.current = true;
     requestAnimationFrame(() => scrollToBottom('smooth'));
     if (!fromQueue) setInput('');   // 出队续发不动当前正在输入的草稿
+    if (drafts.length) setImageDrafts([]);
+    setImageError('');
     setStreaming(true);
 
     // 会话准备 + 保存（后台进行，不阻塞已上屏的 UI）
-    let sid = activeSessionId;
-    const isNewSession = !sid;
     if (!sid) {
       const s = await createSession(selectedAgent);
       sid = s.id;
       setActiveSessionId(sid);
     }
 
-    const session = await getSession(sid);
+    session ??= await getSession(sid);
     if (!session) { sendingRef.current = false; setStreaming(false); return; }
 
     const title = session.titleManual ? session.title : autoTitle(updatedMessages);
@@ -608,39 +680,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       ? updatedMessages.slice(lastMarkerIdx)
       : updatedMessages;
 
-    type OutMsg = {
-      role: string; content: string;
-      toolCalls?: Array<{ id: string; name: string; arguments: string }>;
-      toolCallId?: string;
-    };
-    const chatMessages: OutMsg[] = llmMessages.flatMap((m): OutMsg[] => {
-      // compact-marker 作为 system 消息发送（摘要内容）
-      if ((m as any).type === 'compact-marker') {
-        return [{ role: 'system', content: `[历史上下文摘要]\n${m.content}` }];
-      }
-      if (m.role === 'user') return [{ role: 'user', content: m.content }];
-      if (m.role === 'system') return [{ role: 'system', content: m.content }];
-
-      // assistant：有结构化工具步骤 → 展开成 native 规范序列，
-      // 让 agent 跨轮次看到自己上一轮的工具调用与返回原文（修复跨轮失忆）。
-      const steps = m.toolSteps;
-      if (steps && steps.length > 0) {
-        const out: OutMsg[] = [];
-        steps.forEach((step, i) => {
-          const id = `${m.id}-ts${i}`;
-          out.push({ role: 'assistant', content: '', toolCalls: [{ id, name: step.tool, arguments: JSON.stringify(step.args) }] });
-          out.push({ role: 'tool', content: step.result ?? '', toolCallId: id });
-        });
-        if (m.content.trim()) out.push({ role: 'assistant', content: m.content });
-        return out;
-      }
-
-      // delegate 单步（toolCall，无结构化 result 回灌）→ 保留旧文本回退
-      if (m.toolCall && !m.content.startsWith('<')) {
-        return [{ role: 'assistant', content: `<action tool="${m.toolCall.toolName}">${JSON.stringify(m.toolCall.params)}</action>` }];
-      }
-      return [{ role: 'assistant', content: m.content }];
-    });
+    const chatMessages = buildConversationHistory(llmMessages);
 
     // 流跑完后端处理 idle 状态（仅当它仍是当前激活会话时才动全局 streaming）
     runStreamLoop({
@@ -754,10 +794,11 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             {/* 收起态：让出竖条宽度，滚动条落在竖条左侧可点可拖；展开态：抽屉浮层覆盖，无需让位 */}
             <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginRight: taskboardOpen ? 0 : RAIL_W }}>
             <div className="chat__messages" ref={messagesContainerRef} style={{ paddingRight: taskboardOpen ? 'calc(var(--space-6) + 30px)' : 'var(--space-6)' }}>
-              {messages.filter((msg, index) => msg.toolCall || msg.content.trim() || msg.reasoningContent || msg.toolSteps?.length || (streaming && index === messages.length - 1)).map(msg => (
+              {messages.filter((msg, index) => msg.toolCall || msg.content.trim() || msg.images?.length || msg.reasoningContent || msg.toolSteps?.length || (streaming && index === messages.length - 1)).map(msg => (
                 <div key={msg.id}>
                   <MessageItem
                     msg={msg}
+                    sessionId={activeSessionId}
                     isStreaming={streaming && msg === messages[messages.length - 1]}
                     isEditing={editingMsgId === msg.id}
                     editContent={editContent}
@@ -785,8 +826,20 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             <div className="chat__input-area">
               <ExecutionStatusBar message={streaming ? messages[messages.length - 1] : undefined} />
               <QueuedChips items={queue} onRemove={i => { if (activeSessionId) { streamRunners.removeQueued(activeSessionId, i); bumpQueue(t => t + 1); } }} />
+              <ImageDrafts images={imageDrafts} onRemove={key => setImageDrafts(images => images.filter(image => image.key !== key))} />
+              {imageError && <div className="chat__image-error" role="alert">{imageError}</div>}
               <div className="chat__input-wrapper">
-                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={handleKeyDown} disabled={compacting} placeholder={compacting ? '正在压缩上下文…请稍候' : streaming ? '回复中…（可继续输入，发送将排队）' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} aria-label="输入消息" />
+                <input ref={imageInputRef} type="file" accept={IMAGE_ACCEPT} multiple hidden onChange={event => {
+                  void addImageFiles(Array.from(event.target.files ?? []));
+                  event.target.value = '';
+                }} />
+                <button type="button" className="chat__attach-btn" onClick={() => imageInputRef.current?.click()} disabled={compacting || streaming} title={streaming ? '等待当前回复结束后添加图片' : '添加图片'} aria-label="添加图片">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.4 11.6 12 21a6 6 0 0 1-8.5-8.5l10-10a4 4 0 0 1 5.7 5.7l-10 10a2 2 0 0 1-2.8-2.8l9.3-9.3" /></svg>
+                </button>
+                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onPaste={event => {
+                  const files = Array.from(event.clipboardData.files).filter(file => file.type.startsWith('image/'));
+                  if (files.length) { event.preventDefault(); void addImageFiles(files); }
+                }} onKeyDown={handleKeyDown} disabled={compacting} placeholder={compacting ? '正在压缩上下文…请稍候' : streaming ? '回复中…（可继续输入，发送将排队）' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} aria-label="输入消息" />
                 {compacting ? (
                   <button className="chat__send-btn" disabled title="压缩中…">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
@@ -801,7 +854,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                     </button>
                   </>
                 ) : (
-                  <button className="chat__send-btn" onClick={() => handleSend()} disabled={!input.trim()}>
+                  <button className="chat__send-btn" onClick={() => handleSend()} disabled={!input.trim() && imageDrafts.length === 0}>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
                   </button>
                 )}

@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { resolvePath } from './_resolve.js'
@@ -135,6 +135,38 @@ run('指向尚不存在外部文件的符号链接仍按真实目标拦截', () 
 run('data/ 相对路径仍基于 workspace，不再切换到项目根', () => {
   const r = resolvePath('data/notes.txt', { ...ctx, sandboxLevel: 'relaxed' })
   assert.equal(r, path.resolve(workspaceDir, 'data/notes.txt'))
+})
+
+run('新工具执行器草稿允许创建', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), '4torm-executor-create-'))
+  const realData = path.join(root, 'data')
+  const executors = path.join(realData, 'tools', 'executors')
+  mkdirSync(executors, { recursive: true })
+  const realCtx = { dataDir: realData, projectDir: root, workspaceDir: root, sandboxLevel: 'unrestricted' }
+  const target = path.join(executors, 'new_tool.js')
+  assert.equal(resolvePath(target, realCtx, { write: true }), target)
+})
+
+run('已有工具执行器不能被普通文件工具修改或删除', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), '4torm-executor-update-'))
+  const realData = path.join(root, 'data')
+  const executors = path.join(realData, 'tools', 'executors')
+  mkdirSync(executors, { recursive: true })
+  const target = path.join(executors, 'existing.js')
+  writeFileSync(target, 'export default async function () {}')
+  const realCtx = { dataDir: realData, projectDir: root, workspaceDir: root, sandboxLevel: 'unrestricted' }
+  assert.throws(() => resolvePath(target, realCtx, { write: true }), /已有工具执行器/)
+})
+
+run('已有技能执行器同样不能被普通文件工具改写', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), '4torm-skill-executor-update-'))
+  const realData = path.join(root, 'data')
+  const executors = path.join(realData, 'skills', 'example', 'executors')
+  mkdirSync(executors, { recursive: true })
+  const target = path.join(executors, 'existing.js')
+  writeFileSync(target, 'export default async function () {}')
+  const realCtx = { dataDir: realData, projectDir: root, workspaceDir: root, sandboxLevel: 'unrestricted' }
+  assert.throws(() => resolvePath(target, realCtx, { write: true }), /已有工具执行器/)
 })
 
 console.log('ok')

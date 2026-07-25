@@ -12,6 +12,7 @@ import { SessionRunner, type ConversationEvent, type SessionRunnerOpts } from '.
 import { loadAgent } from '../../engine/shared/agent-loader';
 import { resolveNativeMode } from '../../engine/shared/llm-bridge';
 import { buildConversationSystemPrompt } from '../../engine/conversation/prompt-builder';
+import { TIDE_META } from './meta.js';
 import { tryAcquireSessionLease } from '../../engine/conversation/session-lease.js';
 import { loadAgentToolDefs } from '../../engine/shared/tool-defs-loader';
 import type { ContextMessage } from '../../engine/shared/types';
@@ -131,6 +132,8 @@ async function executeTideTask(dataDir: string, task: TideTask, isManual: boolea
     temperature: agent.temperature, toolNames: agent.tools, toolMode: agent.toolMode, skillIds: agent.skills,
     workspace: agent.workspace, sandboxLevel: agent.sandboxLevel,
     native: nativeDecision.native,
+    allowAsk: false,
+    allowDelegate: false,
   };
 
   const projectDir = path.resolve(dataDir, '..');
@@ -143,6 +146,9 @@ async function executeTideTask(dataDir: string, task: TideTask, isManual: boolea
     sandboxLevel: agent.sandboxLevel, skillIds: opts.skillIds,
     dataDir, agentId: agent.id, userMessage: task.prompt,
     native: nativeDecision.native,
+    allowAsk: false,
+    allowDelegate: false,
+    surfaceMeta: TIDE_META,
   });
 
   // history（不含 system）+ 本轮 user

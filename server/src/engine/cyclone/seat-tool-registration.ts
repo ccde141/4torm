@@ -1,5 +1,6 @@
 import type { ToolRegistrationEvent } from '../shared/tool-registration-response.js';
 import { applyToolRegistrationAnswer } from '../shared/tool-registration-response.js';
+import { formatTextToolResult } from '../shared/text-tool-protocol.js';
 import type { SeatData } from './types.js';
 import { saveSeat } from './seat-store.js';
 
@@ -24,7 +25,7 @@ export async function applyPendingSeatResponse(
   } else if (pending.pendingToolCallId) {
     seat.messages.push({ role: 'tool', toolCallId: pending.pendingToolCallId, content: answer });
   } else {
-    seat.messages.push({ role: 'user', content: `<result tool="ask">${answer}</result>` });
+    seat.messages.push({ role: 'user', content: formatTextToolResult('ask', answer, true) });
   }
   seat.pending = undefined;
   await saveSeat(dataDir, workshopId, seat);

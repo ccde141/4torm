@@ -18,7 +18,7 @@ interface Props {
 }
 
 /**
- * StructuredMessage — 信风文本协议下的结构化消息
+ * StructuredMessage — 信风会话中的结构化消息
  *
  * 包含 think / tools / answer / note 四段。
  * 全部使用 tw-* 类系统，零内联样式。

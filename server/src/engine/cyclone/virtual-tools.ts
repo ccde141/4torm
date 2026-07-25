@@ -9,7 +9,7 @@
  * - 群聊：contact（讨论场，剥 ask/delegate 不阻塞串行循环，但保留联络）
  * - 被联络方一轮：delegate + contact（无人类在场，剥 ask，可继续嵌套联络）
  *
- * 文本协议模式：靠 system prompt 文本教模型写 <action tool="ask">，正则拦截。
+ * 文本模式：虚拟工具与普通工具共用 JSON 调用信封。
  * 原生模式：模型只能看见 tools 参数里的工具，故必须把虚拟工具也作为 ToolDef 注入。
  */
 

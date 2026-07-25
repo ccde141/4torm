@@ -10,6 +10,7 @@ export interface ExecutionContext {
   workspaceDir: string;
   projectDir: string;
   sandboxLevel: SandboxLevel;
+  signal?: AbortSignal;
 }
 
 interface AgentConfig {

@@ -16,11 +16,12 @@ import ToolCallMessage from './ToolCallMessage';
 import DelegateCard from './DelegateCard';
 import AskCard from './AskCard';
 import AutomationDraftCard from './AutomationDraftCard';
-import { parseStructuredOutput, stripAllKnownTags } from '../../engine/parser';
 import { renderTextWithCode } from '../../engine/markdown';
 import { formatTimestamp } from '../../utils/time';
 import type { ChatMessage, ToolStep } from '../../types';
 import { formatStreamStatus } from './stream-status';
+import ToolActivityList from './ToolActivityGroup';
+import { MessageImages } from './MessageImages';
 
 /**
  * 渲染单个工具步骤：delegate 步 → DelegateCard（含子步骤/思考流/汇总），
@@ -49,8 +50,13 @@ function renderToolStep(step: ToolStep, key: string) {
   );
 }
 
+function renderToolSteps(steps: ToolStep[], messageId: string) {
+  return <ToolActivityList items={steps} renderItem={(step, i) => renderToolStep(step, `${messageId}-${i}`)} />;
+}
+
 export interface MessageItemProps {
   msg: ChatMessage;
+  sessionId: string;
   /** 是否为正在流式输出的最后一条（= streaming && msg === messages[last]） */
   isStreaming: boolean;
   isEditing: boolean;
@@ -64,7 +70,7 @@ export interface MessageItemProps {
 }
 
 function MessageItemInner({
-  msg, isStreaming, isEditing, editContent, setEditContent,
+  msg, sessionId, isStreaming, isEditing, editContent, setEditContent,
   onSaveEdit, onCancelEdit, onStartEdit, onDeleteMessage, onAskReply,
 }: MessageItemProps) {
   if (isEditing) {
@@ -144,44 +150,9 @@ function MessageItemInner({
   }
 
   if (msg.role === 'assistant') {
-    // 流式中的最后一条消息：识别 <answer> 段（含未闭合）+ 剥离 think/action 标签
+    // 流式正文直接展示；工具与思考由各自的结构化事件渲染。
     if (isStreaming) {
-      const raw = msg.content;
-      // 优先级 1: 已闭合 <answer>...</answer>
-      const closed = /<answer>([\s\S]*?)<\/answer>/i.exec(raw);
-      // 优先级 2: 未闭合 <answer>... 取到末尾
-      const open = !closed ? /<answer>([\s\S]*)$/i.exec(raw) : null;
-
-      let display: string;
-      if (closed) {
-        display = closed[1].trim();
-      } else if (open) {
-        display = open[1].trim();
-      } else {
-        // 优先级 3: 剥离已知标签，显示标签外裸文本。
-        // 未闭合 <action> 的截断只在「代码块外」执行，避免误伤正文里引用的标签例子。
-        const protect = /```[\s\S]*?```|`[^`\n]+`/g;
-        const stripSeg = (seg: string): string => {
-          let s = seg;
-          s = s.replace(/<think>[\s\S]*?<\/think>/gi, '');
-          s = s.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '');
-          const unclosed = s.lastIndexOf('<action');
-          if (unclosed !== -1 && s.indexOf('</action>', unclosed) === -1) {
-            s = s.slice(0, unclosed);
-          }
-          s = s.replace(/<think>[\s\S]*$/i, '');
-          return s.replace(/<\/?(?:think|answer|note|action[^>]*)>/gi, '');
-        };
-        let stripped = '';
-        let li = 0;
-        let mm: RegExpExecArray | null;
-        while ((mm = protect.exec(raw)) !== null) {
-          stripped += stripSeg(raw.slice(li, mm.index)) + mm[0];
-          li = mm.index + mm[0].length;
-        }
-        stripped += stripSeg(raw.slice(li));
-        display = stripped.trim();
-      }
+      const display = msg.content.trim();
 
       // 流式状态指示器
       const phase = msg.streamingPhase;
@@ -198,7 +169,7 @@ function MessageItemInner({
           {/* 原生思考流（流式中默认展开） */}
           {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming />}
           {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
-          {steps && steps.map((step, i) => renderToolStep(step, `${msg.id}-${i}`))}
+          {steps && renderToolSteps(steps, msg.id)}
           {/* 流式文本气泡 */}
           <div className="chat__message chat__message--assistant">
             <div className="chat__avatar">AI</div>
@@ -212,29 +183,20 @@ function MessageItemInner({
       );
     }
 
-    const parsed = parseStructuredOutput(msg.content, [], { native: msg.native });
-    const hasStructure = parsed.think || parsed.actions.length > 0 || parsed.note || parsed.answer;
-    // 优先使用 msg.toolSteps（原生模式下 rawContent 不含 <action>，toolSteps 是源数据）
-    const toolSteps = msg.toolSteps && msg.toolSteps.length > 0
-      ? msg.toolSteps
-      : parsed.actions.map(a => ({
-          tool: a.tool, args: a.args,
-          result: undefined as string | undefined,
-          status: 'done' as const,
-        }));
-    if (hasStructure || (msg.toolSteps && msg.toolSteps.length > 0)) {
+    const answer = msg.content.trim();
+    // 工具步骤只来自结构化事件。
+    const toolSteps = msg.toolSteps ?? [];
+    if (answer || toolSteps.length > 0) {
       return (
         <>
           {/* 原生思考流（落定后默认折叠） */}
           {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming={false} />}
           {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
-          {toolSteps.map((step, i) => renderToolStep(step, `${msg.id}-${i}`))}
+          {renderToolSteps(toolSteps, msg.id)}
           <StructuredMessage
-            think={parsed.think}
-            tools={[]} answer={parsed.answer || stripAllKnownTags(msg.content).trim()} note={parsed.note}
+            tools={[]} answer={answer}
             msgId={msg.id}
             timestamp={msg.timestamp}
-            answerSource={parsed.answerSource}
             actions={
               <>
                 <button className="chat__msg-action-btn" title="编辑" onClick={() => onStartEdit(msg)}>✏</button>
@@ -269,7 +231,10 @@ function MessageItemInner({
     <div className={`chat__message chat__message--${msg.role}`}>
       <div className="chat__avatar">{msg.role === 'user' ? '你' : 'S'}</div>
       <div className="chat__bubble">
-        <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>
+        {msg.role === 'user' && msg.images?.length && msg.agentId && (
+          <MessageImages images={msg.images} agentId={msg.agentId} sessionId={sessionId} />
+        )}
+        {msg.content && <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>}
         {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
         <div className="chat__bubble-actions">
           <button className="chat__msg-action-btn" title="编辑" onClick={() => onStartEdit(msg)}>✏</button>

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { renderTextWithCode } from '../../../engine/markdown';
 import ToolCallMessage from '../../../components/chat/ToolCallMessage';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
+import ToolActivityList from '../../../components/chat/ToolActivityGroup';
 import type { FeedMsg } from './useRoomStreamRunners';
 
 export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEditContent,
@@ -62,9 +63,9 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
       <div className="chat__bubble">
         <div className="conv__speaker-label">{m.speaker}</div>
         {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} defaultOpen={false} />}
-        {m.tools.map((tool, toolIndex) => (
+        <ToolActivityList items={m.tools} renderItem={(tool, toolIndex) => (
           <ToolCallMessage key={toolIndex} toolCall={{ toolName: tool.tool, params: tool.args, result: tool.result, status: tool.status }} />
-        ))}
+        )} />
         {m.phase && <div className="chat__streaming-phase">{m.phase}</div>}
         {m.content && <div className="chat__content" style={{ whiteSpace: 'pre-wrap' }}>{renderTextWithCode(m.content, `room-${prefix}s-${idx}`)}{m.streaming ? '▍' : ''}</div>}
         {!m.streaming && actions}

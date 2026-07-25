@@ -17,3 +17,13 @@ test('工具注册只在季风可交互会话中可见', () => {
   assert.equal(interactive.includes('register_tool'), true);
   assert.equal(unattended.includes('register_tool'), false);
 });
+
+test('无人值守入口可以移除 ask 与 delegate', () => {
+  const tools = buildVirtualToolDefs(true, false, false, {
+    allowAsk: false,
+    allowDelegate: false,
+  }).map(tool => tool.name);
+
+  assert.equal(tools.includes('ask'), false);
+  assert.equal(tools.includes('delegate'), false);
+});

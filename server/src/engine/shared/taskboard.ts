@@ -101,7 +101,10 @@ const STATUS_MARK: Record<string, string> = { done: '[x]', doing: '[~]', blocked
  * system prompt 片段：始终描述 task_board 用法；已有板子时附当前状态。
  * 与 buildDelegateSection / buildAskSection 同级，各引擎 prompt-builder 复用。
  */
-export function buildTaskBoardSection(board: TaskBoard | null): string {
+export function buildTaskBoardSection(board: TaskBoard | null, native = false): string {
+  const example = native
+    ? '调用 task_board，传入 action、goal 和完整 tasks。'
+    : '调用示例：\n`{"type":"tool_call","name":"task_board","arguments":{"action":"set","goal":"实现登录","tasks":[{"title":"设计接口","status":"done"},{"title":"写代码","status":"doing"},{"title":"写测试","status":"todo"}]}}`';
   const usage = `### task_board
   描述: 维护本会话的任务板（用户可见的结构化进度清单）。它有两个作用——让用户实时看到你的计划与进度，同时**是你给自己的工作备忘**：把大任务拆成子任务落在板上，逐项推进，不漏步、不跑偏。
   参数:
@@ -121,7 +124,7 @@ export function buildTaskBoardSection(board: TaskBoard | null): string {
   - **每步前瞥一眼板子**：确认下一项该做什么、有没有漏的，再继续
   - set 是**整体覆盖**：每次都要带上所有任务（含未变动的），不是增量追加
 
-  调用示例：<action tool="task_board">{"action":"set","goal":"实现登录","tasks":[{"title":"设计接口","status":"done"},{"title":"写代码","status":"doing"},{"title":"写测试","status":"todo"}]}</action>`;
+  ${example}`;
 
   if (!board?.tasks?.length) return usage;
 

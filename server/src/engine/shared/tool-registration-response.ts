@@ -1,4 +1,5 @@
 import type { ContextMessage } from './types.js';
+import { formatTextToolResult } from './text-tool-protocol.js';
 import {
   resolveToolRegistration,
   toolRegistrationArgs,
@@ -28,6 +29,9 @@ export async function applyToolRegistrationAnswer(
   if (pendingToolCallId) {
     messages.push({ role: 'tool', toolCallId: pendingToolCallId, content: resolved.result });
   } else {
-    messages.push({ role: 'user', content: `<result tool="register_tool">${resolved.result}</result>` });
+    messages.push({
+      role: 'user',
+      content: formatTextToolResult('register_tool', resolved.result, resolved.ok),
+    });
   }
 }

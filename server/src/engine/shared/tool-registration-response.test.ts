@@ -34,7 +34,12 @@ test('确认答复直接提交首次提案并回填文本工具结果', async (t
 
   const registry = JSON.parse(await fs.readFile(path.join(dataDir, 'tools', 'registry.json'), 'utf8'));
   assert.equal(registry[0].description, '首次提交的定义');
-  assert.match(messages[0].content, /<result tool="register_tool">/);
+  assert.deepEqual(JSON.parse(messages[0].content), {
+    type: 'tool_result',
+    name: 'register_tool',
+    ok: true,
+    content: '工具「original_tool」已注册。可在 Agent 配置中启用。',
+  });
   assert.deepEqual(events.map(event => [event.type, event.tool]), [
     ['tool-call', 'register_tool'],
     ['tool-result', 'register_tool'],

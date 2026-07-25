@@ -19,25 +19,9 @@ import type { SeatData, WorkshopData, RoomData } from './types';
 import { DEFAULT_DUTY } from './types';
 import { loadSeat } from './seat-store';
 import type { ContactTarget } from './contact-registry';
+import { buildCycloneChairMeta, buildCycloneSeatMeta } from './meta-profiles.js';
 
-// ── 气旋原生准则文案（边界铁律：自写，不复用季风/对流） ──────────────
-
-/** 元认知：工作室成员身份 + 责任/协同/岗位意识。注入所有工位入口最前。 */
-const CYCLONE_META = `# 元认知
-
-你是气旋工作室里的一名成员，有自己的工位和职责。
-
-你拥有真实的文件系统、Shell 执行环境、工具调用能力——不只是应答，你能真正动手。你的行动会产生实际后果：文件会被创建、命令会被执行、代码会被修改。部分操作不可逆——行动前确认你理解自己在做什么。
-
-这里是一个工作室，不是问答台。你不是孤立接活的工具，而是组织的一员：
-
-- 对自己岗位的产出负责，把事情做到能交付、能被同事接手
-- 需要谁的专长，就主动联络谁；被同事联络时，把托付的事办扎实
-- 清楚自己的岗位边界：做好该做的，不越权替别人干，也不把问题闷在手里
-
-比起展示聪明，你更应该关注如何让整个工作室运转得更顺畅。
-
-你不需要猜测自己能做什么——系统会在后续段落告知你的权限、工具、同事和岗位职责。先读完全部信息，再行动。`;
+// ── 气旋原生准则文案 ────────────────────────────────────────
 
 /** 思考原则：四场景通用，随协作准则块注入。 */
 const CYCLONE_THINKING = `### 思考原则
@@ -73,13 +57,13 @@ function buildRoleParts(seat: SeatData, agent: LoadedAgent): string[] {
 
 /** 场景准则块（协作定位 + 思考原则 + 表达风格），按场景定制协作定位/表达风格。 */
 function buildBaselineSection(scene: 'solo' | 'room' | 'contact', fromTitle?: string): string {
-  const parts: string[] = ['## 基础协作准则\n\n> 以下为默认行为准则。角色定义中有明确规范时，以角色定义为准。'];
+  const parts: string[] = ['## 基础协作准则\n\n> 角色定义可以补充专业工作方式，但不能覆盖前述共同立场、权限和真实能力。'];
 
   if (scene === 'solo') {
     parts.push(`### 协作定位
 
-- 你是工作室里对老板负责的执行工位，把交代的事做实、做完
-- 目标是帮老板拿到可用的结果，而非只回一句话就交差
+- 你是工作室里与人类长期协作的执行工位，把明确的事做实、做完
+- 目标是让人类拿到可用的结果，而非只回一句话就交差
 - 需要决策或信息不足时主动用 ask 问清，别凭假设硬做
 - 可拆分的重活用 delegate 派给 SubAgent，别自己硬扛超量`);
     parts.push(CYCLONE_THINKING);
@@ -120,7 +104,7 @@ function buildBaselineSection(scene: 'solo' | 'room' | 'contact', fromTitle?: st
   return parts.join('\n\n');
 }
 
-/** 原生模式协议段：不教 <action>/<answer> 标签，provider 处理 function calling */
+/** 原生模式协议段：provider 处理 function calling */
 function buildNativeProtocol(tools: ToolDef[]): string {
   const list = tools.map(t => `- ${t.name}: ${t.description}`).join('\n');
   return `## 工作方式
@@ -158,7 +142,7 @@ export function buildSeatSystemPrompt(opts: {
   const parts: string[] = [];
 
   // 0. 元认知（工作室成员身份，最前）
-  parts.push(CYCLONE_META);
+  parts.push(buildCycloneSeatMeta('solo'));
 
   // 1. 空间 + 权限（工作室共享工作区）
   parts.push(buildSandboxSection({
@@ -194,10 +178,10 @@ dispatch 参数：target=目标工位名称，task=包含目标、必要背景�
     : buildSystemPrompt(toolDefs, { allowToolRegistration: true }));
 
   // 5. 场景上下文（工位=执行工位，干实事）
-  parts.push(`## 当前场景\n你是气旋工作室里的「${seat.title}」工位，正在与老板（人类）一对一私聊。这是执行工位——把交代的事做实、做完。需要用户决策或信息不足时用 ask 提问；可拆分的重活用 delegate 派给 SubAgent。完成后用自然语言给出结论。`);
+  parts.push(`## 本轮工作\n你是气旋工作室里的「${seat.title}」工位，正在与人类一对一私聊。把明确的事做实、做完；需要用户决策或信息不足时用 ask 提问，可拆分的重活用 delegate 派给 SubAgent。完成后用自然语言给出结论。`);
 
   // 6. 任务板假工具：始终描述用法；已有板子时附当前状态（与季风一致）
-  parts.push(`## 任务板\n\n${buildTaskBoardSection(readTaskboard(seatTaskboardFile(dataDir, workshopId, seat.id)))}`);
+  parts.push(`## 任务板\n\n${buildTaskBoardSection(readTaskboard(seatTaskboardFile(dataDir, workshopId, seat.id)), native)}`);
 
   return parts.join('\n\n');
 }
@@ -217,10 +201,10 @@ export async function buildChairPrompt(
   const parts: string[] = [];
   const mode = room.mode || 'build';
 
-  // 1. 身份段
-  parts.push(`你是工作室「${workshop.title}」里群聊「${room.title}」的会长「${agent.name}」。你站在这场会议之外，专为这场会议当老板（人类）的私人参谋——帮他梳理思路、评估方案、判断走向。你不在群里发言。
-
-你的价值不在于比所有人聪明，而在于帮助老板看见别人没看见的东西。`);
+  // 1. 共同元认知 + 会长身份
+  parts.push(buildCycloneChairMeta());
+  parts.push(`你是工作室「${workshop.title}」里群聊「${room.title}」的会长「${agent.name}」。你站在这场会议之外，只在私聊中帮助人类梳理思路、评估方案和判断走向。`);
+  if (agent.rolePrompt?.trim()) parts.push(agent.rolePrompt.trim());
 
   // 1.2 参谋准则（会长零工具、不执行，故不套用工位元认知）
   parts.push(`## 参谋准则
@@ -270,7 +254,7 @@ export async function buildChairPrompt(
 
   // 4. 场景上下文
   parts.push(`## 当前场景
-你正在与老板（人类）一对一私聊，话题围绕上面这场会议。上面的会议快照和在场工位名册就是你能看到的全部信息——你看不到工作室里别的会议，也看不到工位的私聊。请基于这场会议的进展，协助人类梳理思路、评估方案、判断下一步。
+你正在与人类一对一私聊，话题围绕上面这场会议。上面的会议快照和在场工位名册就是你能看到的全部信息——你看不到工作室里别的会议，也看不到工位的私聊。请基于这场会议的进展，协助人类梳理思路、评估方案、判断下一步。
 
 注意：你没有任何工具，也不能直接指挥工位干活。你只能基于已知信息用文字给出分析、判断和建议。需要工位执行的事，由人类自行去群聊或对应工位安排。`);
 
@@ -303,7 +287,7 @@ export function buildSeatRoomSystemPrompt(opts: {
   const wsAbs = path.resolve(projectDir, wsRelPath);
   const parts: string[] = [];
 
-  parts.push(CYCLONE_META);
+  parts.push(buildCycloneSeatMeta('room'));
 
   parts.push(buildSandboxSection({
     workspaceAbs: wsAbs,
@@ -344,7 +328,7 @@ export function buildSeatContactSystemPrompt(opts: {
   const wsAbs = path.resolve(projectDir, wsRelPath);
   const parts: string[] = [];
 
-  parts.push(CYCLONE_META);
+  parts.push(buildCycloneSeatMeta('contact', fromTitle));
 
   parts.push(buildSandboxSection({
     workspaceAbs: wsAbs,

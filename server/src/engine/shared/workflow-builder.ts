@@ -312,8 +312,38 @@ function genShortId(): string {
 
 // ── Prompt 注入片段（给季风 / 对流共用） ──────────────────────────
 
+function formatWorkflowPromptCall(
+  name: string,
+  args: Record<string, unknown>,
+  native: boolean,
+): string {
+  if (native) {
+    return Object.keys(args).length > 0
+      ? `参数示例：\`${JSON.stringify(args)}\``
+      : `直接调用 \`${name}\`，无需参数`;
+  }
+  return `\`${JSON.stringify({ type: 'tool_call', name, arguments: args })}\``;
+}
+
 /** 返回工作流搭建假工具的 prompt 说明段（追加到 system prompt 末尾） */
-export function buildWorkflowToolsSection(): string {
+export function buildWorkflowToolsSection(native = false, allowAsk = true): string {
+  const planningSteps = allowAsk
+    ? `3. 如果缺少 Agent，用 ask 建议用户去创建（给出名称和 rolePrompt 示例）
+4. **推荐**在调用 create_workflow 之前，先调用 ask 工具向用户确认方案：在 question 中列出节点编排和角色分配概要，给用户一个介入和调整的机会
+5. 调 create_workflow 一次性生成
+
+ask 是确认手段而非强制门槛——需求清晰时可直接创建，方案复杂或有多种取舍时建议先 ask 确认。
+
+注意：ask 是工具调用，不要只在自然语言中模拟提问或声明已经询问。`
+    : `3. 如果缺少 Agent，在最终回复中说明需要创建的 Agent，并给出名称和 rolePrompt 示例
+4. 仅在需求和方案已经明确时调用 create_workflow；信息不足时不要猜测创建
+5. 调 create_workflow 一次性生成`;
+  const labelRule = allowAsk
+    ? '- label 必须体现节点职责，与你在 ask 中向用户展示的角色名保持一致'
+    : '- label 必须体现节点职责，并与已经明确的角色分工保持一致';
+  const updateRule = allowAsk
+    ? '**仅当用户明确要求修改某个工作流、或编辑其节点内容时才使用。** 修改前务必先向用户确认改动方案（用 ask 展示将如何调整），用户同意后再调用本工具。'
+    : '**仅当用户已经明确要求修改某个工作流或编辑其节点内容，并且改动方案清晰时使用。**';
   return `
 
 ## 工作流搭建能力
@@ -324,7 +354,7 @@ export function buildWorkflowToolsSection(): string {
 
 节点 = 信封到了谁手里：
 - entry：起点，写入初始需求
-- agent：一个 AI 独自读信封→干活→把 <answer> 自动打包成新信封传给下游；运行中人类可随时找它对话
+- agent：一个 AI 独自读信封、完成工作，再把自然语言结果自动打包成新信封传给下游；运行中人类可随时找它对话
 - meeting：多个 AI 圆桌讨论，会长汇总纪要，结果写入信封
 - human-gate：暂停，人类查看/编辑信封内容后点继续，编辑后的内容流向下游
 - note：贴在 agent 身上的便签（固定提示词），不参与信封流动，也可独立悬空当备注
@@ -339,13 +369,7 @@ export function buildWorkflowToolsSection(): string {
 
 1. 调 list_agents 查看可用 Agent
 2. 通过对话澄清需求（目标、角色分工、是否需要会议室、是否需要人类暂停点）
-3. 如果缺少 Agent，用 ask 建议用户去创建（给出名称和 rolePrompt 示例）
-4. **推荐**在调用 create_workflow 之前，先调用 ask 工具（<action tool="ask">）向用户确认方案：在 question 中列出节点编排和角色分配概要，给用户一个介入和调整的机会
-5. 调 create_workflow 一次性生成
-
-ask 是确认手段而非强制门槛——需求清晰时可直接创建，方案复杂或有多种取舍时建议先 ask 确认。
-
-注意：ask 是工具调用，格式是 <action tool="ask">{"question":"..."}</action>，不是输出 <ask> 标签。
+${planningSteps}
 
 ### 信风引擎的真实能力边界（务必遵守，不要设计引擎做不到的结构）
 
@@ -358,7 +382,7 @@ ask 是确认手段而非强制门槛——需求清晰时可直接创建，方�
   描述: 列出框架内所有可用的 Agent 实体（id + 名称 + 角色）。
   参数: 无
   调用示例:
-  <action tool="list_agents">{}</action>
+  ${formatWorkflowPromptCall('list_agents', {}, native)}
 
 ### create_workflow
   描述: 创建一个完整的信风工作流。
@@ -386,12 +410,12 @@ ask 是确认手段而非强制门槛——需求清晰时可直接创建，方�
   - 所有边合起来必须构成 DAG（无环）
 
   调用示例:
-  <action tool="create_workflow">{"params":"{\\"name\\":\\"示例\\",\\"nodes\\":[{\\"id\\":\\"entry\\",\\"type\\":\\"entry\\",\\"label\\":\\"入口\\"},{\\"id\\":\\"planner\\",\\"type\\":\\"agent\\",\\"label\\":\\"规划者\\",\\"agentId\\":\\"agent-xxx\\",\\"role\\":\\"拆解任务为子步骤\\"},{\\"id\\":\\"out\\",\\"type\\":\\"output\\",\\"label\\":\\"输出\\"}],\\"edges\\":[{\\"source\\":\\"entry\\",\\"target\\":\\"planner\\"},{\\"source\\":\\"planner\\",\\"target\\":\\"out\\"}]}"}</action>
+  ${formatWorkflowPromptCall('create_workflow', { params: '{"name":"示例","nodes":[{"id":"entry","type":"entry","label":"入口"},{"id":"planner","type":"agent","label":"规划者","agentId":"agent-xxx","role":"拆解任务为子步骤"},{"id":"out","type":"output","label":"输出"}],"edges":[{"source":"entry","target":"planner"},{"source":"planner","target":"out"}]}' }, native)}
 
   注意：
   - 必须先 list_agents 确认 agentId 真实存在
   - participantNodeIds 填的是同工作流内 agent 节点的 id，不是 agentId
-  - label 必须体现节点职责，与你在 ask 中向用户展示的角色名保持一致
+  ${labelRule}
   - 不要设计回边/循环（会被校验拒绝），也不要假设 human-gate 能分叉或打回
   - 如果返回错误，根据错误信息修正后重新调用，不要放弃
 
@@ -400,12 +424,12 @@ ask 是确认手段而非强制门槛——需求清晰时可直接创建，方�
   参数:
     workflowId: string [可选] — 要查看详情的工作流 id
   调用示例:
-  <action tool="list_workflows">{}</action>
-  <action tool="list_workflows">{"workflowId":"wf-xxxxx"}</action>
+  ${formatWorkflowPromptCall('list_workflows', {}, native)}
+  ${formatWorkflowPromptCall('list_workflows', { workflowId: 'wf-xxxxx' }, native)}
 
 ### update_workflow
   描述: 修改已有工作流（整图替换）。
-  **仅当用户明确要求修改某个工作流、或编辑其节点内容时才使用。** 修改前务必先向用户确认改动方案（用 ask 展示将如何调整），用户同意后再调用本工具。
+  ${updateRule}
   参数:
     workflowId: string [必填] — 要修改的工作流 id（必须已存在，不会新建）
     params: string [必填] — 完整的 name/nodes/edges JSON（整图替换，非增量；未改动的节点也要原样带上）
@@ -417,5 +441,5 @@ ask 是确认手段而非强制门槛——需求清晰时可直接创建，方�
   - 节点/边的字段规则与 create_workflow 完全一致（同样必须是 DAG、Entry 必存、Output 唯一）
   - 用户手工调整的画布布局会自动保留（按节点 id 沿用坐标），无需关心 position
   调用示例:
-  <action tool="update_workflow">{"workflowId":"wf-xxxxx","params":"{\\"name\\":\\"...\\",\\"nodes\\":[...],\\"edges\\":[...]}"}</action>`;
+  ${formatWorkflowPromptCall('update_workflow', { workflowId: 'wf-xxxxx', params: '完整的 name/nodes/edges JSON 字符串' }, native)}`;
 }

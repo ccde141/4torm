@@ -17,27 +17,13 @@ import type { ToolDef } from '../shared/tool-defs-loader';
 import { recallMemory } from '../shared/agent-memory';
 import { buildSandboxSection, type SandboxLevel } from '../shared/sandbox-prompt';
 import { buildWorkflowToolsSection } from '../shared/workflow-builder';
-import { buildSelfManagementSection } from '../shared/prompt';
+import { buildSelfManagementSection, buildTextToolProtocol } from '../shared/prompt';
 import { buildTaskBoardSection, readTaskboard, taskboardFile } from '../shared/taskboard';
+import { buildAgentMeta } from '../shared/meta-prompt.js';
+import { SEASON_META } from './meta-profile.js';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-
-function renderToolList(tools: ToolDef[]): string {
-  return tools.map(t => {
-    const req = new Set<string>(
-      Array.isArray(t.parameters?.required) ? t.parameters!.required : [],
-    );
-    const props = t.parameters?.properties ?? {};
-    const params = Object.entries(props)
-      .map(([k, v]) => {
-        const mark = req.has(k) ? ' [必填]' : ' [可选]';
-        return `    ${k}: ${v?.type ?? 'string'}${mark} — ${v?.description ?? ''}`;
-      })
-      .join('\n') || '    无参数';
-    return `### ${t.name}\n  描述: ${t.description}\n  参数:\n${params}`;
-  }).join('\n\n');
-}
 
 function buildDelegateSection(): string {
   return `\n\n### delegate
@@ -107,10 +93,26 @@ export interface PromptBuildOpts {
   /** 用户消息内容（用于判断是否触发记忆注入） */
   userMessage?: string;
   /**
-   * 原生工具调用模式：跳过 <action>/<answer> 文本协议段（与原生通道冲突），
+   * 原生工具调用模式：使用 provider 的结构化工具通道，
    * 工具的调用格式由 provider 处理，prompt 只保留工具的语义指导。
    */
   native?: boolean;
+  /** 当前入口是否允许挂起等待人类回答。默认开启。 */
+  allowAsk?: boolean;
+  /** 当前入口是否允许派出 SubAgent。默认开启。 */
+  allowDelegate?: boolean;
+  /** 当前功能区的身份段；缺省为季风。 */
+  surfaceMeta?: string;
+}
+
+function buildSelfDispatchSection(allowAsk: boolean, allowDelegate: boolean): string {
+  const rules: string[] = [];
+  if (allowAsk) rules.push('- 目标模糊、信息不足、需要人类判断 → 使用 ask');
+  if (allowDelegate) {
+    rules.push('- 子任务明确且可独立完成或者单一任务比较复杂且执行步骤多 → 使用 delegate');
+  }
+  if (!rules.length) return '';
+  return `### 自我调度\n\n你不需要独自承担所有事情：\n\n${rules.join('\n')}`;
 }
 
 /**
@@ -140,7 +142,7 @@ function buildMemoryAwarenessSection(): string {
 - memory_read(slug) — 读某条全文`;
 }
 
-/** 原生模式的精简协议段（替代 buildOutputProtocol，不教 <action> 格式） */
+/** 原生模式的精简协议段 */
 function buildNativeProtocol(): string {
   return `## 工作方式
 
@@ -156,13 +158,11 @@ function buildNativeProtocol(): string {
 /** 构建完整 system prompt */
 export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Promise<string> {
   const parts: string[] = [];
+  const allowAsk = opts.allowAsk !== false;
+  const allowDelegate = opts.allowDelegate !== false;
 
-  // 1. 元认知：我是谁，我运行在什么平台
-  const metaPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'meta.md');
-  try {
-    const meta = await fs.readFile(metaPath, 'utf-8');
-    if (meta.trim()) parts.push(meta.trim());
-  } catch { /* meta.md 不存在时跳过 */ }
+  // 1. 共同元认知 + 当前功能区身份
+  parts.push(buildAgentMeta(opts.surfaceMeta ?? SEASON_META));
 
   // 2. 空间 + 权限：我在哪里操作
   parts.push(buildSandboxSection({
@@ -182,21 +182,24 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
     if (baseline.trim()) parts.push(baseline.trim());
   } catch { /* baseline.md 不存在时跳过 */ }
 
+  const dispatchSection = buildSelfDispatchSection(allowAsk, allowDelegate);
+  if (dispatchSection) parts.push(dispatchSection);
+
   // 5. 协议段：我有什么工具（原生模式精简 / 文本模式完整）
   if (opts.native) {
     parts.push(buildNativeProtocol());
   } else if (opts.toolDefs.length > 0) {
-    parts.push(buildOutputProtocol(opts.toolDefs));
+    parts.push(buildTextToolProtocol(opts.toolDefs));
   }
 
   // 6. delegate 说明
-  parts.push(buildDelegateSection());
+  if (allowDelegate) parts.push(buildDelegateSection());
 
   // 7. ask 说明
-  parts.push(buildAskSection());
+  if (allowAsk) parts.push(buildAskSection());
 
   // 8. 工作流搭建假工具
-  parts.push(buildWorkflowToolsSection());
+  parts.push(buildWorkflowToolsSection(opts.native, allowAsk));
 
   // 8.5 能力扩展（查看 / 创建工具、技能、MCP）— 与对流/气旋/信风共用 shared 单一来源
   parts.push(buildSelfManagementSection({
@@ -218,65 +221,9 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   const board = opts.sessionId
     ? readTaskboard(taskboardFile(opts.dataDir, opts.agentId, opts.sessionId))
     : null;
-  parts.push(`## 任务板\n\n${buildTaskBoardSection(board)}`);
+  parts.push(`## 任务板\n\n${buildTaskBoardSection(board, opts.native)}`);
 
   return parts.join('\n\n');
-}
-
-function buildOutputProtocol(tools: ToolDef[]): string {
-  const toolList = renderToolList(tools);
-  return `## 输出协议（严格遵守）
-
-## 回复模式
-
-你每次回复只能选择以下两种模式之一。
-
-### 模式 A — 需要调用工具
-
-输出结构：
-<think>已知什么、缺少什么、决定做什么</think>
-<action tool="工具名">{"参数":"值"}</action>
-
-规则：
-- 必须包含 <think> + 至少一个 <action>
-- <action> 标签**只能**包含 tool 这一个属性，禁止添加 name="..." 或其它任何属性
-- <action> 参数严格 JSON，[必填] 参数不得省略
-- 禁止在收到工具结果前输出 <answer>
-- **默认每轮只输出 1 个 <action>**。仅当多个动作完全独立、可以并行（如同时读 3 个文件用于对比）时才批处理。串行依赖必须分轮。
-- 单轮工具数量上限 5 个；超过此数请拆分多轮。
-
-### 模式 B — 直接回答用户
-
-输出结构：
-<think>推理过程和最终结论依据</think>
-<answer>完整的回答内容</answer>
-<note>简短提醒（≤3句话）</note>
-
-规则：
-- 必须包含 <think> + <answer>
-- <note> 仅用于简短风险提醒，可省略
-- 禁止包含 <action>
-
----
-
-工具执行后你会收到包含 <result> 的回复，解读后继续行动或给出答案。
-
-## 协议自检（每次输出前默念）
-
-❌ 不要在 <action> 后输出未包标签的自然语言（要么放 <answer> 里，要么删掉）
-❌ 不要在等待 <result> 时就输出 <answer>
-❌ 不要忘记把最终结论包在 <answer>...</answer> 里
-
-## 系统行为告知（了解即可，无需操作）
-
-- 如果你的输出因长度限制被截断（标签未闭合），系统会自动要求你继续输出剩余内容。
-- 如果你的回复中既没有 <action> 也没有 <answer>，系统会要求你明确下一步。
-- 不要因为担心输出过长而省略关键内容——系统有续写机制保障完整输出。
-- 工具调用没有硬性次数上限，复杂任务可以多轮调用直到完成。
-
-## 可用工具
-
-${toolList}`;
 }
 
 /** ask 虚拟工具说明（向人类提问） */
@@ -295,15 +242,15 @@ function buildAskSection(): string {
   - options 要互斥、覆盖合理范围、文字精炼。用户也可自由输入选项外的答案。
 
   正确示例：
-  <action tool="ask">{"question":"遇到了什么类型的问题？","options":"[\\"代码报错\\",\\"界面异常\\",\\"功能不符预期\\"]"}</action>
+  {"type":"tool_call","name":"ask","arguments":{"question":"遇到了什么类型的问题？","options":"[\\"代码报错\\",\\"界面异常\\",\\"功能不符预期\\"]"}}
 
   错误示例（question 写成段落、options 过多且重叠）：
-  <action tool="ask">{"question":"能具体说说发生了什么吗？比如出现了什么错误提示、哪个功能异常、或者在哪一步卡住了？尽量描述一下你看到的现象，我好帮你排查。","options":"[\\"代码报错或运行异常\\",\\"文件/数据丢失或损坏\\",\\"界面显示不正常\\",\\"操作没有达到预期效果\\",\\"系统或环境出现问题\\",\\"其他问题\\"]"}</action>
+  {"type":"tool_call","name":"ask","arguments":{"question":"能具体说说发生了什么吗？比如出现了什么错误提示、哪个功能异常、或者在哪一步卡住了？尽量描述一下你看到的现象，我好帮你排查。","options":"[\\"代码报错或运行异常\\",\\"文件/数据丢失或损坏\\",\\"界面显示不正常\\",\\"操作没有达到预期效果\\",\\"系统或环境出现问题\\",\\"其他问题\\"]"}}
 
   对比要点：
   - question 是一句问句，不是一段引导语
   - options 互斥、≤4 项、每项简短，"其他"由前端自由输入框承载，不必显式列出
-  - **格式铁律**：ask 只能通过 <action tool="ask">{...}</action> 调用。禁止写成 <ask question="..."> 这类属性标签，那样无法被识别。
+  - **格式铁律**：ask 只能通过 JSON tool_call 信封调用，调用信封外不能包含其他文字。
 
 ## 何时应主动使用 ask
 

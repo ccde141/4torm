@@ -28,6 +28,10 @@ import {
 } from './react-loop';
 import { buildNativeConvectionProtocol, runConvectionReActNative } from './native-adapter';
 import { appendConvectionReasoning, buildConvectionMessage } from './convection-reasoning';
+import {
+  buildConvectionChairPrompt,
+  buildConvectionParticipantMeta,
+} from './prompt-profiles.js';
 
 const LLM_TIMEOUT_MS = 3_600_000;
 const HEARTBEAT_INTERVAL_MS = 5_000;
@@ -88,16 +92,13 @@ async function buildAgentMessages(
   const wsPath = sessionWorkspace(dataDir, session.id);
   const projectDir = path.resolve(dataDir, '..');
 
-  // 读对流自己的 meta.md / baseline.md
+  // 读对流自己的 baseline.md
   const selfDir = path.dirname(fileURLToPath(import.meta.url));
 
   const parts: string[] = [];
 
-  // 1. 元认知
-  try {
-    const meta = await fs.readFile(path.join(selfDir, 'meta.md'), 'utf-8');
-    if (meta.trim()) parts.push(meta.trim());
-  } catch { /* 文件不存在时跳过 */ }
+  // 1. 共同元认知 + 对流参与者身份
+  parts.push(buildConvectionParticipantMeta());
 
   // 2. 空间 + 权限
   parts.push(buildSandboxSection({
@@ -156,10 +157,7 @@ export async function handleSpeak(
 
     // 每个 agent 各自决议原生模式（model 可能不同）
     const nativeDecision = await resolveNativeMode(dataDir, agent.model);
-    console.log(`[convection] ${agent.name} (${agent.model}) → native=${nativeDecision.native} mode=${nativeDecision.mode}`);
-    if (nativeDecision.forcedMismatch) {
-      onEvent?.({ type: 'notice', message: `⚠️ ${agent.name} 的模型配置为强制原生工具调用，但探测显示可能不支持。如遇异常请调整模式。` });
-    }
+    console.log(`[convection] ${agent.name} (${agent.model}) → tools=${nativeDecision.native ? 'structured' : 'text'}`);
 
     let reasoningContent = '';
 
@@ -189,7 +187,7 @@ export async function handleSpeak(
           signal,
         });
       } else {
-        // 文本协议模式：现有 runConvectionReAct
+        // JSON 文本工具模式
         const { messages, agent: loadedAgent } = await buildAgentMessages(dataDir, session, agentId, false);
         return await runConvectionReAct({
           dataDir,
@@ -293,12 +291,12 @@ export async function handleChair(
   const snapshot = formatPublicContext(session);
   const system: ContextMessage = {
     role: 'system',
-    content: [
-      `你是会长「${agent.name}」，不参与公共讨论，只在私聊中为人类出谋划策。`,
-      `当前话题：「${session.topic}」`,
-      '你可以看到公共对话的完整记录。基于对话内容和人类的问题给出参谋意见。',
-      `\n--- 当前公共对话记录 ---\n${snapshot}\n--- 记录结束 ---`,
-    ].join('\n'),
+    content: buildConvectionChairPrompt({
+      chairName: agent.name,
+      rolePrompt: agent.rolePrompt,
+      topic: session.topic,
+      publicContext: snapshot,
+    }),
   };
 
   const msgs: ContextMessage[] = [system, ...session.chairMessages];

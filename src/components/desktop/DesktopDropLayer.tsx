@@ -15,6 +15,8 @@ import { useEffect, useState } from 'react';
 import { isElectron, filePath } from '../../lib/desktop';
 
 export interface DroppedFile {
+  /** 当前 renderer 生命周期内的文件对象，供附件上传直接读取。 */
+  file: File;
   name: string;
   /** 绝对磁盘路径（Electron）；解析失败为空串 */
   path: string;
@@ -55,6 +57,7 @@ export function DesktopDropLayer() {
       setDragging(false);
 
       const files: DroppedFile[] = Array.from(e.dataTransfer.files).map((f) => ({
+        file: f,
         name: f.name,
         path: filePath(f),
         type: f.type,

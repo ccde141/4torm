@@ -19,6 +19,8 @@ const CONTROL_PLANE_FILES = ['tide/tasks.json', 'agents/registry.json', 'tools/r
 // 工作流目录：保护每个工作流的控制文件（graph.json / meta.json 等），
 // 但**放行** {wfId}/workspace/ —— 那是 agent 的工作区，本就该自由读写（信封产物、交付物等）。
 const WORKFLOWS_ROOT = 'tradewind/workflows'
+const TOOL_EXECUTORS_ROOT = 'tools/executors'
+const SKILLS_ROOT = 'skills'
 
 /** target 是否等于 base 或落在 base 目录内（用 path.relative 归一化分隔符/盘符/大小写，跨平台稳） */
 function within(target, base) {
@@ -71,6 +73,7 @@ function assertInAllowedRoot(resolved, ctx) {
 /** 写操作前校验：命中控制面则拒绝。读操作不受限。 */
 function assertWritable(resolved, ctx) {
   if (!ctx.dataDir) return
+  const requestedTarget = path.resolve(resolved)
   const target = canonicalPath(resolved)
   const files = CONTROL_PLANE_FILES.map(p => canonicalPath(path.resolve(ctx.dataDir, p)))
   const fileHit = files.some(f => path.relative(f, target) === '')
@@ -82,6 +85,31 @@ function assertWritable(resolved, ctx) {
     const parts = path.relative(wfRoot, target).split(path.sep) // [wfId, seg2, ...]
     const inWorkspace = parts.length >= 2 && parts[1] === 'workspace'
     workflowHit = !inWorkspace
+  }
+
+  const toolExecutorsRoot = canonicalPath(path.resolve(ctx.dataDir, TOOL_EXECUTORS_ROOT))
+  const skillRoot = canonicalPath(path.resolve(ctx.dataDir, SKILLS_ROOT))
+  const skillParts = within(target, skillRoot)
+    ? path.relative(skillRoot, target).split(path.sep)
+    : []
+  const requestedToolRoot = path.resolve(ctx.dataDir, TOOL_EXECUTORS_ROOT)
+  const requestedSkillRoot = path.resolve(ctx.dataDir, SKILLS_ROOT)
+  const requestedSkillParts = within(requestedTarget, requestedSkillRoot)
+    ? path.relative(requestedSkillRoot, requestedTarget).split(path.sep)
+    : []
+  const inExecutorDirectory = within(target, toolExecutorsRoot)
+    || within(requestedTarget, requestedToolRoot)
+    || (skillParts.length >= 3 && skillParts[1] === 'executors')
+    || (requestedSkillParts.length >= 3 && requestedSkillParts[1] === 'executors')
+  let existingExecutorHit = false
+  if (inExecutorDirectory) {
+    try {
+      existingExecutorHit = lstatSync(target).isFile()
+    } catch { /* 尚未存在的执行器草稿允许创建 */ }
+  }
+
+  if (existingExecutorHit) {
+    throw new Error(`拒绝改写已有工具执行器：${resolved}。请创建新的执行器草稿并走工具注册确认，已有执行器只能由人类在框架外维护。`)
   }
 
   if (fileHit || workflowHit) {

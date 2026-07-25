@@ -24,6 +24,24 @@ import type {
 import { BUILTIN_EVENT_IDS } from '../foundation/types';
 import type { ContextMessage } from '../../shared/types';
 
+function formatAssistantMessage(msg: ContextMessage): string {
+  if (!msg.reasoningContent && !msg.toolCalls?.length) {
+    return `**[助手]** ${msg.content}`;
+  }
+
+  const parts: string[] = [];
+  if (msg.reasoningContent) {
+    parts.push(`<details>\n<summary>💭 思考过程</summary>\n\n${msg.reasoningContent}\n\n</details>`);
+  }
+  for (const call of msg.toolCalls || []) {
+    parts.push(
+      `<details>\n<summary>🔧 ${call.name}</summary>\n\n\`\`\`json\n${call.arguments}\n\`\`\`\n\n</details>`,
+    );
+  }
+  if (msg.content) parts.push(msg.content);
+  return `**[助手]**\n\n${parts.join('\n\n')}`;
+}
+
 export class OutputExecutor implements NodeExecutor {
   readonly type = 'output';
   readonly category = 'flow';
@@ -187,47 +205,7 @@ export class OutputExecutor implements NodeExecutor {
   private formatMessage(msg: ContextMessage): string {
     const role = msg.role;
     const content = msg.content;
-
-    // 解析结构化标签
-    const thinkMatch = content.match(/<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/i);
-    const answerMatch = content.match(/<answer>([\s\S]*?)<\/answer>/i);
-    const noteMatch = content.match(/<note>([\s\S]*?)<\/note>/i);
-    const actionMatches = [...content.matchAll(/<action\s+[^>]*?tool\s*=\s*"([^"]+)"[^>]*>([\s\S]*?)<\/action>/gi)];
-
-    // 有结构化标签的 assistant 消息
-    if (role === 'assistant' && (thinkMatch || answerMatch || actionMatches.length > 0)) {
-      const parts: string[] = [];
-
-      if (thinkMatch) {
-        parts.push(`<details>\n<summary>💭 思考过程</summary>\n\n${thinkMatch[1].trim()}\n\n</details>`);
-      }
-
-      for (const am of actionMatches) {
-        const tool = am[1];
-        const args = am[2].trim();
-        parts.push(`<details>\n<summary>🔧 ${tool}</summary>\n\n\`\`\`json\n${args}\n\`\`\`\n\n</details>`);
-      }
-
-      if (answerMatch) {
-        parts.push(answerMatch[1].trim());
-      } else {
-        // 无 answer 标签：剥离已处理的标签，输出剩余内容
-        let remainder = content;
-        remainder = remainder.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');
-        remainder = remainder.replace(/<action[^>]*>[\s\S]*?<\/action>/gi, '');
-        remainder = remainder.replace(/<note>[\s\S]*?<\/note>/gi, '');
-        remainder = remainder.replace(/<\/?(?:think(?:ing)?|action|answer|note)[^>]*>/gi, '').trim();
-        if (remainder) parts.push(remainder);
-      }
-
-      if (noteMatch) {
-        parts.push(`> 💡 ${noteMatch[1].trim()}`);
-      }
-
-      return `**[助手]**\n\n${parts.join('\n\n')}`;
-    }
-
-    // 普通消息
+    if (role === 'assistant') return formatAssistantMessage(msg);
     const roleLabel = role === 'user' ? '人类' : role === 'system' ? '系统' : '助手';
     // 运行时 system 消息（信封、纪要广播等）以引用块展示
     if (role === 'system') {

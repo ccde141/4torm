@@ -66,11 +66,8 @@ function contactOk(result: string | undefined): 'running' | 'success' | 'error' 
   return (result.startsWith('联络失败') || result.startsWith('联络被系统拒绝') || result.includes('正忙')) ? 'error' : 'success';
 }
 
-function stripTags(content: string): string {
-  return (content || '')
-    .replace(/<think>[\s\S]*?<\/think>/g, '')
-    .replace(/<action[^>]*>[\s\S]*?<\/action>/g, '')
-    .trim();
+function displayText(content: string): string {
+  return (content || '').trim();
 }
 
 /**
@@ -91,7 +88,7 @@ export function contextToDisplay(stored: StoredMsg[]): DisplayMessage[] {
   for (const [sourceIndex, m] of stored.entries()) {
     if (m.role === 'tool') continue;
     if (m.role === 'system') {
-      const text = stripTags(m.content);
+      const text = displayText(m.content);
       if (m.kind === 'dispatch-receipt') {
         out.push({
           id: `d${seq++}`, sourceIndex, role: 'system', kind: m.kind,
@@ -126,7 +123,7 @@ export function contextToDisplay(stored: StoredMsg[]): DisplayMessage[] {
         }
         return { kind: 'tool', tool: tc.name, args, result, status: statusOf(result) };
       });
-      const text = stripTags(m.content);
+      const text = displayText(m.content);
       // 跳过纯工具调用且无文本的空壳（卡片已单列），但保留有文本或有卡片的
       if (!text && blocks.length === 0) continue;
       out.push({

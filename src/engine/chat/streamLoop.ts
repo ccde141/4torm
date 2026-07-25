@@ -15,13 +15,14 @@ import type { ChatMessage, Agent } from '../../types';
 import type { ChatSession } from '../../store/chat';
 import type { ToolDef } from '../../store/tools';
 import type { TaskBoard } from '../../utils/taskboard';
-import { normalizeDelegateProgressAtToolBoundary } from './delegate-progress';
+import { applyDelegateStreamEvent, finalizeStreamAnswer } from './delegate-stream-events';
 
 export type StreamCtx = {
   session: ChatSession;
   allMessages: ChatMessage[];
   chatMessages: Array<{
     role: string; content: string;
+    reasoningContent?: string;
     /** 原生历史回灌：assistant 携带的工具调用 */
     toolCalls?: Array<{ id: string; name: string; arguments: string }>;
     /** 原生历史回灌：tool 结果消息配对 id */
@@ -300,84 +301,19 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
     }
     // delegate 事件 → 写入 assistantMsg.toolSteps[] 里的一个 delegate step，
     // 按调用顺序落位（与其它工具同列），由 DelegateCard inline 渲染。
-    case 'delegate-start': {
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
-      if (!target) break;
-      const step: import('../../types').ToolStep = {
-        tool: 'delegate', args: { task: ev.task }, status: 'running',
-        delegate: { delegateId: ev.delegateId, task: ev.task, content: '', steps: [], status: 'running' },
-      };
-      const steps = [...(target.toolSteps || []), step];
-      const updated = { ...target, toolSteps: steps, streamingPhase: 'tool-exec' as const, phaseElapsed: 0 };
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
-      ctx.throttledFlush();
-      break;
-    }
-    case 'delegate-token': {
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
-      const steps = updateDelegateStep(target?.toolSteps, ev.delegateId, d => ({ ...d, content: d.content + ev.content }));
-      if (!steps) break;
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? { ...m, toolSteps: steps } : m));
-      ctx.throttledFlush();
-      break;
-    }
-    case 'delegate-tool-call': {
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
-      const steps = updateDelegateStep(target?.toolSteps, ev.delegateId, d => ({
-        ...d,
-        content: normalizeDelegateProgressAtToolBoundary(d.content),
-        steps: [...d.steps, { type: 'tool' as const, tool: ev.tool, args: ev.args }],
-      }));
-      if (!steps) break;
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? { ...m, toolSteps: steps } : m));
-      ctx.throttledFlush();
-      break;
-    }
-    case 'delegate-tool-result': {
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
-      const steps = updateDelegateStep(target?.toolSteps, ev.delegateId, d => {
-        const sub = [...d.steps];
-        const last = sub.findLast(s => s.tool === ev.tool && s.result == null);
-        if (last) { last.result = ev.result; last.ok = ev.ok; }
-        return { ...d, steps: sub };
-      });
-      if (!steps) break;
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? { ...m, toolSteps: steps } : m));
-      ctx.throttledFlush();
-      break;
-    }
+    case 'delegate-start':
+    case 'delegate-token':
+    case 'delegate-tool-call':
+    case 'delegate-tool-result':
     case 'delegate-done': {
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
-      const st = ev.status === 'success' ? 'success' as const : 'error' as const;
-      const steps = updateDelegateStep(target?.toolSteps, ev.delegateId, d => ({
-        ...d,
-        content: normalizeDelegateProgressAtToolBoundary(d.content),
-        summary: ev.summary,
-        status: st,
-      }));
-      if (!steps) break;
-      // 同步外层 step 的 result/status，供跨轮历史回灌（toolSteps 展开成 tool 消息）
-      const synced = steps.map(s =>
-        s.delegate?.delegateId === ev.delegateId
-          ? { ...s, result: ev.summary, status: st === 'success' ? 'done' as const : 'error' as const }
-          : s);
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? { ...m, toolSteps: synced } : m));
+      ctx.setAllMessages(applyDelegateStreamEvent(ctx.allMessages, ctx.assistantMsgId, ev));
       ctx.throttledFlush();
       break;
     }
     case 'answer': {
       // 最终回复：用完整 rawContent 替换占位消息
-      // 关键：保留 toolSteps（原生模式下 rawContent 不含 <action>，toolSteps 是源数据）
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
-      const finalMsg: ChatMessage = {
-        id: ctx.assistantMsgId, role: 'assistant',
-        content: ev.rawContent || ev.content,
-        timestamp: new Date().toISOString(), agentId: ctx.agent.id,
-        toolSteps: target?.toolSteps,
-        reasoningContent: target?.reasoningContent,  // 原生思考流跨 answer 事件保留
-        native: ev.native,  // 持久化模式标志：重载后据此决定是否扫描正文 <action>
-      };
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? finalMsg : m));
+      // 保留结构化工具步骤，正文只负责展示模型回答。
+      ctx.setAllMessages(finalizeStreamAnswer(ctx.allMessages, ctx.assistantMsgId, ev, ctx.agent.id));
       ctx.setMessages([...ctx.allMessages]);
       break;
     }
@@ -389,14 +325,11 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
         timestamp: new Date().toISOString(), agentId: ctx.agent.id,
         ask: { question: ev.question, options: ev.options, answered: false },
       };
-      // 保留 assistantMsg 中已流式产出的内容（剥离 think/action 标签），追加 askMsg
-      const cleanContent = ctx.streamContent
-        .replace(/<action[^>]*>[\s\S]*?<\/action>/g, '')
-        .replace(/<think>[\s\S]*?<\/think>/g, '')
-        .trim();
+      // 保留 assistantMsg 中已流式产出的普通正文，追加 askMsg
+      const cleanContent = ctx.streamContent.trim();
       let msgs = ctx.allMessages;
       if (cleanContent) {
-        // 把 assistantMsg 内容更新为剥离后的描述性文字，保留它
+        // 把 assistantMsg 内容更新为已产出的正文，保留它
         msgs = msgs.map(m => m.id === ctx.assistantMsgId ? { ...m, content: cleanContent } : m);
       } else {
         // 没有可保留内容时，移除空占位
@@ -429,23 +362,4 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
 
 function findMsg(msgs: ChatMessage[], id: string): ChatMessage | undefined {
   return msgs.find(m => m.id === id);
-}
-
-type DelegateData = NonNullable<import('../../types').ToolStep['delegate']>;
-
-/**
- * 在 toolSteps 中定位 delegateId 对应的 delegate step，对其 delegate 数据做不可变更新。
- * 返回新 toolSteps 数组；未找到则返回 undefined（调用方据此跳过刷新）。
- */
-function updateDelegateStep(
-  toolSteps: import('../../types').ToolStep[] | undefined,
-  delegateId: string,
-  fn: (d: DelegateData) => DelegateData,
-): import('../../types').ToolStep[] | undefined {
-  if (!toolSteps) return undefined;
-  const idx = toolSteps.findIndex(s => s.delegate?.delegateId === delegateId);
-  if (idx < 0) return undefined;
-  const next = [...toolSteps];
-  next[idx] = { ...next[idx], delegate: fn(next[idx].delegate!) };
-  return next;
 }

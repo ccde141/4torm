@@ -15,8 +15,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { subscribe, unsubscribe } from '../stream/unified-client';
-import { parseStructuredContent } from './parser';
-import StructuredMessage from './StructuredMessage';
 import ToolCallMessage from './ToolCallMessage';
 import DelegateCard from './DelegateCard';
 import { normalizeDelegateProgressAtToolBoundary } from '../../../engine/chat/delegate-progress';
@@ -521,14 +519,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
             }
             const isStreamingMsg = streaming && msg === messages[messages.length - 1];
             if (isStreamingMsg) {
-              let raw = msg.content;
-              raw = raw.replace(/<think>[\s\S]*?<\/think>/gi, '');
-              raw = raw.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '');
-              const unclosed = raw.lastIndexOf('<action');
-              if (unclosed !== -1 && raw.indexOf('</action>', unclosed) === -1) {
-                raw = raw.slice(0, unclosed);
-              }
-              const display = raw.replace(/<\/?(?:think|answer|note|action[^>]*)>/gi, '').trim();
+              const display = msg.content.trim();
               return (
                 <div key={msg.id} className="tw-chat-row tw-chat-row--assistant">
                   <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div>
@@ -546,25 +537,6 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
                     )}
                   </div>
                 </div>
-              );
-            }
-            const parsed = parseStructuredContent(msg.content);
-            const hasStructure = parsed.think || parsed.actions.length > 0 || parsed.answer;
-            if (hasStructure) {
-              const toolSteps = parsed.actions.map(a => ({
-                tool: a.tool, args: a.args,
-                result: undefined as string | undefined,
-                status: 'done' as const,
-              }));
-              return (
-                <StructuredMessage
-                  key={msg.id}
-                  think={parsed.think}
-                  tools={toolSteps}
-                  answer={parsed.answer}
-                  note=""
-                  msgId={msg.id}
-                />
               );
             }
             return (

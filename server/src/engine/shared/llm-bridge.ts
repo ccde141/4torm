@@ -11,20 +11,52 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { ContextMessage, LLMOptions, NativeToolCall } from './types';
+import type {
+  ContextMessage,
+  LLMOptions,
+  NativeToolCall,
+  ProviderReasoningEnvelope,
+} from './types';
 import type { ToolDef } from './tool-defs-loader';
 import { toProviderToolsWithMap, parseToolCalls, restoreToolName, makeToolCallAccumulator } from './tool-bridge';
 import { providersFile } from '../../services/data-paths.js';
 import { createToolProgressTracker, type ToolPreparationProgress } from './tool-progress.js';
+import { normalizeChatRequestBody } from './provider-normalization.js';
+import {
+  extractReasoningContent,
+  extractReasoningEnvelope,
+  mapProviderMessages,
+} from './provider-messages.js';
+import {
+  buildAnthropicRequest,
+  parseAnthropicResponse,
+} from './provider-transports/anthropic.js';
+import { parseAnthropicSSEStream } from './provider-transports/anthropic-stream.js';
+import {
+  resolveProviderProtocol,
+  type ProviderProtocol,
+} from './provider-transports/protocol.js';
+import { parseTextToolResponse } from './text-tool-protocol.js';
+import { TextToolStreamGate } from './text-tool-stream-gate.js';
 
 interface Provider {
   id: string;
   baseUrl: string;
   apiKey?: string;
   headers?: Record<string, string>;
+  customHeaders?: Record<string, string>;
+  protocol?: 'auto' | ProviderProtocol;
   models?: string[];
   nativeMode?: 'auto' | 'native' | 'text';
   nativeProbe?: Record<string, { native: boolean; probedAt: string }>;
+  modelCapabilities?: Record<string, {
+    tools?: { status: 'supported' | 'unsupported'; checkedAt: string; method?: string };
+    vision?: { status: 'supported' | 'unsupported'; checkedAt: string };
+  }>;
+  modelProfiles?: Record<string, string>;
+  toolTransports?: Record<string, {
+    status: 'native-confirmed' | 'text-required'; checkedAt: string; fingerprint: string;
+  }>;
 }
 
 interface ProvidersFile {
@@ -33,7 +65,14 @@ interface ProvidersFile {
 
 interface ChatCompletionResponse {
   choices?: Array<{
-    message?: { content?: string | null; tool_calls?: unknown[] };
+    message?: {
+      content?: string | null;
+      tool_calls?: unknown[];
+      reasoning_content?: string;
+      reasoning?: string;
+      thinking?: string;
+      reasoning_details?: unknown[];
+    };
     finish_reason?: string;
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
@@ -50,6 +89,8 @@ export interface TokenUsage {
 /** callLLM 的结构化返回值 */
 export interface LLMResult {
   content: string;
+  reasoningContent?: string;
+  reasoningEnvelope?: ProviderReasoningEnvelope;
   /** 'stop' = 正常结束; 'length' = 输出被 max_tokens 截断; 'tool_calls' = 模型要调工具; null = 未知 */
   finishReason: 'stop' | 'length' | 'tool_calls' | null;
   /** API 返回的真实 token 用量（部分 provider 可能不返回，此时为 undefined） */
@@ -101,18 +142,60 @@ export async function resolveNativeMode(dataDir: string, fullModelKey: string): 
   const providers = await loadProviders(dataDir);
   const provider = resolveProvider(providers, fullModelKey);
   const model = extractModelId(fullModelKey);
-  const mode = provider?.nativeMode ?? 'auto';
-  const probe = provider?.nativeProbe?.[model];
+  const mode = 'auto' as const;
+  const transport = provider?.toolTransports?.[model];
+  const validTransport = provider && transport?.fingerprint === toolTransportFingerprint(provider, model)
+    ? transport.status : undefined;
+  const native = validTransport === 'native-confirmed' ? true
+    : validTransport === 'text-required' ? false : undefined;
 
-  if (mode === 'native') {
-    return { native: true, mode, forcedMismatch: probe ? !probe.native : false };
-  }
-  if (mode === 'text') {
-    return { native: false, mode, forcedMismatch: false };
-  }
   // auto：有探测记录按记录；无记录乐观走原生（赌现代模型大多支持，
   // 不支持时 finish_reason 终结 + 未知工具友好回填可兜底，不会崩）
-  return { native: probe ? probe.native : true, mode, forcedMismatch: false };
+  return { native: native ?? true, mode, forcedMismatch: false };
+}
+
+function applyTextToolFallback(
+  result: LLMResult,
+  tools: ToolDef[] | undefined,
+  nameMap: Map<string, string>,
+): LLMResult {
+  if (!tools?.length || result.toolCalls?.length || result.finishReason === 'length') return result;
+  const parsed = parseTextToolResponse(result.content);
+  if (parsed.kind !== 'tool-call') return result;
+  const name = restoreToolName(parsed.name, nameMap);
+  if (!tools.some(tool => tool.name === name)) return result;
+  return {
+    ...result,
+    content: '',
+    finishReason: 'tool_calls',
+    toolCalls: [{
+      id: `text_fallback_${Date.now().toString(36)}`,
+      name,
+      arguments: JSON.stringify(parsed.arguments),
+    }],
+  };
+}
+
+const TOOL_TRANSPORT_PROBE_VERSION = 2;
+
+function normalizeTransportBaseUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    return `${url.protocol}//${url.host.toLowerCase()}${url.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    return baseUrl.trim().replace(/\/+$/, '');
+  }
+}
+
+function toolTransportFingerprint(provider: Provider, model: string): string {
+  return JSON.stringify([
+    provider.id,
+    normalizeTransportBaseUrl(provider.baseUrl),
+    resolveProviderProtocol(provider.baseUrl, provider.protocol),
+    model,
+    provider.modelProfiles?.[model] ?? 'auto',
+    TOOL_TRANSPORT_PROBE_VERSION,
+  ]);
 }
 
 export interface LLMCallParams {
@@ -136,32 +219,6 @@ export interface LLMCallParams {
   tools?: ToolDef[];
 }
 
-/** 把 ContextMessage 映射成 provider 消息体（双模式：文本 / 原生）。
- * @param forwardMap original→sanitized 工具名映射，把历史 assistant.tool_calls 的名字
- *                   净化成与当前请求 tools 一致的合法名（多轮一致性）。 */
-function mapMessages(messages: ContextMessage[], forwardMap: Map<string, string>): unknown[] {
-  return messages.map(m => {
-    // 原生：工具结果消息
-    if (m.role === 'tool') {
-      return { role: 'tool', tool_call_id: m.toolCallId, content: m.content };
-    }
-    // 原生：assistant 携带 tool_calls
-    if (m.toolCalls && m.toolCalls.length > 0) {
-      return {
-        role: 'assistant',
-        content: m.content || null,
-        tool_calls: m.toolCalls.map(tc => ({
-          id: tc.id,
-          type: 'function',
-          function: { name: forwardMap.get(tc.name) ?? tc.name, arguments: tc.arguments },
-        })),
-      };
-    }
-    // 文本模式（现状）
-    return { role: m.role, content: m.content };
-  });
-}
-
 /** 构造请求公共部分 */
 async function buildRequest(params: LLMCallParams, stream: boolean) {
   const { dataDir, fullModelKey, messages, options } = params;
@@ -171,10 +228,29 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
   const provider = resolveProvider(providers, fullModelKey);
   if (!provider) throw new Error(`找不到模型 ${fullModelKey} 的提供商`);
 
+  const protocol = resolveProviderProtocol(provider.baseUrl, provider.protocol);
+  const model = options?.model ?? extractModelId(fullModelKey);
+  if (protocol === 'anthropic-messages') {
+    return {
+      ...buildAnthropicRequest({
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey,
+        customHeaders: provider.customHeaders ?? provider.headers,
+        model,
+        messages,
+        tools: params.tools,
+        stream,
+        maxTokens: options?.maxTokens ?? 8192,
+        temperature: options?.temperature ?? 0.7,
+      }),
+      protocol,
+    };
+  }
+
   const url = provider.baseUrl.replace(/\/+$/, '') + '/chat/completions';
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(provider.headers ?? {}),
+    ...(provider.customHeaders ?? provider.headers ?? {}),
   };
   if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
 
@@ -191,9 +267,16 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
   const forwardMap = new Map<string, string>();
   for (const [sanitized, original] of nameMap) forwardMap.set(original, sanitized);
 
+  const identity = {
+    baseUrl: provider.baseUrl,
+    model,
+    profile: provider.modelProfiles?.[model],
+  };
   const body: Record<string, unknown> = {
-    model: options?.model ?? extractModelId(fullModelKey),
-    messages: mapMessages(messages, forwardMap),
+    model,
+    messages: mapProviderMessages(messages, forwardMap, {
+      ...identity,
+    }),
     temperature: options?.temperature ?? 0.7,
     // 默认 8192（原 4096 太低，长命令/长 write_file content 作为 tool_call 参数易被截断）。
     // 仍是可被 options.maxTokens 覆盖的上限，按实际生成计费，抬高不等于增费。
@@ -208,7 +291,11 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
   if (stream) {
     body.stream_options = { include_usage: true };
   }
-  return { url, headers, body, nameMap };
+  const normalizedBody = normalizeChatRequestBody(
+    identity,
+    body,
+  );
+  return { url, headers, body: normalizedBody, nameMap, protocol };
 }
 
 /** 可重试的 HTTP 状态码 */
@@ -268,13 +355,14 @@ export async function callLLM(params: LLMCallParams): Promise<LLMResult> {
 
 async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
   const useStream = typeof params.onChunk === 'function';
-  const { url, headers, body, nameMap } = await buildRequest(params, useStream);
+  const { url, headers, body, nameMap, protocol } = await buildRequest(params, useStream);
   const bodyStr = JSON.stringify(body);
 
   // 诊断埋点：每次请求打 prompt 规模，看上下文是否随轮次膨胀（框架侧信号）。
   if (process.env.LLM_STREAM_DIAG !== '0') {
     const msgCount = Array.isArray(body.messages) ? body.messages.length : 0;
-    console.log(`[llm-request] 发送 prompt：消息数=${msgCount} body=${(bodyStr.length / 1024).toFixed(1)}KB max_tokens=${body.max_tokens}${body.tools ? ' +tools' : ''}`);
+    const maxTokens = body.max_completion_tokens ?? body.max_tokens;
+    console.log(`[llm-request] 发送 prompt：消息数=${msgCount} body=${(bodyStr.length / 1024).toFixed(1)}KB max_tokens=${maxTokens}${body.tools ? ' +tools' : ''}`);
   }
 
   let lastError: Error | null = null;
@@ -318,6 +406,10 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
 
     // 成功响应
     if (!useStream) {
+      if (protocol === 'anthropic-messages') {
+        const result = parseAnthropicResponse(await res.json() as Record<string, any>, nameMap);
+        return applyTextToolFallback(result, params.tools, nameMap);
+      }
       const data = (await res.json()) as ChatCompletionResponse;
       if (data.error?.message) throw new Error(`LLM 错误：${data.error.message}`);
       const message = data.choices?.[0]?.message;
@@ -327,6 +419,8 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
       // 工具名反解（把净化名还原成原始 mcp:... ，react-loop 才能正确分发）
       for (const tc of toolCalls) tc.name = restoreToolName(tc.name, nameMap);
       const content = typeof rawContent === 'string' ? rawContent : '';
+      const reasoningContent = extractReasoningContent(message);
+      const reasoningEnvelope = extractReasoningEnvelope(message);
       if (!content && toolCalls.length === 0) {
         // 文本模式下 content 必须有；原生模式下若既无 content 又无 tool_calls 才算异常
         if (!params.tools) {
@@ -336,11 +430,31 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
       const rawReason = data.choices?.[0]?.finish_reason;
       const finishReason = normalizeFinishReason(rawReason);
       const usage = parseUsage(data.usage);
-      return { content, finishReason, usage, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
+      return applyTextToolFallback({
+        content,
+        reasoningContent: reasoningContent || undefined,
+        reasoningEnvelope,
+        finishReason,
+        usage,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      }, params.tools, nameMap);
     }
 
-    // 流式：解析 OpenAI SSE 格式
-    return parseSSEStream(res, params.onChunk!, !!params.tools, nameMap, params.onReasoning, params.onToolProgress);
+    // 流式：疑似文本工具信封先缓冲，确认是普通正文后再显示。
+    const gate = params.tools ? new TextToolStreamGate(params.onChunk!) : undefined;
+    const onChunk = gate ? (chunk: string) => gate.push(chunk) : params.onChunk!;
+    if (protocol === 'anthropic-messages') {
+      const result = await parseAnthropicSSEStream(res, nameMap, onChunk, params.onReasoning);
+      const normalized = applyTextToolFallback(result, params.tools, nameMap);
+      gate?.finish(Boolean(normalized.content));
+      return normalized;
+    }
+    const result = await parseSSEStream(
+      res, onChunk, !!params.tools, nameMap, params.onReasoning, params.onToolProgress,
+    );
+    const normalized = applyTextToolFallback(result, params.tools, nameMap);
+    gate?.finish(Boolean(normalized.content));
+    return normalized;
   }
 
   throw lastError ?? new Error('LLM 调用失败（重试耗尽）');
@@ -394,6 +508,8 @@ async function parseSSEStream(
   const decoder = new TextDecoder();
   let buffer = '';
   let full = '';
+  let fullReasoning = '';
+  const reasoningDetails: unknown[] = [];
   let finishReason: 'stop' | 'length' | 'tool_calls' | null = null;
   let usage: TokenUsage | undefined;
   const toolAcc = native ? makeToolCallAccumulator() : null;
@@ -447,11 +563,11 @@ async function parseSSEStream(
 
   // 单行处理抽成闭包：主循环与流结束后的残留 buffer 收尾复用同一套逻辑，
   // 避免末尾未换行的 chunk（部分聚合端最后一条 data 不补 \n\n 就关连接）被丢弃。
-  const processLine = (line: string) => {
+  const processLine = (line: string): boolean => {
       const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data:')) return;
+      if (!trimmed || !trimmed.startsWith('data:')) return false;
       const payload = trimmed.slice(5).trim();
-      if (payload === '[DONE]') return;
+      if (payload === '[DONE]') return true;
 
       try {
         const json = JSON.parse(payload) as {
@@ -464,6 +580,7 @@ async function parseSSEStream(
               reasoning_content?: string;  // DeepSeek R1 / 硅基流动 / 多数国内聚合
               reasoning?: string;          // OpenRouter / 部分兼容端
               thinking?: string;           // 少数把 Anthropic 转译成 OpenAI 格式的网关
+              reasoning_details?: unknown[];
             };
             finish_reason?: string | null;
           }>;
@@ -474,7 +591,14 @@ async function parseSSEStream(
         const reasoning = choice?.delta?.reasoning_content
           ?? choice?.delta?.reasoning
           ?? choice?.delta?.thinking;
-        if (reasoning) { echo('think', reasoning); if (onReasoning) onReasoning(reasoning); }
+        if (reasoning) {
+          fullReasoning += reasoning;
+          echo('think', reasoning);
+          if (onReasoning) onReasoning(reasoning);
+        }
+        if (Array.isArray(choice?.delta?.reasoning_details)) {
+          reasoningDetails.push(...choice.delta.reasoning_details);
+        }
         const token = choice?.delta?.content;
         if (token) {
           full += token;
@@ -514,9 +638,11 @@ async function parseSSEStream(
       } catch {
         // 非 JSON 行忽略
       }
+      return false;
   };
 
   try {
+    let streamDone = false;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -525,7 +651,17 @@ async function parseSSEStream(
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
-      for (const line of lines) processLine(line);
+      for (const line of lines) {
+        if (processLine(line)) {
+          streamDone = true;
+          break;
+        }
+      }
+      if (streamDone) {
+        await reader.cancel();
+        buffer = '';
+        break;
+      }
     }
   } catch (err) {
     if (heartbeat) clearInterval(heartbeat);
@@ -560,5 +696,14 @@ async function parseSSEStream(
   }
   // 工具名反解（净化名 → 原始名），与非流式路径一致
   if (toolCalls) for (const tc of toolCalls) tc.name = restoreToolName(tc.name, nameMap);
-  return { content: full, finishReason, usage, toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined };
+  return {
+    content: full,
+    reasoningContent: fullReasoning || undefined,
+    reasoningEnvelope: reasoningDetails.length > 0
+      ? { field: 'reasoning_details', value: reasoningDetails }
+      : undefined,
+    finishReason,
+    usage,
+    toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+  };
 }

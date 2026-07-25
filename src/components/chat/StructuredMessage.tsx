@@ -2,21 +2,19 @@ import { useState, type ReactNode } from 'react';
 import { renderTextWithCode } from '../../engine/markdown';
 import { formatTimestamp } from '../../utils/time';
 import type { ToolStep } from '../../types';
+import ReasoningBlock from './ReasoningBlock';
+import ToolActivityList from './ToolActivityGroup';
 
 interface Props {
-  think: string;
   tools: ToolStep[];
   answer: string;
-  note: string;
   msgId: string;
   timestamp?: string;
-  /** answer 来源（recovered/from-think 时显示对应 badge） */
-  answerSource?: 'closed' | 'open' | 'from-think' | 'recovered';
+  reasoning?: string;
   actions?: ReactNode;
 }
 
-export default function StructuredMessage({ think, tools, answer, note, msgId, timestamp, answerSource, actions }: Props) {
-  const [showThink, setShowThink] = useState(false);
+export default function StructuredMessage({ tools, answer, msgId, timestamp, reasoning, actions }: Props) {
   // 完成态默认折叠，运行中默认展开
   const [showTool, setShowTool] = useState<Record<number, boolean>>(() =>
     Object.fromEntries(tools.map((t, i) => [i, t.status === 'running'])),
@@ -30,21 +28,8 @@ export default function StructuredMessage({ think, tools, answer, note, msgId, t
     <div className="chat__message chat__message--assistant">
       <div className="chat__avatar">AI</div>
       <div className="chat__bubble stmsg-bubble">
-        {think && answerSource !== 'from-think' && (
-          <div className="stmsg-section stmsg-section--collapsible">
-            <button className="stmsg-collapse-trigger" onClick={() => setShowThink(!showThink)} aria-expanded={showThink}>
-              <span className="stmsg-collapse-arrow">{showThink ? '▼' : '▶'}</span>
-              <span className="stmsg-collapse-label">思考过程</span>
-            </button>
-            {showThink && (
-              <div className="stmsg-collapse-body">
-                <div className="stmsg-think">{think}</div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {tools.map((t, i) => (
+        {reasoning && <ReasoningBlock reasoning={reasoning} isStreaming={false} />}
+        <ToolActivityList items={tools} renderItem={(t, i) => (
           <div key={i} className={`stmsg-tool stmsg-tool--${t.status}`}>
             <button className="stmsg-tool-header" onClick={() => toggleTool(i)} aria-expanded={showTool[i] ?? false}>
               <span className="stmsg-tool-arrow">{showTool[i] ? '▼' : '▶'}</span>
@@ -69,27 +54,10 @@ export default function StructuredMessage({ think, tools, answer, note, msgId, t
               </div>
             )}
           </div>
-        ))}
+        )} />
 
         {answer && (
-          <>
-            {answerSource === 'from-think' && (
-              <div
-                className="stmsg-recovered-badge stmsg-recovered-badge--from-think"
-                title="模型把答案直接写在了 <think> 标签里，系统已把内容提取出来正常显示。"
-              >
-                💭 答案原写在思考过程里，已自动取出
-              </div>
-            )}
-            <div className="stmsg-answer">{renderTextWithCode(answer, msgId)}</div>
-          </>
-        )}
-
-        {note && (
-          <div className="stmsg-note-area">
-            <div className="stmsg-note-header">💡 提醒</div>
-            <div className="stmsg-note-body">{note}</div>
-          </div>
+          <div className="stmsg-answer">{renderTextWithCode(answer, msgId)}</div>
         )}
         {timestamp && <div className="chat__timestamp" title={formatTimestamp(timestamp, true)}>{formatTimestamp(timestamp)}</div>}
         {actions && <div className="chat__bubble-actions">{actions}</div>}

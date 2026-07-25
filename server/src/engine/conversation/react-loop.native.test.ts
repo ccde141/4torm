@@ -11,9 +11,9 @@
 
 import assert from 'node:assert/strict';
 import { runReActLoopNative, MAX_NUDGES, type LLMCaller, type ToolCaller } from './react-loop';
-import type { NativeToolCall, ContextMessage } from '../shared/types';
+import type { NativeToolCall, ContextMessage, ProviderReasoningEnvelope } from '../shared/types';
 
-interface Step { content?: string; toolCalls?: NativeToolCall[]; finishReason?: 'stop' | 'length' | 'tool_calls' | null }
+interface Step { content?: string; reasoningContent?: string; reasoningEnvelope?: ProviderReasoningEnvelope; toolCalls?: NativeToolCall[]; finishReason?: 'stop' | 'length' | 'tool_calls' | null }
 
 function fakeLLM(script: Step[]): { llm: LLMCaller; calls: () => number } {
   let i = 0;
@@ -23,7 +23,7 @@ function fakeLLM(script: Step[]): { llm: LLMCaller; calls: () => number } {
       i++;
       const finishReason = step.finishReason
         ?? (step.toolCalls && step.toolCalls.length ? 'tool_calls' : 'stop');
-      return { content: step.content ?? '', finishReason, toolCalls: step.toolCalls };
+      return { content: step.content ?? '', finishReason, toolCalls: step.toolCalls, reasoningContent: step.reasoningContent, reasoningEnvelope: step.reasoningEnvelope };
     },
   };
   return { llm, calls: () => i };
@@ -71,6 +71,33 @@ async function main() {
     assert.equal(calls(), 2); // 恰好两轮
     // 注入的"继续"提示应点名终结工具
     assert.ok(msgs.some(m => m.role === 'user' && m.content.includes('complete_task')));
+  });
+
+  await run('工具调用后的下一轮保留上一轮 reasoning_content', async () => {
+    const snapshots: ContextMessage[][] = [];
+    const llm: LLMCaller = {
+      async call(messages) {
+        snapshots.push(messages.map(message => ({ ...message })));
+        if (snapshots.length === 1) {
+          return {
+            content: '', reasoningContent: '先读取文件',
+            reasoningEnvelope: {
+              field: 'reasoning_details', value: [{ type: 'reasoning.encrypted', data: 'signed' }],
+            },
+            finishReason: 'tool_calls', toolCalls: [tc('read_file')],
+          };
+        }
+        return { content: '完成', finishReason: 'stop' };
+      },
+    };
+    await runReActLoopNative({
+      messages: [{ role: 'system', content: 's' }], llm, tools, toolDefs: [],
+    });
+    const assistant = snapshots[1].find(message => message.role === 'assistant');
+    assert.equal(assistant?.reasoningContent, '先读取文件');
+    assert.deepEqual(assistant?.reasoningEnvelope?.value, [
+      { type: 'reasoning.encrypted', data: 'signed' },
+    ]);
   });
 
   await run('耗尽→强制总结→仍不封口→系统兜底封口：anomaly 但照样交接下游', async () => {

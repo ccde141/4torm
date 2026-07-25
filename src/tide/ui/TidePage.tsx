@@ -14,8 +14,6 @@ import {
 } from '../../api/tide';
 import type { Agent } from '../../types';
 import TaskItem from './TideTaskItem';
-import { parseStructuredOutput } from '../../engine/parser';
-import { renderTextWithCode } from '../../engine/markdown';
 import StructuredMessage from '../../components/chat/StructuredMessage';
 import CreateForm from './TideCreateForm';
 import { formatRelative, formatSchedule, actionBtnStyle } from './tide-styles';
@@ -525,30 +523,14 @@ function SessionView({ session, onClose }: { session: TideSession; onClose: () =
           if (m.role === 'tool-call') return <ToolCallBubble key={m.id} content={m.content} timestamp={m.timestamp} />;
           if (m.role === 'tool-result') return <ToolResultBubble key={m.id} content={m.content} timestamp={m.timestamp} />;
           if (m.role === 'assistant') {
-            const parsed = parseStructuredOutput(m.content, []);
-            const hasStructure = parsed.think || parsed.actions.length > 0 || parsed.note || parsed.answer;
-            if (hasStructure) {
-              return (
-                <StructuredMessage
-                  key={m.id}
-                  think={parsed.think}
-                  tools={parsed.actions.map(a => ({ tool: a.tool, args: a.args, status: 'done' as const }))}
-                  answer={parsed.answer}
-                  note={parsed.note}
-                  msgId={m.id}
-                  timestamp={m.timestamp}
-                  answerSource={parsed.answerSource}
-                />
-              );
-            }
             return (
-              <div key={m.id} className="chat__message chat__message--assistant" style={{ paddingLeft: '24px' }}>
-                <div className="chat__avatar">AI</div>
-                <div className="chat__bubble" style={{ borderLeft: '3px solid #3b82f6' }}>
-                  <div className="md-bubble">{renderTextWithCode(m.content, m.id)}</div>
-                  {m.timestamp && <div className="chat__timestamp" title={m.timestamp}>{m.timestamp.slice(0, 19).replace('T', ' ')}</div>}
-                </div>
-              </div>
+              <StructuredMessage
+                key={m.id}
+                tools={[]}
+                answer={m.content}
+                msgId={m.id}
+                timestamp={m.timestamp}
+              />
             );
           }
           return (

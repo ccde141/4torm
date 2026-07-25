@@ -6,7 +6,6 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { resolveExecutionContext, type SandboxLevelInput } from './execution-context.js';
 import { skillDir, toolExecutorDir, toolRegistryFile } from './data-paths.js';
@@ -147,7 +146,9 @@ export async function executeTool(
   // UI 侧通道：执行器可返回 { result, meta } 携带展示用元数据（如覆盖写入的旧内容）。
   // meta 仅通过此回调外溢给调用方转发前端，绝不进入 LLM 结果字符串。不传则丢弃 meta。
   onMeta?: (meta: unknown) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw createAbortError();
   // MCP 工具：本执行器只认本地工具/技能注册表，mcp: 前缀必须直接走 MCP client。
   // 在此单点拦截，可一并修复所有入口（HTTP /api/tools/exec、各 sub-agent-runner、信风 node-runner）。
   if (tool.startsWith('mcp:')) {
@@ -158,92 +159,94 @@ export async function executeTool(
       return `（MCP 工具调用失败：${tool}）${(e as Error).message}`;
     }
   }
-  let toolDef = await findToolInRegistry(dataDir, tool);
-  if (!toolDef) toolDef = await findToolInSkills(dataDir, tool);
-  if (!toolDef) {
-    // 精确匹配失败：本地模型常吐脏工具名（带空格/大小写/functions. 前缀）。
-    // 先归一化候选匹配一次，命中唯一规范名则用规范名重查，仍不中才报未知工具。
-    const resolved = resolveToolName(tool, await listKnownToolNames(dataDir));
-    if (resolved && resolved !== tool) {
-      console.warn(`[tool-executor] 工具名归一化：${JSON.stringify(tool)} → ${resolved}`);
-      toolDef = await findToolInRegistry(dataDir, resolved);
-      if (!toolDef) toolDef = await findToolInSkills(dataDir, resolved);
-      if (toolDef) tool = resolved;
-    }
-  }
-  if (!toolDef) {
+  const resolved = await resolveToolDefinition(dataDir, tool);
+  if (!resolved) {
     // 未知工具不是系统故障，而是模型用错了工具名（或复读了协议示例占位符）。
     // 返回友好结果让模型自我纠正，不抛异常（避免被上层包成 HTTP 500 崩掉本轮对话）。
     return `（未知工具：${tool}）该工具不存在。请检查工具名是否正确，或确认是否误把协议示例当成了真实调用。`;
   }
+  tool = resolved.tool;
+  const toolDef = resolved.toolDef;
 
-  const ctx = await resolveExecutionContext(
+  const resolvedContext = await resolveExecutionContext(
     dataDir,
     agentId,
     workspaceDirOverride,
     sandboxLevelOverride,
   );
+  const ctx = { ...resolvedContext, signal };
 
-  // template 类型：shell 命令模板
   if (toolDef.executorType === 'template' && toolDef.executorTemplate) {
-    let cmd = toolDef.executorTemplate;
-    for (const [k, v] of Object.entries(args)) {
-      cmd = cmd.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), v);
-    }
-    const blocked = checkBlockedCommand(cmd);
-    if (blocked) return `(安全拦截) ${blocked}`;
-    // cwd 起点一律为工作区（与 run_command.js 对齐）：命令相对路径产物落在各自
-    // workspace，不污染项目根。unrestricted 若需碰项目根用绝对路径显式指定。
-    const cmdCwd = ctx.workspaceDir || ctx.projectDir;
-    try {
-      return execSync(cmd, {
-        encoding: 'utf-8', timeout: 15000,
-        cwd: cmdCwd, maxBuffer: 1024 * 1024,
-      }) || '(执行完毕)';
-    } catch (e: unknown) {
-      const err = e as { stdout?: string; stderr?: string; message: string; signal?: string; killed?: boolean };
-      if (err.signal === 'SIGTERM' || err.killed) {
-        return '(命令执行超时，已自动终止)';
-      }
-      return err.stdout || err.stderr || err.message;
-    }
+    return executeTemplateTool(dataDir, toolDef, args, ctx, signal);
   }
 
-  // builtin/custom 类型：JS 模块动态 import
   if (toolDef.executorType === 'builtin' || toolDef.executorType === 'custom') {
-    const fileName = toolDef.executorFile || tool;
-    const source = toolDef._skillId;
-
-    const candidates = source
-      ? [path.join(skillDir(dataDir, source), 'executors', `${fileName}.js`)]
-      : [];
-    candidates.push(path.join(toolExecutorDir(dataDir), `${fileName}.js`));
-
-    let lastError: unknown;
-    for (const filePath of candidates) {
-      try {
-        const mod = await importWithCache(filePath);
-        const fn = mod.default;
-        if (typeof fn !== 'function') {
-          throw new Error(`执行器未导出 default 函数: ${filePath}`);
-        }
-        const out = await fn(args, ctx);
-        // 执行器可返回 { result, meta }：meta 走 onMeta 侧通道，LLM 只拿到 result 字符串
-        if (out && typeof out === 'object' && 'result' in out) {
-          onMeta?.((out as { meta?: unknown }).meta);
-          return String((out as { result: unknown }).result ?? '');
-        }
-        return out;
-      } catch (e) {
-        lastError = e;
-      }
-    }
-    const errCode = (lastError as NodeJS.ErrnoException)?.code;
-    if (errCode === 'MODULE_NOT_FOUND' || errCode === 'ERR_MODULE_NOT_FOUND') {
-      throw new Error(`执行器文件不存在: ${fileName}.js`);
-    }
-    throw lastError;
+    return executeModuleTool(dataDir, tool, toolDef, args, ctx, onMeta, signal);
   }
 
   throw new Error(`未知执行器类型: ${toolDef.executorType}`);
+}
+
+async function resolveToolDefinition(dataDir: string, tool: string) {
+  let toolDef = await findToolInRegistry(dataDir, tool) ?? await findToolInSkills(dataDir, tool);
+  if (toolDef) return { tool, toolDef };
+  const normalized = resolveToolName(tool, await listKnownToolNames(dataDir));
+  if (!normalized || normalized === tool) return null;
+  console.warn(`[tool-executor] 工具名归一化：${JSON.stringify(tool)} → ${normalized}`);
+  toolDef = await findToolInRegistry(dataDir, normalized) ?? await findToolInSkills(dataDir, normalized);
+  return toolDef ? { tool: normalized, toolDef } : null;
+}
+
+async function executeTemplateTool(
+  dataDir: string, toolDef: ToolDefWithSource, args: Record<string, string>,
+  ctx: Awaited<ReturnType<typeof resolveExecutionContext>>, signal?: AbortSignal,
+): Promise<string> {
+  let cmd = toolDef.executorTemplate!;
+  for (const [key, value] of Object.entries(args)) {
+    cmd = cmd.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
+  }
+  const blocked = checkBlockedCommand(cmd);
+  if (blocked) return `(安全拦截) ${blocked}`;
+  const runnerPath = path.join(toolExecutorDir(dataDir), 'run_command.js');
+  const runner = await importWithCache(runnerPath);
+  if (typeof runner.runCommand !== 'function') {
+    throw new Error(`命令执行器未导出 runCommand: ${runnerPath}`);
+  }
+  return runner.runCommand(cmd, { cwd: ctx.workspaceDir || ctx.projectDir, timeout: 15000, signal });
+}
+
+async function executeModuleTool(
+  dataDir: string, tool: string, toolDef: ToolDefWithSource,
+  args: Record<string, string>, ctx: object,
+  onMeta?: (meta: unknown) => void, signal?: AbortSignal,
+): Promise<string> {
+  const fileName = toolDef.executorFile || tool;
+  const candidates = toolDef._skillId
+    ? [path.join(skillDir(dataDir, toolDef._skillId), 'executors', `${fileName}.js`)] : [];
+  candidates.push(path.join(toolExecutorDir(dataDir), `${fileName}.js`));
+  let lastError: unknown;
+  for (const filePath of candidates) {
+    try {
+      const fn = (await importWithCache(filePath)).default;
+      if (typeof fn !== 'function') throw new Error(`执行器未导出 default 函数: ${filePath}`);
+      const out = await fn(args, ctx);
+      if (!out || typeof out !== 'object' || !('result' in out)) return out;
+      onMeta?.((out as { meta?: unknown }).meta);
+      return String((out as { result: unknown }).result ?? '');
+    } catch (error) {
+      if (signal?.aborted || (error as Error)?.name === 'AbortError') throw error;
+      lastError = error;
+    }
+  }
+  const code = (lastError as NodeJS.ErrnoException)?.code;
+  if (code === 'MODULE_NOT_FOUND' || code === 'ERR_MODULE_NOT_FOUND') {
+    throw new Error(`执行器文件不存在: ${fileName}.js`);
+  }
+  throw lastError;
+}
+
+function createAbortError(): Error {
+  const error = new Error('(工具执行已中止)');
+  error.name = 'AbortError';
+  return error;
 }

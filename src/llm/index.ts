@@ -14,10 +14,18 @@ export {
   getActiveModel,
   setActiveModel,
   probeAndStore,
+  probeVisionAndStore,
+  getModelCapability,
   getNativeProbe,
   PROVIDER_PRESETS,
 } from './config';
 export type { ProviderEntry, ModelOption } from './config';
+export type {
+  CapabilityProbe,
+  CapabilityStatus,
+  ModelCapabilities,
+  ModelCapabilityMap,
+} from './model-capabilities';
 
 export type {
   MessageRole,

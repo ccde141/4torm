@@ -43,7 +43,7 @@ export const autoModeSyncRules: ValidationRule[] = [
 /**
  * 每个 Agent 节点的模型须具备原生工具调用能力（异步：需读 provider 配置 + 探测缓存）。
  *
- * 自动模式的终结判定/信封工具建在 native `tool_calls` 上，text 循环的 extractAnswer
+ * 自动模式的终结判定/信封工具建在 native `tool_calls` 上，文本循环的最终正文
  * 启发式不可靠，故启动前拦下。判定为文本模式 → 报错并引导去模型提供区探测/切换。
  * 无 model 信息的节点跳过（由基础 R4/R5 负责报错，避免假阳性）。
  */

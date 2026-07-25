@@ -3,16 +3,19 @@
  *
  * 职责：给定 messages + LLM 调用能力 + 工具调用能力 → 循环直到产出最终回答。
  * native 走结构化 tool_calls（本文件 runReActLoopNative，主路径）。
- * 文本协议退路（runReActLoop / XML 解析）已拆至 react-loop-text.ts，
+ * JSON 文本工具循环（runReActLoop）已拆至 react-loop-text.ts，
  * 经本文件末尾 barrel 转出，外部 import 路径不变。
  *
  * 不依赖任何 session/workflow 概念，纯粹的 ReAct 执行器。
  */
 
-import type { ContextMessage, LLMOptions } from '../shared/types';
+import type { ContextMessage, LLMOptions, ProviderReasoningEnvelope } from '../shared/types';
 import type { TokenUsage } from '../shared/llm-bridge';
 import type { ToolPreparationProgress } from '../shared/tool-progress';
 import { salvageToolArgs } from '../shared/tool-bridge';
+import { createAssistantContextMessage } from '../shared/provider-messages.js';
+import { SuspendSignal } from '../shared/suspend-signal.js';
+export { SuspendSignal } from '../shared/suspend-signal.js';
 
 // ── 共享常量（native + text 双路径共用） ──────────────────────────
 
@@ -41,6 +44,7 @@ export interface ToolCallRecord {
   tool: string;
   args: Record<string, string>;
   result: string;
+  meta?: unknown;
 }
 
 /** LLM 调用抽象——调用方注入具体实现 */
@@ -53,12 +57,12 @@ export interface LLMCaller {
     tools?: import('../shared/tool-defs-loader').ToolDef[],
     onReasoning?: (chunk: string) => void,
     onToolProgress?: (progress: ToolPreparationProgress) => void,
-  ): Promise<{ content: string; finishReason: 'stop' | 'length' | 'tool_calls' | null; usage?: TokenUsage; toolCalls?: import('../shared/types').NativeToolCall[] }>;
+  ): Promise<{ content: string; reasoningContent?: string; reasoningEnvelope?: ProviderReasoningEnvelope; finishReason: 'stop' | 'length' | 'tool_calls' | null; usage?: TokenUsage; toolCalls?: import('../shared/types').NativeToolCall[] }>;
 }
 
 /** 工具调用抽象——调用方注入具体实现 */
 export interface ToolCaller {
-  call(tool: string, args: Record<string, string>): Promise<string>;
+  call(tool: string, args: Record<string, string>, onMeta?: (meta: unknown) => void): Promise<string>;
 }
 
 /** ReAct 循环事件（流式推送用） */
@@ -67,7 +71,7 @@ export type ReActStreamEvent =
   | { type: 'reasoning'; chunk: string }
   | ({ type: 'tool-progress' } & ToolPreparationProgress)
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string }
+  | { type: 'tool-result'; tool: string; result: string; meta?: unknown }
   | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | { type: 'error'; message: string };
 
@@ -131,7 +135,7 @@ export interface SuspendDecision {
 
 /** ReAct 循环结果 */
 export interface ReActLoopResult {
-  /** 干净文本（<answer> 提取或 stripInternalTags 兜底） */
+  /** 最终正文 */
   content: string;
   /** 最后一轮 LLM 原始输出 */
   rawContent: string;
@@ -162,31 +166,6 @@ export interface ReActLoopResult {
  * ToolCaller 抛出此异常时，react-loop 中断循环并返回 suspended 状态。
  * 调用方在 ToolCaller.call() 内部 throw new SuspendSignal(question, options)。
  */
-export class SuspendSignal extends Error {
-  readonly question: string;
-  readonly options?: string[];
-  constructor(question: string, options?: string[]) {
-    super('__suspend__');
-    this.name = 'SuspendSignal';
-    this.question = question;
-    this.options = options;
-  }
-}
-
-// ── 共享文本工具 ──────────────────────────────────────────────────
-
-/**
- * 剥离 <think> / <action> / <ask> 标签，返回干净文本。
- * native 路径也用作兜底（如会议室 abort 时清理流式累积文本）。
- */
-export function stripInternalTags(text: string): string {
-  return text
-    .replace(/<think>[\s\S]*?<\/think>/g, '')
-    .replace(/<action\s+[^>]*>[\s\S]*?<\/action>/g, '')
-    .replace(/<ask\b[^>]*?\/?>(?:[\s\S]*?<\/ask>)?/gi, '')
-    .trim();
-}
-
 // ── 原生 ReAct 循环（主路径） ─────────────────────────────────────
 
 // ── 原生 ReAct 循环 ───────────────────────────────────────────────
@@ -194,10 +173,10 @@ export function stripInternalTags(text: string): string {
 /**
  * 原生工具调用 ReAct 循环（主路径）。
  *
- * 与文本协议退路（react-loop-text.ts 的 runReActLoop）的本质差异：
+ * 与 JSON 文本工具模式（react-loop-text.ts 的 runReActLoop）的本质差异：
  * - 工具调用来自 result.toolCalls（结构化），不再正则解析 reply
- * - 回填用 role:'tool' 配对消息（带 tool_call_id），不再拼 <result> 文本
- * - 终结靠 finish_reason=stop（无 tool_call），不再 extractAnswer 抠标签
+ * - 回填用 role:'tool' 配对消息（带 tool_call_id）
+ * - 终结靠 finish_reason=stop（无 tool_call）
  * - 业务挂起：通过 onToolError hook 由调用方决策，core 不识别具体异常类型
  *
  * 协议层隔离：模型不再手写 JSON，转义崩溃从原理上消失。
@@ -244,11 +223,15 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       : undefined;
 
     let content: string;
+    let reasoningContent: string | undefined;
+    let reasoningEnvelope: ProviderReasoningEnvelope | undefined;
     let finishReason: 'stop' | 'length' | 'tool_calls' | null;
     let toolCalls: import('../shared/types').NativeToolCall[] | undefined;
     try {
       const result = await llm.call(msgs, undefined, onChunk, abortCtrl.signal, toolDefs, onReasoning, onToolProgress);
       content = result.content;
+      reasoningContent = result.reasoningContent;
+      reasoningEnvelope = result.reasoningEnvelope;
       finishReason = result.finishReason;
       toolCalls = result.toolCalls;
       if (result.usage) latestUsage = result.usage;
@@ -269,7 +252,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       // bug #2：length 截断且有内容 → 是被截断的半句，不能当最终交付，要续写
       if (finishReason === 'length' && content.trim() && continuations < MAX_CONTINUATIONS) {
         continuations++;
-        msgs.push({ role: 'assistant', content });
+        msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
         msgs.push({
           role: 'user',
           content: '【系统：续写指令】你上一条输出因长度上限被截断。请直接从被截断处紧接着往下写，补全剩余内容。严禁重复已输出的内容，严禁重头叙述。',
@@ -334,7 +317,9 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     //    注意：不把带 toolCalls 的 assistant 入历史（那会要求配对 tool 结果），只 push 纯文本。
     if (finishReason === 'length' && continuations < MAX_CONTINUATIONS) {
       continuations++;
-      msgs.push({ role: 'assistant', content: content || '（工具调用因输出长度上限被截断）' });
+      msgs.push(createAssistantContextMessage(
+        content || '（工具调用因输出长度上限被截断）', undefined, reasoningContent, reasoningEnvelope,
+      ));
       msgs.push({
         role: 'user',
         content: '【系统提示】你上一次的工具调用因输出长度上限被截断、参数不完整，已丢弃未执行。请重新发起该次调用，并缩短单次参数体量——需要写入大段内容时，改用分块/多次写入（如分多次 write_file，或把长命令拆成几条）。',
@@ -343,7 +328,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     }
 
     // ── 有工具调用：先把 assistant(tool_calls) 消息入历史（含可能的并发思考文本）──
-    msgs.push({ role: 'assistant', content, toolCalls });
+    msgs.push(createAssistantContextMessage(content, toolCalls, reasoningContent, reasoningEnvelope));
 
     // ── 逐个执行工具，回填 role:'tool' 配对消息 ──
     // 注：tool-call/tool-result 事件由 ToolCaller 内部 emit（带 ok 状态），
@@ -453,7 +438,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
   return { content: raw.trim() || '（达到最大轮次）', rawContent: raw, toolCalls: allToolCalls, turns: maxTurns, usage: latestUsage };
 }
 
-// ── 文本协议退路 barrel 转出 ──────────────────────────────────────
-// runReActLoop 及 XML 解析器拆至 react-loop-text.ts。
+// ── JSON 文本工具循环 barrel 转出 ─────────────────────────────────
+// runReActLoop 拆至 react-loop-text.ts。
 // 此处转出，使 `from './react-loop'` 的外部 import 路径保持不变。
 export { runReActLoop } from './react-loop-text';

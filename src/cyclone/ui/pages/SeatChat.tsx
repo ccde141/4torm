@@ -12,6 +12,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { renderTextWithCode } from '../../../engine/markdown';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
 import ToolCallMessage from '../../../components/chat/ToolCallMessage';
+import ToolActivityList from '../../../components/chat/ToolActivityGroup';
 import DelegateCard from '../../../components/chat/DelegateCard';
 import AskCard from '../../../components/chat/AskCard';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
@@ -368,7 +369,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
         {live && (
           <>
             {live.reasoning && <ReasoningBlock reasoning={live.reasoning} isStreaming />}
-            {live.blocks.map((b, i) => <BlockRow key={`live-${i}`} block={b} />)}
+            <BlockRows blocks={live.blocks} prefix="live" />
             {live.ask && <AskCard question={live.ask.question} options={live.ask.options} answered={false} onReply={(a) => run('resume', a)} />}
             {(live.text || live.phase) && (
               <div className="chat__message chat__message--assistant">
@@ -452,6 +453,20 @@ function BlockRow({ block }: { block: DisplayBlock }) {
   return <ContactCard data={{ target: block.target, message: block.message, reply: block.reply, status: block.status }} />;
 }
 
+function BlockRows({ blocks, prefix }: { blocks: DisplayBlock[]; prefix: string }) {
+  const items = blocks.map(block => ({
+    block,
+    tool: block.kind === 'tool' ? block.tool : block.kind,
+    status: 'status' in block ? block.status : undefined,
+    args: block.kind === 'tool' ? block.args : undefined,
+  }));
+  return (
+    <ToolActivityList items={items} renderItem={(item, index) => (
+      <BlockRow key={`${prefix}-${index}`} block={item.block} />
+    )} />
+  );
+}
+
 const inputHintStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--color-text-tertiary)',
@@ -509,7 +524,7 @@ function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onS
   return (
     <>
       {msg.reasoning && <ReasoningBlock reasoning={msg.reasoning} isStreaming={false} />}
-      {msg.blocks?.map((b, i) => <BlockRow key={`${msg.id}-b-${i}`} block={b} />)}
+      {msg.blocks && <BlockRows blocks={msg.blocks} prefix={`${msg.id}-b`} />}
       {msg.content && (
         <div className="chat__message chat__message--assistant">
           <div className="chat__avatar">AI</div>

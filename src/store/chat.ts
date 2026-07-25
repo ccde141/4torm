@@ -1,6 +1,7 @@
 import { readJson, writeJson, ensureDir, deleteFile } from '../api/storage';
 import type { Agent, ChatMessage } from '../types';
 import { MissingIndexReadCache } from './session-index-cache';
+import { deleteConversationImages } from '../engine/chat/image-attachments';
 import {
   tokenUsageFromMeta,
   tokenUsageToMeta,
@@ -218,6 +219,7 @@ export async function deleteSession(id: string) {
   if (parts.length < 3) return;
   const agentId = `${parts[0]}-${parts[1]}`;
   await deleteFile(sessionPath(agentId, id));
+  await deleteConversationImages(agentId, id);
 
   if (cache) delete cache[id];
   msgCache.delete(id);

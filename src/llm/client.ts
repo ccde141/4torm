@@ -35,7 +35,7 @@ function buildHeaders(apiKey?: string, extraHeaders?: Record<string, string>): R
 }
 
 function resolveUrl(baseUrl: string, path: string): string {
-  if (import.meta.env.DEV && baseUrl.startsWith('http://localhost:')) {
+  if (import.meta.env?.DEV && baseUrl.startsWith('http://localhost:')) {
     const u = new URL(baseUrl);
     const port = u.port || '80';
     return `/api/llm/${port}${u.pathname}${path}`;

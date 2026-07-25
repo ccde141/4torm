@@ -6,8 +6,8 @@ test('Tradewind 文本 ReAct 将原生 reasoning 作为独立事件转发', asyn
   const llm: LLMCaller = {
     async call(_messages, _options, onChunk, _signal, onReasoning) {
       onReasoning?.('内部分析');
-      onChunk?.('<answer>完成</answer>');
-      return { content: '<answer>完成</answer>', finishReason: 'stop' };
+      onChunk?.('完成');
+      return { content: '完成', finishReason: 'stop' };
     },
   };
   const events: Array<{ type: string; chunk?: string }> = [];

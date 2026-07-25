@@ -7,17 +7,17 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { getAgents } from '../../../store/agent';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
-import { parseStructuredOutput } from '../../../engine/parser';
 import { renderTextWithCode } from '../../../engine/markdown';
 import StructuredMessage from '../../../components/chat/StructuredMessage';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
+import ToolActivityList from '../../../components/chat/ToolActivityGroup';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { formatTimestamp } from '../../../utils/time';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import { getConvectionCreateError } from './convection-guards';
 import { shouldLoadConvectionSession } from './convection-session-guards';
 import { ConvectionHttpError, streamConvectionSSE } from './convection-sse';
-import { restoreConvectionMessage } from './convection-message-map';
+import { convectionReasoningProps, restoreConvectionMessage } from './convection-message-map';
 import {
   getConvectionComposerMode,
   normalizeConvectionRound,
@@ -633,38 +633,9 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                     </div>
                   );
                 }
-                // 流式中：显示剥离标签后的可读文本 + 工具调用卡片
+                // 流式正文、思考与工具分别来自各自的结构化事件。
                 if (m.streaming) {
-                  // 提取 think（闭合优先，未闭合兜底取 <think> 后所有内容）
-                  const thinkClosed = /<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/i.exec(m.content);
-                  const thinkOpen = !thinkClosed ? /<think(?:ing)?>([\s\S]*)$/i.exec(m.content) : null;
-                  const thinkText = (thinkClosed?.[1] || thinkOpen?.[1] || '').trim();
-                  const thinkStreaming = !!thinkOpen;
-                  // 提取 note（闭合优先，未闭合兜底）
-                  const noteClosed = /<note>([\s\S]*?)<\/note>/i.exec(m.content);
-                  const noteOpen = !noteClosed ? /<note>([\s\S]*)$/i.exec(m.content) : null;
-                  const noteText = (noteClosed?.[1] || noteOpen?.[1] || '').trim();
-                  // 剥掉 think / note / action（已闭合 + 未闭合残尾），剩下的给 answer/纯文本流式
-                  let raw = m.content;
-                  raw = raw.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');
-                  raw = raw.replace(/<think(?:ing)?>[\s\S]*$/i, '');
-                  raw = raw.replace(/<note>[\s\S]*?<\/note>/gi, '');
-                  raw = raw.replace(/<note>[\s\S]*$/i, '');
-                  raw = raw.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '');
-                  // 检测未闭合的 <action（Agent 正在构造工具调用）
-                  const unclosedIdx = raw.lastIndexOf('<action');
-                  const hasUnclosedAction = unclosedIdx !== -1 && raw.indexOf('</action>', unclosedIdx) === -1;
-                  let pendingAction: { tool: string; filePath?: string; bodyLen: number } | null = null;
-                  if (hasUnclosedAction) {
-                    const fragment = m.content.slice(m.content.lastIndexOf('<action'));
-                    const toolMatch = /tool\s*=\s*["']([^"']+)["']/.exec(fragment);
-                    const pathMatch = /"filePath"\s*:\s*"([^"]*)"/.exec(fragment);
-                    const bodyStart = fragment.indexOf('>');
-                    const bodyLen = bodyStart !== -1 ? fragment.length - bodyStart - 1 : 0;
-                    pendingAction = { tool: toolMatch?.[1] || '...', filePath: pathMatch?.[1], bodyLen };
-                    raw = raw.slice(0, unclosedIdx);
-                  }
-                  const display = raw.replace(/<\/?(?:think|answer|plan|note|action[^>]*)>/gi, '').trim();
+                  const display = m.content.trim();
                   const tools = m.toolCalls || [];
                   const waiting = m.waitingInfo;
                   return (
@@ -672,20 +643,8 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                       <div className="chat__avatar">{m.speaker.slice(0, 2)}</div>
                       <div className="chat__bubble stmsg-bubble">
                         <div className="conv__speaker-label">{m.speaker}</div>
-                        {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} />}
-                        {thinkText && (
-                          <div className="stmsg-section stmsg-section--collapsible">
-                            <details open={thinkStreaming}>
-                              <summary className="stmsg-collapse-trigger">
-                                <span className="stmsg-collapse-arrow">▶</span>
-                                <span className="stmsg-collapse-label">{thinkStreaming ? '思考过程...' : '思考过程'}</span>
-                                {thinkStreaming && <span className="thinking-card__tool-spinner" />}
-                              </summary>
-                              <div className="stmsg-collapse-body">
-                                <div className="stmsg-think">{thinkText}{thinkStreaming ? '▍' : ''}</div>
-                              </div>
-                            </details>
-                          </div>
+                        {convectionReasoningProps(m.reasoning, !!m.streaming) && (
+                          <ReasoningBlock {...convectionReasoningProps(m.reasoning, !!m.streaming)!} />
                         )}
                         {waiting && (
                           <div className="conv__waiting-hint">
@@ -694,7 +653,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                             <span className="thinking-card__tool-spinner" />
                           </div>
                         )}
-                        {tools.length > 0 && tools.map((t, ti) => (
+                        {tools.length > 0 && <ToolActivityList items={tools} renderItem={(t, ti) => (
                           <div key={ti} className={`stmsg-tool stmsg-tool--${t.status}`}>
                             <div className="stmsg-tool-header">
                               <span className={`stmsg-tool-icon stmsg-tool-icon--${t.status}`}>{t.status === 'running' ? '⏳' : '✅'}</span>
@@ -702,51 +661,32 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                               {t.status === 'running' && <span className="thinking-card__tool-spinner" />}
                             </div>
                           </div>
-                        ))}
-                        {pendingAction && !waiting && (
-                          <div className={`stmsg-tool stmsg-tool--running`}>
-                            <div className="stmsg-tool-header">
-                              <span className="stmsg-tool-icon stmsg-tool-icon--running">⏳</span>
-                              <span className="stmsg-tool-name">{pendingAction.tool}</span>
-                              {pendingAction.filePath && <span className="conv__pending-path">{pendingAction.filePath}</span>}
-                              <span className="thinking-card__tool-spinner" />
-                            </div>
-                            {pendingAction.bodyLen > 100 && (
-                              <div className="conv__pending-size">{pendingAction.bodyLen >= 1024 ? `${(pendingAction.bodyLen / 1024).toFixed(1)}KB` : `${pendingAction.bodyLen}B`} 写入中...</div>
-                            )}
-                          </div>
-                        )}
-                        {display && <div className="chat__content">{renderTextWithCode(display, `conv-s-${i}`)}{!hasUnclosedAction ? '▍' : ''}</div>}
-                        {noteText && (
-                          <div className="stmsg-note-area">
-                            <div className="stmsg-note-header">💡 提醒</div>
-                            <div className="stmsg-note-body">{noteText}</div>
-                          </div>
-                        )}
+                        )} />}
+                        {display && <div className="chat__content">{renderTextWithCode(display, `conv-s-${i}`)}▍</div>}
                         {m.timestamp && <div className="chat__timestamp" title={formatTimestamp(m.timestamp, true)}>{formatTimestamp(m.timestamp)}</div>}
                       </div>
                     </div>
                   );
                 }
-                // 流结束：用 rawContent 解析结构化内容，用 toolCalls 渲染工具卡片
-                const source = m.rawContent || m.content;
-                const parsed = parseStructuredOutput(source, []);
+                // 流结束后，工具卡继续使用结构化事件，正文直接展示。
                 const tools = (m.toolCalls || []).map(t => ({ tool: t.tool, args: t.args, result: t.result, status: t.status }));
-                const hasStructure = parsed.think || tools.length > 0 || parsed.answer;
-                if (hasStructure) {
+                if (tools.length > 0) {
                   return (
                     <div key={i}>
                       <div className="conv__speaker-label conv__speaker-label--offset">{m.speaker}</div>
-                      <StructuredMessage think={parsed.think} tools={tools} answer={parsed.answer || m.content} note={parsed.note} msgId={`conv-${i}`} timestamp={m.timestamp} actions={<><button className="chat__msg-action-btn" title="编辑" onClick={() => handleStartEdit(i, m.content)}>✏</button><button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => handleDeleteMsg(i)}>🗑</button></>} />
+                      <StructuredMessage tools={tools} answer={m.content} msgId={`conv-${i}`} timestamp={m.timestamp} reasoning={m.reasoning} actions={<><button className="chat__msg-action-btn" title="编辑" onClick={() => handleStartEdit(i, m.content)}>✏</button><button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => handleDeleteMsg(i)}>🗑</button></>} />
                     </div>
                   );
                 }
-                // 无结构化标签的普通回复
+                // 无工具调用的普通回复。
                 return (
                     <div key={i} className="chat__message chat__message--assistant">
                       <div className="chat__avatar">{m.speaker.slice(0, 2)}</div>
                       <div className="chat__bubble">
                         <div className="conv__speaker-label">{m.speaker}</div>
+                        {convectionReasoningProps(m.reasoning, false) && (
+                          <ReasoningBlock {...convectionReasoningProps(m.reasoning, false)!} />
+                        )}
                         <div className="chat__content">{renderTextWithCode(m.content, `conv-p-${i}`)}</div>
                         {m.timestamp && <div className="chat__timestamp" title={formatTimestamp(m.timestamp, true)}>{formatTimestamp(m.timestamp)}</div>}
                         <div className="chat__bubble-actions">
@@ -815,7 +755,9 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
           {cMsgs.map((m, i) => (
             <div key={i} className={`conv__chair-msg conv__chair-msg--${m.role === 'user' ? 'user' : 'assistant'}`}>
               <div className={`conv__chair-bubble conv__chair-bubble--${m.role === 'user' ? 'user' : 'assistant'}`}>
-                {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!(m as any).streaming} />}
+                {convectionReasoningProps(m.reasoning, !!m.streaming) && (
+                  <ReasoningBlock {...convectionReasoningProps(m.reasoning, !!m.streaming)!} />
+                )}
                 {m.waitingInfo && (m as any).streaming && (
                   <div className="conv__waiting-hint">
                     等待模型响应

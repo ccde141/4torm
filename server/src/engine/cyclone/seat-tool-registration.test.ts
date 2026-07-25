@@ -50,3 +50,16 @@ test('气旋确认工具注册后先保存结果并清除 pending', async (t) =>
   assert.match(saved?.messages.at(-1)?.content || '', /已注册/);
   assert.deepEqual(registry.map((tool: { name: string }) => tool.name), ['seat_registered_tool']);
 });
+
+test('气旋文本模式将 ask 答复回填为 JSON 工具结果', async (t) => {
+  const { dataDir, workshopId, seat } = await setupSeat('ask_result_tool');
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  seat.pending = { question: '继续？', native: false };
+
+  await applyPendingSeatResponse(dataDir, workshopId, seat, '继续', () => undefined);
+
+  const saved = await loadSeat(dataDir, workshopId, seat.id);
+  assert.deepEqual(JSON.parse(saved?.messages.at(-1)?.content || ''), {
+    type: 'tool_result', name: 'ask', ok: true, content: '继续',
+  });
+});

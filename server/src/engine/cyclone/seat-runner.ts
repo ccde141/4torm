@@ -251,6 +251,7 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
     allowToolRegistration: true, contactTargets,
   })];
   let reasoning = '';
+  const generatedContextStart = messages.length;
 
   // toolCaller 恒提供：ask/delegate/contact/task_board/bulletin 是恒在的虚拟工具，
   // 即使工位没有任何真实工具也要能调用（否则文本模式下 bulletin/task_board 调不动）
@@ -276,7 +277,9 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
       });
 
   // 气旋历史存后端：补齐循环返回的最终回复，并把本轮原生思考作为展示元数据绑定。
-  if (!result.suspended) recordSeatAssistantResult(messages, result.content, reasoning);
+  if (!result.suspended) {
+    recordSeatAssistantResult(messages, result.content, reasoning, generatedContextStart);
+  }
 
   // messages 被循环原地追加了 assistant/tool 消息；剔除开头注入的 system prompt 后即新历史。
   // 注意：仅剔除首条注入的 system，保留历史中的压缩摘要 system 消息
@@ -361,7 +364,7 @@ export async function chatSeat(
 
 /**
  * 恢复挂起的工位：人类回复了 ask 问题。
- * 原生模式把回复作为 role:'tool' 配对补上；文本模式作为 <result tool="ask"> 追加。
+ * 原生模式把回复作为 role:'tool' 配对补上；文本模式追加 JSON 工具结果。
  */
 export async function resumeSeat(
   dataDir: string, workshopId: string, seatId: string,

@@ -24,7 +24,7 @@ import type { RoomData, SeatData, JoinBehavior } from './types';
 function formatSeatHistory(seat: SeatData): string {
   const lines = seat.messages
     .filter(m => (m.role === 'user' || m.role === 'assistant') && (m.content || '').trim())
-    .map(m => `${m.role === 'user' ? '老板' : seat.title}: ${(m.content || '').trim()}`);
+    .map(m => `${m.role === 'user' ? '人类' : seat.title}: ${(m.content || '').trim()}`);
   return lines.join('\n\n');
 }
 

@@ -4,7 +4,7 @@
  * 背景：ask / delegate / list_agents / create_workflow 不在 tools/registry.json，
  * 是 session-runner 的 toolCaller 按工具名拦截执行的「虚拟工具」。
  *
- * 文本协议模式：靠 system prompt 文本教模型写 <action tool="ask">，正则解析后拦截。
+ * 文本模式：虚拟工具与普通工具共用 JSON 调用信封。
  * 原生模式：模型只能看见 tools 参数里的工具，因此必须把这些虚拟工具也作为 ToolDef
  *           注入 tools 参数，模型才能在原生通道调用它们。执行端拦截逻辑不变。
  *
@@ -31,6 +31,7 @@ export function buildVirtualToolDefs(
   allowWorkflow = true,
   allowAutomation = false,
   allowToolRegistration = false,
+  capabilities: { allowAsk?: boolean; allowDelegate?: boolean } = {},
 ): ToolDef[] {
   const defs: ToolDef[] = [
     {
@@ -167,5 +168,9 @@ export function buildVirtualToolDefs(
     );
   }
 
-  return defs;
+  return defs.filter(def => {
+    if (def.name === 'ask') return capabilities.allowAsk !== false;
+    if (def.name === 'delegate') return capabilities.allowDelegate !== false;
+    return true;
+  });
 }

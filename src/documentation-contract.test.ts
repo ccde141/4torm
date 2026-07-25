@@ -12,6 +12,19 @@ test('normal install and desktop development prepare the documentation site', as
   assert.equal(packageJson.scripts?.['preelectron:dev'], 'npm run docs:build');
 });
 
+test('build configuration stays compatible with current npm and VitePress', async () => {
+  const [packageText, npmrc] = await Promise.all([
+    fs.readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../.npmrc', import.meta.url), 'utf8'),
+  ]);
+  const packageJson = JSON.parse(packageText) as {
+    devDependencies?: Record<string, string>;
+  };
+
+  assert.match(packageJson.devDependencies?.vite ?? '', /^\^8\.1\./);
+  assert.doesNotMatch(npmrc, /electron[_-]mirror/i);
+});
+
 test('documentation theme mounts one low-power ASCII background', async () => {
   const [theme, field, config, styles] = await Promise.all([
     fs.readFile(new URL('../docs/.vitepress/theme/index.ts', import.meta.url), 'utf8'),
@@ -69,6 +82,17 @@ test('personal labels and skin textures stay out of version control', async () =
 
   assert.match(gitignore, /^data\/labels\.json$/m);
   assert.match(gitignore, /^data\/skin-textures\/$/m);
+});
+
+test('user-created tools and skills stay local while built-ins remain versioned', async () => {
+  const gitignore = await fs.readFile(new URL('../.gitignore', import.meta.url), 'utf8');
+
+  assert.match(gitignore, /^data\/tools\/executors\/\*$/m);
+  assert.match(gitignore, /^!data\/tools\/executors\/read_file\.js$/m);
+  assert.match(gitignore, /^!data\/tools\/executors\/run_command\.js$/m);
+  assert.match(gitignore, /^data\/skills\/\*$/m);
+  assert.match(gitignore, /^!data\/skills\/code-review\/$/m);
+  assert.match(gitignore, /^!data\/skills\/web-search\/$/m);
 });
 
 test('system status definitions do not depend on the obsolete data file', async () => {

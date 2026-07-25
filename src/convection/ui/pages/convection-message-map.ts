@@ -13,6 +13,10 @@ interface StoredConvectionMessage {
   toolCalls?: StoredToolCall[];
 }
 
+export function convectionReasoningProps(reasoning: string | undefined, isStreaming: boolean) {
+  return reasoning ? { reasoning, isStreaming } : undefined;
+}
+
 export function restoreConvectionMessage(message: StoredConvectionMessage) {
   return {
     speaker: message.speaker,

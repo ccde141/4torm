@@ -54,7 +54,7 @@
     "tsx": "^4.19.4",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",
-    "vite": "^8.0.10",
+    "vite": "^8.1.5",
     "vitepress": "^2.0.0-alpha.18",
     "wait-on": "^9.0.10"
   }

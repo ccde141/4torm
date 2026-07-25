@@ -21,7 +21,7 @@ import { callTool } from './tool-bridge';
 import type { ToolCallRecord, ConvectionReActEvent } from './react-loop';
 
 /**
- * 对流原生模式协议段：不教 <action>/<answer> 标签格式。
+ * 对流原生模式协议段：工具调用由 provider 的结构化通道承载。
  * 原生 function calling 由 provider 处理，模型直接自然语言输出即可。
  */
 export function buildNativeConvectionProtocol(tools: ToolDef[]): string {

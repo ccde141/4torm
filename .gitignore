@@ -70,6 +70,23 @@ _release/
 # 工具权限设置（用户数据）
 data/tools/permissions.json
 
+# User-created executors stay local. Framework executors remain versioned.
+data/tools/executors/*
+!data/tools/executors/_diff.js
+!data/tools/executors/_resolve.js
+!data/tools/executors/_resolve.test.mjs
+!data/tools/executors/delete_file.js
+!data/tools/executors/edit_file.js
+!data/tools/executors/list_directory.js
+!data/tools/executors/read_file.js
+!data/tools/executors/run_command.js
+!data/tools/executors/run_command.test.mjs
+!data/tools/executors/search_content.js
+!data/tools/executors/use_skill.js
+!data/tools/executors/webfetch.js
+!data/tools/executors/webfetch_advanced.js
+!data/tools/executors/write_file.js
+
 # MCP 服务器配置（含用户本地路径/密钥）
 data/mcp/servers.json
 

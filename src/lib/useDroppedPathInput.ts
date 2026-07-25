@@ -12,19 +12,24 @@
 import { useEffect, type Dispatch, type SetStateAction, type RefObject } from 'react';
 import {
   DESKTOP_FILES_DROPPED,
+  type DroppedFile,
   type DesktopFilesDroppedEvent,
 } from '../components/desktop/DesktopDropLayer';
+
+const INCLUDE_ALL_FILES = () => true;
 
 export function useDroppedPathInput(
   setInput: Dispatch<SetStateAction<string>>,
   inputRef: RefObject<HTMLTextAreaElement | null>,
   enabled = true,
+  includeFile: (file: DroppedFile) => boolean = INCLUDE_ALL_FILES,
 ): void {
   useEffect(() => {
     if (!enabled) return;
     const onDropped = (e: Event) => {
       const { files } = (e as DesktopFilesDroppedEvent).detail;
       const text = files
+        .filter(includeFile)
         .map(f => f.path)
         .filter(Boolean)
         .map(p => (/\s/.test(p) ? `"${p}"` : p)) // 含空格的路径加引号
@@ -42,5 +47,5 @@ export function useDroppedPathInput(
     };
     window.addEventListener(DESKTOP_FILES_DROPPED, onDropped);
     return () => window.removeEventListener(DESKTOP_FILES_DROPPED, onDropped);
-  }, [enabled, setInput, inputRef]);
+  }, [enabled, setInput, inputRef, includeFile]);
 }

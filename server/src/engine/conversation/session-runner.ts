@@ -34,6 +34,7 @@ import {
   type ToolRegistrationProposal,
 } from '../shared/tool-registration.js';
 import { applyToolRegistrationAnswer } from '../shared/tool-registration-response.js';
+import { formatTextToolResult } from '../shared/text-tool-protocol.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -73,7 +74,7 @@ export type ConversationEvent =
   | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
   | { type: 'ask'; question: string; options?: string[] }
-  | { type: 'answer'; content: string; rawContent: string; native?: boolean }
+  | { type: 'answer'; content: string; rawContent: string; native?: boolean; nativeContext?: ContextMessage[] }
   | { type: 'usage'; usage: TokenUsage }
   | { type: 'error'; message: string }
   | { type: 'notice'; message: string }
@@ -105,9 +106,13 @@ export interface SessionRunnerOpts {
   interceptTool?: (tool: string, args: Record<string, string>) => string | null;
   /**
    * 原生工具调用模式。true = 走 runReActLoopNative（结构化 tool_calls）。
-   * 默认 false = 文本协议（向后兼容）。
+   * 默认 false = JSON 文本工具模式。
    */
   native?: boolean;
+  /** 是否允许 ask 挂起；无人值守入口应关闭。 */
+  allowAsk?: boolean;
+  /** 是否允许 delegate 派出 SubAgent。 */
+  allowDelegate?: boolean;
 }
 
 export class SessionRunner {
@@ -138,7 +143,7 @@ export class SessionRunner {
   /**
    * 恢复挂起的会话：人类回复了 ask 问题。
    * 原生模式：把回复作为 role:'tool' 配对消息补上（pendingToolCallId）。
-   * 文本模式：把回复作为 <result tool="ask"> 文本追加（向后兼容）。
+   * 文本模式：把回复作为 JSON 工具结果追加。
    */
   async resume(
     answer: string,
@@ -169,7 +174,7 @@ export class SessionRunner {
     } else if (pendingToolCallId) {
       messages.push({ role: 'tool', toolCallId: pendingToolCallId, content: answer });
     } else {
-      messages.push({ role: 'user', content: `<result tool="ask">${answer}</result>` });
+      messages.push({ role: 'user', content: formatTextToolResult('ask', answer, true) });
     }
 
     try {
@@ -219,7 +224,10 @@ export class SessionRunner {
     // create_automation 仅在可交互会话（有 sessionId）注入：潮汐无人值守运行不给，避免自我繁殖。
     const nativeToolDefs = [
       ...toolDefs,
-      ...buildVirtualToolDefs(true, !!this.opts.sessionId, !!this.opts.sessionId),
+      ...buildVirtualToolDefs(true, !!this.opts.sessionId, !!this.opts.sessionId, {
+        allowAsk: this.opts.allowAsk,
+        allowDelegate: this.opts.allowDelegate,
+      }),
       ...buildMemoryToolDefs(),
     ];
 
@@ -242,6 +250,12 @@ export class SessionRunner {
         }
         // ask 虚拟工具：抛 SuspendSignal 中断循环
         if (tool === 'ask') {
+          if (this.opts.allowAsk === false) {
+            const result = '当前入口不支持 ask，请根据已有信息继续完成任务。';
+            onEvent({ type: 'tool-call', tool, args });
+            onEvent({ type: 'tool-result', tool, result, ok: false });
+            return result;
+          }
           const question = args.question || '需要你的确认';
           let options: string[] | undefined;
           if (args.options) {
@@ -272,6 +286,12 @@ export class SessionRunner {
           }
         }
         if (tool === 'delegate') {
+          if (this.opts.allowDelegate === false) {
+            const result = '当前入口不支持 delegate，请在本轮内直接完成任务。';
+            onEvent({ type: 'tool-call', tool, args });
+            onEvent({ type: 'tool-result', tool, result, ok: false });
+            return result;
+          }
           return await this.execDelegate(args, onEvent);
         }
         // 长期记忆工具：引擎侧内联执行，补 source='conversation'+时间戳
@@ -370,7 +390,8 @@ export class SessionRunner {
 
     const enableTools = shouldAttachToolCaller(nativeToolDefs, !!this.opts.interceptTool);
     // 原生模式（native=true）走 runReActLoopNative（结构化 tool_calls）；
-    // 文本模式走 runReActLoop（<action> 协议）。
+    // 文本模式走 JSON 调用信封循环。
+    const generatedContextStart = chatMessages.length;
     const result = this.opts.native
       ? await runReActLoopNative({
           messages: chatMessages,
@@ -415,7 +436,11 @@ export class SessionRunner {
       return { content: '', rawContent: '' };
     }
 
-    onEvent({ type: 'answer', content: result.content, rawContent: result.rawContent, native: !!this.opts.native });
+    onEvent({
+      type: 'answer', content: result.content, rawContent: result.rawContent,
+      native: !!this.opts.native,
+      nativeContext: this.opts.native ? chatMessages.slice(generatedContextStart) : undefined,
+    });
     if (result.usage) onEvent({ type: 'usage', usage: result.usage });
     onEvent({ type: 'done' });
     return { content: result.content, rawContent: result.rawContent };

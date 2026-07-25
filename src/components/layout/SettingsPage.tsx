@@ -7,9 +7,22 @@ import {
   getAllModels,
   listModels,
   probeAndStore,
+  probeVisionAndStore,
   PROVIDER_PRESETS,
 } from '../../llm';
 import type { ProviderEntry } from '../../llm';
+import type { ProviderPreset } from '../../llm/config';
+import {
+  retainProviderCapabilities,
+  type ModelCapability,
+} from '../../llm/model-capabilities';
+import type { ProviderProtocol } from '../../llm/provider-protocol';
+import { ModelCapabilityPanel } from './ModelCapabilityPanel';
+import {
+  retainModelProfiles,
+  setModelProfile,
+  type ProviderProfileSelection,
+} from '../../llm/provider-profiles';
 
 export default function SettingsPage() {
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
@@ -34,8 +47,8 @@ export default function SettingsPage() {
     window.setTimeout(() => setHighlightId(cur => (cur === id ? null : cur)), 2400);
   };
 
-  const handleQuickAdd = async (baseUrl: string, label: string) => {
-    const entry = await addProvider(label, baseUrl, '');
+  const handleQuickAdd = async (preset: ProviderPreset) => {
+    const entry = await addProvider(preset.label, preset.baseUrl, '', preset.protocol);
     setShowPresets(false);
     refresh();
     flagNew(entry.id);
@@ -64,7 +77,7 @@ export default function SettingsPage() {
           <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-bold)', margin: '0 0 var(--space-1) 0' }}>LLM 提供商设置</h2>
           <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', margin: 0 }}>添加多个提供商，模型自动同步到对话页面的选择清单</p>
           <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', margin: 'var(--space-1) 0 0 0' }}>
-            预设均为 OpenAI 兼容服务。使用 Anthropic 等非 OpenAI API，可部署 <a href="https://github.com/songquanpeng/one-api" target="_blank" style={{color: 'var(--color-accent)'}}>one-api</a> 或 <a href="https://github.com/BerriAI/litellm" target="_blank" style={{color: 'var(--color-accent)'}}>LiteLLM</a> 作为翻译层，填入其地址即可
+            支持 OpenAI Compatible 与 Anthropic Messages 接口，其他服务可通过兼容网关接入
           </p>
         </div>
         <div style={{ position: 'relative' }}>
@@ -74,7 +87,7 @@ export default function SettingsPage() {
           {showPresets && (
             <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '4px', background: 'var(--color-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: 'var(--space-1)', zIndex: 10, minWidth: '200px', boxShadow: 'var(--shadow-md)' }}>
               {PROVIDER_PRESETS.map(p => (
-                <button key={p.label} onClick={() => handleQuickAdd(p.baseUrl, p.label)} style={{ display: 'block', width: '100%', padding: 'var(--space-2) var(--space-3)', background: 'transparent', border: 'none', color: 'var(--color-text)', fontSize: 'var(--text-sm)', cursor: 'pointer', textAlign: 'left', borderRadius: 'var(--radius-sm)' }}
+                <button key={p.label} onClick={() => handleQuickAdd(p)} style={{ display: 'block', width: '100%', padding: 'var(--space-2) var(--space-3)', background: 'transparent', border: 'none', color: 'var(--color-text)', fontSize: 'var(--text-sm)', cursor: 'pointer', textAlign: 'left', borderRadius: 'var(--radius-sm)' }}
                   onMouseEnter={e => (e.target as HTMLElement).style.background = 'var(--color-bg-hover)'}
                   onMouseLeave={e => (e.target as HTMLElement).style.background = 'transparent'}
                 >{p.label}</button>
@@ -124,6 +137,7 @@ function ProviderCard({ provider: p, highlight, onChange, onRemove, onRefresh }:
     if (highlight) rootRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [highlight]);
   const [testing, setTesting] = useState(false);
+  const [modelListError, setModelListError] = useState('');
   const [fetchedModels, setFetchedModels] = useState<string[]>([]);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -133,22 +147,32 @@ function ProviderCard({ provider: p, highlight, onChange, onRemove, onRefresh }:
   // 外部刷新（如添加新 provider）时同步 label
   useEffect(() => { setLabel(p.label); }, [p.label]);
   const [probing, setProbing] = useState<Set<string>>(new Set());
-  const [probeMsg, setProbeMsg] = useState<string>('');
+  const [probeMessages, setProbeMessages] = useState<Record<string, string>>({});
 
-  /** 探测一个 model 的原生能力，结果写入 provider.nativeProbe 并回显 */
-  const probeModel = async (model: string) => {
-    setProbing(prev => new Set(prev).add(model));
+  const probeCapability = async (model: string, capability: ModelCapability) => {
+    const key = `${capability}:${model}`;
+    setProbing(prev => new Set(prev).add(key));
     try {
-      const res = await probeAndStore(p.id, model);
-      if (!res.reachable) {
-        setProbeMsg(`⚠️ ${model}：连接失败，请检查 API 地址 / Key / 模型名`);
+      if (capability === 'tools') {
+        const result = await probeAndStore(p.id, model);
+        const message = result.status === 'native-confirmed' ? '工具调用已确认'
+          : result.status === 'text-required' ? (result.error || '接口未接受工具字段')
+            : (result.error || '未得到明确结论，原有结论保持不变');
+        setProbeMessages(current => ({ ...current, [key]: message }));
       } else {
-        setProbeMsg(`${model}：原生工具调用 ${res.native ? '✓ 支持' : '✗ 不支持（将走文本协议）'}`);
+        const result = await probeVisionAndStore(p.id, model);
+        const message = result.status === 'supported' ? '已确认接受图片输入'
+          : result.status === 'unsupported' ? result.error
+            : (result.error || '未得到明确结论，原有结论保持不变');
+        setProbeMessages(current => ({ ...current, [key]: message }));
       }
-    } catch {
-      setProbeMsg(`⚠️ ${model}：探测异常`);
+    } catch (error) {
+      setProbeMessages(current => ({
+        ...current,
+        [key]: error instanceof Error ? error.message : '能力分析失败',
+      }));
     } finally {
-      setProbing(prev => { const n = new Set(prev); n.delete(model); return n; });
+      setProbing(prev => { const next = new Set(prev); next.delete(key); return next; });
       onRefresh();
     }
   };
@@ -160,25 +184,43 @@ function ProviderCard({ provider: p, highlight, onChange, onRemove, onRefresh }:
     await updateProvider(p.id, { models: [...p.models, name] });
     setManualModel('');
     onRefresh();
-    await probeModel(name);
   };
 
   const handleRemoveModel = async (modelName: string) => {
-    await updateProvider(p.id, { models: p.models.filter(m => m !== modelName) });
+    const models = p.models.filter(m => m !== modelName);
+    await updateProvider(p.id, {
+      models,
+      modelProfiles: retainModelProfiles(p.modelProfiles, models),
+      ...retainProviderCapabilities(p, models),
+    });
+    onRefresh();
+  };
+
+  const handleProfileChange = async (model: string, profile: ProviderProfileSelection) => {
+    await updateProvider(p.id, {
+      modelProfiles: setModelProfile(p.modelProfiles, model, profile),
+    });
     onRefresh();
   };
 
   const handleTest = async () => {
     if (!p.baseUrl) return;
     setTesting(true);
+    setModelListError('');
     try {
-      const res = await listModels({ baseUrl: p.baseUrl, apiKey: p.apiKey });
+      const res = await listModels({
+        baseUrl: p.baseUrl,
+        apiKey: p.apiKey,
+        headers: p.customHeaders,
+        protocol: p.protocol,
+      });
       const ids = res.data.map(m => m.id);
       setFetchedModels(ids);
       setChecked(new Set(ids));
-    } catch {
+    } catch (error) {
       setFetchedModels([]);
       setChecked(new Set());
+      setModelListError(error instanceof Error ? error.message : '获取模型列表失败');
     } finally {
       setTesting(false);
     }
@@ -186,14 +228,13 @@ function ProviderCard({ provider: p, highlight, onChange, onRemove, onRefresh }:
 
   const handleConfirmModels = async () => {
     const newModels = [...checked];
-    const added = newModels.filter(m => !p.models.includes(m));
-    await updateProvider(p.id, { models: newModels });
+    await updateProvider(p.id, {
+      models: newModels,
+      modelProfiles: retainModelProfiles(p.modelProfiles, newModels),
+      ...retainProviderCapabilities(p, newModels),
+    });
     setFetchedModels([]);
     onRefresh();
-    // 只探测新加入、且尚无探测记录的模型
-    for (const m of added) {
-      if (!p.nativeProbe?.[m]) await probeModel(m);
-    }
   };
 
   const handleToggleModel = (modelId: string) => {
@@ -254,6 +295,16 @@ function ProviderCard({ provider: p, highlight, onChange, onRemove, onRefresh }:
       </div>
       {showAdvanced && (
         <div style={{ marginTop: 'var(--space-2)' }}>
+          <label style={fieldLabel}>接口协议</label>
+          <select
+            value={p.protocol ?? 'auto'}
+            onChange={e => { updateProvider(p.id, { protocol: e.target.value as ProviderProtocol }); onRefresh(); }}
+            style={{ ...inputStyle, cursor: 'pointer', marginBottom: 'var(--space-2)' }}
+          >
+            <option value="auto">自动识别</option>
+            <option value="openai-chat-completions">OpenAI Compatible</option>
+            <option value="anthropic-messages">Anthropic Messages</option>
+          </select>
           <label style={fieldLabel}>自定义请求头 <span style={{ fontWeight: 'var(--font-normal)', color: 'var(--color-text-tertiary)' }}>— JSON 格式，非标 API 需要</span></label>
           <textarea
             value={headersJson}
@@ -262,18 +313,6 @@ function ProviderCard({ provider: p, highlight, onChange, onRemove, onRefresh }:
             style={{ ...inputStyle, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', resize: 'vertical' }}
             placeholder='{"x-api-key": "sk-xxx"}'
           />
-          <div style={{ marginTop: 'var(--space-2)' }}>
-            <label style={fieldLabel}>原生工具调用模式 <span style={{ fontWeight: 'var(--font-normal)', color: 'var(--color-text-tertiary)' }}>— auto 按探测结果，native/text 强制</span></label>
-            <select
-              value={p.nativeMode ?? 'auto'}
-              onChange={e => { updateProvider(p.id, { nativeMode: e.target.value as 'auto' | 'native' | 'text' }); onRefresh(); }}
-              style={{ ...inputStyle, cursor: 'pointer' }}
-            >
-              <option value="auto">auto（自动探测，推荐）</option>
-              <option value="native">native（强制原生工具调用）</option>
-              <option value="text">text（强制文本协议）</option>
-            </select>
-          </div>
         </div>
       )}
 
@@ -301,30 +340,14 @@ function ProviderCard({ provider: p, highlight, onChange, onRemove, onRefresh }:
       ) : null}
 
       {p.models.length > 0 && (
-        <div style={{ marginTop: 'var(--space-3)' }}>
-          <div style={{ ...fieldLabel, marginBottom: 'var(--space-1)' }}>已启用模型（{p.models.length}）</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
-            {p.models.map(m => {
-              const probe = p.nativeProbe?.[m];
-              const isProbing = probing.has(m);
-              const badge = isProbing ? '探测中…' : probe ? (probe.native ? '原生' : '文本') : '未探测';
-              const badgeColor = isProbing ? 'var(--color-text-tertiary)' : probe ? (probe.native ? '#34d399' : '#fbbf24') : 'var(--color-text-tertiary)';
-              return (
-                <span key={m} style={{ ...modelTagStyle, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                  {m}
-                  <span title="原生工具调用能力" style={{ fontSize: '10px', color: badgeColor, border: `1px solid ${badgeColor}`, borderRadius: '3px', padding: '0 3px', lineHeight: '14px' }}>{badge}</span>
-                  {!isProbing && (
-                    <button onClick={() => probeModel(m)} title="重新探测" style={{ background: 'none', border: 'none', color: 'var(--color-text-tertiary)', cursor: 'pointer', fontSize: '10px', padding: '0 1px', lineHeight: 1 }}>⟳</button>
-                  )}
-                  <button onClick={() => handleRemoveModel(m)} title="移除" style={{ background: 'none', border: 'none', color: 'var(--color-text-tertiary)', cursor: 'pointer', fontSize: 'var(--text-xs)', padding: '0 2px', lineHeight: 1 }}>✕</button>
-                </span>
-              );
-            })}
-          </div>
-          {probeMsg && (
-            <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{probeMsg}</div>
-          )}
-        </div>
+        <ModelCapabilityPanel
+          provider={p}
+          probing={probing}
+          messages={probeMessages}
+          onProbe={probeCapability}
+          onProfileChange={handleProfileChange}
+          onRemove={handleRemoveModel}
+        />
       )}
 
       <div style={{ marginTop: 'var(--space-3)' }}>
@@ -344,9 +367,14 @@ function ProviderCard({ provider: p, highlight, onChange, onRemove, onRefresh }:
 
       <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
         <button onClick={handleTest} disabled={testing} style={{ ...smallBtnStyle, background: 'var(--color-surface)', border: '1px solid var(--border-color)', color: testing ? 'var(--color-text-tertiary)' : 'var(--color-text-secondary)' }}>
-          {testing ? '测试中...' : fetchedModels.length > 0 ? '重新获取模型列表' : '测试连接并获取模型'}
+          {testing ? '获取中...' : fetchedModels.length > 0 ? '重新获取模型列表' : '获取模型列表'}
         </button>
       </div>
+      {modelListError && (
+        <div style={{ marginTop: 'var(--space-2)', color: '#f87171', fontSize: 'var(--text-xs)', overflowWrap: 'anywhere' }}>
+          {modelListError}。如果该服务不提供模型列表，可在上方手动添加模型
+        </div>
+      )}
     </div>
   );
 }

@@ -20,6 +20,7 @@ import { tryAcquireSessionLease } from '../engine/conversation/session-lease.js'
 import { resolveNativeMode } from '../engine/shared/llm-bridge';
 import { withAgentActivity } from '../engine/shared/agent-activity.js';
 import type { ContextMessage } from '../engine/shared/types';
+import { resolveConversationImages, type ConversationImageRef } from '../services/conversation-attachments.js';
 
 // ── 活跃 runner 注册表（内存级） ─────────────────────────────────
 
@@ -40,6 +41,14 @@ function ensureRunnerLease(sessionId: string, runner: SessionRunner): boolean {
   if (!release) return false;
   activeRunnerLeases.set(sessionId, { runner, release });
   return true;
+}
+
+function abortRunnerOnDisconnect(raw: ServerResponse, runner: SessionRunner): () => void {
+  const abort = () => {
+    if (!raw.writableEnded) runner.abort();
+  };
+  raw.once('close', abort);
+  return () => raw.removeListener('close', abort);
 }
 
 function getOrCreateRunner(sessionId: string, opts: SessionRunnerOpts): SessionRunner {
@@ -100,6 +109,8 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       messages?: Array<{
         role: string;
         content: string;
+        images?: ConversationImageRef[];
+        reasoningContent?: string;
         /** 原生模式历史回灌：assistant 携带的工具调用 */
         toolCalls?: import('../engine/shared/types').NativeToolCall[];
         /** 原生模式历史回灌：tool 结果消息配对 id */
@@ -119,9 +130,9 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     // 前端选择器可覆盖 agent 默认模型；缺省回落 agent.model
     const effectiveModel = body.model || agent.model;
 
-    // 决议原生模式：读 provider 的 nativeMode + nativeProbe 缓存
+    // 传输方式由内部能力记录选择，未知时乐观使用结构化工具。
     const nativeDecision = await resolveNativeMode(dataDir, effectiveModel);
-    console.log(`[conversation] ${agent.name} (${effectiveModel}) → native=${nativeDecision.native} mode=${nativeDecision.mode}`);
+    console.log(`[conversation] ${agent.name} (${effectiveModel}) → tools=${nativeDecision.native ? 'structured' : 'text'}`);
 
     const opts: SessionRunnerOpts = {
       dataDir,
@@ -163,16 +174,21 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     });
 
     // 构造 chatMessages（system + 历史）
+    const historyMessages: ContextMessage[] = await Promise.all(body.messages.map(async m => ({
+      role: m.role as 'user' | 'assistant' | 'system' | 'tool',
+      content: m.content,
+      ...(m.images?.length ? {
+        images: await resolveConversationImages(dataDir, body.agentId!, body.sessionId!, m.images),
+      } : {}),
+      ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
+      ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
+      ...(m.reasoningContent ? { reasoningContent: m.reasoningContent } : {}),
+    })));
     const chatMessages: ContextMessage[] = [
       { role: 'system', content: systemPrompt },
       // 保留 toolCalls / toolCallId / role:'tool'——native 历史回灌，让 agent
       // 跨轮次仍能看到自己上一轮的工具调用与工具返回原文（llm-bridge 已能序列化）。
-      ...body.messages.map(m => ({
-        role: m.role as 'user' | 'assistant' | 'system' | 'tool',
-        content: m.content,
-        ...(m.toolCalls ? { toolCalls: m.toolCalls } : {}),
-        ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
-      })),
+      ...historyMessages,
     ];
 
     if (!ensureRunnerLease(body.sessionId, runner)) {
@@ -183,22 +199,20 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     reply.hijack();
     const raw = reply.raw;
     initSSE(raw, req.headers.origin);
-
-    // 强制 native 但探测显示不支持 → 显式警告（不阻断，仍按用户选择执行）
-    if (nativeDecision.forcedMismatch) {
-      pushSSE(raw, { type: 'notice', message: '⚠️ 该模型配置为强制原生工具调用（native），但探测显示其可能不支持。如遇工具调用异常，请在「模型提供商设置」中改为 auto 或 text 模式。' });
-    }
+    const unbindDisconnect = abortRunnerOnDisconnect(raw, runner);
 
     withAgentActivity(body.agentId!, 'conversation', () => (
       runner.chat(systemPrompt, chatMessages, (ev) => {
         try { pushSSE(raw, ev); } catch { runner.abort(); }
       })
     )).then(() => {
+      unbindDisconnect();
       try { raw.end(); } catch {}
       // 非挂起（ask 等 reply）才清出注册表，否则 /reply 找不到 runner。
       // 不清会导致 activeRunners 内存泄漏（每个聊过的 session 永久驻留）。
       if (!runner.isSuspended()) clearActiveRunner(body.sessionId!, runner);
     }).catch((e) => {
+      unbindDisconnect();
       try {
         pushSSE(raw, { type: 'error', message: (e as Error).message });
         raw.end();
@@ -220,10 +234,11 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: '会话不存在或已结束' });
     }
 
+    const wasSuspended = runner.isSuspended();
     runner.abort();
     // 挂起中（等 reply）的 runner abort 是空操作、chat 的 catch 不会触发清理，
     // 这里显式删除避免永久驻留；正在流式的 runner catch 也会删（幂等无害）。
-    clearActiveRunner(body.sessionId, runner);
+    if (wasSuspended) clearActiveRunner(body.sessionId, runner);
     return reply.send({ ok: true });
   });
 
@@ -250,16 +265,19 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     reply.hijack();
     const raw = reply.raw;
     initSSE(raw, req.headers.origin);
+    const unbindDisconnect = abortRunnerOnDisconnect(raw, runner);
 
     withAgentActivity(runner.getAgentId(), 'conversation', () => (
       runner.resume(body.answer!, (ev) => {
         try { pushSSE(raw, ev); } catch { runner.abort(); }
       })
     )).then(() => {
+      unbindDisconnect();
       try { raw.end(); } catch {}
       // resume 后可能再次挂起（嵌套 ask）；非挂起才清出注册表
       if (!runner.isSuspended()) clearActiveRunner(body.sessionId!, runner);
     }).catch((e) => {
+      unbindDisconnect();
       try {
         pushSSE(raw, { type: 'error', message: (e as Error).message });
         raw.end();

@@ -18,35 +18,26 @@
 import type { ContextMessage } from '../../shared/types';
 import type { MeetingSessionData, MeetingMessage } from './meeting-session';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { callLLM, resolveNativeMode } from '../../shared/llm-bridge';
 import { loadAgent, type LoadedAgent } from '../../shared/agent-loader';
-import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
+import { loadAgentToolDefs, type ToolDef } from '../../shared/tool-defs-loader';
 import { buildSystemPrompt } from '../../shared/prompt';
 import { buildSandboxSection } from '../../shared/sandbox-prompt';
 import {
   runReActLoop,
-  stripInternalTags,
   type LLMCaller,
   type ToolCaller,
 } from './react-loop';
-import { extractAnswer } from '../../shared/answer-extractor';
 import { activeNodeRunners } from '../nodes/agent';
 import { runTradewindReActNative } from './native-adapter';
 import { buildVirtualToolDefs } from './virtual-tools';
 import { appendMeetingReasoning } from './meeting-reasoning';
 import { createMeetingIdleGuard, MEETING_IDLE_TIMEOUT_MS } from './meeting-idle-guard';
-
-/** 读取会议室元认知段（meeting-meta.md，与本文件同级）。读不到则静默跳过。 */
-function loadMeetingMeta(): string {
-  try {
-    const metaPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'meeting-meta.md');
-    return readFileSync(metaPath, 'utf-8').trim();
-  } catch {
-    return '';
-  }
-}
+import {
+  buildTradewindChairMeta,
+  buildTradewindMeetingMeta,
+  buildTradewindMinutesMeta,
+} from './meta-profiles.js';
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
@@ -344,24 +335,14 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       // 记录最后一个 participant 的 promptTokens
       if (result.lastPromptTokens) lastPromptTokens = result.lastPromptTokens;
 
-      // 最终内容提取 + abort 回填
-      // - native 模式：直接取 result.content（无 <answer> 概念），仅 stripInternalTags 兜底
-      // - text 模式：abort 时用流式累积内容 + extractAnswer/stripInternalTags 兜底
+      // 正常完成使用循环的最终正文；中止时保留已经流式展示的自然语言。
       const aborted = signal?.aborted;
       if (idleGuard.timedOut()) {
         onEvent?.({ type: 'error', message: `LLM 静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s 无响应）` });
       }
       const streamedContent = session.streamingCurrent?.content?.trim() || '';
       const reasoning = session.streamingCurrent?.reasoning || undefined;
-      let finalContent: string;
-      if (nativeDecision.native) {
-        const source = aborted ? streamedContent : result.content;
-        finalContent = stripInternalTags(source).trim();
-      } else {
-        finalContent = aborted
-          ? (extractAnswer(streamedContent) ?? stripInternalTags(streamedContent).trim())
-          : result.content;
-      }
+      const finalContent = (aborted ? streamedContent : result.content).trim();
 
       const hasContent = !!finalContent && !finalContent.startsWith('[中止]') && !finalContent.startsWith('[错误]');
       if (hasContent) {
@@ -419,7 +400,9 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
   const system: ContextMessage = {
     role: 'system',
     content: [
+      buildTradewindChairMeta(),
       `你是会议室节点「${session.meetingLabel}」的会长「${agent.name}」，正在与人类**私聊**。`,
+      agent.rolePrompt?.trim() ? `# 角色\n\n${agent.rolePrompt.trim()}` : '',
       ``,
       `## 当前场景`,
       `- 这条通道只有你和人类，其他参与者看不到`,
@@ -547,7 +530,7 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
         onChunk: (chunk) => {
           idleGuard.touch();
           streamRaw += chunk;
-          // 实时更新占位消息的内容（含 <think> 等原始流，前端可看到全过程）
+          // 实时更新占位消息；供应商 reasoning 通过独立事件写入 reasoning 字段。
           const slot = session.publicMessages[placeholderIdx];
           if (slot) slot.content = streamRaw;
           onEvent?.({ type: 'token', label, chunk });
@@ -560,7 +543,7 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
         },
         signal: idleGuard.signal,
       });
-      const answer = extractAnswer(r.content) ?? stripInternalTags(r.content).trim();
+      const answer = r.content.trim();
       const finalContent = answer || `（${label} 未给出有效入会发言）`;
       // 定稿：content 替换为 answer，rawContent 保留完整流，streaming=false
       const slot = session.publicMessages[placeholderIdx];
@@ -589,7 +572,7 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
   session.phase = 'discussion';
 }
 
-function buildOpeningPromptWithHistory(
+export function buildOpeningPromptWithHistory(
   agentName: string,
   rolePrompt: string,
   selfLabel: string,
@@ -611,6 +594,7 @@ function buildOpeningPromptWithHistory(
     .join('\n\n---\n\n');
 
   return [
+    buildTradewindMeetingMeta(),
     rolePrompt ? `# 角色\n\n${rolePrompt}\n\n---\n` : '',
     `# 入会发言`,
     ``,
@@ -633,7 +617,7 @@ function buildOpeningPromptWithHistory(
     `2. 与本次会议话题相关的已有思考、结论或立场`,
     ``,
     `## 输出约束`,
-    `- 用 <answer>...</answer> 包裹最终发言`,
+    `- 直接输出自然语言发言，不要添加协议包装`,
     `- 不要调用任何工具`,
     `- 直接进入正题，不要寒暄`,
   ].filter(Boolean).join('\n');
@@ -659,7 +643,7 @@ function truncateHistoryFromTail(
   return { kept, omittedCount: history.length - kept.length };
 }
 
-function buildOpeningPromptNoHistory(
+export function buildOpeningPromptNoHistory(
   agentName: string,
   rolePrompt: string,
   selfLabel: string,
@@ -668,6 +652,7 @@ function buildOpeningPromptNoHistory(
 ): string {
   const otherLabels = participantLabels.filter(l => l !== selfLabel).join('、') || '（仅你一人）';
   return [
+    buildTradewindMeetingMeta(),
     rolePrompt ? `# 角色\n\n${rolePrompt}\n\n---\n` : '',
     `# 入会发言`,
     ``,
@@ -686,7 +671,7 @@ function buildOpeningPromptNoHistory(
     `2. 对本次话题的初步立场或思考方向`,
     ``,
     `## 输出约束`,
-    `- 用 <answer>...</answer> 包裹最终发言`,
+    `- 直接输出自然语言发言，不要添加协议包装`,
     `- 不要调用任何工具`,
     `- 直接进入正题，不要寒暄`,
   ].filter(Boolean).join('\n');
@@ -732,6 +717,7 @@ export async function handleEnd(opts: HandleEndOpts): Promise<MeetingEndResult> 
   const system: ContextMessage = {
     role: 'system',
     content: [
+      buildTradewindMinutesMeta(),
       `你是会议室节点「${session.meetingLabel}」的会长「${agent.name}」。会议已结束，请生成完整、详尽的会议纪要。`,
       ``,
       `这份纪要会自动注入所有参与者的工作上下文，作为他们后续工作流任务的核心指导依据。`,
@@ -770,7 +756,7 @@ export async function handleEnd(opts: HandleEndOpts): Promise<MeetingEndResult> 
       ``,
       `## 输出约束`,
       `- 不要为简洁牺牲信息密度`,
-      `- 直接输出 Markdown 纪要正文，不要用 <think> / <answer> 标签包裹`,
+      `- 直接输出 Markdown 纪要正文，不要添加协议包装`,
       `- 不要在开头说"以下是纪要"之类的废话`,
     ].join('\n'),
   };
@@ -813,7 +799,25 @@ function buildMeetingEnvironmentSection(selfLabel: string, meetingLabel: string,
   ].join('\n');
 }
 
-function buildMeetingAgentPrompt(
+function buildMeetingContactToolDef(
+  contactTargets: Array<{ label: string; role: string }>,
+): ToolDef {
+  const targets = contactTargets.map(target => target.label).join('、');
+  return {
+    name: 'contact',
+    description: '向目标节点发送消息，等待对方处理后返回回复。',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: `目标节点名称，可选：${targets}` },
+        message: { type: 'string', description: '要传达的问题、请求或补充信息' },
+      },
+      required: ['target', 'message'],
+    },
+  };
+}
+
+export function buildMeetingAgentPrompt(
   agent: LoadedAgent,
   participants: string[],
   session: MeetingSessionData,
@@ -827,9 +831,8 @@ function buildMeetingAgentPrompt(
 ): string {
   const sections: string[] = [];
 
-  // §0 元认知（meeting-meta.md，最前注入）
-  const meta = loadMeetingMeta();
-  if (meta) sections.push(meta);
+  // §0 共同元认知 + 信风会议参与者身份
+  sections.push(buildTradewindMeetingMeta());
 
   // §1 角色定义（Agent 实体自带的 rolePrompt）
   if (agent.rolePrompt) sections.push(`# 角色\n\n${agent.rolePrompt}`);
@@ -837,11 +840,12 @@ function buildMeetingAgentPrompt(
   // §2 会议室工作环境（身份 + 名字 + 消息来源识别）
   sections.push(buildMeetingEnvironmentSection(selfLabel, meetingLabel, agent.name));
 
-  // §3 工具协议
-  // - text 模式：完整文本协议（教 <action>/<answer> 格式 + 工具列表）
-  // - native 模式：跳过文本协议教学，schema 由 API tools 参数注入；工具列表由 §5 简述
-  if (toolDefs.length > 0 && !native) {
-    sections.push(buildSystemPrompt(toolDefs));
+  // §3 工具协议。contact 是会议虚拟工具，不在 Agent 的普通工具定义中。
+  const textToolDefs = contactTargets?.length
+    ? [...toolDefs, buildMeetingContactToolDef(contactTargets)]
+    : toolDefs;
+  if (textToolDefs.length > 0 && !native) {
+    sections.push(buildSystemPrompt(textToolDefs));
   }
 
   // §4 「基地 + 沙箱」段
@@ -856,9 +860,7 @@ function buildMeetingAgentPrompt(
 
   // §5 会议场景说明
   const otherParticipants = participants.filter(p => p !== selfLabel);
-  const finalReplyDesc = native
-    ? `- 工具调用过程不会展示给其他参与者，只有最终回答会被公开`
-    : `- 工具调用过程不会展示给其他参与者，只有最终 <answer> 内容会被公开\n- 用 <answer>你的发言</answer> 包裹最终回复`;
+  const finalReplyDesc = `- 工具调用过程不会展示给其他参与者，只有最终自然语言回答会被公开`;
 
   const contactSection: string[] = [
     `## 联络节点（contact）`,
@@ -879,15 +881,9 @@ function buildMeetingAgentPrompt(
     );
   } else {
     contactSection.push(
-      `### contact`,
-      `  描述: 向目标节点发送消息，对方处理后返回回复。`,
-      `  参数:`,
-      `    target: string [必填] — 目标节点名称（可选值：${contactTargets && contactTargets.length > 0 ? contactTargets.map(t => t.label).join('、') : '（无可联络节点）'}）`,
-      `    message: string [必填] — 你要传达的内容`,
+      `按上方文本工具调用协议调用 \`contact\`，向目标节点发送消息并等待回复。`,
       `  - 必须真正调用工具才会触发，仅在文字里说"我联络了xxx"不会有任何动作`,
       `  - 对方处理可能涉及工具调用，需耐心等待`,
-      `  调用示例:`,
-      `  <action tool="contact">{"target":"节点名称","message":"你要传达的具体内容"}</action>`,
       ``,
     );
   }
