@@ -11,6 +11,7 @@ import QueuedChips, { MAX_QUEUE } from './QueuedChips';
 import TaskBoardDrawer, { RAIL_W } from './TaskBoardDrawer';
 import { loadTaskboard, saveTaskboard, type TaskBoard } from '../../utils/taskboard';
 import { runStreamLoop } from '../../engine/chat/streamLoop';
+import { appendToolStep, finishLatestToolStep } from '../../engine/chat/tool-step-events';
 import { applyDelegateStreamEvent, finalizeStreamAnswer, isDelegateStreamEvent } from '../../engine/chat/delegate-stream-events';
 import { buildConversationHistory } from '../../engine/chat/conversation-history';
 import { streamUrl } from '../../lib/apiBase';
@@ -444,14 +445,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             // 清理 assistant 流式内容中的 action/think 标签
             const cleanContent = streamContent.trim();
             allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: cleanContent } : m);
-            const toolMsg: ChatMessage = {
-              id: generateMessageId(), role: 'assistant',
-              content: `📋 ${ev.tool}`,
-              timestamp: new Date().toISOString(), agentId: selectedAgent.id,
-              toolCall: { toolName: ev.tool, params: ev.args, status: 'running' as any },
-            };
-            const idx = allMessages.findIndex(m => m.id === assistantMsgId);
-            allMessages.splice(idx, 0, toolMsg);
+            allMessages = appendToolStep(allMessages, assistantMsgId, ev.tool, ev.args || {});
             allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, streamingPhase: 'tool-exec', phaseElapsed: 0, streamingTool: ev.tool, streamingArgumentChars: undefined } : m);
             emit([...allMessages]);
           } else if (ev.type === 'tool-result') {
@@ -461,17 +455,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             const before = (ev as any).meta?.before;
             // ev.meta.pendingAutomation = AI 自建潮汐草稿，存进 toolCall 供确认卡渲染
             const pendingAutomation = (ev as any).meta?.pendingAutomation;
-            for (let i = allMessages.length - 1; i >= 0; i--) {
-              if (allMessages[i].toolCall && (allMessages[i].toolCall as any).status === 'running') {
-                allMessages[i] = { ...allMessages[i], toolCall: {
-                  ...allMessages[i].toolCall!,
-                  result: ev.result, status: ev.ok ? 'success' : 'error',
-                  ...(typeof before === 'string' ? { diff: { before } } : {}),
-                  ...(pendingAutomation ? { pendingAutomation } : {}),
-                } };
-                break;
-              }
-            }
+            allMessages = finishLatestToolStep(allMessages, assistantMsgId, ev.result, ev.ok !== false, { before, pendingAutomation });
             allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, streamingPhase: 'llm-waiting', phaseElapsed: 0, streamingTool: undefined, streamingArgumentChars: undefined } : m);
             emit([...allMessages]);
           } else if (isDelegateStreamEvent(ev)) {

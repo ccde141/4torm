@@ -28,7 +28,7 @@ import { MessageImages } from './MessageImages';
  * 其余 → ToolCallMessage。两处渲染路径（流式中 / 落定后）共用，保证 sub-agent
  * 卡片按调用顺序 inline 落在工具列里，而非浮在整条消息之上。
  */
-function renderToolStep(step: ToolStep, key: string) {
+function renderToolStep(step: ToolStep, key: string, timestamp: string) {
   const d = step.delegate;
   if (d) {
     return (
@@ -42,16 +42,26 @@ function renderToolStep(step: ToolStep, key: string) {
       />
     );
   }
+  if ((step.tool === 'create_automation' || step.tool === 'update_automation') && step.pendingAutomation) {
+    return <AutomationDraftCard key={`automation-${key}`} pending={step.pendingAutomation} timestamp={formatTimestamp(timestamp)} />;
+  }
   return (
     <ToolCallMessage
       key={`tool-${key}`}
-      toolCall={{ toolName: step.tool, params: step.args as Record<string, unknown>, result: step.result, status: step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending' }}
+      toolCall={{
+        toolName: step.tool,
+        params: step.args as Record<string, unknown>,
+        result: step.result,
+        status: step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending',
+        diff: step.diff,
+        pendingAutomation: step.pendingAutomation,
+      }}
     />
   );
 }
 
-function renderToolSteps(steps: ToolStep[], messageId: string) {
-  return <ToolActivityList items={steps} renderItem={(step, i) => renderToolStep(step, `${messageId}-${i}`)} />;
+function renderToolSteps(steps: ToolStep[], messageId: string, timestamp: string) {
+  return <ToolActivityList items={steps} renderItem={(step, i) => renderToolStep(step, `${messageId}-${i}`, timestamp)} />;
 }
 
 export interface MessageItemProps {
@@ -169,7 +179,7 @@ function MessageItemInner({
           {/* 原生思考流（流式中默认展开） */}
           {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming />}
           {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
-          {steps && renderToolSteps(steps, msg.id)}
+          {steps && renderToolSteps(steps, msg.id, msg.timestamp)}
           {/* 流式文本气泡 */}
           <div className="chat__message chat__message--assistant">
             <div className="chat__avatar">AI</div>
@@ -192,7 +202,7 @@ function MessageItemInner({
           {/* 原生思考流（落定后默认折叠） */}
           {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming={false} />}
           {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
-          {renderToolSteps(toolSteps, msg.id)}
+          {renderToolSteps(toolSteps, msg.id, msg.timestamp)}
           <StructuredMessage
             tools={[]} answer={answer}
             msgId={msg.id}

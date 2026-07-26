@@ -25,8 +25,8 @@ import { normalizeChatRequestBody } from './provider-normalization.js';
 import {
   extractReasoningContent,
   extractReasoningEnvelope,
-  mapProviderMessages,
 } from './provider-messages.js';
+import { compileModelMessages } from './model-request/compile.js';
 import {
   buildAnthropicRequest,
   parseAnthropicResponse,
@@ -274,8 +274,10 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
   };
   const body: Record<string, unknown> = {
     model,
-    messages: mapProviderMessages(messages, forwardMap, {
-      ...identity,
+    messages: compileModelMessages(messages, {
+      identity,
+      forwardToolNames: forwardMap,
+      toolTransport: params.tools?.length ? 'native' : 'text',
     }),
     temperature: options?.temperature ?? 0.7,
     // 默认 8192（原 4096 太低，长命令/长 write_file content 作为 tool_call 参数易被截断）。

@@ -3,6 +3,12 @@ export type TextToolResponse =
   | { kind: 'tool-call'; name: string; arguments: Record<string, unknown> }
   | { kind: 'invalid'; error: string };
 
+export interface TextToolResult {
+  name: string;
+  content: string;
+  ok: boolean;
+}
+
 const TOOL_CALL_FENCE = /^```tool_call\s*\r?\n([\s\S]*?)\r?\n```$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -51,4 +57,17 @@ export function parseTextToolResponse(content: string): TextToolResponse {
 
 export function formatTextToolResult(name: string, content: string, ok: boolean): string {
   return JSON.stringify({ type: 'tool_result', name, ok, content });
+}
+
+export function formatTextToolCall(name: string, argumentsValue: Record<string, unknown>): string {
+  return JSON.stringify({ type: 'tool_call', name, arguments: argumentsValue });
+}
+
+export function parseTextToolResult(content: string): TextToolResult | undefined {
+  let parsed: unknown;
+  try { parsed = JSON.parse(content.trim()); } catch { return undefined; }
+  if (!isRecord(parsed) || parsed.type !== 'tool_result') return undefined;
+  if (typeof parsed.name !== 'string' || !parsed.name.trim()) return undefined;
+  if (typeof parsed.content !== 'string' || typeof parsed.ok !== 'boolean') return undefined;
+  return { name: parsed.name.trim(), content: parsed.content, ok: parsed.ok };
 }

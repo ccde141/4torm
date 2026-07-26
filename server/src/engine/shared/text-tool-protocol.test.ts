@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  formatTextToolCall,
   formatTextToolResult,
+  parseTextToolResult,
   parseTextToolResponse,
 } from './text-tool-protocol.js';
 
@@ -54,4 +56,14 @@ test('formats tool results as a framework-owned JSON envelope', () => {
     ok: true,
     content: 'pong',
   }));
+});
+
+test('formats and parses strict tool envelopes for request compilation', () => {
+  const call = formatTextToolCall('ping', { value: 1 });
+  assert.deepEqual(parseTextToolResponse(call), {
+    kind: 'tool-call', name: 'ping', arguments: { value: 1 },
+  });
+  assert.deepEqual(parseTextToolResult(formatTextToolResult('ping', 'pong', true)), {
+    name: 'ping', content: 'pong', ok: true,
+  });
 });

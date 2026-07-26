@@ -361,6 +361,19 @@ test('模型提供商文档覆盖协议、模型配置与图片检测边界', as
   assert.match(config, /模型提供商.*\/guide\/providers/);
 });
 
+test('故障检修页覆盖 LM Studio、图片和文档构建问题', async () => {
+  const [troubleshooting, config] = await Promise.all([
+    fs.readFile(new URL('../docs/guide/troubleshooting.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/.vitepress/config.ts', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(troubleshooting, /LM Studio 报 assistant 消息为空/);
+  assert.match(troubleshooting, /配置切换为「LM Studio」/);
+  assert.match(troubleshooting, /图片发送失败/);
+  assert.match(troubleshooting, /npm run docs:build/);
+  assert.match(config, /故障检修.*\/guide\/troubleshooting/);
+});
+
 test('Agent 管理区分控制台工具与功能区系统能力', async () => {
   const agents = await fs.readFile(
     new URL('../docs/guide/agents.md', import.meta.url),

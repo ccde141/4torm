@@ -1,6 +1,9 @@
 const FRAMEWORK_TOOLS = new Set([
-  'ask', 'delegate', 'contact', 'dispatch', 'task_board',
-  'register_tool', 'register_skill', 'list_agents', 'create_workflow', 'complete_task',
+  'ask', 'delegate', 'contact', 'dispatch', 'bulletin', 'task_board',
+  'register_tool', 'register_skill', 'review_changes', 'list_agents',
+  'create_workflow', 'list_workflows', 'update_workflow', 'complete_task',
+  'create_automation', 'update_automation', 'list_automations',
+  'envelope_add', 'envelope_remove', 'envelope_list',
 ]);
 
 export interface ToolActivityLike { tool: string }

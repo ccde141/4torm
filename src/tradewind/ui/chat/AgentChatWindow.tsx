@@ -16,10 +16,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { subscribe, unsubscribe } from '../stream/unified-client';
 import ToolCallMessage from './ToolCallMessage';
+import ToolActivityList from '../../../components/chat/ToolActivityGroup';
 import DelegateCard from './DelegateCard';
 import { normalizeDelegateProgressAtToolBoundary } from '../../../engine/chat/delegate-progress';
 import ContactCard from './ContactCard';
 import type { ChatMessage } from '../../../types';
+import { appendToolStep, finishLatestToolStep } from '../../../engine/chat/tool-step-events';
 
 interface AgentChatWindowProps {
   nodeId: string;
@@ -133,39 +135,19 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
 
         case 'tool-call':
           setMessages(prev => {
-            const toolMsg: ChatMessage = {
-              id: nextId(), role: 'assistant', content: '',
-              timestamp: new Date().toISOString(),
-              toolCall: { toolName: ev.tool, params: ev.args, status: 'pending' },
-            };
-            const msgs = [...prev];
             const placeholderId = streamRef.current?.id;
-            if (placeholderId) {
-              const idx = msgs.findIndex(m => m.id === placeholderId);
-              msgs.splice(idx, 0, toolMsg);
-            } else {
-              msgs.push(toolMsg);
-            }
-            return msgs;
+            if (!placeholderId) return prev;
+            return appendToolStep(prev, placeholderId, ev.tool, ev.args || {});
           });
           break;
 
         case 'tool-result':
           setMessages(prev => {
-            const msgs = [...prev];
             const before = ev.meta?.before;
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              if (msgs[i].toolCall && msgs[i].toolCall!.status === 'pending') {
-                msgs[i] = { ...msgs[i], toolCall: {
-                  ...msgs[i].toolCall!,
-                  result: ev.result,
-                  status: ev.ok ? 'success' : 'error',
-                  ...(typeof before === 'string' ? { diff: { before } } : {}),
-                } };
-                break;
-              }
-            }
-            return msgs;
+            const placeholderId = streamRef.current?.id;
+            return placeholderId
+              ? finishLatestToolStep(prev, placeholderId, ev.result, ev.ok, { before })
+              : prev;
           });
           break;
 
@@ -518,6 +500,24 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
               );
             }
             const isStreamingMsg = streaming && msg === messages[messages.length - 1];
+            const toolSteps = msg.toolSteps || [];
+            if (toolSteps.length) {
+              return (
+                <div key={msg.id} className="tw-chat-row tw-chat-row--assistant">
+                  <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div>
+                  <div className="tw-chat-bubble">
+                    <ToolActivityList items={toolSteps} renderItem={(step, index) => (
+                      <ToolCallMessage key={index} toolCall={{
+                        toolName: step.tool, params: step.args, result: step.result,
+                        status: step.status === 'running' ? 'pending' : step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending',
+                        diff: step.diff,
+                      }} />
+                    )} />
+                    {msg.content && <div className="tw-chat-content">{msg.content}</div>}
+                  </div>
+                </div>
+              );
+            }
             if (isStreamingMsg) {
               const display = msg.content.trim();
               return (

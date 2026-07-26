@@ -38,6 +38,107 @@ test('generic OpenAI-compatible providers keep existing request fields', () => {
   assert.equal('max_completion_tokens' in body, false);
 });
 
+test('LM Studio profile omits empty assistant placeholders but keeps tool calls', () => {
+  const body = normalizeChatRequestBody(
+    { baseUrl: 'http://localhost:1234/v1', model: 'local-model', profile: 'lmstudio' },
+    {
+      ...baseBody,
+      messages: [
+        { role: 'user', content: 'continue' },
+        { role: 'assistant', content: '' },
+        {
+          role: 'assistant', content: null,
+          tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'ping', arguments: '{}' } }],
+        },
+      ],
+    },
+  );
+
+  assert.deepEqual(body.messages, [
+    { role: 'user', content: 'continue' },
+    {
+      role: 'assistant', content: null,
+      tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'ping', arguments: '{}' } }],
+    },
+  ]);
+});
+
+test('LM Studio profile text-encodes tool history with array arguments', () => {
+  const messages = [
+    { role: 'user', content: 'update the board' },
+    {
+      role: 'assistant', content: null,
+      tool_calls: [
+        {
+          id: 'call-board', type: 'function',
+          function: {
+            name: 'task_board',
+            arguments: JSON.stringify({ action: 'set', tasks: [{ title: 'test' }] }),
+          },
+        },
+        {
+          id: 'call-file', type: 'function',
+          function: { name: 'delete_file', arguments: JSON.stringify({ path: 'old.txt' }) },
+        },
+      ],
+    },
+    { role: 'tool', tool_call_id: 'call-board', content: 'board updated' },
+    { role: 'tool', tool_call_id: 'call-file', content: 'file deleted' },
+    { role: 'user', content: 'continue' },
+  ];
+  const body = normalizeChatRequestBody(
+    { baseUrl: 'http://localhost:1234/v1', model: 'local-model', profile: 'lmstudio' },
+    { ...baseBody, messages, tools: [{ type: 'function' }] },
+  );
+
+  assert.deepEqual(body.messages, [
+    messages[0],
+    {
+      role: 'assistant',
+      content: [
+        JSON.stringify({
+          type: 'tool_call', name: 'task_board',
+          arguments: { action: 'set', tasks: [{ title: 'test' }] },
+        }),
+        JSON.stringify({
+          type: 'tool_call', name: 'delete_file', arguments: { path: 'old.txt' },
+        }),
+      ].join('\n\n'),
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        type: 'tool_result', name: 'task_board', ok: true, content: 'board updated',
+      }),
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        type: 'tool_result', name: 'delete_file', ok: true, content: 'file deleted',
+      }),
+    },
+    messages[4],
+  ]);
+  assert.deepEqual(body.tools, [{ type: 'function' }]);
+  assert.equal(body.tool_choice, 'auto');
+});
+
+test('generic providers keep array-valued native tool history unchanged', () => {
+  const messages = [{
+    role: 'assistant', content: null,
+    tool_calls: [{
+      id: 'call-1', type: 'function',
+      function: { name: 'task_board', arguments: JSON.stringify({ tasks: [] }) },
+    }],
+  }];
+  const body = normalizeChatRequestBody(
+    { baseUrl: 'https://example.test/v1', model: 'custom-model' },
+    { ...baseBody, messages },
+  );
+
+  assert.deepEqual(body.messages, messages);
+});
+
 test('reasoning history is forwarded only by providers with preserved thinking', () => {
   assert.equal(resolveProviderModelCapabilities({
     baseUrl: 'https://api.moonshot.cn/v1', model: 'kimi-k2.7-code',

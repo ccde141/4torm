@@ -1,6 +1,7 @@
 import { dashScopeAdapter } from './dashscope.js';
 import { deepSeekAdapter } from './deepseek.js';
 import { kimiAdapter } from './kimi.js';
+import { lmStudioAdapter } from './lmstudio.js';
 import { miniMaxAdapter } from './minimax.js';
 import { openAICompatibleAdapter } from './openai-compatible.js';
 import { openRouterAdapter } from './openrouter.js';
@@ -10,6 +11,7 @@ import { zhipuGlmAdapter } from './zhipu-glm.js';
 
 const PROVIDER_ADAPTERS: ProviderAdapter[] = [
   kimiAdapter,
+  lmStudioAdapter,
   deepSeekAdapter,
   zhipuGlmAdapter,
   dashScopeAdapter,

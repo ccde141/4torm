@@ -102,6 +102,9 @@ export interface ToolStep {
   args: Record<string, string>;
   result?: string;
   status: 'pending' | 'running' | 'done' | 'error';
+  /** UI 侧通道元数据，与独立 ToolCall 卡片保持一致。 */
+  diff?: ToolCall['diff'];
+  pendingAutomation?: ToolCall['pendingAutomation'];
   /**
    * delegate 专用：sub-agent 的思考流 + 子步骤 + 汇总。
    * 存在时该 step 用 DelegateCard inline 渲染，落在 toolSteps 的调用顺序里

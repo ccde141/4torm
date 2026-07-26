@@ -16,6 +16,7 @@ import type { ChatSession } from '../../store/chat';
 import type { ToolDef } from '../../store/tools';
 import type { TaskBoard } from '../../utils/taskboard';
 import { applyDelegateStreamEvent, finalizeStreamAnswer } from './delegate-stream-events';
+import { appendToolStep, finishLatestToolStep } from './tool-step-events';
 
 export type StreamCtx = {
   session: ChatSession;
@@ -249,14 +250,11 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
       // 累积到 assistantMsg.toolSteps[]（流式期间内嵌展示，运行时字段不持久化）
       const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
       if (!target) break;
-      const newStep: import('../../types').ToolStep = {
-        tool: ev.tool,
-        args: ev.args || {},
-        status: 'running',
-      };
-      const steps = [...(target.toolSteps || []), newStep];
-      const updated = { ...target, toolSteps: steps, streamingPhase: 'tool-exec' as const, phaseElapsed: 0, streamingTool: ev.tool, streamingArgumentChars: undefined };
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
+      const withStep = appendToolStep(ctx.allMessages, ctx.assistantMsgId, ev.tool, ev.args || {});
+      ctx.setAllMessages(withStep.map(m => m.id === ctx.assistantMsgId ? {
+        ...m, streamingPhase: 'tool-exec' as const, phaseElapsed: 0,
+        streamingTool: ev.tool, streamingArgumentChars: undefined,
+      } : m));
       ctx.throttledFlush();
       break;
     }
@@ -264,15 +262,13 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
       // 找最后一个 running step 更新
       const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
       if (!target?.toolSteps) break;
-      const steps = [...target.toolSteps];
-      for (let i = steps.length - 1; i >= 0; i--) {
-        if (steps[i].status === 'running') {
-          steps[i] = { ...steps[i], result: ev.result, status: ev.ok === false ? 'error' : 'done' };
-          break;
-        }
-      }
-      const updated = { ...target, toolSteps: steps, streamingPhase: 'llm-waiting' as const, phaseElapsed: 0, streamingTool: undefined, streamingArgumentChars: undefined };
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
+      const before = typeof ev.meta?.before === 'string' ? ev.meta.before : undefined;
+      const pendingAutomation = ev.meta?.pendingAutomation;
+      const finished = finishLatestToolStep(ctx.allMessages, ctx.assistantMsgId, ev.result, ev.ok !== false, { before, pendingAutomation });
+      ctx.setAllMessages(finished.map(m => m.id === ctx.assistantMsgId ? {
+        ...m, streamingPhase: 'llm-waiting' as const, phaseElapsed: 0,
+        streamingTool: undefined, streamingArgumentChars: undefined,
+      } : m));
       ctx.throttledFlush();
       break;
     }
