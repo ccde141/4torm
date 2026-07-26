@@ -46,6 +46,7 @@ export default defineConfig({
           items: [
             { text: '介绍', link: '/guide/introduction' },
             { text: '快速开始', link: '/guide/getting-started' },
+            { text: '模型提供商', link: '/guide/providers' },
             { text: '控制台与 Agent 管理', link: '/guide/agents' },
             { text: '核心概念', link: '/guide/concepts' },
           ],

@@ -42,6 +42,9 @@ test('documentation theme mounts one low-power ASCII background', async () => {
   assert.match(field, /const homeMaximumAlpha = 0\.5/);
   assert.match(field, /const pageThreshold = 0\.22/);
   assert.match(field, /const pageMaximumAlpha = 0\.46/);
+  assert.match(field, /const phaseSpeed = 0\.48/);
+  assert.match(field, /currentPhase = \(\(timestamp - startedAt\) \/ 1000\) \* phaseSpeed/);
+  assert.match(field, /startedAt = performance\.now\(\) - \(currentPhase \/ phaseSpeed\) \* 1000/);
   assert.match(field, /function gridValue\(/);
   assert.match(field, /Math\.imul/);
   assert.match(field, /function valueNoise\(/);
@@ -54,8 +57,8 @@ test('documentation theme mounts one low-power ASCII background', async () => {
   assert.doesNotMatch(field, /Math\.sin\(distance \* 0\.16/);
   assert.match(field, /frontmatter\.value\.layout === 'home'/);
   assert.match(field, /--ascii-field-color/);
-  assert.match(styles, /--ascii-field-color: #0047bd/);
-  assert.match(styles, /--ascii-field-color: #7bc4ff/);
+  assert.match(styles, /--ascii-field-color: #0057d9/);
+  assert.match(styles, /--ascii-field-color: #96d8ff/);
   assert.match(styles, /\.ascii-breathing-field \{[\s\S]*?opacity: 0\.8;/);
   assert.doesNotMatch(config, /本地部署/);
 });
@@ -339,4 +342,55 @@ test('README 与架构基线不再保留旧三档权限说明', async () => {
   assert.match(docs[1].text, /旧值.*映射为项目级/);
   assert.match(docs[1].text, /符号链接/);
   assert.match(docs[2].text, /执行权限配置/);
+});
+
+test('模型提供商文档覆盖协议、模型配置与图片检测边界', async () => {
+  const [providers, gettingStarted, config] = await Promise.all([
+    fs.readFile(new URL('../docs/guide/providers.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/guide/getting-started.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/.vitepress/config.ts', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(providers, /OpenAI Compatible/);
+  assert.match(providers, /Anthropic Messages/);
+  assert.match(providers, /图片理解.*检测/s);
+  assert.match(providers, /检测失败也不一定表示模型完全没有视觉能力/);
+  assert.doesNotMatch(providers, /native-confirmed|text-required|JSON 工具信封/);
+  assert.match(gettingStarted, /\[模型提供商\]\(\.\/providers\)/);
+  assert.doesNotMatch(gettingStarted, /one-api|LiteLLM/);
+  assert.match(config, /模型提供商.*\/guide\/providers/);
+});
+
+test('Agent 管理区分控制台工具与功能区系统能力', async () => {
+  const agents = await fs.readFile(
+    new URL('../docs/guide/agents.md', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(agents, /部分能力由当前功能区直接提供/);
+  assert.match(agents, /对流、潮汐和气旋群聊不提供 SubAgent/);
+  assert.doesNotMatch(agents, /`ask`、`task_board` 和 `delegate`.*仍会保留/);
+});
+
+test('季风文档说明图片输入、保存方式与功能区边界', async () => {
+  const chat = await fs.readFile(
+    new URL('../docs/modes/chat.md', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(chat, /选择文件.*粘贴.*拖入/s);
+  assert.match(chat, /单条消息最多包含 4 张图片/);
+  assert.match(chat, /单张不能超过 8 MB/);
+  assert.match(chat, /PNG、JPEG、WebP 和 GIF/);
+  assert.match(chat, /目前完整的会话图片输入只接入季风/);
+});
+
+test('数据目录列出季风会话图片附件', async () => {
+  const dataLayout = await fs.readFile(
+    new URL('../docs/architecture/data-layout.md', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(dataLayout, /\{sessionId\}\.attachments\//);
+  assert.match(dataLayout, /季风会话中发送的图片附件/);
 });

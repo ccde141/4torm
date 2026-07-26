@@ -43,8 +43,9 @@ data/
 │       ├── sessions/
 │       │   ├── _index.json
 │       │   ├── {sessionId}.json
-│       │   └── {sessionId}.taskboard.json
-│       │           季风会话、索引和任务板
+│       │   ├── {sessionId}.taskboard.json
+│       │   └── {sessionId}.attachments/
+│       │           季风会话、索引和任务板；附件目录保存季风会话中发送的图片附件
 │       │
 │       └── sessions-tide/
 │           └── {taskName}_{taskId}/

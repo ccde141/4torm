@@ -40,11 +40,9 @@ npm run build && npm run electron:prod
 
 ## 首次配置
 
-1. **添加 LLM 提供商** —— 控制台 → 提供商管理,填入 API endpoint 和 key(OpenAI 兼容格式)
+1. **添加模型提供商** —— 进入控制台的「提供商管理」，填写 API 地址和 Key，再选择需要启用的模型。4torm 支持 OpenAI Compatible 与 Anthropic Messages 接口，完整说明见[模型提供商](./providers)
 2. **创建 Agent** —— 控制台 → 新建 Agent → 选择模型、填写角色提示词，并确认默认启用的工具和技能。完整说明见[控制台与 Agent 管理](./agents)
 3. **开始对话** —— 侧栏切到「季风」→ 选 Agent → 发消息
-
-> 预设支持 OpenAI 兼容服务。使用 Anthropic / 国内厂商等非标准 API,可通过 [one-api](https://github.com/songquanpeng/one-api) 或 [LiteLLM](https://github.com/BerriAI/litellm) 作翻译层。
 
 ## 接下来
 

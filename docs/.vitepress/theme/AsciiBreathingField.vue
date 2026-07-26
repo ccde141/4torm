@@ -9,6 +9,7 @@ const palette = '    ...:::---+++***◦◦••▢▣'
 const cellSize = 18
 const fontSize = 12
 const frameInterval = 50
+const phaseSpeed = 0.48
 const homeThreshold = 0.22
 const homeMaximumAlpha = 0.5
 const pageThreshold = 0.22
@@ -126,13 +127,13 @@ function animate(timestamp: number): void {
   animationFrame = requestAnimationFrame(animate)
   if (timestamp - previousFrame < frameInterval) return
   previousFrame = timestamp
-  currentPhase = ((timestamp - startedAt) / 1000) * 0.24
+  currentPhase = ((timestamp - startedAt) / 1000) * phaseSpeed
   draw(currentPhase)
 }
 
 function startAnimation(): void {
   if (animationFrame !== null || document.hidden || motionQuery?.matches) return
-  startedAt = performance.now() - (currentPhase / 0.24) * 1000
+  startedAt = performance.now() - (currentPhase / phaseSpeed) * 1000
   animationFrame = requestAnimationFrame(animate)
 }
 
