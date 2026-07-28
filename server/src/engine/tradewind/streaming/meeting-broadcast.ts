@@ -23,7 +23,7 @@ export type MeetingBroadcastEvent =
   | { type: 'round-done'; messages: unknown[]; compacted?: boolean }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-reasoning'; chunk: string }
-  | { type: 'chair-done'; content: string }
+  | { type: 'chair-done'; content: string; reasoningContent?: string }
   | { type: 'minutes-done'; content: string }
   | { type: 'summary-chunk'; chunk: string }
   | { type: 'summary-done'; minutes: string }

@@ -1,7 +1,7 @@
 /**
  * 信风 Agent 节点浮动对话窗口
  *
- * 从 src/components/chat/ChatPage.tsx 复制解耦，独立演进。
+ * 参照季风会话形态复制解耦，独立演进。
  * 精简版：无会话列表、无 Agent 切换、无工具确认弹窗。
  * 通过 React Portal 渲染到 body 层级（避免 xyflow z-index 冲突）。
  *
@@ -16,7 +16,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { subscribe, unsubscribe } from '../stream/unified-client';
 import ToolCallMessage from './ToolCallMessage';
-import ToolActivityList from '../../../components/chat/ToolActivityGroup';
+import TwToolActivityGroup from './TwToolActivityGroup';
+import TwReasoningBlock from './TwReasoningBlock';
 import DelegateCard from './DelegateCard';
 import { normalizeDelegateProgressAtToolBoundary } from '../../../engine/chat/delegate-progress';
 import ContactCard from './ContactCard';
@@ -40,6 +41,7 @@ interface AgentChatWindowProps {
 type StreamEvent =
   | { type: 'connected'; busy: boolean }
   | { type: 'token'; content: string }
+  | { type: 'reasoning'; content: string }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: { before?: string } }
   | { type: 'delegate-start'; task: string; delegateId: string }
@@ -66,10 +68,12 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
   const [roundSource, setRoundSource] = useState<'human' | 'envelope' | 'contact' | null>(null);
   // 已暂停（扣住信封、待续跑）
   const [paused, setPaused] = useState(false);
+  const [activity, setActivity] = useState<'idle' | 'waiting' | 'reasoning' | 'responding' | 'tool' | 'delegate' | 'contact' | 'failed'>('idle');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const msgIdRef = useRef(0);
-  const streamRef = useRef<{ id: string; content: string } | null>(null);
+  const streamRef = useRef<{ id: string; content: string; reasoningContent: string } | null>(null);
+  const streamFrameRef = useRef<number | null>(null);
   // 订阅对账：seq 去重 + 基线建立前缓冲
   const lastSeqRef = useRef(0);
   const bufferingRef = useRef(true);
@@ -85,6 +89,32 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
   // 彻底消除"面板晚开 / loadMessages↔subscribe 竞态"导致的整轮事件丢失。
   useEffect(() => {
     let cancelled = false;
+    const flushStreamFrame = () => {
+      if (streamFrameRef.current !== null) {
+        window.cancelAnimationFrame(streamFrameRef.current);
+        streamFrameRef.current = null;
+      }
+      const current = streamRef.current;
+      if (!current) return;
+      setMessages(prev => prev.map(message => message.id === current.id ? {
+        ...message,
+        content: current.content,
+        reasoningContent: current.reasoningContent || undefined,
+      } : message));
+    };
+    const scheduleStreamFrame = () => {
+      if (streamFrameRef.current !== null) return;
+      streamFrameRef.current = window.requestAnimationFrame(() => {
+        streamFrameRef.current = null;
+        const current = streamRef.current;
+        if (!current) return;
+        setMessages(prev => prev.map(message => message.id === current.id ? {
+          ...message,
+          content: current.content,
+          reasoningContent: current.reasoningContent || undefined,
+        } : message));
+      });
+    };
     // 重置对账状态
     streamRef.current = null;
     lastSeqRef.current = 0;
@@ -97,6 +127,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
     setPaused(false);
     setRoundSource(null);
     setError(null);
+    setActivity('idle');
 
     // applyEvent：纯 reducer，回放与实时共用（不含 seq 去重）
     const applyEvent = (ev: StreamEvent & { scope?: string; nodeId?: string }) => {
@@ -114,6 +145,25 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           // 记录本轮来源，决定停止按钮形态（envelope/contact 只能暂停/停工作流）
           if (ev.source === 'envelope' || ev.source === 'contact') setRoundSource(ev.source);
           setPaused(false);
+          setActivity('waiting');
+          break;
+        }
+
+        case 'reasoning': {
+          const cur = streamRef.current;
+          if (!cur) {
+            const id = nextId();
+            streamRef.current = { id, content: '', reasoningContent: ev.content };
+            setMessages(prev => [...prev, {
+              id, role: 'assistant', content: '', reasoningContent: ev.content,
+              timestamp: new Date().toISOString(),
+            }]);
+          } else {
+            cur.reasoningContent += ev.content;
+            scheduleStreamFrame();
+          }
+          setStreaming(true);
+          setActivity('reasoning');
           break;
         }
 
@@ -121,19 +171,20 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           const cur = streamRef.current;
           if (!cur) {
             const id = nextId();
-            streamRef.current = { id, content: ev.content };
+            streamRef.current = { id, content: ev.content, reasoningContent: '' };
             setMessages(prev => [...prev, { id, role: 'assistant', content: ev.content, timestamp: new Date().toISOString() }]);
             setStreaming(true);
           } else {
             cur.content += ev.content;
-            setMessages(prev => prev.map(m =>
-              m.id === cur.id ? { ...m, content: cur!.content } : m,
-            ));
+            scheduleStreamFrame();
           }
+          setActivity('responding');
           break;
         }
 
         case 'tool-call':
+          flushStreamFrame();
+          setActivity('tool');
           setMessages(prev => {
             const placeholderId = streamRef.current?.id;
             if (!placeholderId) return prev;
@@ -142,6 +193,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           break;
 
         case 'tool-result':
+          setActivity('waiting');
           setMessages(prev => {
             const before = ev.meta?.before;
             const placeholderId = streamRef.current?.id;
@@ -152,6 +204,8 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           break;
 
         case 'delegate-start':
+          flushStreamFrame();
+          setActivity('delegate');
           setMessages(prev => {
             const delMsg: ChatMessage = {
               id: nextId(), role: 'assistant', content: '',
@@ -224,6 +278,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           break;
 
         case 'delegate-done':
+          setActivity('waiting');
           setMessages(prev => {
             const msgs = [...prev];
             for (let i = msgs.length - 1; i >= 0; i--) {
@@ -241,6 +296,8 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           break;
 
         case 'contact-start':
+          flushStreamFrame();
+          setActivity('contact');
           setMessages(prev => {
             const contactMsg: ChatMessage = {
               id: nextId(), role: 'assistant', content: '',
@@ -260,6 +317,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           break;
 
         case 'contact-done':
+          setActivity('waiting');
           setMessages(prev => {
             const msgs = [...prev];
             for (let i = msgs.length - 1; i >= 0; i--) {
@@ -273,6 +331,8 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           break;
 
         case 'answer':
+          flushStreamFrame();
+          setActivity('responding');
           setMessages(prev => prev.map(m =>
             streamRef.current && m.id === streamRef.current.id
               ? { ...m, content: ev.rawContent || ev.content }
@@ -281,15 +341,19 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           break;
 
         case 'error':
+          flushStreamFrame();
           setError(ev.message);
+          setActivity('failed');
           break;
 
         case 'done':
           console.log('[AgentChat] SSE done');
+          flushStreamFrame();
           streamRef.current = null;
           setStreaming(false);
           setRoundSource(null);
           setPaused(false);
+          setActivity(current => current === 'failed' ? 'failed' : 'idle');
           break;
 
         case 'paused':
@@ -297,16 +361,18 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           streamRef.current = null;
           setStreaming(false);
           setPaused(true);
+          setActivity('idle');
           break;
       }
     };
 
     // 渲染历史消息（snapshot.messages → ChatMessage[]）
-    const renderHistory = (msgs: Array<{ role: string; content: string }>) => {
+    const renderHistory = (msgs: Array<{ role: string; content: string; reasoningContent?: string }>) => {
       const loaded = msgs.map(m => ({
         id: nextId(),
         role: m.role as 'user' | 'assistant' | 'system',
         content: m.content,
+        reasoningContent: m.reasoningContent,
         timestamp: new Date().toISOString(),
       }));
       setMessages(loaded);
@@ -332,19 +398,27 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
     fetch(`/api/tradewind/chat/${nodeId}/snapshot`)
       .then(r => r.json())
       .then((snap: {
-        messages: Array<{ role: string; content: string }>;
+        messages: Array<{ role: string; content: string; reasoningContent?: string }>;
         roundLog: Array<StreamEvent & { seq?: number }>;
         busy: boolean;
+        roundSource?: 'human' | 'envelope' | 'contact' | null;
         paused?: boolean;
         lastSeq: number;
       }) => {
         if (cancelled) return;
         renderHistory(snap.messages);
+        const replayedSource = snap.roundLog.find(event => event.type === 'user-message')?.source;
+        setRoundSource(snap.roundSource ?? (
+          replayedSource === 'human' || replayedSource === 'envelope' || replayedSource === 'contact'
+            ? replayedSource
+            : null
+        ));
         // busy 时回放进行中轮次的事件日志（与实时共用 applyEvent）。
         // 跳过 user-message：该轮 user 消息已同步进 snapshot.messages（handle 开头 push），
         // 回放再加一次会重复（用户看到两条相同输入）。
         if (snap.busy && snap.roundLog.length > 0) {
           setStreaming(true);
+          setActivity('waiting');
           for (const ev of snap.roundLog) {
             if (ev.type === 'user-message') continue;
             applyEvent(ev);
@@ -352,7 +426,9 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
         } else {
           // 不 busy：当前轮已固化进 messages，忽略 roundLog，并确保收尾态
           setStreaming(false);
+          flushStreamFrame();
           streamRef.current = null;
+          setActivity('idle');
         }
         // 重连到已暂停的信封轮：恢复暂停态（roundLog 回放已含 user-message → roundSource 已置位）
         if (snap.paused) setPaused(true);
@@ -376,6 +452,10 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
 
     return () => {
       cancelled = true;
+      if (streamFrameRef.current !== null) {
+        window.cancelAnimationFrame(streamFrameRef.current);
+        streamFrameRef.current = null;
+      }
       unsubscribe(nodeId, onStreamEvent);
     };
   }, [nodeId, executionId]);
@@ -418,6 +498,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
     // 人类发起的轮：可自由停止（无下发承诺）。envelope/contact 轮由 user-message 事件标记。
     setRoundSource('human');
     setPaused(false);
+    setActivity('waiting');
 
     fetch(`/api/tradewind/chat/${nodeId}`, {
       method: 'POST',
@@ -464,13 +545,33 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
   };
 
   const isEnvelopeRound = roundSource === 'envelope' || roundSource === 'contact';
+  const activityLabels = {
+    idle: '节点会话就绪', waiting: '等待模型响应', reasoning: '模型正在思考',
+    responding: '正在生成回复', tool: '正在执行工具', delegate: 'SubAgent 正在处理',
+    contact: '正在联络其他节点', failed: '本轮执行失败',
+  };
+  const activityBadges = {
+    idle: '空闲', waiting: '等待', reasoning: '思考', responding: '回复',
+    tool: '工具', delegate: '委派', contact: '联络', failed: '失败',
+  };
+  const statusText = sealed
+    ? '本轮已封存'
+    : paused
+      ? '信封已暂停，等待续跑'
+      : activityLabels[activity];
 
   // Portal 渲染到 body
   return createPortal(
     <div className="tw-chat-overlay" style={{ display: visible ? undefined : 'none' }}>
       <div className="tw-chat-window">
         <div className="tw-chat-window__header">
-          <span className="tw-chat-window__title">{nodeLabel}</span>
+          <div className="tw-chat-window__identity">
+            <span className="tw-chat-window__eyebrow">AGENT NODE</span>
+            <span className="tw-chat-window__title">{nodeLabel}</span>
+          </div>
+          <span className={`tw-chat-window__state tw-chat-window__state--${activity}${streaming ? ' tw-chat-window__state--active' : ''}`}>
+            {sealed ? '已封存' : paused ? '已暂停' : activityBadges[activity]}
+          </span>
           <button className="tw-chat-window__close" onClick={onClose}>×</button>
         </div>
         <div className="tw-chat-window__messages" ref={messagesContainerRef}>
@@ -506,7 +607,8 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
                 <div key={msg.id} className="tw-chat-row tw-chat-row--assistant">
                   <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div>
                   <div className="tw-chat-bubble">
-                    <ToolActivityList items={toolSteps} renderItem={(step, index) => (
+                    {msg.reasoningContent && <TwReasoningBlock content={msg.reasoningContent} streaming={isStreamingMsg} />}
+                    <TwToolActivityGroup items={toolSteps} renderItem={(step, index) => (
                       <ToolCallMessage key={index} toolCall={{
                         toolName: step.tool, params: step.args, result: step.result,
                         status: step.status === 'running' ? 'pending' : step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending',
@@ -524,6 +626,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
                 <div key={msg.id} className="tw-chat-row tw-chat-row--assistant">
                   <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div>
                   <div className="tw-chat-bubble">
+                    {msg.reasoningContent && <TwReasoningBlock content={msg.reasoningContent} streaming />}
                     {display ? (
                       <>
                         {display}
@@ -542,48 +645,59 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
             return (
               <div key={msg.id} className="tw-chat-row tw-chat-row--assistant">
                 <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div>
-                <div className="tw-chat-bubble">{msg.content}</div>
+                <div className="tw-chat-bubble">
+                  {msg.reasoningContent && <TwReasoningBlock content={msg.reasoningContent} streaming={false} />}
+                  {msg.content}
+                </div>
               </div>
             );
           })}
           {error && <div className="tw-chat-msg tw-chat-msg--error">{error}</div>}
           <div ref={messagesEndRef} />
         </div>
+        <div className={`tw-chat-status tw-chat-status--${activity}${streaming ? ' tw-chat-status--active' : ''}${paused ? ' tw-chat-status--paused' : ''}`}>
+          <span className="tw-chat-status__pulse" />
+          <span>{statusText}</span>
+        </div>
         <div className="tw-chat-window__input-area">
           {sealed ? (
             <div className="tw-chat-window__sealed">本次工作流已结束 · 内容只读保留。开始新一轮或重开工作流后可继续对话。</div>
           ) : (
-            <>
+            <div className="tw-chat-window__composer">
               <textarea
                 className="tw-chat-window__input"
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  e.target.style.height = 'auto';
+                  e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+                }}
                 onKeyDown={handleKeyDown}
                 placeholder="输入消息..."
-                disabled={streaming}
+                disabled={streaming || paused}
                 rows={1}
               />
               {paused ? (
                 // 已暂停：续跑（重跑本轮）或停整个工作流。信封轮无"取消这一轮"出口。
                 <>
-                  <button className="tw-chat-window__send" onClick={resumeRound}>续跑</button>
-                  <button className="tw-chat-window__stop" onClick={stopWorkflow}>停止工作流</button>
+                  <button className="tw-chat-window__resume" onClick={resumeRound}>续跑</button>
+                  <button className="tw-chat-window__stop tw-chat-window__stop--wide" onClick={stopWorkflow}>停止工作流</button>
                 </>
               ) : streaming ? (
                 isEnvelopeRound ? (
                   // 信封轮进行中：可暂停（扣住信封）或停整个工作流；不给"停止输出"（会投垃圾下游）
                   <>
-                    <button className="tw-chat-window__stop" onClick={pauseRound}>暂停</button>
-                    <button className="tw-chat-window__stop" onClick={stopWorkflow}>停止工作流</button>
+                    <button className="tw-chat-window__pause" onClick={pauseRound}>暂停</button>
+                    <button className="tw-chat-window__stop tw-chat-window__stop--wide" onClick={stopWorkflow}>停止工作流</button>
                   </>
                 ) : (
                   // human 轮：无下发承诺，可自由停止
-                  <button className="tw-chat-window__stop" onClick={stop}>停止</button>
+                  <button className="tw-chat-window__stop" onClick={stop} aria-label="停止生成">■</button>
                 )
               ) : (
-                <button className="tw-chat-window__send" onClick={send} disabled={!input.trim()}>发送</button>
+                <button className="tw-chat-window__send" onClick={send} disabled={!input.trim()} aria-label="发送消息">➤</button>
               )}
-            </>
+            </div>
           )}
         </div>
       </div>

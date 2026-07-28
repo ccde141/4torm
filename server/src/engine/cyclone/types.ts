@@ -137,9 +137,13 @@ export interface RoomMessage {
   /** 本轮工具调用记录 */
   toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }>;
   /** 时间线中的特殊系统对象。 */
-  kind?: 'dispatch-result';
+  kind?: 'dispatch-result' | 'membership';
   /** 特殊系统对象关联的异步派发。 */
   dispatchId?: string;
+  /** 成员变更关联的工位。 */
+  seatId?: string;
+  /** 成员变更方向。 */
+  membershipAction?: 'joined' | 'left';
 }
 
 /**

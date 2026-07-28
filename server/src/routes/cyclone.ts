@@ -6,7 +6,7 @@
  * Phase 1：群聊 CRUD + 拉工位 + 串行发言（speak，SSE 流式）。
  */
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import fs from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { getAppContext } from '../services/app-context.js';
@@ -14,10 +14,11 @@ import {
   createWorkshop, loadWorkshop, listWorkshops, deleteWorkshop, renameWorkshop, setChair,
 } from '../engine/cyclone/workshop-store';
 import {
-  addSeat, loadSeat, saveSeat, deleteSeat, updateSeatRole, resetSeatContext, tryAcquireSeatLock,
+  addSeat, loadSeat, saveSeat, updateSeatRole, resetSeatContext, tryAcquireSeatLock,
 } from '../engine/cyclone/seat-store';
+import { deleteSeatFromWorkshop } from '../engine/cyclone/seat-lifecycle';
 import {
-  createRoom, loadRoom, saveRoom, deleteRoom, joinRoom, leaveRoom, setRoomParticipants, renameRoom, setRoomMode, tryAcquireRoomLock, resetRoomContext,
+  createRoom, loadRoom, saveRoom, deleteRoom, joinRoom, leaveRoom, setRoomParticipants, renameRoom, setRoomTopic, setRoomMode, tryAcquireRoomLock, resetRoomContext, RoomDeleteConflictError, RoomSettingsConflictError,
 } from '../engine/cyclone/room-store';
 import { chatSeat, resumeSeat, type SeatEvent } from '../engine/cyclone/seat-runner';
 import { chatChair } from '../engine/cyclone/chair-runner';
@@ -38,6 +39,18 @@ const activeAborts = new Map<string, AbortController>();
 
 function isActiveRound(workshopId: string, key: string): boolean {
   return activeAborts.has(`${workshopId}/${key}`) || activeAborts.has(`${workshopId}/room/${key}`);
+}
+
+async function runRoomSettingsMutation<T>(
+  reply: FastifyReply, mutation: () => Promise<T>,
+): Promise<T | undefined> {
+  try {
+    return await mutation();
+  } catch (error) {
+    if (!(error instanceof RoomSettingsConflictError)) throw error;
+    reply.status(409).send({ error: error.message });
+    return undefined;
+  }
 }
 
 function summaryMessages(messages: Array<{ role?: string; speaker?: string; content?: string; isHuman?: boolean }>): Array<{ role: string; content: string }> {
@@ -309,7 +322,13 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (action === 'delete') {
-      await deleteSeat(dataDir, workshopId, seatId);
+      if (activeAborts.has(lockKey)) {
+        return reply.status(409).send({ error: '该工位正在处理中，请先停止当前轮次' });
+      }
+      const result = await runRoomSettingsMutation(
+        reply, () => deleteSeatFromWorkshop(dataDir, workshopId, seatId),
+      );
+      if (result === undefined && reply.sent) return;
       return reply.send({ ok: true });
     }
 
@@ -479,14 +498,27 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (action === 'delete') {
-      await deleteRoom(dataDir, workshopId, roomId);
+      if (activeAborts.has(lockKey)) {
+        return reply.status(409).send({ error: '该群聊或会长私聊正在处理中，请先停止' });
+      }
+      let deleted: boolean;
+      try {
+        deleted = await deleteRoom(dataDir, workshopId, roomId);
+      } catch (error) {
+        if (error instanceof RoomDeleteConflictError) {
+          return reply.status(409).send({ error: error.message });
+        }
+        throw error;
+      }
+      if (!deleted) return reply.status(404).send({ error: '群聊不存在' });
       return reply.send({ ok: true });
     }
 
     if (action === 'join') {
       if (!body?.seatId) return reply.status(400).send({ error: '缺少 seatId' });
       try {
-        const room = await joinRoom(dataDir, workshopId, roomId, body.seatId);
+        const room = await runRoomSettingsMutation(reply, () => joinRoom(dataDir, workshopId, roomId, body.seatId));
+        if (room === undefined) return;
         if (!room) return reply.status(404).send({ error: '群聊不存在' });
         return reply.send({ participantSeatIds: room.participantSeatIds });
       } catch (e) {
@@ -496,27 +528,39 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
 
     if (action === 'leave') {
       if (!body?.seatId) return reply.status(400).send({ error: '缺少 seatId' });
-      const room = await leaveRoom(dataDir, workshopId, roomId, body.seatId);
+      const room = await runRoomSettingsMutation(reply, () => leaveRoom(dataDir, workshopId, roomId, body.seatId));
+      if (room === undefined) return;
       if (!room) return reply.status(404).send({ error: '群聊不存在' });
       return reply.send({ participantSeatIds: room.participantSeatIds });
     }
 
     if (action === 'reorder') {
       if (!Array.isArray(body?.seatIds)) return reply.status(400).send({ error: '缺少 seatIds 数组' });
-      const room = await setRoomParticipants(dataDir, workshopId, roomId, body.seatIds);
+      const room = await runRoomSettingsMutation(reply, () => setRoomParticipants(dataDir, workshopId, roomId, body.seatIds));
+      if (room === undefined) return;
       if (!room) return reply.status(404).send({ error: '群聊不存在' });
       return reply.send({ participantSeatIds: room.participantSeatIds });
     }
 
     if (action === 'rename') {
       if (!body?.title) return reply.status(400).send({ error: '缺少 title' });
-      const room = await renameRoom(dataDir, workshopId, roomId, body.title);
+      const room = await runRoomSettingsMutation(reply, () => renameRoom(dataDir, workshopId, roomId, body.title));
+      if (room === undefined) return;
       if (!room) return reply.status(404).send({ error: '群聊不存在' });
       return reply.send({ title: room.title });
     }
 
+    if (action === 'set-topic') {
+      if (!body?.topic?.trim()) return reply.status(400).send({ error: '缺少 topic' });
+      const room = await runRoomSettingsMutation(reply, () => setRoomTopic(dataDir, workshopId, roomId, body.topic));
+      if (room === undefined) return;
+      if (!room) return reply.status(404).send({ error: '群聊不存在' });
+      return reply.send({ topic: room.topic });
+    }
+
     if (action === 'set-mode') {
-      const room = await setRoomMode(dataDir, workshopId, roomId, body?.mode);
+      const room = await runRoomSettingsMutation(reply, () => setRoomMode(dataDir, workshopId, roomId, body?.mode));
+      if (room === undefined) return;
       if (!room) return reply.status(404).send({ error: '群聊不存在' });
       return reply.send({ mode: room.mode });
     }

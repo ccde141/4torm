@@ -50,15 +50,16 @@ export function HumanGateNode({ id, data, selected }: NodeProps) {
       <Handle type="target" position={Position.Left} className="tw-handle" />
       <div className="tw-node__icon">◇</div>
       <div className="tw-node__label">{label}</div>
-      {waiting && <div className="tw-node__sub">已暂停</div>}
+      <div className={`tw-node__state-line ${waiting ? 'tw-node__state-line--waiting' : ''}`}>
+        <span className="tw-node__state-dot" />
+        <span>{waiting ? '等待人工确认' : running ? '等待信封' : '尚未运行'}</span>
+      </div>
       {memo && <div className="tw-node__memo">{memo}</div>}
-      <button
-        className={`tw-node__chat-btn ${waiting ? 'tw-node__chat-btn--active' : 'tw-node__chat-btn--idle'}`}
-        onClick={openPanel}
-        title={waiting ? '查看/编辑信封内容' : running ? '等待信封到达' : '未运行'}
-      >
-        {waiting ? '✏️ 编辑' : running ? '等待中' : '未运行'}
-      </button>
+      {waiting && (
+        <button className="tw-node__gate-action" onClick={openPanel} title="查看信封内容并决定是否修改">
+          审查并继续
+        </button>
+      )}
       <Handle type="source" position={Position.Right} className="tw-handle" />
     </div>
   );

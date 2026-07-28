@@ -15,8 +15,10 @@ export interface RoomMsg {
   rawContent?: string;
   reasoning?: string;
   toolCalls?: RoomToolCall[];
-  kind?: 'dispatch-result';
+  kind?: 'dispatch-result' | 'membership';
   dispatchId?: string;
+  seatId?: string;
+  membershipAction?: 'joined' | 'left';
 }
 
 export interface RoomData {
@@ -47,6 +49,8 @@ export function publicToFeed(messages: RoomMsg[]): FeedMsg[] {
       isArchiveSummary: archive,
       kind: message.kind,
       dispatchId: message.dispatchId,
+      seatId: message.seatId,
+      membershipAction: message.membershipAction,
       reasoning: message.reasoning,
       tools: (message.toolCalls || []).map(tool => ({
         tool: tool.tool, args: tool.args, result: tool.result, status: 'success' as const,

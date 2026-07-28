@@ -20,6 +20,7 @@ import { scheduleAutoSave } from '../hooks/auto-save';
 import { deleteWorkflow, openWorkflowWorkspace } from '../workflow-client';
 import { validateGraph } from '../workflow-validation';
 import type { WorkflowMode } from '../../types';
+import type { ExecutionPhase } from '../hooks/execution-phase';
 
 export default function TradeWindPage() {
   const store = useWorkflowStore();
@@ -218,6 +219,10 @@ export default function TradeWindPage() {
     if (!outputNode) return null;
     return store.edges.find((e) => e.target === outputNode.id)?.source ?? null;
   }, [store.nodes, store.edges]);
+  const currentWorkflowPhase: ExecutionPhase = execution.workflowId === store.workflowId
+    ? execution.phase
+    : 'idle';
+  const toolbarPhase: ExecutionPhase = execution.running ? execution.phase : currentWorkflowPhase;
 
   return (
     <div className="tw-page">
@@ -225,6 +230,7 @@ export default function TradeWindPage() {
         workflowId={store.workflowId}
         workflowName={store.workflowName}
         running={execution.running}
+        phase={toolbarPhase}
         saveTime={saveTime}
         onRun={handleRun}
         onOpenProfiles={() => setProfileVisible(true)}
@@ -251,7 +257,7 @@ export default function TradeWindPage() {
           onRun={handleRun}
         />
         <ReactFlowProvider>
-          <TradeWindCanvas store={store} />
+          <TradeWindCanvas store={store} executionPhase={currentWorkflowPhase} />
         </ReactFlowProvider>
         <ConfigPanel
           node={selectedNode}

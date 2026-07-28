@@ -175,8 +175,16 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
 
   /** GET /status — 当前执行状态（用于前端刷新后恢复） */
   app.get('/status', async (_req, reply) => {
-    if (!isExecutionRunning() || !activeOrchestrator) {
+    if (!activeOrchestrator) {
       return reply.send({ running: false });
+    }
+    if (!isExecutionRunning()) {
+      return reply.send({
+        running: false,
+        executionId: activeOrchestrator.getExecutionId(),
+        workflowId: activeOrchestrator.getWorkflowId(),
+        outcome: activeOrchestrator.getOutcome(),
+      });
     }
     return reply.send({
       running: true,
@@ -191,7 +199,13 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
   app.get('/nodes/status', async (_req, reply) => {
     // 循环模式下用统一存活判定：圈间 gap 期 activeLoop 仍存活，不能因当前圈已 stop 就误报 stopped。
     if (!isExecutionRunning()) {
-      return reply.send({ running: false, nodes: {} });
+      return reply.send({
+        running: false,
+        nodes: {},
+        outcome: activeOrchestrator?.getOutcome() ?? null,
+        executionId: activeOrchestrator?.getExecutionId(),
+        workflowId: activeOrchestrator?.getWorkflowId(),
+      });
     }
     const lap = activeLoop ? activeLoop.getLapIndex() : undefined;
     // gap 期 activeOrchestrator 可能指向已停实例：拿不到执行态就回空节点表，但 running 仍为 true。
@@ -606,10 +620,9 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
     if (!runner) {
       return reply.status(404).send({ error: '节点尚未激活' });
     }
-    if (!runner.isBusy()) {
-      return reply.status(409).send({ error: '节点当前没有在处理消息' });
+    if (!runner.abortRound()) {
+      return reply.status(409).send({ error: '只有人类发起的节点会话可以单独停止' });
     }
-    runner.abortRound();
     return reply.send({ aborted: true });
   });
 
@@ -841,7 +854,6 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
         raw.write(`data: ${JSON.stringify(chairDoneEvent)}\n\n`);
         raw.end();
       } catch {}
-      broadcastToMeeting(nodeId, { type: 'chair-done', content: '' });
     }).catch((e) => {
       clearInterval(hb);
       const errEvent = { type: 'error' as const, message: (e as Error).message };

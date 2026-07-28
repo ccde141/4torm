@@ -91,11 +91,13 @@ export type NodeRunnerEvent = (
 /** Agent 节点快照（REST /snapshot 返回，订阅时对账用） */
 export interface NodeSnapshot {
   /** 已提交的对话历史（不含首条 system prompt） */
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<{ role: string; content: string; reasoningContent?: string }>;
   /** 当前轮进行中的有序事件日志（前端用同一 reducer 回放） */
   roundLog: NodeRunnerEvent[];
   /** 当前是否正在处理 */
   busy: boolean;
+  /** 当前运行或暂停轮次的真实来源；旧客户端可忽略。 */
+  roundSource?: MessageSource | null;
   /** 是否已暂停（扣住信封、待续跑） */
   paused?: boolean;
   /** 已派发的最大序号（前端只应用 seq > lastSeq 的增量） */
@@ -146,6 +148,7 @@ export class NodeRunner {
   private readonly events: NodeEventEmitter;
   private readonly compactState: CompactState = { disabled: false, archiveSeq: 0 };
   private roundAbort: AbortController | null = null;
+  private currentRoundSource: MessageSource | null = null;
   /** 暂停中：pause() 置位，让 handle 的 catch 把本轮 abort 识别为"暂停"而非"停止/错误"。 */
   private pausing = false;
   /** 暂停时扣住的信封消息（连同 onComplete），续跑时重投。null=未暂停。 */
@@ -171,11 +174,16 @@ export class NodeRunner {
   getSnapshot(): NodeSnapshot {
     const msgs = this.messages
       .filter((_, i) => i !== 0) // 去掉首条 system prompt
-      .map(m => ({ role: m.role, content: m.content }));
+      .map(m => ({
+        role: m.role,
+        content: m.content,
+        reasoningContent: m.reasoningContent,
+      }));
     return {
       messages: msgs,
       roundLog: this.events.getRoundLog(),
       busy: this.busy,
+      roundSource: this.pausedMsg?.source ?? this.currentRoundSource,
       paused: this.isPaused(),
       lastSeq: this.events.lastSeq,
     };
@@ -186,8 +194,14 @@ export class NodeRunner {
    * 注意：envelope 轮不该走这里——它没有"单独取消这一轮"的合法出口，
    * 只能 pause()（暂停后续跑）或 orchestrator.stop()（停整个工作流）。
    */
-  abortRound(): void {
-    this.roundAbort?.abort();
+  canAbortRound(): boolean {
+    return this.busy && this.currentRoundSource === 'human' && this.roundAbort !== null;
+  }
+
+  abortRound(): boolean {
+    if (!this.canAbortRound()) return false;
+    this.roundAbort!.abort();
+    return true;
   }
 
   /**
@@ -197,7 +211,7 @@ export class NodeRunner {
    * @returns 是否成功进入暂停（仅 busy 时有效）
    */
   pause(): boolean {
-    if (!this.busy || !this.roundAbort) return false;
+    if (!this.busy || !this.roundAbort || this.currentRoundSource === 'human') return false;
     this.pausing = true;
     this.roundAbort.abort();
     return true;
@@ -266,11 +280,16 @@ export class NodeRunner {
   /** 处理单条消息 */
   private async handle(msg: QueuedMessage): Promise<void> {
     this.busy = true;
+    this.currentRoundSource = msg.source;
     this.events.beginRound();
     this.roundAbort = new AbortController();
     // 本轮若在服务某方的 contact，记下其源节点——供反向联络的死锁提示区分措辞
     this.currentContactFrom = msg.source === 'contact' ? (msg.contactFrom ?? null) : null;
-    const emit = (ev: NodeRunnerEvent) => this.events.emit(ev);
+    let reasoningContent = '';
+    const emit = (ev: NodeRunnerEvent) => {
+      if (ev.type === 'reasoning') reasoningContent += ev.content;
+      this.events.emit(ev);
+    };
 
     // 追加 user message 到上下文（续跑重投的消息除外——原消息已在上下文里）
     if (!msg._resume) {
@@ -284,7 +303,11 @@ export class NodeRunner {
     try {
       const result = await this.runReAct(emit, msg.source);
       // 追加 assistant 回复到上下文
-      this.messages.push({ role: 'assistant', content: result.rawContent });
+      this.messages.push({
+        role: 'assistant',
+        content: result.rawContent,
+        ...(reasoningContent ? { reasoningContent } : {}),
+      });
 
       emit({ type: 'answer', content: result.content, rawContent: result.rawContent });
       emit({ type: 'done', outcome: 'completed' });
@@ -332,6 +355,8 @@ export class NodeRunner {
       emit({ type: 'done', outcome: isAbort ? 'stopped' : 'error' });
     } finally {
       this.busy = false;
+      this.currentRoundSource = null;
+      this.roundAbort = null;
     }
   }
 
@@ -486,6 +511,7 @@ export class NodeRunner {
         tools: toolDefs.length > 0 ? toolCaller : undefined,
         onEvent: (ev) => {
           if (ev.type === 'token') emit({ type: 'token', content: ev.chunk });
+          if (ev.type === 'reasoning') emit({ type: 'reasoning', content: ev.chunk });
         },
         signal: combinedAbort.signal,
       });

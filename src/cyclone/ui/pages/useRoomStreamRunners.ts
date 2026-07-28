@@ -36,8 +36,10 @@ export interface FeedMsg {
   phase?: string;
   /** 原生思考流（流式当轮显示；不进上下文，重载不保留） */
   reasoning?: string;
-  kind?: 'dispatch-result';
+  kind?: 'dispatch-result' | 'membership';
   dispatchId?: string;
+  seatId?: string;
+  membershipAction?: 'joined' | 'left';
   tools: FeedTool[];
 }
 

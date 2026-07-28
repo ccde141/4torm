@@ -1,7 +1,7 @@
 /**
  * 气旋群聊面板 —— 对齐对流中栏布局
  *
- * 布局：Header（标题双击重命名 + 话题）+ Config bar（在场工位 tag：↑↓调序 / ×移除 / + 添加）
+ * 布局：Header（标题 + 话题 + 会议设置）
  *       + Messages（对流式气泡，头像 + speaker label + 工具卡片）+ Input（chat__ 输入区）。
  * 发言模型：人发一句 → 在场工位串行响应（SSE 流式），仿对流 handleSpeak。
  * 流式：运行态不在本组件，存于 CyclonePage 级 useRoomStreamRunners 注册表（按 roomId 索引）。
@@ -16,7 +16,7 @@ import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import DispatchIndex from './DispatchIndex';
 import RoomTimeline from './RoomTimeline';
 import RoomComposer from './RoomComposer';
-import RoomConfigBar from './RoomConfigBar';
+import RoomSettingsPanel from './RoomSettingsPanel';
 import type { CycloneDispatch } from './dispatch-timeline';
 import type { DispatchAction } from './useWorkshopDispatches';
 import { publicToFeed, readRoomError, type RoomData } from './room-messages';
@@ -26,19 +26,17 @@ import { useSmartChatScroll } from './useSmartChatScroll';
 interface SeatLite { id: string; title: string; }
 
 export default function RoomPanel({ workshopId, roomId, seats, runners, dispatches,
-  onDispatchAction, onChanged, onOpenSeat, active = true }: {
+  onDispatchAction, onChanged, onOpenSeat, settingsLocked = false, active = true }: {
   workshopId: string; roomId: string; seats: SeatLite[]; runners: RoomStreamRunners;
   dispatches: CycloneDispatch[];
   onDispatchAction: (roomId: string, dispatchId: string, action: DispatchAction) => Promise<CycloneDispatch>;
-  onChanged?: () => void; onOpenSeat: (seatId: string) => void; active?: boolean;
+  onChanged?: () => void; onOpenSeat: (seatId: string) => void; settingsLocked?: boolean; active?: boolean;
 }) {
   const confirm = useConfirm();
   const [room, setRoom] = useState<RoomData | null>(null);
   const [history, setHistory] = useState<FeedMsg[]>([]);
   // 草稿初值取自注册表：切走/重挂回来未发文本还在（内存级）
   const [input, setInputRaw] = useState(() => runners.getDraft(roomId));
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState('');
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
   const [editMessageContent, setEditMessageContent] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -140,7 +138,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
     const timer = window.setTimeout(() => setDispatchNotice(null), 5_000);
     return () => window.clearTimeout(timer);
   }, [dispatchNotice]);
-  // ── 工位管理（替代 prompt）──
+  // ── 房间写操作 ──
   async function postAction(action: string, body: Record<string, unknown>, fallback: string): Promise<boolean> {
     const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/${action}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -149,23 +147,6 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
     await reload(true);
     return true;
   }
-  const joinSeat = (seatId: string) => postAction('join', { seatId }, '添加工位进群失败');
-  const leaveSeat = (seatId: string) => postAction('leave', { seatId }, '移除工位失败');
-  const toggleMode = () => { if (room) postAction('set-mode', { mode: room.mode === 'plan' ? 'build' : 'plan' }, '切换群聊模式失败'); };
-  function moveSeat(idx: number, dir: -1 | 1) {
-    if (!room) return;
-    const ids = [...room.participantSeatIds];
-    const j = idx + dir;
-    if (j < 0 || j >= ids.length) return;
-    [ids[idx], ids[j]] = [ids[j], ids[idx]];
-    postAction('reorder', { seatIds: ids }, '调整工位顺序失败');
-  }
-  async function commitTitle() {
-    setEditingTitle(false);
-    const t = titleDraft.trim();
-    if (room && t && t !== room.title) await postAction('rename', { title: t }, '重命名群聊失败');
-  }
-
   function startEditMessage(message: FeedMsg) {
     if (message.sourceIndex === undefined) return;
     setEditingMessageIndex(message.sourceIndex);
@@ -250,33 +231,16 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
     return <div style={{ opacity: .5, margin: 'auto' }}>加载群聊…</div>;
   }
   return (
-    <div className="cyclone-room" style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
+    <div className="cyclone-room" style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, position: 'relative' }}>
       {/* Header */}
       <div className="conv__header">
-        {editingTitle ? (
-          <input autoFocus value={titleDraft} onChange={e => setTitleDraft(e.target.value)} onBlur={commitTitle}
-            onKeyDown={e => { if (e.key === 'Enter') commitTitle(); if (e.key === 'Escape') setEditingTitle(false); }} className="conv__header-input" />
-        ) : (
-          <span className="conv__header-title" title="双击重命名" onDoubleClick={() => { setEditingTitle(true); setTitleDraft(room.title); }}># {room.title}</span>
-        )}
+        <span className="conv__header-title"># {room.title}</span>
         <span className="conv__header-id">{room.topic}</span>
         <DispatchIndex dispatches={roomDispatches} onSelect={focusDispatch} />
-        <button
-          onClick={toggleMode}
-          title={room.mode === 'plan' ? 'plan 模式：只读 + 联络，不动文件。点击切回 build' : 'build 模式：可读写工作区。点击切到 plan'}
-          style={{
-            marginLeft: 'auto', padding: '2px 10px', fontSize: 'var(--text-xs)', fontWeight: 600,
-            borderRadius: 'var(--radius-sm)', cursor: 'pointer', border: '1px solid',
-            ...(room.mode === 'plan'
-              ? { background: 'var(--color-warning-subtle, #4a3a1a)', borderColor: 'var(--color-warning, #d4a017)', color: 'var(--color-warning, #d4a017)' }
-              : { background: 'var(--color-accent-subtle)', borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }),
-          }}>
-          {room.mode === 'plan' ? 'plan · 只读' : 'build · 可写'}
-        </button>
+        <RoomSettingsPanel room={room} seats={seats}
+          roomUrl={`/api/cyclone/workshop/${workshopId}/room/${roomId}`}
+          locked={streaming || settingsLocked} onChanged={() => reload(true)} />
       </div>
-
-      <RoomConfigBar participantIds={room.participantSeatIds} seats={seats} streaming={streaming}
-        onMove={moveSeat} onJoin={joinSeat} onLeave={leaveSeat} />
 
       {/* Messages：已落库 history + 本轮 roundFeed（流式中 history 不含本轮；done 后 reload 带回、clearIfDone 清 roundFeed，无重影） */}
       <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>

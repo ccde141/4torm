@@ -15,6 +15,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { WorkflowGraph, WorkflowMode } from '../../types';
 import { requestStop } from '../execution-client';
+import { phaseFromExecutionStatus, type ExecutionOutcome, type ExecutionPhase } from './execution-phase';
 
 export interface NodeStatus {
   busy: boolean;
@@ -24,6 +25,8 @@ export interface NodeStatus {
 export interface ExecutionState {
   running: boolean;
   executionId: string | null;
+  workflowId: string | null;
+  phase: ExecutionPhase;
   error: string | null;
   /** 循环模式下当前第几圈（1 起）；非循环运行为 null */
   lap: number | null;
@@ -37,6 +40,8 @@ export interface ExecutionActions {
 export function useExecution(): ExecutionState & ExecutionActions {
   const [running, setRunning] = useState(false);
   const [executionId, setExecutionId] = useState<string | null>(null);
+  const [workflowId, setWorkflowId] = useState<string | null>(null);
+  const [phase, setPhase] = useState<ExecutionPhase>('idle');
   const [error, setError] = useState<string | null>(null);
   const [lap, setLap] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -48,8 +53,12 @@ export function useExecution(): ExecutionState & ExecutionActions {
       try {
         const res = await fetch('/api/tradewind/status');
         if (!res.ok) return;
-        const data = await res.json() as { running: boolean; executionId?: string };
+        const data = await res.json() as {
+          running: boolean; executionId?: string; workflowId?: string; outcome?: ExecutionOutcome | null;
+        };
         if (cancelled) return;
+        setWorkflowId(data.workflowId ?? null);
+        setPhase(current => phaseFromExecutionStatus(data, current));
         if (data.running && data.executionId) {
           setRunning(true);
           setExecutionId(data.executionId);
@@ -74,8 +83,13 @@ export function useExecution(): ExecutionState & ExecutionActions {
       try {
         const res = await fetch('/api/tradewind/nodes/status');
         if (!res.ok) return;
-        const data = await res.json() as { running: boolean; nodes: Record<string, NodeStatus>; lap?: number; executionId?: string };
+        const data = await res.json() as {
+          running: boolean; nodes: Record<string, NodeStatus>; lap?: number;
+          executionId?: string; workflowId?: string; outcome?: ExecutionOutcome | null;
+        };
         if (stopped) return;
+        setPhase(current => phaseFromExecutionStatus(data, current));
+        if (data.workflowId) setWorkflowId(data.workflowId);
         // 后端工作流已结束 → 同步前端状态
         if (!data.running) { setRunning(false); setExecutionId(null); }
         // 循环模式每圈全新 executionId：同步到前端，驱动会话面板随圈重置（gap 期无 executionId 时保持不变）
@@ -113,8 +127,11 @@ export function useExecution(): ExecutionState & ExecutionActions {
       }
       const data = await res.json() as { executionId: string };
       setExecutionId(data.executionId);
+      setWorkflowId(workflowId);
+      setPhase('running');
       setRunning(true);
     } catch (e) {
+      setPhase('failed');
       setError((e as Error).message);
     }
   }, []);
@@ -124,11 +141,12 @@ export function useExecution(): ExecutionState & ExecutionActions {
       await requestStop();
       setRunning(false);
       setExecutionId(null);
+      setPhase('stopped');
       abortRef.current?.abort();
     } catch (cause) {
       setError((cause as Error).message || '停止工作流失败');
     }
   }, []);
 
-  return { running, executionId, error, lap, start, stop };
+  return { running, executionId, workflowId, phase, error, lap, start, stop };
 }

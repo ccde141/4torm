@@ -1,3 +1,5 @@
+import type { MeetingChairMessage } from './meeting-client';
+
 export function appendReasoning(current: string, chunk: string): string {
   return current + chunk;
 }
@@ -16,6 +18,22 @@ export function appendChairStreamChunk(
     return { ...current, reasoning: appendReasoning(current.reasoning, chunk) };
   }
   return { ...current, content: current.content + chunk };
+}
+
+export function applyChairStreamSnapshot(
+  messages: MeetingChairMessage[],
+  content: string,
+  reasoningContent: string,
+): MeetingChairMessage[] {
+  const lastIndex = messages.length - 1;
+  if (lastIndex < 0 || messages[lastIndex].role !== 'assistant') return messages;
+  const next = [...messages];
+  next[lastIndex] = {
+    ...messages[lastIndex],
+    content,
+    ...(reasoningContent ? { reasoningContent } : {}),
+  };
+  return next;
 }
 
 export function combineReasoning(nativeReasoning?: string, taggedReasoning?: string): string {

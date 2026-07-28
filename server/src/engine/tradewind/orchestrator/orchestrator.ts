@@ -77,6 +77,7 @@ export class Orchestrator {
   private archive!: ArchiveManager;
   private abortController = new AbortController();
   private running = false;
+  private outcome: LapOutcome | null = null;
   private agentActivities = new Map<string, AgentActivityHandle>();
 
   /** 本圈结束信号：Output → 'done'；出错 → 'error'；外部 stop 未出 output → 'stopped'。供 LoopController 等待。 */
@@ -115,6 +116,7 @@ export class Orchestrator {
   getTokenStream(): TokenStreamBus { return this.tokenStream; }
   getRunDir(): string { return this.runDir; }
   isRunning(): boolean { return this.running; }
+  getOutcome(): LapOutcome | null { return this.outcome; }
 
   /** 本圈结束信号。LoopController 用它等待续圈时机；'done' 才续圈，'error'/'stopped' 终止循环。 */
   whenSettled(): Promise<LapOutcome> { return this.settled; }
@@ -253,15 +255,16 @@ export class Orchestrator {
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
+    if (!this.outcome) this.outcome = 'stopped';
 
     // 兜底：若本圈未经 output/error 就被外部停止，也要 resolve settled，
     // 否则等待中的 LoopController 会永挂。Promise 只 resolve 一次，重复调用无害。
-    this.settledResolve('stopped');
+    this.settledResolve(this.outcome);
 
     // 写终结状态：被 stop 掐断的圈（未跑到 output）此前会因 handleNodeDone 闸门而不写 meta，
     // 永留 'running'。这里补写 'stopped'，使 meta 状态真实反映"被中止"而非崩溃残留。
     // ?. 守卫：gap 期停整个循环时 archive 可能尚未在 start() 中建立。
-    await this.archive?.writeEnd('stopped');
+    if (this.outcome === 'stopped') await this.archive?.writeEnd('stopped');
 
     // 0. 清理 Contact Registry
     clearContactRegistry();
@@ -303,6 +306,7 @@ export class Orchestrator {
     if (!node) return;
 
     if (node.type === 'output') {
+      this.outcome = 'done';
       // 单圈完成：归档 + 收尾（释放锁、清 runner）。
       // 循环 vs 单次的区别由 settled 信号交给上层判断——本圈无论如何都 stop（每圈全新 Orchestrator）。
       // 非循环（单次运行）时上层无人 await settled，等价于原 WORKFLOW_END + stop 行为。
@@ -323,6 +327,7 @@ export class Orchestrator {
     // 同 handleNodeDone：stop() 后（running=false）到来的 error 是 teardown 噪声，
     // settled 已由 stop() resolve('stopped')，不再覆写 meta / 重复 resolve。
     if (!this.running) return;
+    this.outcome = 'error';
 
     console.error(`[orchestrator] Node ${nodeId} failed:`, error.message);
     this.eventBus.emit({

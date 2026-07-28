@@ -31,7 +31,7 @@ import {
 import { activeNodeRunners } from '../nodes/agent';
 import { runTradewindReActNative } from './native-adapter';
 import { buildVirtualToolDefs } from './virtual-tools';
-import { appendMeetingReasoning } from './meeting-reasoning';
+import { appendMeetingReasoning, createChairAssistantMessage } from './meeting-reasoning';
 import { createMeetingIdleGuard, MEETING_IDLE_TIMEOUT_MS } from './meeting-idle-guard';
 import {
   buildTradewindChairMeta,
@@ -58,7 +58,7 @@ export type MeetingStreamEvent =
   | { type: 'agent-done'; label: string; content: string; rawContent?: string; reasoning?: string; toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>; noReply?: boolean }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-reasoning'; chunk: string }
-  | { type: 'chair-done'; content: string }
+  | { type: 'chair-done'; content: string; reasoningContent?: string }
   | { type: 'minutes-done'; content: string }
   | { type: 'error'; message: string };
 
@@ -436,8 +436,8 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
       onReasoning: onReasoning ? (chunk) => { idleGuard.touch(); onReasoning(chunk); } : undefined,
       signal: idleGuard.signal,
     });
-    session.chairMessages.push({ role: 'assistant', content: r.content });
-    onEvent?.({ type: 'chair-done', content: r.content });
+    session.chairMessages.push(createChairAssistantMessage(r.content, r.reasoningContent));
+    onEvent?.({ type: 'chair-done', content: r.content, reasoningContent: r.reasoningContent });
   } catch (e) {
     const message = idleGuard.timedOut()
       ? `LLM 静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s 无响应）`

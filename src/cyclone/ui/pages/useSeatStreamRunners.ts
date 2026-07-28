@@ -250,10 +250,10 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void) {
   /** 删工位：标弃用 + 掐流 + 通知服务端 abort。 */
   const kill = useCallback((workshopId: string, seatId: string) => {
     const r = runners.current.get(seatId);
-    if (!r) return;
-    r.abandoned = true;
     queues.current.delete(seatId);   // 删工位连带清掉其排队 / 草稿
     drafts.current.delete(seatId);
+    if (!r) return;
+    r.abandoned = true;
     abortSeat(workshopId, seatId);
   }, [abortSeat]);
 

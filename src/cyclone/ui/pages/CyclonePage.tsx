@@ -51,6 +51,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   const [chairAgentId, setChairAgentId] = useState<string | null>(null);
   /** 会长私聊抽屉是否展开（常驻右侧，独立于主区 view） */
   const [chairOpen, setChairOpen] = useState(false);
+  const [, forceChairRunTick] = useState(0);
   /** 工作室公告板条目（工作室级，全体工位可见）—— 作为工作室主区默认页 */
   const [bulletin, setBulletin] = useState<BulletinEntry[]>([]);
   const workshopRequestGuard = useRef(createLatestRequestGuard());
@@ -62,6 +63,8 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     | { kind: 'edit-seat'; id: string; draft: SeatDraft }
     | null
   >(null);
+  const viewRef = useRef(view);
+  useEffect(() => { viewRef.current = view; }, [view]);
   /** 当前正在查看的会议（room）id —— 会长私聊绑定到它，换会议即换会长上下文 */
   const activeRoomId = view?.kind === 'room' ? view.id : null;
 
@@ -97,6 +100,11 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     // 任一工位流结束 → 刷新侧栏 pending 标记
     if (activeWidRef.current) loadWorkshop(activeWidRef.current);
   }, [loadWorkshop]));
+
+  useEffect(() => {
+    if (!activeRoomId) return;
+    return seatRunners.subscribe(chairStreamKey(activeRoomId), () => forceChairRunTick(tick => tick + 1));
+  }, [activeRoomId, seatRunners.subscribe]);
 
   // 群聊流式注册表：同理，切走房间不掐流、后台续跑、切回读 roundFeed 恢复
   const roomRunners = useRoomStreamRunners(useCallback(() => {
@@ -222,6 +230,29 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     await refreshWorkshops(); await loadWorkshop(activeWid);
   }
 
+  async function deleteRoom(roomId: string, title: string) {
+    if (!activeWid) return;
+    if (!(await confirm({
+      title: `删除群聊「${title}」？`,
+      message: '公共会议、会长私聊及该群聊的异步派发记录将一并删除，不可恢复。',
+      confirmText: '删除', danger: true,
+    }))) return;
+    const workshopId = activeWid;
+    const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/delete`, { method: 'POST' });
+    if (!r.ok) { alert(await readErrorMessage(r, '删除群聊失败')); return; }
+    roomRunners.kill(workshopId, roomId);
+    seatRunners.kill(workshopId, chairStreamKey(roomId));
+    if (activeWidRef.current === workshopId && viewRef.current?.kind === 'room' && viewRef.current.id === roomId) {
+      setView(null);
+      setChairOpen(false);
+    }
+    await refreshWorkshops();
+    if (activeWidRef.current === workshopId) {
+      await loadWorkshop(workshopId);
+      await refreshDispatches();
+    }
+  }
+
   /** 创建群聊：建群 → 跑入会发言（SSE 流式落库）→ 进入。入会发言的可视化在 RoomPanel 进入后 reload 自然呈现。 */
   async function handleCreateRoom(cfg: {
     title: string; topic: string; mode: 'build' | 'plan';
@@ -295,13 +326,20 @@ export default function CyclonePage({ active }: { active?: boolean }) {
             </div>
             {rooms.map(rm => {
               const items = dispatches.filter(item => item.sourceRoomId === rm.id);
-              const running = items.some(item => item.status === 'queued' || item.status === 'running');
+              const dispatchRunning = items.some(item => (
+                item.status === 'queued' || item.status === 'running' || item.status === 'awaiting_human'
+              ));
+              const running = dispatchRunning
+                || !!roomRunners.getRunner(rm.id)?.streaming
+                || !!seatRunners.getRunner(chairStreamKey(rm.id))?.streaming;
               const unread = items.some(item => item.readState === 'unread' && (item.status === 'completed' || item.status === 'failed'));
               return (
                 <div key={rm.id} onClick={() => setView({ kind: 'room', id: rm.id })}
                   style={{ ...itemStyle, display: 'flex', alignItems: 'center', gap: 8, ...(view?.kind === 'room' && view.id === rm.id ? itemActiveStyle : null) }}>
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}># {rm.title}</span>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}># {rm.title}</span>
                   {(running || unread) && <span className={`cyclone-room__dispatch-mark${running ? ' cyclone-room__dispatch-mark--active' : ''}`} title={running ? '异步任务执行中' : '有未读异步结果'} />}
+                  <button disabled={running} onClick={e => { e.stopPropagation(); deleteRoom(rm.id, rm.title); }}
+                    style={{ ...delBtnStyle, opacity: running ? .35 : 1 }} title="删除群聊">×</button>
                 </div>
               );
             })}
@@ -341,6 +379,11 @@ export default function CyclonePage({ active }: { active?: boolean }) {
           <RoomPanel key={view.id} workshopId={activeWid} roomId={view.id}
             seats={seats.map(s => ({ id: s.id, title: s.title }))} runners={roomRunners}
             dispatches={dispatches} onDispatchAction={dispatchAction}
+            settingsLocked={
+              !!seatRunners.getRunner(chairStreamKey(view.id))?.streaming
+              || dispatches.some(item => item.sourceRoomId === view.id
+                && (item.status === 'queued' || item.status === 'running' || item.status === 'awaiting_human'))
+            }
             onOpenSeat={seatId => { setActiveSeatId(seatId); setView({ kind: 'seat', id: seatId }); }}
             onChanged={() => loadWorkshop(activeWid)} active={active} />
         )}

@@ -12,6 +12,14 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
   onCancelEdit: () => void; onDelete: () => void;
 }) {
   const [dispatchOpen, setDispatchOpen] = useState(false);
+  if (m.kind === 'membership') {
+    return (
+      <div className={`cyclone-membership-event cyclone-membership-event--${m.membershipAction || 'joined'}`} role="status">
+        <span className="cyclone-membership-event__mark" aria-hidden="true" />
+        <span>{m.content}</span>
+      </div>
+    );
+  }
   if (m.kind === 'dispatch-result') {
     return (
       <div className="chat__message chat__message--user cyclone-dispatch-result">

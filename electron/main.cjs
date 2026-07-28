@@ -18,6 +18,7 @@ const fs = require('node:fs');
 // 生产模式：打包后必走；未打包时由 ELECTRON_PROD=1 触发生产预览（自托管 dist/）
 const isProd = app.isPackaged || process.env.ELECTRON_PROD === '1';
 const isDev = !isProd;
+const shouldOpenDevTools = isDev && process.env.ELECTRON_OPEN_DEVTOOLS === '1';
 const DEV_URL = process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173';
 const PROD_PORT = parseInt(process.env.PORT || '3001', 10);
 const PROD_URL = process.env.ELECTRON_PROD_URL || `http://localhost:${PROD_PORT}`;
@@ -110,7 +111,7 @@ function createWindow() {
   });
 
   mainWindow.loadURL(isDev ? DEV_URL : PROD_URL);
-  if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
+  if (shouldOpenDevTools) mainWindow.webContents.openDevTools({ mode: 'detach' });
 
   mainWindow.on('closed', () => { mainWindow = null; });
 }

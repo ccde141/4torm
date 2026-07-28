@@ -173,6 +173,57 @@
   background: var(--glass-bg-hover);
 }
 
+.tw-toolbar__workspace-btn {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 42%, var(--border-color));
+  border-radius: var(--border-radius-full);
+  background:
+    radial-gradient(circle at 18% 20%, var(--color-accent-subtle) 0%, transparent 42%),
+    linear-gradient(135deg, var(--color-surface) 0%, var(--color-bg-secondary) 100%);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  transition:
+    transform var(--duration-fast) var(--ease-out-back),
+    border-color var(--duration-fast) var(--ease-out-expo),
+    box-shadow var(--duration-fast) var(--ease-out-expo),
+    color var(--duration-fast) var(--ease-out-expo),
+    background var(--duration-fast) var(--ease-out-expo);
+}
+
+.tw-toolbar__workspace-btn:hover:not(:disabled) {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px var(--color-accent-glow);
+}
+
+.tw-toolbar__workspace-btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+}
+
+.tw-toolbar__workspace-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-accent);
+  font-size: 13px;
+  line-height: 1;
+  transition: transform var(--duration-fast) var(--ease-out-back);
+}
+
+.tw-toolbar__workspace-btn:hover:not(:disabled) .tw-toolbar__workspace-btn-icon {
+  transform: translate(1px, -1px) scale(1.08);
+}
+
 .tw-toolbar__btn-icon {
   font-size: 10px;
 }
@@ -197,6 +248,14 @@
   background: var(--color-success);
   animation: pulse-glow 1.5s ease-in-out infinite;
 }
+.tw-toolbar__status--completed { color: var(--color-success); }
+.tw-toolbar__status--completed .tw-toolbar__dot { background: var(--color-success); box-shadow: 0 0 8px rgba(34, 197, 94, 0.65); }
+.tw-toolbar__status--stopped,
+.tw-toolbar__status--failed,
+.tw-toolbar__status--interrupted { color: var(--color-error); }
+.tw-toolbar__status--stopped .tw-toolbar__dot,
+.tw-toolbar__status--failed .tw-toolbar__dot,
+.tw-toolbar__status--interrupted .tw-toolbar__dot { background: var(--color-error); }
 
 /* ─── 画布容器 ──────────────────────────────────────── */
 
@@ -393,6 +452,40 @@
 
 .tw-node--output { border-color: rgba(34, 197, 94, 0.3); }
 .tw-node--output:hover { border-color: rgba(34, 197, 94, 0.5); }
+.tw-node--output-complete {
+  border-color: rgba(34, 197, 94, 0.85);
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.2), 0 0 26px rgba(34, 197, 94, 0.24);
+}
+.tw-node--output-missed {
+  border-color: rgba(239, 68, 68, 0.72);
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.12);
+}
+
+.tw-node__state-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 22px;
+  margin-top: var(--space-1);
+  padding: 2px 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+.tw-node__state-dot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+.tw-node__state-line--waiting { color: #f59e0b; border-color: rgba(245, 158, 11, 0.3); }
+.tw-node__state-line--complete { color: var(--color-success); border-color: rgba(34, 197, 94, 0.3); }
+.tw-node__state-line--missed { color: var(--color-error); border-color: rgba(239, 68, 68, 0.3); }
 
 .tw-node--agent { border-color: rgba(245, 158, 11, 0.3); }
 .tw-node--agent:hover { border-color: rgba(245, 158, 11, 0.5); }
@@ -922,9 +1015,20 @@
 
 
 /* ─── Human Gate 节点（暂停点） ─── */
-/* 普通矩形节点，金黄色边框，跟其他节点同构 */
-.tw-node--gate { border-color: rgba(234, 179, 8, 0.3); }
-.tw-node--gate:hover { border-color: rgba(234, 179, 8, 0.5); }
+/* 普通矩形节点，保留玻璃材质并用琥珀底层标明人工介入语义 */
+.tw-node--gate {
+  min-width: 132px;
+  border-color: rgba(234, 179, 8, 0.38);
+  background:
+    linear-gradient(145deg, rgba(245, 158, 11, 0.13), rgba(245, 158, 11, 0.035)),
+    var(--glass-bg);
+}
+.tw-node--gate:hover {
+  border-color: rgba(234, 179, 8, 0.58);
+  background:
+    linear-gradient(145deg, rgba(245, 158, 11, 0.18), rgba(245, 158, 11, 0.06)),
+    var(--glass-bg-hover);
+}
 
 .tw-node--gate .tw-node__icon {
   font-size: 22px;
@@ -949,7 +1053,23 @@
   }
 }
 .tw-node--gate-waiting {
-  animation: tw-gate-waiting-pulse 1.2s ease-in-out infinite;
+  animation: tw-gate-waiting-pulse var(--motion-loop-duration) var(--motion-loop-ease) infinite;
+}
+.tw-node__gate-action {
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: 5px 9px;
+  border: 1px solid rgba(245, 158, 11, 0.38);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 158, 11, 0.08);
+  color: #fbbf24;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+.tw-node__gate-action:hover {
+  border-color: rgba(245, 158, 11, 0.68);
+  background: rgba(245, 158, 11, 0.15);
 }
 
 /* 完成正反馈：busy 结束的下降沿触发一次性绿色提示，持续 15 秒，方便长流程中回看。

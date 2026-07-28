@@ -4,11 +4,13 @@
 
 import { useState, useEffect } from 'react';
 import type { WorkflowMode } from '../../types';
+import { phasePresentation, type ExecutionPhase } from '../hooks/execution-phase';
 
 interface ToolbarProps {
   workflowId: string;
   workflowName: string;
   running: boolean;
+  phase: ExecutionPhase;
   saveTime: number | null;
   onRun: (mode: WorkflowMode) => void;
   onOpenProfiles: () => void;
@@ -20,7 +22,7 @@ interface ToolbarProps {
 }
 
 export function Toolbar({
-  workflowId, workflowName, running, saveTime, onRun, onOpenProfiles, onStop, onSave, onOpenWorkspace, onSetWorkflowName, onLoadList,
+  workflowId, workflowName, running, phase, saveTime, onRun, onOpenProfiles, onStop, onSave, onOpenWorkspace, onSetWorkflowName, onLoadList,
 }: ToolbarProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(workflowName);
@@ -49,6 +51,7 @@ export function Toolbar({
     const d = new Date(ts);
     return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
   };
+  const status = phasePresentation[phase];
 
   return (
     <div className="tw-toolbar">
@@ -76,8 +79,9 @@ export function Toolbar({
         <button className="tw-toolbar__btn tw-toolbar__btn--save" onClick={onSave}>
           保存
         </button>
-        <button className="tw-toolbar__btn tw-toolbar__btn--ghost" onClick={onOpenWorkspace} title="打开当前工作流的共享工作区">
-          打开工作区
+        <button className="tw-toolbar__workspace-btn" onClick={onOpenWorkspace} title="打开当前工作流的共享工作区">
+          <span className="tw-toolbar__workspace-btn-icon" aria-hidden="true">↗</span>
+          <span>打开工作区</span>
         </button>
         {showSaved && saveTime && (
           <span className="tw-toolbar__saved-hint">已保存 {formatTime(saveTime)}</span>
@@ -107,9 +111,9 @@ export function Toolbar({
             </button>
           </>
         )}
-        <div className={`tw-toolbar__status ${running ? 'tw-toolbar__status--running' : ''}`}>
+        <div className={`tw-toolbar__status tw-toolbar__status--${status.tone}`}>
           <span className="tw-toolbar__dot" />
-          {running ? '执行中' : '就绪'}
+          {status.label}
         </div>
       </div>
     </div>

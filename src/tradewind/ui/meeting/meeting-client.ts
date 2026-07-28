@@ -35,24 +35,30 @@ export interface MeetingParticipant {
   label: string;
 }
 
+export interface MeetingChairMessage {
+  role: string;
+  content: string;
+  reasoningContent?: string;
+}
+
 export interface MeetingStatus {
   nodeId: string;
   round: number;
   busy: boolean;
-  /** 'opening' = 入会摘要中，禁用人类交互；'discussion' = 讨论阶段；'ended' = 会议结束 */
-  phase?: 'opening' | 'discussion' | 'ended';
+  /** opening=入会摘要；discussion=讨论；ending=会长整理纪要；ended=会议结束 */
+  phase?: 'opening' | 'discussion' | 'ending' | 'ended';
   messageCount: number;
   participants: MeetingParticipant[];
   configuredParticipants: MeetingParticipant[];
   chairAgentId: string;
   publicMessages?: MeetingMessage[];
-  chairMessages?: Array<{ role: string; content: string }>;
+  chairMessages?: MeetingChairMessage[];
   /** 正在流式产出的消息（面板关了再开时 replay 用） */
   streamingCurrent?: { speaker: string; content: string; reasoning?: string } | null;
 }
 
 export type MeetingBroadcastEvent =
-  | { type: 'connected'; phase: string; round: number; messages: MeetingMessage[]; chairMessages: Array<{ role: string; content: string }>; participants: MeetingParticipant[]; configuredParticipants: MeetingParticipant[] }
+  | { type: 'connected'; phase: string; round: number; messages: MeetingMessage[]; chairMessages: MeetingChairMessage[]; participants: MeetingParticipant[]; configuredParticipants: MeetingParticipant[] }
   | { type: 'agent-start'; label: string }
   | { type: 'token'; label: string; chunk: string }
   | { type: 'reasoning'; label: string; chunk: string }
@@ -65,7 +71,7 @@ export type MeetingBroadcastEvent =
   | { type: 'round-done'; messages: MeetingMessage[]; compacted?: boolean }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-reasoning'; chunk: string }
-  | { type: 'chair-done'; content: string }
+  | { type: 'chair-done'; content: string; reasoningContent?: string }
   | { type: 'minutes-done'; content: string }
   | { type: 'summary-chunk'; chunk: string }
   | { type: 'summary-done'; minutes: string }

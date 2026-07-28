@@ -12,6 +12,16 @@ test('normal install and desktop development prepare the documentation site', as
   assert.equal(packageJson.scripts?.['preelectron:dev'], 'npm run docs:build');
 });
 
+test('desktop development starts without automatically opening DevTools', async () => {
+  const electronMain = await fs.readFile(
+    new URL('../electron/main.cjs', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(electronMain, /process\.env\.ELECTRON_OPEN_DEVTOOLS === '1'/);
+  assert.doesNotMatch(electronMain, /if \(isDev\) mainWindow\.webContents\.openDevTools/);
+});
+
 test('build configuration stays compatible with current npm and VitePress', async () => {
   const [packageText, npmrc] = await Promise.all([
     fs.readFile(new URL('../package.json', import.meta.url), 'utf8'),
@@ -250,6 +260,30 @@ test('潮汐推送目标说明工具过程的真实保存边界', async () => {
 
   assert.match(tide, /工具调用过程不会出现在该会话中/);
   assert.match(tide, /保存在对应的潮汐运行记录文件中/);
+});
+
+test('气旋文档说明正式会议设置与成员生命周期边界', async () => {
+  const cyclone = await fs.readFile(
+    new URL('../docs/modes/cyclone.md', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(cyclone, /群聊右上角的「会议设置」/);
+  assert.match(cyclone, /「请离会议」只会将工位移出当前群聊/);
+  assert.match(cyclone, /成员已加入，但入会发言失败/);
+  assert.match(cyclone, /公共会议、会长私聊或当前群聊的异步派发仍在处理/);
+});
+
+test('信风文档说明出口全量交接与会议双会话形态', async () => {
+  const tradewind = await fs.readFile(
+    new URL('../docs/modes/tradewind.md', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(tradewind, /等待信封全量交接/);
+  assert.match(tradewind, /浮动卡片左侧提供公共会议与会长私聊的切换入口/);
+  assert.match(tradewind, /会长正在整理会议纪要/);
+  assert.match(tradewind, /不能被当作普通回复直接丢弃/);
 });
 
 test('核心概念只描述两档文件工具权限及真实边界', async () => {

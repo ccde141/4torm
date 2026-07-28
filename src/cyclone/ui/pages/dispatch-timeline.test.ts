@@ -58,6 +58,18 @@ test('带入讨论的系统消息保留为人类侧异步回执而非归档摘�
   assert.equal(message.dispatchId, 'dispatch-a');
 });
 
+test('成员变更保留为专用系统时间线而非 Agent 或归档消息', () => {
+  const [message] = publicToFeed([{
+    id: 'membership-a', speaker: '系统', content: '研究员加入会议', timestamp: 1,
+    kind: 'membership', seatId: 'seat-a', membershipAction: 'joined',
+  }]);
+  assert.equal(message.kind, 'membership');
+  assert.equal(message.isHuman, false);
+  assert.equal(message.isArchiveSummary, false);
+  assert.equal(message.seatId, 'seat-a');
+  assert.equal(message.membershipAction, 'joined');
+});
+
 test('源工位只显示尚未由持久化回执接替的私聊派发', () => {
   const active = {
     ...dispatch('seat-active', 'turn-a', 0), sourceKind: 'seat' as const,

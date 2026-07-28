@@ -7,7 +7,7 @@
  * - 处理节点选中、拖放、右键菜单
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -29,9 +29,11 @@ import { HumanGateNode } from './nodes/HumanGateNode';
 import { TradeWindEdge } from './edges/TradeWindEdge';
 import { ContextMenu, type ContextMenuState } from './ContextMenu';
 import type { WorkflowStoreState, WorkflowStoreActions } from '../hooks/useWorkflowStore';
+import type { ExecutionPhase } from '../hooks/execution-phase';
 
 interface TradeWindCanvasProps {
   store: WorkflowStoreState & WorkflowStoreActions;
+  executionPhase: ExecutionPhase;
 }
 
 const nodeTypes: NodeTypes = {
@@ -49,9 +51,12 @@ const edgeTypes: EdgeTypes = {
 
 const MENU_INIT: ContextMenuState = { visible: false, x: 0, y: 0, nodeId: null, edgeId: null, flowPosition: null };
 
-export function TradeWindCanvas({ store }: TradeWindCanvasProps) {
+export function TradeWindCanvas({ store, executionPhase }: TradeWindCanvasProps) {
   const rfInstance = useRef<ReactFlowInstance | null>(null);
   const [menu, setMenu] = useState<ContextMenuState>(MENU_INIT);
+  const renderedNodes = useMemo(() => store.nodes.map(node => node.type === 'output'
+    ? { ...node, data: { ...node.data, runtimePhase: executionPhase } }
+    : node), [store.nodes, executionPhase]);
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: { id: string }) => {
@@ -128,7 +133,7 @@ export function TradeWindCanvas({ store }: TradeWindCanvasProps) {
   return (
     <div className="tw-canvas" ref={canvasRef}>
       <ReactFlow
-        nodes={store.nodes}
+        nodes={renderedNodes}
         edges={store.edges}
         onNodesChange={store.onNodesChange}
         onEdgesChange={store.onEdgesChange}
