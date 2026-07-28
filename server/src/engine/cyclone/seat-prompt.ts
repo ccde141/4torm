@@ -132,11 +132,12 @@ export function buildSeatSystemPrompt(opts: {
   toolDefs: ToolDef[];
   native: boolean;
   contactTargets?: ContactTarget[];
+  memorySection?: string;
   wsRelPath: string;
   /** 本工位上次已读到的公告板 updatedAt（变更注意力标 🆕） */
   bulletinSeenAt?: number;
 }): string {
-  const { dataDir, workshopId, seat, agent, toolDefs, native, contactTargets = [], wsRelPath, bulletinSeenAt } = opts;
+  const { dataDir, workshopId, seat, agent, toolDefs, native, contactTargets = [], memorySection, wsRelPath, bulletinSeenAt } = opts;
   const projectDir = path.resolve(dataDir, '..');
   const wsAbs = path.resolve(projectDir, wsRelPath);
   const parts: string[] = [];
@@ -154,6 +155,7 @@ export function buildSeatSystemPrompt(opts: {
 
   // 2~3. 角色身份（agent 人设 / 工位覆盖 + 职责名片）
   parts.push(...buildRoleParts(seat, agent));
+  if (memorySection?.trim()) parts.push(memorySection.trim());
 
   // 3.2 基础协作准则（私聊场景）
   parts.push(buildBaselineSection('solo'));
@@ -279,10 +281,11 @@ export function buildSeatRoomSystemPrompt(opts: {
   wsRelPath: string;
   topic: string;
   dispatchTargets?: ContactTarget[];
+  memorySection?: string;
   /** 本工位上次已读到的公告板 updatedAt（变更注意力标 🆕，跨频道共享同一水位） */
   bulletinSeenAt?: number;
 }): string {
-  const { dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath, topic, dispatchTargets = [], bulletinSeenAt } = opts;
+  const { dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath, topic, dispatchTargets = [], memorySection, bulletinSeenAt } = opts;
   const projectDir = path.resolve(dataDir, '..');
   const wsAbs = path.resolve(projectDir, wsRelPath);
   const parts: string[] = [];
@@ -297,6 +300,7 @@ export function buildSeatRoomSystemPrompt(opts: {
   }));
 
   parts.push(...buildRoleParts(seat, agent));
+  if (memorySection?.trim()) parts.push(memorySection.trim());
   parts.push(buildBaselineSection('room'));
   if (dispatchTargets.length > 0) parts.push(buildRoomDispatchGuidance(seat.title, dispatchTargets));
   parts.push(buildBulletinSection(readBulletinSync(dataDir, workshopId), { seenAt: bulletinSeenAt }));
@@ -322,8 +326,9 @@ export function buildSeatContactSystemPrompt(opts: {
   native: boolean;
   wsRelPath: string;
   fromTitle: string;
+  memorySection?: string;
 }): string {
-  const { dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath, fromTitle } = opts;
+  const { dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath, fromTitle, memorySection } = opts;
   const projectDir = path.resolve(dataDir, '..');
   const wsAbs = path.resolve(projectDir, wsRelPath);
   const parts: string[] = [];
@@ -338,6 +343,7 @@ export function buildSeatContactSystemPrompt(opts: {
   }));
 
   parts.push(...buildRoleParts(seat, agent));
+  if (memorySection?.trim()) parts.push(memorySection.trim());
   parts.push(buildBaselineSection('contact', fromTitle));
   parts.push(buildBulletinSection(readBulletinSync(dataDir, workshopId)));
   if (toolDefs.length > 0) {

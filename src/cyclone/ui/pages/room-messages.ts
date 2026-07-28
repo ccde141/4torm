@@ -1,4 +1,5 @@
 import type { FeedMsg } from './useRoomStreamRunners';
+import type { RoomReplySegment } from './room-reply-segments';
 
 export interface RoomToolCall {
   tool: string;
@@ -15,6 +16,7 @@ export interface RoomMsg {
   rawContent?: string;
   reasoning?: string;
   toolCalls?: RoomToolCall[];
+  segments?: RoomReplySegment[];
   kind?: 'dispatch-result' | 'membership';
   dispatchId?: string;
   seatId?: string;
@@ -52,6 +54,7 @@ export function publicToFeed(messages: RoomMsg[]): FeedMsg[] {
       seatId: message.seatId,
       membershipAction: message.membershipAction,
       reasoning: message.reasoning,
+      segments: message.segments,
       tools: (message.toolCalls || []).map(tool => ({
         tool: tool.tool, args: tool.args, result: tool.result, status: 'success' as const,
       })),

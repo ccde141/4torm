@@ -19,6 +19,12 @@ import { execToolUnified } from '../shared/exec-tool';
 import { runReActLoop, runReActLoopNative, type ToolCaller, type LLMCaller } from './react-loop';
 import { callLLM } from '../shared/llm-bridge';
 import { buildSeatContactSystemPrompt } from './seat-prompt';
+import {
+  buildCycloneMemoryPrompt,
+  executeCycloneMemoryTool,
+  isCycloneMemoryTool,
+  withCycloneMemoryTools,
+} from './cyclone-memory.js';
 import { execBulletin } from './bulletin';
 import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { loadSeat, saveSeat, tryAcquireSeatLock } from './seat-store';
@@ -120,7 +126,10 @@ async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: 
   const agent = await loadAgent(dataDir, seat.agentId);
   if (!agent) throw new Error(`「${seat.title}」绑定的 agent 已删除`);
 
-  const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode);
+  const toolDefs = withCycloneMemoryTools(
+    await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode),
+  );
+  const memorySection = await buildCycloneMemoryPrompt(dataDir, agent.id, message);
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
   const wsDir = wsRel(dataDir, workshopId);
   const llm = makeLLM(dataDir, agent.model, agent.temperature);
@@ -130,6 +139,13 @@ async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: 
 
   const toolCaller: ToolCaller = {
     async call(tool, args) {
+      if (isCycloneMemoryTool(tool)) {
+        try {
+          return (await executeCycloneMemoryTool(dataDir, agent.id, tool, args))!;
+        } catch (error) {
+          return `记忆工具执行失败: ${(error as Error).message}`;
+        }
+      }
       if (tool === 'bulletin') {
         return (await execBulletin(dataDir, workshopId, args, seat.title)).result;
       }
@@ -165,7 +181,9 @@ async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: 
 
   const system: ContextMessage = {
     role: 'system',
-    content: buildSeatContactSystemPrompt({ dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath: wsDir, fromTitle }),
+    content: buildSeatContactSystemPrompt({
+      dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath: wsDir, fromTitle, memorySection,
+    }),
   };
   const messages: ContextMessage[] = [system, ...seat.messages];
   // 被联络方剥 ask（无人类在场），保留 delegate + 嵌套 contact

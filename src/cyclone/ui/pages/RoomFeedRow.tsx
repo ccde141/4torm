@@ -2,14 +2,21 @@ import { useState } from 'react';
 import { renderTextWithCode } from '../../../engine/markdown';
 import ToolCallMessage from '../../../components/chat/ToolCallMessage';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
-import ToolActivityList from '../../../components/chat/ToolActivityGroup';
+import CycloneToolActivityList from './CycloneToolActivityList';
 import type { FeedMsg } from './useRoomStreamRunners';
+import DispatchCard from './DispatchCard';
+import type { CycloneDispatch } from './dispatch-timeline';
+import type { DispatchAction } from './useWorkshopDispatches';
 
 export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEditContent,
-  onStartEdit, onSaveEdit, onCancelEdit, onDelete }: {
+  onStartEdit, onSaveEdit, onCancelEdit, onDelete, dispatches, highlightedId,
+  onDispatchAction, onOpenSeat }: {
   m: FeedMsg; idx: number; prefix: string; editing: boolean; editContent: string;
   onEditContent: (value: string) => void; onStartEdit: () => void; onSaveEdit: () => void;
   onCancelEdit: () => void; onDelete: () => void;
+  dispatches: CycloneDispatch[]; highlightedId: string | null;
+  onDispatchAction: (id: string, action: DispatchAction) => Promise<void>;
+  onOpenSeat: (seatId: string) => void;
 }) {
   const [dispatchOpen, setDispatchOpen] = useState(false);
   if (m.kind === 'membership') {
@@ -66,17 +73,50 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
     );
   }
   return (
+    <>
+      <div className="conv__speaker-label conv__speaker-label--offset">{m.speaker}</div>
+      {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} defaultOpen={false} />}
+      {m.segments ? m.segments.map((segment, segmentIndex) => {
+        if (segment.kind === 'tools') return <CycloneToolActivityList key={segmentIndex} items={segment.tools} renderItem={(tool, toolIndex) => (
+          <ToolCallMessage key={toolIndex} toolCall={{ toolName: tool.tool, params: tool.args, result: tool.result, status: tool.status }} />
+        )} />;
+        if (segment.kind === 'dispatch') {
+          const item = dispatches.find(dispatch => dispatch.id === segment.dispatchId);
+          return item ? <DispatchCard key={segment.dispatchId} item={item}
+            highlighted={highlightedId === item.id}
+            onAction={action => onDispatchAction(item.id, action)}
+            onOpenSeat={() => onOpenSeat(item.targetSeatId)} /> : null;
+        }
+        return <AssistantBubble key={segmentIndex} m={m} content={segment.content}
+          id={`room-${prefix}s-${idx}-${segmentIndex}`} />;
+      }) : <CycloneToolActivityList items={m.tools} renderItem={(tool, toolIndex) => (
+        <ToolCallMessage key={toolIndex} toolCall={{ toolName: tool.tool, params: tool.args, result: tool.result, status: tool.status }} />
+      )} />}
+      {!m.segments && (m.phase || m.content || (!m.streaming && actions)) && (
+        <div className={`chat__message chat__message--assistant${m.isArchiveSummary ? ' chat__message--archive-summary' : ''}`}>
+          <div className="chat__avatar">{m.isArchiveSummary ? '档' : m.speaker.slice(0, 2)}</div>
+          <div className="chat__bubble">
+            {m.phase && <div className="chat__streaming-phase">{m.phase}</div>}
+            {m.content && <div className="chat__content" style={{ whiteSpace: 'pre-wrap' }}>{renderTextWithCode(m.content, `room-${prefix}s-${idx}`)}{m.streaming ? '▍' : ''}</div>}
+            {!m.streaming && actions}
+          </div>
+        </div>
+      )}
+      {m.segments && m.phase && <AssistantBubble m={m} content="" id={`room-${prefix}p-${idx}`} />}
+      {m.segments && !m.streaming && actions}
+    </>
+  );
+}
+
+function AssistantBubble({ m, content, id }: { m: FeedMsg; content: string; id: string }) {
+  return (
     <div className={`chat__message chat__message--assistant${m.isArchiveSummary ? ' chat__message--archive-summary' : ''}`}>
       <div className="chat__avatar">{m.isArchiveSummary ? '档' : m.speaker.slice(0, 2)}</div>
       <div className="chat__bubble">
-        <div className="conv__speaker-label">{m.speaker}</div>
-        {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} defaultOpen={false} />}
-        <ToolActivityList items={m.tools} renderItem={(tool, toolIndex) => (
-          <ToolCallMessage key={toolIndex} toolCall={{ toolName: tool.tool, params: tool.args, result: tool.result, status: tool.status }} />
-        )} />
-        {m.phase && <div className="chat__streaming-phase">{m.phase}</div>}
-        {m.content && <div className="chat__content" style={{ whiteSpace: 'pre-wrap' }}>{renderTextWithCode(m.content, `room-${prefix}s-${idx}`)}{m.streaming ? '▍' : ''}</div>}
-        {!m.streaming && actions}
+        {m.phase && !content && <div className="chat__streaming-phase">{m.phase}</div>}
+        {content && <div className="chat__content" style={{ whiteSpace: 'pre-wrap' }}>
+          {renderTextWithCode(content, id)}{m.streaming ? '▍' : ''}
+        </div>}
       </div>
     </div>
   );

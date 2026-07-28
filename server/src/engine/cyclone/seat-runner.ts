@@ -45,6 +45,12 @@ import {
   type ToolRegistrationProposal,
 } from '../shared/tool-registration.js';
 import { applyPendingSeatResponse } from './seat-tool-registration.js';
+import {
+  buildCycloneMemoryPrompt,
+  executeCycloneMemoryTool,
+  isCycloneMemoryTool,
+  withCycloneMemoryTools,
+} from './cyclone-memory.js';
 
 /** 工位执行事件（流式推送用） */
 export type SeatEvent =
@@ -128,6 +134,18 @@ function makeToolCaller(opts: {
   let dispatchOrder = 0;
   return {
     async call(tool, args) {
+      if (isCycloneMemoryTool(tool)) {
+        onEvent({ type: 'tool-call', tool, args });
+        try {
+          const result = (await executeCycloneMemoryTool(dataDir, agentId, tool, args))!;
+          onEvent({ type: 'tool-result', tool, result, ok: true });
+          return result;
+        } catch (error) {
+          const result = `记忆工具执行失败: ${(error as Error).message}`;
+          onEvent({ type: 'tool-result', tool, result, ok: false });
+          return result;
+        }
+      }
       if (tool === 'ask') {
         const question = args.question || '需要你的确认';
         let options: string[] | undefined;
@@ -318,15 +336,18 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
 }
 
 /** 加载工位 + 绑定 agent + 工具定义 + 决议 native + 可联络名单（chat/resume 共用前置） */
-async function prepare(dataDir: string, workshopId: string, seatId: string) {
+async function prepare(dataDir: string, workshopId: string, seatId: string, taskHint: string) {
   const seat = await loadSeat(dataDir, workshopId, seatId);
   if (!seat) throw new Error(`工位不存在：${seatId}`);
   const agent = await loadAgent(dataDir, seat.agentId);
   if (!agent) throw new Error(`工位绑定的 agent 不存在或已删除：${seat.agentId}`);
-  const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode);
+  const toolDefs = withCycloneMemoryTools(
+    await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode),
+  );
+  const memorySection = await buildCycloneMemoryPrompt(dataDir, agent.id, taskHint);
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
   const contactTargets = await listOtherSeats(dataDir, workshopId, seatId);
-  return { seat, agent, toolDefs, native, contactTargets };
+  return { seat, agent, toolDefs, native, contactTargets, memorySection };
 }
 
 /**
@@ -343,13 +364,13 @@ export async function chatSeat(
     const queuedSeat = await loadSeat(dataDir, workshopId, seatId);
     if (!queuedSeat) throw new Error(`工位不存在：${seatId}`);
     return await withAgentActivity(queuedSeat.agentId, 'cyclone', async () => {
-        const { seat, agent, toolDefs, native, contactTargets } = await prepare(dataDir, workshopId, seatId);
+        const { seat, agent, toolDefs, native, contactTargets, memorySection } = await prepare(dataDir, workshopId, seatId, humanMessage);
         if (seat.agentId !== queuedSeat.agentId) throw new Error(`工位「${queuedSeat.title}」已更换 Agent，本轮已跳过`);
         if (seat.pending) throw new Error('工位处于挂起状态，请先回复其提问（resume）');
         await deliverSeatDispatchReceipts(dataDir, workshopId, seat);
         const system: SeatContextMessage = {
           role: 'system', content: buildSeatSystemPrompt({
-            dataDir, workshopId, seat, agent, toolDefs, native, contactTargets,
+            dataDir, workshopId, seat, agent, toolDefs, native, contactTargets, memorySection,
             wsRelPath: wsRelPath(dataDir, workshopId), bulletinSeenAt: seat.bulletinSeenAt,
           }),
         };
@@ -379,13 +400,13 @@ export async function resumeSeat(
         const native = await applyPendingSeatResponse(
           dataDir, workshopId, queuedSeat, answer, onEvent,
         );
-        const { seat, agent, toolDefs, contactTargets } = await prepare(dataDir, workshopId, seatId);
+        const { seat, agent, toolDefs, contactTargets, memorySection } = await prepare(dataDir, workshopId, seatId, answer);
         if (seat.agentId !== queuedSeat.agentId) throw new Error(`工位「${queuedSeat.title}」已更换 Agent，本轮已跳过`);
         // 原生 tool result 已持久化；回执只能在回答落位后注入。
         await deliverSeatDispatchReceipts(dataDir, workshopId, seat);
         const system: SeatContextMessage = {
           role: 'system', content: buildSeatSystemPrompt({
-            dataDir, workshopId, seat, agent, toolDefs, native, contactTargets,
+            dataDir, workshopId, seat, agent, toolDefs, native, contactTargets, memorySection,
             wsRelPath: wsRelPath(dataDir, workshopId), bulletinSeenAt: seat.bulletinSeenAt,
           }),
         };

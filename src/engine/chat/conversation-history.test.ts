@@ -48,6 +48,22 @@ test('独立工具卡使用结构化历史而不生成文本标签', () => {
   ]);
 });
 
+test('native context claims aggregated assistant content before the final answer', () => {
+  const history = buildConversationHistory([{
+    id: 'a2', role: 'assistant', content: 'Before tools\n\nFinal answer',
+    timestamp: '2026-01-01T00:00:00.000Z',
+    nativeContext: [
+      {
+        role: 'assistant', content: 'Before tools',
+        toolCalls: [{ id: 'tc-2', name: 'read_file', arguments: '{}' }],
+      },
+      { role: 'tool', content: 'file content', toolCallId: 'tc-2' },
+    ],
+  }]);
+
+  assert.deepEqual(history.at(-1), { role: 'assistant', content: 'Final answer' });
+});
+
 test('用户消息中的图片随文字进入模型上下文', () => {
   const images = [{
     id: 'image-1', name: 'screen.png', mimeType: 'image/png',

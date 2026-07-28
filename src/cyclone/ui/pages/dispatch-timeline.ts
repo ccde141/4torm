@@ -92,3 +92,26 @@ export function selectVisibleSeatDispatches(
     && item.receiptState !== 'delivered'
   ));
 }
+
+interface SeatDispatchReference {
+  dispatchId?: string;
+  blocks?: Array<{ kind: string; tool?: string; result?: string }>;
+}
+
+export function selectOrphanedSeatDispatches(
+  dispatches: CycloneDispatch[],
+  seatId: string,
+  references: SeatDispatchReference[],
+): CycloneDispatch[] {
+  const linked = new Set<string>();
+  for (const reference of references) {
+    if (reference.dispatchId) linked.add(reference.dispatchId);
+    for (const block of reference.blocks ?? []) {
+      if (block.kind !== 'tool' || block.tool !== 'dispatch') continue;
+      const id = block.result?.match(/任务 ID[：:]\s*([\w-]+)/)?.[1];
+      if (id) linked.add(id);
+    }
+  }
+  return selectVisibleSeatDispatches(dispatches, seatId)
+    .filter(item => !linked.has(item.id));
+}

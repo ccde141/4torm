@@ -11,19 +11,24 @@
  */
 import { useRef, useCallback } from 'react';
 import { streamUrl } from '../../../lib/apiBase';
-import type { DisplayBlock, DisplayMessage } from './messageDisplay';
+import type { DisplayMessage } from './messageDisplay';
 import type { TaskBoard } from '../../../utils/taskboard';
 import { readCycloneSSE } from './cyclone-sse';
 import { normalizeDelegateProgressAtToolBoundary } from '../../../engine/chat/delegate-progress';
 import { formatStreamStatus, getToolTarget } from '../../../components/chat/stream-status';
+import {
+  appendReplyBlock,
+  appendReplyText,
+  findReplyBlock,
+  reconcileReplyAnswer,
+  type CycloneReplySegment,
+} from './cyclone-reply-sequence';
 export interface Live {
-  blocks: DisplayBlock[];
-  text: string;
+  segments: CycloneReplySegment[];
   /** 原生思考流（流式当轮显示；不进上下文，故重载不保留） */
   reasoning?: string;
   phase: string;
   activityTarget?: string;
-  ask?: { question: string; options?: string[] };
   /** task_board 假工具通过 meta 侧通道回传的最新任务板（undefined=本轮未更新，null=已清空） */
   taskboard?: TaskBoard | null;
 }
@@ -45,34 +50,32 @@ interface SeatRunner {
 }
 const MAX_BG = 3;
 function emptyLive(): Live {
-  return { blocks: [], text: '', phase: formatStreamStatus('llm-waiting') };
+  return { segments: [], phase: formatStreamStatus('llm-waiting') };
 }
 
 /** 把一个 SeatEvent 应用到 Live 累积态（流式 + 重载共用的卡片块构建逻辑）。 */
 function applyEvent(ev: any, ls: Live): void {
   switch (ev.type) {
     case 'token':
-      ls.text += ev.content; ls.phase = formatStreamStatus('model-output'); ls.activityTarget = undefined; break;
+      appendReplyText(ls.segments, ev.content); ls.phase = formatStreamStatus('model-output'); ls.activityTarget = undefined; break;
     case 'reasoning':
       ls.reasoning = (ls.reasoning || '') + ev.content; ls.phase = formatStreamStatus('model-output'); ls.activityTarget = undefined; break;
     case 'tool-progress':
       ls.phase = formatStreamStatus('tool-preparing', Math.round((ev.elapsed || 0) / 1000), ev.tool, ev.argumentChars);
       ls.activityTarget = undefined; break;
     case 'tool-call':
-      ls.blocks.push({ kind: 'tool', tool: ev.tool, args: ev.args, status: 'running' });
+      appendReplyBlock(ls.segments, { kind: 'tool', tool: ev.tool, args: ev.args, status: 'running' });
       ls.phase = formatStreamStatus('tool-exec', 0, ev.tool);
       ls.activityTarget = getToolTarget(ev.args); break;
     case 'tool-result': {
       // task_board 侧通道：结构化任务板即时刷新抽屉（不进 LLM 上下文）
       if (ev.meta && 'taskboard' in ev.meta) ls.taskboard = ev.meta.taskboard;
-      for (let i = ls.blocks.length - 1; i >= 0; i--) {
-        const b = ls.blocks[i];
-        if (b.kind === 'tool' && b.status === 'running') { ls.blocks[i] = { ...b, result: ev.result, status: ev.ok ? 'success' : 'error' }; break; }
-      }
+      const block = findReplyBlock(ls.segments, item => item.kind === 'tool' && item.status === 'running');
+      if (block?.kind === 'tool') { block.result = ev.result; block.status = ev.ok ? 'success' : 'error'; }
       ls.phase = formatStreamStatus('llm-waiting'); ls.activityTarget = undefined; break;
     }
     case 'heartbeat': {
-      const tool = ls.blocks.findLast(b => b.kind === 'tool' && b.status === 'running');
+      const tool = findReplyBlock(ls.segments, item => item.kind === 'tool' && item.status === 'running');
       ls.phase = formatStreamStatus(
         ev.phase === 'tool-exec' ? 'tool-exec' : 'llm-waiting',
         Math.round((ev.elapsed || 0) / 1000),
@@ -82,14 +85,14 @@ function applyEvent(ev: any, ls: Live): void {
       break;
     }
     case 'delegate-start':
-      ls.blocks.push({ kind: 'delegate', id: ev.delegateId, task: ev.task, steps: [], status: 'running' });
+      appendReplyBlock(ls.segments, { kind: 'delegate', id: ev.delegateId, task: ev.task, steps: [], status: 'running' });
       ls.phase = '子任务执行中...'; break;
     case 'delegate-token': {
-      const b = ls.blocks.find(x => x.kind === 'delegate' && x.id === ev.delegateId);
+      const b = findReplyBlock(ls.segments, item => item.kind === 'delegate' && item.id === ev.delegateId);
       if (b && b.kind === 'delegate') b.content = (b.content || '') + ev.content; break;
     }
     case 'delegate-tool-call': {
-      const b = ls.blocks.find(x => x.kind === 'delegate' && x.id === ev.delegateId);
+      const b = findReplyBlock(ls.segments, item => item.kind === 'delegate' && item.id === ev.delegateId);
       if (b && b.kind === 'delegate') {
         b.content = normalizeDelegateProgressAtToolBoundary(b.content || '');
         b.steps.push({ type: 'tool', tool: ev.tool, args: ev.args });
@@ -97,7 +100,7 @@ function applyEvent(ev: any, ls: Live): void {
       break;
     }
     case 'delegate-tool-result': {
-      const b = ls.blocks.find(x => x.kind === 'delegate' && x.id === ev.delegateId);
+      const b = findReplyBlock(ls.segments, item => item.kind === 'delegate' && item.id === ev.delegateId);
       if (b && b.kind === 'delegate') {
         for (let i = b.steps.length - 1; i >= 0; i--) {
           if (b.steps[i].tool === ev.tool && b.steps[i].result === undefined) { b.steps[i].result = ev.result; b.steps[i].ok = ev.ok; break; }
@@ -106,7 +109,7 @@ function applyEvent(ev: any, ls: Live): void {
       break;
     }
     case 'delegate-done': {
-      const b = ls.blocks.find(x => x.kind === 'delegate' && x.id === ev.delegateId);
+      const b = findReplyBlock(ls.segments, item => item.kind === 'delegate' && item.id === ev.delegateId);
       if (b && b.kind === 'delegate') {
         b.content = normalizeDelegateProgressAtToolBoundary(b.content || '');
         b.summary = ev.summary;
@@ -115,19 +118,19 @@ function applyEvent(ev: any, ls: Live): void {
       ls.phase = ''; break;
     }
     case 'contact-start':
-      ls.blocks.push({ kind: 'contact', id: ev.contactId, target: ev.target, message: ev.message, status: 'running' });
+      appendReplyBlock(ls.segments, { kind: 'contact', id: ev.contactId, target: ev.target, message: ev.message, status: 'running' });
       ls.phase = `联络 ${ev.target}...`; break;
     case 'contact-done': {
-      const b = ls.blocks.find(x => x.kind === 'contact' && x.id === ev.contactId);
+      const b = findReplyBlock(ls.segments, item => item.kind === 'contact' && item.id === ev.contactId);
       if (b && b.kind === 'contact') { b.reply = ev.reply; b.status = ev.ok ? 'success' : 'error'; }
       ls.phase = ''; break;
     }
     case 'answer':
-      ls.text = ev.content; ls.phase = ''; break;
+      reconcileReplyAnswer(ls.segments, ev.content); ls.phase = ''; break;
     case 'ask':
-      ls.ask = { question: ev.question, options: ev.options }; ls.phase = ''; break;
+      appendReplyBlock(ls.segments, { kind: 'ask', question: ev.question, options: ev.options, answered: false }); ls.phase = ''; break;
     case 'error':
-      ls.text += `\n[错误] ${ev.message}`; ls.phase = ''; break;
+      appendReplyText(ls.segments, `\n[错误] ${ev.message}`); ls.phase = ''; break;
   }
 }
 
@@ -307,7 +310,7 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void) {
         );
       } catch (e) {
         if (!ctrl.signal.aborted) {
-          runner.live.text += `\n[请求失败] ${(e as Error).message}`;
+          appendReplyText(runner.live.segments, `\n[请求失败] ${(e as Error).message}`);
           runner.live.phase = '';
         }
       } finally {

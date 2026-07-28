@@ -49,12 +49,14 @@ function parseArgs(raw: string): Record<string, unknown> {
 
 function statusOf(result: string | undefined): 'running' | 'success' | 'error' {
   if (result === undefined) return 'running';
-  return (result.startsWith('错误') || result.startsWith('工具执行失败') || result.startsWith('联络失败')) ? 'error' : 'success';
+  return (result.startsWith('错误') || result.startsWith('工具执行失败')
+    || result.startsWith('联络失败') || isCancelledToolResult(result)) ? 'error' : 'success';
 }
 
 /** 解析 delegate 工具结果文本 `[status] summary` */
 function parseDelegateResult(result: string | undefined): { summary: string; status: 'running' | 'success' | 'error' } {
   if (result === undefined) return { summary: '', status: 'running' };
+  if (isCancelledToolResult(result)) return { summary: result, status: 'error' };
   const m = result.match(/^\[(\w+)\]\s*([\s\S]*)$/);
   if (m) return { summary: m[2], status: m[1] === 'success' ? 'success' : m[1] === 'error' ? 'error' : 'success' };
   return { summary: result, status: 'success' };
@@ -63,6 +65,7 @@ function parseDelegateResult(result: string | undefined): { summary: string; sta
 /** contact 结果是否成功（与 seat-runner 判定一致） */
 function contactOk(result: string | undefined): 'running' | 'success' | 'error' {
   if (result === undefined) return 'running';
+  if (isCancelledToolResult(result)) return 'error';
   return (result.startsWith('联络失败') || result.startsWith('联络被系统拒绝') || result.includes('正忙')) ? 'error' : 'success';
 }
 
@@ -136,3 +139,4 @@ export function contextToDisplay(stored: StoredMsg[]): DisplayMessage[] {
   }
   return out;
 }
+import { isCancelledToolResult } from './tool-result-status';

@@ -26,7 +26,12 @@ export default function RoomTimeline({ history, roundFeed, dispatches, highlight
     ...history.map((message, index) => ({ key: message.key, turnId: message.turnId, message, index, prefix: 'h' as const })),
     ...(roundFeed || []).map((message, index) => ({ key: message.key, turnId: message.turnId, message, index, prefix: 'r' as const })),
   ];
-  const timeline = buildDispatchTimeline(messages, dispatches);
+  const linkedDispatches = new Set(messages.flatMap(item => (
+    item.message.segments?.flatMap(segment => segment.kind === 'dispatch' ? [segment.dispatchId] : []) ?? []
+  )));
+  const timeline = buildDispatchTimeline(
+    messages, dispatches.filter(item => !linkedDispatches.has(item.id)),
+  );
 
   return timeline.map(item => {
     if (item.kind === 'dispatch') {
@@ -40,6 +45,8 @@ export default function RoomTimeline({ history, roundFeed, dispatches, highlight
       editing={prefix === 'h' && editingMessageIndex === message.sourceIndex}
       editContent={editMessageContent} onEditContent={onEditContent}
       onStartEdit={() => onStartEdit(message)} onSaveEdit={onSaveEdit}
-      onCancelEdit={onCancelEdit} onDelete={() => onDelete(message)} />;
+      onCancelEdit={onCancelEdit} onDelete={() => onDelete(message)}
+      dispatches={dispatches} highlightedId={highlightedId}
+      onDispatchAction={onDispatchAction} onOpenSeat={onOpenSeat} />;
   });
 }

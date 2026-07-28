@@ -153,6 +153,10 @@ export interface ReActLoopResult {
  * - 终结靠 finish_reason=stop（无 tool_call）
  * - 业务挂起：通过 onToolError hook 由调用方决策，core 不识别具体异常类型
  */
+function completeAnswer(parts: string[], current = ''): string {
+  return [...parts, current].map(part => part.trim()).filter(Boolean).join('\n\n');
+}
+
 export async function runReActLoopNative(params: NativeReActLoopParams): Promise<ReActLoopResult> {
   const { messages: msgs, llm, tools, toolDefs, onEvent, signal } = params;
   const maxTurns = params.maxTurns ?? MAX_TURNS;
@@ -160,6 +164,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
   let latestUsage: TokenUsage | undefined;
   let emptyNudge = 0;
   let continuations = 0;
+  const answerParts: string[] = [];
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (signal?.aborted) {
@@ -220,6 +225,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     if (!toolCalls || toolCalls.length === 0) {
       if (finishReason === 'length' && content.trim() && continuations < MAX_CONTINUATIONS) {
         continuations++;
+        answerParts.push(content);
         msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
         msgs.push({
           role: 'user',
@@ -228,7 +234,8 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
         continue;
       }
       if (content.trim()) {
-        return { content: content.trim(), rawContent: content, toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage };
+        const answer = completeAnswer(answerParts, content);
+        return { content: answer, rawContent: answer, toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage };
       }
       if (emptyNudge < MAX_NUDGES) {
         emptyNudge++;
@@ -246,6 +253,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     emptyNudge = 0;
 
     // 有工具调用：先把 assistant(tool_calls) 消息入历史
+    if (content.trim()) answerParts.push(content);
     msgs.push(createAssistantContextMessage(content, toolCalls, reasoningContent, reasoningEnvelope));
 
     // 逐个执行工具，回填 role:'tool' 配对消息
@@ -322,7 +330,8 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
   // 循环耗尽
   const last = msgs.filter(m => m.role === 'assistant').pop();
   const raw = last?.content ?? '';
-  return { content: raw.trim() || '（达到最大轮次）', rawContent: raw, toolCalls: allToolCalls, turns: maxTurns, usage: latestUsage };
+  const answer = answerParts.length > 0 ? completeAnswer(answerParts) : raw.trim();
+  return { content: answer || '（达到最大轮次）', rawContent: answer, toolCalls: allToolCalls, turns: maxTurns, usage: latestUsage };
 }
 
 // ── JSON 文本工具循环 barrel 转出 ─────────────────────────────────

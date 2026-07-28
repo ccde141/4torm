@@ -181,6 +181,10 @@ export interface ReActLoopResult {
  *
  * 协议层隔离：模型不再手写 JSON，转义崩溃从原理上消失。
  */
+function completeAnswer(parts: string[], current = ''): string {
+  return [...parts, current].map(part => part.trim()).filter(Boolean).join('\n\n');
+}
+
 export async function runReActLoopNative(params: NativeReActLoopParams): Promise<ReActLoopResult> {
   const { messages: msgs, llm, tools, toolDefs, onEvent, signal } = params;
   const maxTurns = params.maxTurns ?? MAX_TURNS;
@@ -190,6 +194,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
   let continuations = 0;
   let continueNudge = 0; // completion 门：无终结工具时"继续"提示计数
   let escalated = false; // completion 门：已进入"强制总结"升级阶段（此后收口一律判 anomaly）
+  const answerParts: string[] = [];
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (signal?.aborted) {
@@ -252,6 +257,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       // bug #2：length 截断且有内容 → 是被截断的半句，不能当最终交付，要续写
       if (finishReason === 'length' && content.trim() && continuations < MAX_CONTINUATIONS) {
         continuations++;
+        answerParts.push(content);
         msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
         msgs.push({
           role: 'user',
@@ -292,7 +298,8 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       }
 
       if (content.trim()) {
-        return { content: content.trim(), rawContent: content, toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage };
+        const answer = completeAnswer(answerParts, content);
+        return { content: answer, rawContent: answer, toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage };
       }
       // 空 content 且无 tool_call：调过工具的逼一句收尾（决策 4 / bug #9），否则重试
       if (emptyNudge < MAX_NUDGES) {
@@ -328,6 +335,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     }
 
     // ── 有工具调用：先把 assistant(tool_calls) 消息入历史（含可能的并发思考文本）──
+    if (content.trim()) answerParts.push(content);
     msgs.push(createAssistantContextMessage(content, toolCalls, reasoningContent, reasoningEnvelope));
 
     // ── 逐个执行工具，回填 role:'tool' 配对消息 ──
@@ -427,6 +435,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
   // 循环耗尽
   const last = msgs.filter(m => m.role === 'assistant').pop();
   const raw = last?.content ?? '';
+  const answer = answerParts.length > 0 ? completeAnswer(answerParts) : raw.trim();
   // completion 门下耗尽 MAX_TURNS 仍未显式封口（如模型一直在调工具从不收口）：
   // 系统兜底强制封口，照样交接下游 + 打 anomaly 标记，绝不让下游因收不到信封而永久卡死。
   if (params.completion && tools) {
@@ -435,7 +444,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     });
     return { content: sealed, rawContent: raw, toolCalls: allToolCalls, turns: maxTurns, usage: latestUsage, autoOutcome: 'anomaly' };
   }
-  return { content: raw.trim() || '（达到最大轮次）', rawContent: raw, toolCalls: allToolCalls, turns: maxTurns, usage: latestUsage };
+  return { content: answer || '（达到最大轮次）', rawContent: answer, toolCalls: allToolCalls, turns: maxTurns, usage: latestUsage };
 }
 
 // ── JSON 文本工具循环 barrel 转出 ─────────────────────────────────

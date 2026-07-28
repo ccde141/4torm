@@ -11,22 +11,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { renderTextWithCode } from '../../../engine/markdown';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
-import ToolCallMessage from '../../../components/chat/ToolCallMessage';
-import ToolActivityList from '../../../components/chat/ToolActivityGroup';
-import DelegateCard from '../../../components/chat/DelegateCard';
 import AskCard from '../../../components/chat/AskCard';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
-import ContactCard from './ContactCard';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import TaskBoardDrawer, { RAIL_W } from '../../../components/chat/TaskBoardDrawer';
 import { loadSeatTaskboard, saveSeatTaskboard, type TaskBoard } from '../../../utils/taskboard';
-import { contextToDisplay, type DisplayMessage, type DisplayBlock } from './messageDisplay';
+import { contextToDisplay, type DisplayMessage } from './messageDisplay';
 import type { SeatStreamRunners } from './useSeatStreamRunners';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import ExecutionStatusBar from '../../../components/chat/ExecutionStatusBar';
 import SeatDispatchActivity from './SeatDispatchActivity';
-import type { CycloneDispatch } from './dispatch-timeline';
-import { selectVisibleSeatDispatches } from './dispatch-timeline';
+import { selectOrphanedSeatDispatches, type CycloneDispatch } from './dispatch-timeline';
 import {
   dispatchesRequiringSeatReload,
   findActiveSeatDispatch,
@@ -34,6 +29,8 @@ import {
 } from './seat-dispatch-activity';
 import { SeatDispatchReceipt, SeatOutboundDispatch } from './SeatDispatchCard';
 import { useSmartChatScroll } from './useSmartChatScroll';
+import { buildSeatDisplayHistory, hasUnansweredAsk } from './cyclone-reply-sequence';
+import { BlockRows, LiveReplySegments } from './CycloneBlockRows';
 
 interface SeatStatus {
   id: string; title: string;
@@ -82,18 +79,17 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   const queue = runners.getQueue(seatId);
   const isChair = seatId.startsWith('__chair__');
   const activeDispatch = isChair ? null : findActiveSeatDispatch(dispatches, seatId);
-  const sourceDispatches = isChair ? [] : selectVisibleSeatDispatches(dispatches, seatId);
   const dispatchActivity = activeDispatch ? formatSeatDispatchActivity(activeDispatch) : null;
   const busy = streaming || !!activeDispatch;
   const dispatchStatuses = useRef(new Map<string, CycloneDispatch['status']>());
   const receiptStates = useRef(new Map<string, CycloneDispatch['receiptState']>());
   const dispatchTextRef = useRef<(text: string) => void>(() => {});
   const seatLiveSignal = [
-    live?.text.length ?? 0,
+    ...(live?.segments.map(segment => `${segment.content.length}:${segment.blocks.length}`) ?? []),
     live?.reasoning?.length ?? 0,
-    live?.blocks.length ?? 0,
     live?.phase ?? '',
-    ...sourceDispatches.map(item => `${item.id}:${item.status}:${item.updatedAt}`),
+    ...dispatches.filter(item => item.sourceKind === 'seat' && item.sourceSeatId === seatId)
+      .map(item => `${item.id}:${item.status}:${item.updatedAt}`),
     activeDispatch ? `${activeDispatch.id}:${activeDispatch.status}:${activeDispatch.updatedAt}` : '',
   ].join('|');
   const { scrollRef, showJumpButton, scrollToBottom } = useSmartChatScroll({
@@ -316,7 +312,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   function dispatchText(text: string) {
     if (text === '/reset' || text === '/reset clear') { resetContext('clear'); return; }
     if (text === '/reset summary') { resetContext('summary'); return; }
-    run('chat', text);
+    run(pending ? 'resume' : 'chat', text);
   }
   dispatchTextRef.current = dispatchText;
 
@@ -341,18 +337,20 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
     if (loadError) return <div style={{ opacity: .65, margin: 'auto', padding: 'var(--space-4)', textAlign: 'center', color: 'var(--color-danger)' }}>{loadError}</div>;
     return <div style={{ opacity: .5, margin: 'auto' }}>{seatId.startsWith('__chair__') ? '加载会长…' : '加载工位…'}</div>;
   }
-  // 挂起态：流式结束后若 seat.pending 存在，渲染交互 AskCard；流式期间用 live.ask
+  // 挂起态：若历史尚未包含 AskCard，才使用 seat.pending 兼容旧数据。
   const pending = !busy ? seat.pending : undefined;
-  // 后台未落库的乐观用户气泡（切走再回时从 runner 恢复，history 里可能还没有）
-  const optimistic = runner && !runner.done && runner.pendingUser && !history.some(h => h.id === runner.pendingUser!.id)
-    ? runner.pendingUser : null;
+  const optimistic = runner?.pendingUser ?? null;
+  const visibleHistory = buildSeatDisplayHistory(history, optimistic);
+  const orphanedDispatches = isChair ? [] : selectOrphanedSeatDispatches(
+    dispatches, seatId, [...visibleHistory, ...(live?.segments ?? [])],
+  );
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
       {/* 有任务板且收起时：让出竖条宽度，滚动条落在竖条左侧可点可拖；展开态抽屉浮层覆盖，无需让位 */}
       <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginRight: (!isChair && !tbOpen) ? RAIL_W : 0 }}>
       <div className="chat__messages" ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)', ...(!isChair && tbOpen ? { paddingRight: 'calc(var(--space-4) + 30px)' } : {}) }}>
-        {history.map(m => <DisplayRow
+        {visibleHistory.map(m => <DisplayRow
           key={m.id}
           msg={m}
           editing={editingMessageIndex === m.sourceIndex}
@@ -362,27 +360,18 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
           onSaveEdit={saveEditMessage}
           onCancelEdit={cancelEditMessage}
           onDelete={() => deleteMessage(m)}
+          dispatches={dispatches}
         />)}
-        {optimistic && <DisplayRow key={optimistic.id} msg={optimistic} editing={false} editContent="" onEditContent={() => {}} onStartEdit={() => {}} onSaveEdit={() => {}} onCancelEdit={() => {}} onDelete={() => {}} />}
-        {sourceDispatches.map(item => <SeatOutboundDispatch key={item.id} item={item} />)}
+        {orphanedDispatches.map(item => <SeatOutboundDispatch key={item.id} item={item} />)}
         {activeDispatch && <SeatDispatchActivity item={activeDispatch} />}
         {live && (
           <>
             {live.reasoning && <ReasoningBlock reasoning={live.reasoning} isStreaming />}
-            <BlockRows blocks={live.blocks} prefix="live" />
-            {live.ask && <AskCard question={live.ask.question} options={live.ask.options} answered={false} onReply={(a) => run('resume', a)} />}
-            {(live.text || live.phase) && (
-              <div className="chat__message chat__message--assistant">
-                <div className="chat__avatar">AI</div>
-                <div className="chat__bubble">
-                  {live.phase && <div className="chat__streaming-phase">{live.phase}</div>}
-                  {live.text && <div className="md-bubble" style={{ whiteSpace: 'pre-wrap' }}>{live.text}▍</div>}
-                </div>
-              </div>
-            )}
+            <LiveReplySegments live={live} dispatches={dispatches}
+              onAskReply={(answer) => run('resume', answer)} />
           </>
         )}
-        {pending && (
+        {pending && !runner && !hasUnansweredAsk(visibleHistory) && (
           <AskCard question={pending.question} options={pending.options} answered={false} onReply={(a) => run('resume', a)} />
         )}
       </div>
@@ -439,34 +428,6 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   );
 }
 
-/** 渲染单个卡片块（流式 + 重载共用） */
-function BlockRow({ block }: { block: DisplayBlock }) {
-  if (block.kind === 'tool') {
-    return <ToolCallMessage toolCall={{ toolName: block.tool, params: block.args, result: block.result, status: block.status }} />;
-  }
-  if (block.kind === 'delegate') {
-    return <DelegateCard toolCall={{ toolName: 'delegate', params: { task: block.task }, result: block.summary, status: block.status, steps: block.steps as any }} content={block.content} />;
-  }
-  if (block.kind === 'ask') {
-    return <AskCard question={block.question} options={block.options} answered={block.answered} reply={block.reply} onReply={() => {}} />;
-  }
-  return <ContactCard data={{ target: block.target, message: block.message, reply: block.reply, status: block.status }} />;
-}
-
-function BlockRows({ blocks, prefix }: { blocks: DisplayBlock[]; prefix: string }) {
-  const items = blocks.map(block => ({
-    block,
-    tool: block.kind === 'tool' ? block.tool : block.kind,
-    status: 'status' in block ? block.status : undefined,
-    args: block.kind === 'tool' ? block.args : undefined,
-  }));
-  return (
-    <ToolActivityList items={items} renderItem={(item, index) => (
-      <BlockRow key={`${prefix}-${index}`} block={item.block} />
-    )} />
-  );
-}
-
 const inputHintStyle: React.CSSProperties = {
   fontSize: 'var(--text-xs)',
   color: 'var(--color-text-tertiary)',
@@ -475,7 +436,7 @@ const inputHintStyle: React.CSSProperties = {
 };
 
 /** 单条已落库展示消息 */
-function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onSaveEdit, onCancelEdit, onDelete }: {
+function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onSaveEdit, onCancelEdit, onDelete, dispatches }: {
   msg: DisplayMessage;
   editing: boolean;
   editContent: string;
@@ -484,6 +445,7 @@ function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onS
   onSaveEdit: () => void;
   onCancelEdit: () => void;
   onDelete: () => void;
+  dispatches: CycloneDispatch[];
 }) {
   if (msg.kind === 'dispatch-receipt') {
     return <SeatDispatchReceipt content={msg.content} id={msg.id} />;
@@ -524,13 +486,13 @@ function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onS
   return (
     <>
       {msg.reasoning && <ReasoningBlock reasoning={msg.reasoning} isStreaming={false} />}
-      {msg.blocks && <BlockRows blocks={msg.blocks} prefix={`${msg.id}-b`} />}
       {msg.content && (
         <div className="chat__message chat__message--assistant">
           <div className="chat__avatar">AI</div>
           <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>{actions}</div>
         </div>
       )}
+      {msg.blocks && <BlockRows blocks={msg.blocks} prefix={`${msg.id}-b`} dispatches={dispatches} />}
       {!msg.content && actions}
     </>
   );

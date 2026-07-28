@@ -145,6 +145,18 @@ async function main() {
     assert.equal(calls(), 1); // 一轮就交付，绝不多问
   });
 
+  await run('工具前后的正文合并为完整交付', async () => {
+    const { llm } = fakeLLM([
+      { content: 'Intermediate finding.', toolCalls: [tc('read_file')] },
+      { content: 'Final sentence.', finishReason: 'stop' },
+    ]);
+    const r = await runReActLoopNative({
+      messages: [{ role: 'system', content: 's' }], llm, tools, toolDefs: [],
+    });
+    assert.equal(r.content, 'Intermediate finding.\n\nFinal sentence.');
+    assert.equal(r.rawContent, 'Intermediate finding.\n\nFinal sentence.');
+  });
+
   console.log('ok');
 }
 

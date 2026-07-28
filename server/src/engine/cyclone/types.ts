@@ -119,6 +119,11 @@ export interface WorkshopSummary {
 }
 
 /** 群聊一条公共消息（发言者 = 工位 title 或「人类」） */
+export type RoomMessageSegment =
+  | { kind: 'text'; content: string }
+  | { kind: 'tools'; tools: Array<{ tool: string; args: Record<string, string>; result?: string; status: 'running' | 'success' | 'error' }> }
+  | { kind: 'dispatch'; dispatchId: string };
+
 export interface RoomMessage {
   /** 稳定消息 ID；旧数据可缺省。 */
   id?: string;
@@ -136,6 +141,8 @@ export interface RoomMessage {
   reasoning?: string;
   /** 本轮工具调用记录 */
   toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }>;
+  /** 可选展示分段；旧消息缺省时继续使用 content/toolCalls。 */
+  segments?: RoomMessageSegment[];
   /** 时间线中的特殊系统对象。 */
   kind?: 'dispatch-result' | 'membership';
   /** 特殊系统对象关联的异步派发。 */

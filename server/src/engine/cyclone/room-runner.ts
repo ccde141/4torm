@@ -25,7 +25,7 @@ import { execContact } from './contact';
 import { listOtherSeats, listWorkshopSeats } from './contact-registry';
 import { loadSeat, saveSeat } from './seat-store';
 import { saveRoom } from './room-store';
-import type { RoomData, SeatData } from './types';
+import type { RoomData, RoomMessageSegment, SeatData } from './types';
 import { toRoomProgressEvent } from './loop-event-forwarder';
 import type { ToolPreparationProgress } from '../shared/tool-progress';
 import type { CycloneDispatch } from './dispatch-store.js';
@@ -35,6 +35,13 @@ import { runFreshSeatTurn } from './room-seat-turn.js';
 import { expireDispatchDecisions } from './dispatch-store.js';
 import { genId } from './paths.js';
 import { createRoomDispatchRecord } from './room-dispatch.js';
+import { createRoomMessageSegments } from './room-message-segments.js';
+import {
+  buildCycloneMemoryPrompt,
+  executeCycloneMemoryTool,
+  isCycloneMemoryTool,
+  withCycloneMemoryTools,
+} from './cyclone-memory.js';
 
 /** 群聊执行事件 */
 export type RoomEvent =
@@ -70,6 +77,18 @@ function makeRoomToolCaller(opts: {
   let dispatchOrder = 0;
   return {
     async call(tool, args) {
+      if (isCycloneMemoryTool(tool)) {
+        onEvent({ type: 'tool-call', speaker, tool, args });
+        try {
+          const result = (await executeCycloneMemoryTool(dataDir, agentId, tool, args))!;
+          onEvent({ type: 'tool-result', speaker, tool, result, ok: true });
+          return result;
+        } catch (error) {
+          const result = `记忆工具执行失败: ${(error as Error).message}`;
+          onEvent({ type: 'tool-result', speaker, tool, result, ok: false });
+          return result;
+        }
+      }
       // bulletin 假工具：群聊里也可改工作室公告板（落款为发言工位 title）
       if (tool === 'bulletin') {
         onEvent({ type: 'tool-call', speaker, tool, args });
@@ -123,13 +142,18 @@ async function runSeatInRoom(
   dataDir: string, workshopId: string, room: RoomData, seat: SeatData,
   signal: AbortSignal | undefined, onEvent: (ev: RoomEvent) => void,
   turnId: string, roundSeq: number, dispatchStarts: DispatchStartBuffer,
-): Promise<{ content: string; rawContent: string; reasoning?: string; toolCalls: Array<{ tool: string; args: Record<string, string>; result: string }> } | null> {
+): Promise<{ content: string; rawContent: string; reasoning?: string; segments: RoomMessageSegment[]; toolCalls: Array<{ tool: string; args: Record<string, string>; result: string }> } | null> {
   const agent = await loadAgent(dataDir, seat.agentId);
   if (!agent) {
     onEvent({ type: 'error', message: `工位「${seat.title}」绑定的 agent 已删除，跳过` });
     return null;
   }
-  const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode);
+  const toolDefs = withCycloneMemoryTools(
+    await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode),
+  );
+  const memorySection = await buildCycloneMemoryPrompt(
+    dataDir, agent.id, `${room.topic}\n${formatPublicContext(room)}`,
+  );
   // plan 模式：只放行只读工具（dangerous !== true），砍掉写工具（write/edit/delete/run_command）。
   // contact 是虚拟工具，单独热注入，不受此过滤影响。
   const planMode = room.mode === 'plan';
@@ -142,10 +166,18 @@ async function runSeatInRoom(
   const virtualToolDefs = buildSeatVirtualToolDefs({
     allowAsk: false, allowDelegate: false, allowDispatch: true, contactTargets, dispatchTargets,
   });
+  const segmentCollector = createRoomMessageSegments();
+  const emit = (event: RoomEvent) => {
+    if (event.type === 'token') segmentCollector.token(event.content);
+    if (event.type === 'tool-call') segmentCollector.toolCall(event.tool, event.args);
+    if (event.type === 'tool-result') segmentCollector.toolResult(event.result, event.ok);
+    if (event.type === 'dispatch-created') segmentCollector.dispatch(event.dispatch.id);
+    onEvent(event);
+  };
   const toolCaller = makeRoomToolCaller({
     dataDir, workshopId, seatId: seat.id, seatTitle: seat.title,
     agentId: agent.id, sandboxLevel: agent.sandboxLevel, wsDir,
-    speaker: seat.title, signal, onEvent, roomId: room.id, turnId, roundSeq,
+    speaker: seat.title, signal, onEvent: emit, roomId: room.id, turnId, roundSeq,
     contextVersion: room.dispatchContextVersion ?? 0, dispatchStarts,
   });
 
@@ -155,6 +187,7 @@ async function runSeatInRoom(
       dataDir, workshopId, seat, agent,
       toolDefs: native ? effectiveToolDefs : [...effectiveToolDefs, ...virtualToolDefs],
       native, wsRelPath: wsDir, topic: room.topic, dispatchTargets,
+      memorySection,
       bulletinSeenAt: seat.bulletinSeenAt,
     }),
   };
@@ -171,7 +204,7 @@ async function runSeatInRoom(
         onEvent: (ev) => {
           if (ev.type === 'reasoning') reasoningAcc += ev.chunk;
           const progress = toRoomProgressEvent(seat.title, ev);
-          if (progress) onEvent(progress);
+          if (progress) emit(progress);
         },
         signal,
       })
@@ -180,7 +213,7 @@ async function runSeatInRoom(
         onEvent: (ev) => {
           if (ev.type === 'reasoning') reasoningAcc += ev.chunk;
           const progress = toRoomProgressEvent(seat.title, ev);
-          if (progress) onEvent(progress);
+          if (progress) emit(progress);
         },
         signal,
       });
@@ -189,10 +222,12 @@ async function runSeatInRoom(
   const seenAt = readBulletinSync(dataDir, workshopId).updatedAt;
   if (seat.bulletinSeenAt !== seenAt) { seat.bulletinSeenAt = seenAt; await saveSeat(dataDir, workshopId, seat); }
 
+  segmentCollector.reconcile(result.content);
   return {
     content: result.content,
     rawContent: result.rawContent,
     reasoning: reasoningAcc || undefined,
+    segments: segmentCollector.segments,
     toolCalls: result.toolCalls.filter(call => call.tool !== 'dispatch'),
   };
 }
@@ -241,6 +276,7 @@ export async function speakInRoom(
           speaker: currentSeat.title, content, timestamp: Date.now(),
           rawContent: r.rawContent || undefined, reasoning: r.reasoning,
           toolCalls: r.toolCalls.length > 0 ? r.toolCalls : undefined,
+          segments: r.segments.length > 0 ? r.segments : undefined,
         });
         onEvent({ type: 'seat-done', speaker: currentSeat.title, content });
       }

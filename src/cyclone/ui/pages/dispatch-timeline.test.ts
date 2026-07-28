@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildDispatchTimeline,
   countPendingDispatches,
+  selectOrphanedSeatDispatches,
   selectVisibleSeatDispatches,
   type CycloneDispatch,
   type TimelineMessage,
@@ -70,6 +71,19 @@ test('成员变更保留为专用系统时间线而非 Agent 或归档消息', (
   assert.equal(message.membershipAction, 'joined');
 });
 
+test('群聊历史保留落盘的交错展示分段', () => {
+  const [message] = publicToFeed([{
+    id: 'segmented', speaker: '研究员', content: '第一段\n\n最终段', timestamp: 1,
+    segments: [
+      { kind: 'text', content: '第一段' },
+      { kind: 'dispatch', dispatchId: 'dispatch-a' },
+      { kind: 'text', content: '最终段' },
+    ],
+  }]);
+
+  assert.deepEqual(message.segments?.map(segment => segment.kind), ['text', 'dispatch', 'text']);
+});
+
 test('源工位只显示尚未由持久化回执接替的私聊派发', () => {
   const active = {
     ...dispatch('seat-active', 'turn-a', 0), sourceKind: 'seat' as const,
@@ -82,5 +96,26 @@ test('源工位只显示尚未由持久化回执接替的私聊派发', () => {
   assert.deepEqual(
     selectVisibleSeatDispatches([active, delivered, room, other], 'seat-a').map(item => item.id),
     ['seat-active'],
+  );
+});
+
+test('源工位只把无法关联到历史调用的派发视为孤儿', () => {
+  const linked = {
+    ...dispatch('seat-linked', 'turn-a', 0), sourceKind: 'seat' as const,
+    sourceRoomId: '', sourceSeatId: 'seat-a', receiptState: 'pending' as const,
+  };
+  const orphan = { ...linked, id: 'seat-orphan' };
+  const delivered = { ...linked, id: 'seat-delivered', receiptState: 'delivered' as const };
+  const references = [{
+    blocks: [{
+      kind: 'tool', tool: 'dispatch',
+      result: '异步任务已送达，任务 ID：seat-linked。',
+    }],
+  }];
+
+  assert.deepEqual(
+    selectOrphanedSeatDispatches([linked, orphan, delivered], 'seat-a', references)
+      .map(item => item.id),
+    ['seat-orphan'],
   );
 });

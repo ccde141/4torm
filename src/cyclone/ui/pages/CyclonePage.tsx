@@ -110,7 +110,9 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   const roomRunners = useRoomStreamRunners(useCallback(() => {
     if (activeWidRef.current) loadWorkshop(activeWidRef.current);
     void refreshDispatches().catch(error => console.error('[cyclone] 刷新异步派发失败', error));
-  }, [loadWorkshop, refreshDispatches]));
+  }, [loadWorkshop, refreshDispatches]), useCallback(() => {
+    void refreshDispatches().catch(error => console.error('[cyclone] 刷新异步派发失败', error));
+  }, [refreshDispatches]));
 
   // 切走当前工位时把它的流转后台（不掐流）
   const prevViewRef = useRef<string | null>(null);

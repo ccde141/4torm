@@ -5,8 +5,6 @@
  * - 私聊一轮产出单个 AI 的一个 Live；群聊一轮是「人发一句 → 在场工位串行响应」，产出多条消息。
  * - 故累积态是 roundFeed: FeedMsg[]（乐观人类气泡 + 本轮各工位流式消息），而非单个 Live。
  *
- * 鲁棒性同私聊：
- * - 注册表持于 CyclonePage（始终挂载），RoomPanel 按 key={roomId} 重挂不影响在跑的流。
  * - 切走房间不掐流，后台续跑，服务端自行落库（room-runner 落 publicMessages）。
  * - 切回 → 读 runner.roundFeed 恢复界面；done 后保留 roundFeed 到 reload 完成再 clear，防终答闪空。
  * - 删群标 abandoned + abort 防僵尸。
@@ -17,11 +15,8 @@ import { streamUrl } from '../../../lib/apiBase';
 import { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { readCycloneSSE } from './cyclone-sse';
 import { formatStreamStatus } from '../../../components/chat/stream-status';
-
-export interface FeedTool {
-  tool: string; args: Record<string, string>; result?: string;
-  status: 'running' | 'success' | 'error';
-}
+import { appendRoomDispatch, appendRoomText, appendRoomTool, completeRoomTool,
+  reconcileRoomAnswer, type FeedTool, type RoomReplySegment } from './room-reply-segments';
 
 /** 统一渲染项：历史消息 + 本轮实时消息共用（仿对流单数组模型） */
 export interface FeedMsg {
@@ -41,6 +36,7 @@ export interface FeedMsg {
   seatId?: string;
   membershipAction?: 'joined' | 'left';
   tools: FeedTool[];
+  segments?: RoomReplySegment[];
 }
 
 /** 单个群聊一轮的运行态。归属 roomId，不归属当前界面。 */
@@ -63,7 +59,7 @@ function applyEvent(ev: any, r: RoomRunner): void {
   switch (ev.type) {
     case 'seat-start':
       r.activeSpeaker = ev.speaker;
-      feed.push({ key: ev.turnId, turnId: ev.turnId, speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: formatStreamStatus('llm-waiting'), tools: [] });
+      feed.push({ key: ev.turnId, turnId: ev.turnId, speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: formatStreamStatus('llm-waiting'), tools: [], segments: [] });
       break;
     case 'seat-waiting': {
       const m = feed[feed.length - 1];
@@ -72,7 +68,11 @@ function applyEvent(ev: any, r: RoomRunner): void {
     }
     case 'token': {
       const m = feed[feed.length - 1];
-      if (m && m.speaker === r.activeSpeaker) { m.content += ev.content; m.phase = formatStreamStatus('model-output'); }
+      if (m && m.speaker === r.activeSpeaker) {
+        m.content += ev.content;
+        appendRoomText(m.segments!, ev.content);
+        m.phase = formatStreamStatus('model-output');
+      }
       break;
     }
     case 'reasoning': {
@@ -91,6 +91,7 @@ function applyEvent(ev: any, r: RoomRunner): void {
       const m = feed[feed.length - 1];
       if (m && m.speaker === r.activeSpeaker) {
         m.tools.push({ tool: ev.tool, args: ev.args, status: 'running' });
+        appendRoomTool(m.segments!, ev.tool, ev.args);
         m.phase = formatStreamStatus('tool-exec', 0, ev.tool);
       }
       break;
@@ -113,13 +114,24 @@ function applyEvent(ev: any, r: RoomRunner): void {
         for (let k = m.tools.length - 1; k >= 0; k--) {
           if (m.tools[k].status === 'running') { m.tools[k] = { ...m.tools[k], result: ev.result, status: ev.ok ? 'success' : 'error' }; break; }
         }
+        completeRoomTool(m.segments!, ev.result, ev.ok);
         m.phase = formatStreamStatus('llm-waiting');
       }
       break;
     }
+    case 'dispatch-created': {
+      const m = feed[feed.length - 1];
+      if (m && m.speaker === r.activeSpeaker) appendRoomDispatch(m.segments!, ev.dispatch.id);
+      break;
+    }
     case 'seat-done': {
       const m = feed[feed.length - 1];
-      if (m && m.speaker === ev.speaker) { m.content = ev.content || m.content; m.streaming = false; m.phase = ''; }
+      if (m && m.speaker === ev.speaker) {
+        m.content = ev.content || m.content;
+        reconcileRoomAnswer(m.segments!, m.content);
+        m.streaming = false;
+        m.phase = '';
+      }
       r.activeSpeaker = '';
       break;
     }
@@ -137,8 +149,12 @@ async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (
 
 /**
  * @param onRoomFinished 任一群聊轮结束后回调（CyclonePage 级稳定引用，刷新侧栏）
+ * @param onDispatchCreated 派发记录创建后立即回调，刷新实时派发卡片
  */
-export function useRoomStreamRunners(onRoomFinished: (roomId: string) => void) {
+export function useRoomStreamRunners(
+  onRoomFinished: (roomId: string) => void,
+  onDispatchCreated: (roomId: string) => void,
+) {
   const runners = useRef(new Map<string, RoomRunner>());
   const listeners = useRef(new Map<string, Set<() => void>>());
   /** roomId → 待发消息队列 / 输入框草稿。独立于 runner，clearIfDone 后仍存活，跨重挂保留。 */
@@ -257,7 +273,11 @@ export function useRoomStreamRunners(onRoomFinished: (roomId: string) => void) {
         await streamSSE(
           `/api/cyclone/workshop/${workshopId}/room/${roomId}/speak`,
           { message: text },
-          (ev) => { applyEvent(ev, runner); if (HIGH_FREQ.has(ev.type)) scheduleNotify(); else flushNotify(); },
+          (ev) => {
+            applyEvent(ev, runner);
+            if (ev.type === 'dispatch-created') onDispatchCreated(roomId);
+            if (HIGH_FREQ.has(ev.type)) scheduleNotify(); else flushNotify();
+          },
           ctrl.signal,
         );
       } catch (e) {
@@ -272,7 +292,7 @@ export function useRoomStreamRunners(onRoomFinished: (roomId: string) => void) {
         onRoomFinished(roomId);    // 刷新侧栏（即使 RoomPanel 未挂载也生效）
       }
     })();
-  }, [notify, onRoomFinished]);
+  }, [notify, onDispatchCreated, onRoomFinished]);
 
   return { subscribe, getRunner, startRound, abortRoom, kill, clearIfDone,
     getQueue, enqueue, dequeue, removeQueued, takeAllQueued, getDraft, setDraft };

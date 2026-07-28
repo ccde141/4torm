@@ -37,14 +37,26 @@ function mapSingleToolCall(message: ChatMessage): NativeContextMessage[] {
 
 function mapNativeAssistant(message: ChatMessage): NativeContextMessage[] {
   const nativeContext = message.nativeContext!.map(item => ({ ...item }));
+  const finalContent = unclaimedContent(message.content, nativeContext);
   const claimed = nativeContext.reduce(
     (sum, item) => sum + (item.role === 'assistant' ? item.reasoningContent?.length ?? 0 : 0), 0,
   );
   const finalReasoning = message.reasoningContent?.slice(claimed);
-  if (message.content.trim() || finalReasoning) {
-    nativeContext.push(assistantMessage(message.content, finalReasoning));
+  if (finalContent.trim() || finalReasoning) {
+    nativeContext.push(assistantMessage(finalContent, finalReasoning));
   }
   return nativeContext;
+}
+
+function unclaimedContent(content: string, context: NativeContextMessage[]): string {
+  const claimed = context
+    .filter(item => item.role === 'assistant' && item.content.trim())
+    .map(item => item.content)
+    .join('\n\n');
+  if (!claimed) return content;
+  if (content === claimed) return '';
+  const prefix = `${claimed}\n\n`;
+  return content.startsWith(prefix) ? content.slice(prefix.length) : content;
 }
 
 function mapLegacyToolSteps(message: ChatMessage): NativeContextMessage[] {

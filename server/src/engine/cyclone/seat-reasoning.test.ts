@@ -54,6 +54,20 @@ test('工位最终回复不会把旧轮次思考计入本轮工具推理', () =>
   });
 });
 
+test('seat history claims aggregated assistant content before the final answer', () => {
+  const messages: SeatContextMessage[] = [
+    {
+      role: 'assistant', content: 'Before tools',
+      toolCalls: [{ id: 'content-1', name: 'read_file', arguments: '{}' }],
+    },
+    { role: 'tool', content: 'file content', toolCallId: 'content-1' },
+  ];
+
+  recordSeatAssistantResult(messages, 'Before tools\n\nFinal answer', '');
+
+  assert.deepEqual(messages.at(-1), { role: 'assistant', content: 'Final answer' });
+});
+
 test('中止与错误结果不进入工位历史', () => {
   const messages = [{ role: 'user' as const, content: '开始' }];
 

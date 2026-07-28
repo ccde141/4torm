@@ -8,9 +8,14 @@ export function recordSeatAssistantResult(
 ): void {
   if (!content || content.startsWith('[中止]') || content.startsWith('[错误]')) return;
 
+  const generatedMessages = messages.slice(generatedContextStart);
+  const finalContent = unclaimedContent(content, generatedMessages);
+  if (!finalContent && !reasoning) return;
+
   let target = messages[messages.length - 1];
-  if (target?.role !== 'assistant' || target.content !== content) {
-    target = { role: 'assistant', content };
+  const targetAlreadyOwnsContent = target?.role === 'assistant' && target.content === content;
+  if (!targetAlreadyOwnsContent && (target?.role !== 'assistant' || target.content !== finalContent)) {
+    target = { role: 'assistant', content: finalContent };
     messages.push(target);
   }
   if (!reasoning) return;
@@ -23,4 +28,15 @@ export function recordSeatAssistantResult(
 
   target.reasoning = reasoning;
   if (remainingReasoning) target.reasoningContent = remainingReasoning;
+}
+
+function unclaimedContent(content: string, messages: SeatContextMessage[]): string {
+  const claimed = messages
+    .filter(message => message.role === 'assistant' && message.content.trim())
+    .map(message => message.content)
+    .join('\n\n');
+  if (!claimed) return content;
+  if (content === claimed) return '';
+  const prefix = `${claimed}\n\n`;
+  return content.startsWith(prefix) ? content.slice(prefix.length) : content;
 }
