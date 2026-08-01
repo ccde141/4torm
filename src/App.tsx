@@ -42,13 +42,13 @@ import './styles/index.css';
 
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   agent:     { title: '控制台', subtitle: 'Agent实例管理' },
-  chat:      { title: '对话 · 季风', subtitle: '与 Agent 信息交互' },
+  chat:      { title: '季风 · 对话', subtitle: '与 Agent 信息交互' },
   tools:     { title: '工具', subtitle: '全局工具注册与管理' },
   skills:    { title: '技能', subtitle: '管理与安装 Agent 能力包' },
-  convection: { title: '会议室 · 对流', subtitle: '多 Agent 持续协作会话' },
-  cyclone:   { title: '工作室 · 气旋', subtitle: '工位私聊与团队协作' },
-  tradewind: { title: '工作流 · 信风', subtitle: '多 Agent 协作工作流' },
-  tide:      { title: '自动化 · 潮汐', subtitle: '定时自动化任务' },
+  convection: { title: '对流 · 会议室', subtitle: '多 Agent 持续协作会话' },
+  cyclone:   { title: '气旋 · 工作室', subtitle: '工位私聊与团队协作' },
+  tradewind: { title: '信风 · 工作流', subtitle: '多 Agent 协作工作流' },
+  tide:      { title: '潮汐 · 自动化任务', subtitle: '定时自动化任务' },
   model:     { title: '模型', subtitle: '模型提供商与 API 配置' },
   mcp:       { title: 'MCP', subtitle: '外部工具服务管理' },
 };
@@ -94,6 +94,7 @@ function PageContent({ page, preselectSession, onClearPreselect, onNavigate }: {
 
 export default function App() {
   const [activePage, setActivePage] = useState('agent');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [preselectSession, setPreselectSession] = useState<string | null>(null);
   const [skin, setSkin] = useState<SkinConfig>(getSkinConfig());
   const pageInfo = PAGE_TITLES[activePage] ?? PAGE_TITLES.agent;
@@ -123,7 +124,12 @@ export default function App() {
         <WindBackground params={windParams} />
       )}
       <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden' }}>
-        <Sidebar activePage={activePage} onNavigate={setActivePage} />
+        <Sidebar
+          activePage={activePage}
+          collapsed={sidebarCollapsed}
+          onNavigate={setActivePage}
+          onToggle={() => setSidebarCollapsed(value => !value)}
+        />
         <div className="main-content" style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
           <Header title={pageInfo.title} subtitle={pageInfo.subtitle} onNavigate={handleNavigate} />
           <div style={{ flex: 1, overflow: 'hidden' }}>

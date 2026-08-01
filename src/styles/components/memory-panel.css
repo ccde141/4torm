@@ -118,7 +118,7 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-secondary);
-  transition: all var(--duration-fast) var(--ease-out-expo);
+  transition: background var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo), opacity var(--duration-fast) var(--ease-out-expo);
 }
 .mem-btn:hover:not(:disabled) { background: var(--color-bg-hover); color: var(--color-text-primary); }
 .mem-btn:disabled { opacity: .5; cursor: default; }

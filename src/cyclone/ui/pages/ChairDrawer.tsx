@@ -47,6 +47,7 @@ export default function ChairDrawer({
       <button
         onClick={onToggle}
         title="展开会长私聊"
+        aria-label="展开会长私聊"
         aria-hidden={open}
         tabIndex={open ? -1 : 0}
         style={{ ...tabStyle, opacity: open ? 0 : 1, pointerEvents: open ? 'none' : 'auto' }}
@@ -83,7 +84,7 @@ export default function ChairDrawer({
             <option value="">未设会长</option>
             {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
-          <button onClick={onToggle} style={collapseBtnStyle} title="收起">×</button>
+          <button onClick={onToggle} style={collapseBtnStyle} title="收起" aria-label="收起会长私聊">×</button>
         </div>
 
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>

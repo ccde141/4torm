@@ -422,7 +422,10 @@
   cursor: pointer;
   display: grid;
   place-items: center;
-  transition: all var(--duration-fast) var(--ease-out-expo);
+  transition:
+    transform var(--duration-fast) var(--ease-out-expo),
+    background var(--duration-fast) var(--ease-out-expo),
+    opacity var(--duration-fast) var(--ease-out-expo);
   flex-shrink: 0;
 }
 
@@ -506,10 +509,13 @@
   color: #fff;
   display: grid;
   place-items: center;
-  transition: all var(--duration-fast) var(--ease-out-expo);
+  transition:
+    transform var(--duration-fast) var(--ease-out-expo),
+    background var(--duration-fast) var(--ease-out-expo),
+    opacity var(--duration-fast) var(--ease-out-expo);
   flex-shrink: 0;
   cursor: pointer;
-  animation: chat-stop-pulse 1.5s ease-in-out infinite;
+  animation: chat-stop-pulse var(--motion-loop-duration) var(--motion-loop-ease) infinite;
 }
 
 .chat__stop-btn:hover {
@@ -1330,6 +1336,35 @@
 }
 
 /* 抽屉头部带标签操作按钮：hover 提亮 + accent 描边 */
+.taskboard-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  flex-shrink: 0;
+}
+
+.taskboard-header__primary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.taskboard-header__collapse {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.taskboard-header__toolbar {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 .taskboard-act {
   transition: background var(--duration-fast) var(--ease-out-expo),
               border-color var(--duration-fast) var(--ease-out-expo),
@@ -1368,6 +1403,102 @@
 .taskboard-drawer > *:nth-child(2) { animation-delay: 70ms; }
 .taskboard-drawer > *:nth-child(3) { animation-delay: 120ms; }
 .taskboard-drawer > *:nth-child(4) { animation-delay: 160ms; }
+
+/* Execution surface motion stays in the shared motion vocabulary. The panel
+   fades without transforms so the Electron native surface keeps matching its
+   measured DOM bounds while the overlay enters. */
+.execution-surface-backdrop {
+  animation: mo-fade-in var(--motion-enter-duration) var(--motion-enter-ease) both;
+}
+
+.execution-surface-panel {
+  animation: mo-fade-in var(--motion-modal-duration) var(--motion-modal-ease) both;
+}
+
+.execution-surface-tab,
+.taskboard-execution-row {
+  animation: mo-fade-in-up var(--motion-enter-duration) var(--motion-enter-ease) both;
+}
+
+.execution-surface-tab__select,
+.execution-surface-tab__close,
+.execution-surface-action,
+.taskboard-execution-row {
+  transition:
+    background var(--duration-fast) var(--ease-out-expo),
+    border-color var(--duration-fast) var(--ease-out-expo),
+    color var(--duration-fast) var(--ease-out-expo),
+    transform var(--duration-fast) var(--ease-out-back);
+}
+
+.execution-surface-tab__select:hover,
+.execution-surface-tab__close:hover,
+.execution-surface-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.execution-surface-action:focus-visible,
+.execution-surface-tab__select:focus-visible,
+.execution-surface-tab__close:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.execution-surface-action:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.execution-surface-shortcut {
+  transition:
+    background var(--duration-fast) var(--ease-out-expo),
+    border-color var(--duration-fast) var(--ease-out-expo),
+    color var(--duration-fast) var(--ease-out-expo),
+    transform var(--duration-fast) var(--ease-out-back);
+}
+
+.execution-surface-shortcut:hover:not(:disabled) {
+  border-color: var(--glass-border);
+  background: var(--glass-bg);
+  color: var(--color-text-primary);
+  transform: translateY(-1px);
+}
+
+.execution-surface-shortcut__icon {
+  width: 12px;
+  height: 9px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  box-shadow: inset 0 2px 0 color-mix(in srgb, currentColor 22%, transparent);
+}
+
+.execution-surface-shortcut__status {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-text-tertiary);
+  opacity: 0.55;
+}
+
+.execution-surface-shortcut__status--active {
+  background: var(--color-accent);
+  box-shadow: 0 0 6px var(--color-accent-glow);
+  animation: execution-surface-opening-pulse var(--motion-loop-duration) var(--motion-loop-ease) infinite;
+}
+
+.taskboard-execution-row:hover {
+  transform: translateX(-2px);
+}
+
+@keyframes execution-surface-opening-pulse {
+  0%, 100% { opacity: 0.62; transform: scale(0.985); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.execution-surface-loading {
+  animation: execution-surface-opening-pulse var(--motion-loop-duration) var(--motion-loop-ease) infinite;
+  will-change: transform, opacity;
+}
 
 /* ── 原生思考流展示块 ─────────────────────────────────── */
 .reasoning-block {

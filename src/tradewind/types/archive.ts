@@ -1,8 +1,6 @@
 /**
  * 归档元信息 —— 单次执行的元数据契约
  *
- * 设计依据：workflow-design-v2.0.md §8（归档与事件日志）
- * 决策依据：tradewind-build-guide.md §5.0 决策 2（EndStatus 三态联合）
  *
  * 关键认知：
  * - graphSnapshot 是启动时刻的图快照，保护后续画布修改不影响回看
@@ -60,7 +58,7 @@ export interface ExecutionMeta {
 /**
  * 节点快照（NodeExecutor.snapshot? 的返回类型）。
  *
- * 决策依据：tradewind-build-guide.md §5.0 决策 5（宽松起手 + 各节点内部窄化）
+ * 节点按自身类型窄化并解释快照内容。
  *
  * 各节点自决具体结构，归档时按 `{nodeId}.json` 单独存放。
  * 引擎不做结构校验，渲染时由对应节点的 render 组件解读。

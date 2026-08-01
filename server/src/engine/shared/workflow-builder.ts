@@ -441,5 +441,13 @@ ${planningSteps}
   - 节点/边的字段规则与 create_workflow 完全一致（同样必须是 DAG、Entry 必存、Output 唯一）
   - 用户手工调整的画布布局会自动保留（按节点 id 沿用坐标），无需关心 position
   调用示例:
-  ${formatWorkflowPromptCall('update_workflow', { workflowId: 'wf-xxxxx', params: '完整的 name/nodes/edges JSON 字符串' }, native)}`;
+  ${formatWorkflowPromptCall('update_workflow', { workflowId: 'wf-xxxxx', params: '完整的 name/nodes/edges JSON 字符串' }, native)}
+
+### start_workflow
+  描述: 启动一个已经保存的信风工作流，并把本次任务作为入口信封交给它。
+  约束:
+  - ${allowAsk ? '只有用户明确要求执行，或已经通过 ask 确认执行时才能调用' : '只有任务输入已经明确要求执行时才能调用'}
+  - 讨论方案、搭建或修改工作流时不得擅自启动
+  - 不确定 workflowId 时先调用 list_workflows；启动冲突时真实返回，不重试、不停止现有工作流
+  ${formatWorkflowPromptCall('start_workflow', { workflowId: 'wf-xxxxx', initialInput: '本次要完成的任务' }, native)}`;
 }

@@ -19,6 +19,7 @@ export interface ExecutionMeta {
   startTime: string;
   endTime?: string;
   status: 'running' | 'done' | 'error' | 'stopped' | 'crashed';
+  trigger?: { source: 'user' | 'conversation'; sessionId?: string; agentId?: string };
 }
 
 export class ArchiveManager {
@@ -28,7 +29,7 @@ export class ArchiveManager {
   /** 终结状态写一次即锁定：首个 writeEnd 胜出，防止 stop() 覆写 handleNodeDone 已写的 'done'。 */
   private ended = false;
 
-  constructor(runDir: string, executionId: string, workflowId: string) {
+  constructor(runDir: string, executionId: string, workflowId: string, trigger?: ExecutionMeta['trigger']) {
     this.runDir = runDir;
     this.metaPath = path.join(runDir, 'meta.json');
     this.meta = {
@@ -36,6 +37,7 @@ export class ArchiveManager {
       workflowId,
       startTime: new Date().toISOString(),
       status: 'running',
+      ...(trigger ? { trigger } : {}),
     };
   }
 

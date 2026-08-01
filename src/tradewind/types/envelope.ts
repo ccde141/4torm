@@ -1,8 +1,7 @@
 /**
  * 信封（Envelope）—— 节点间数据流转的统一契约
  *
- * 设计依据：workflow-design-v2.0.md §6.1
- * 决策依据：tradewind-build-guide.md §5.0 决策 4（contentType / eventTypeId 保持 string）
+ * contentType / eventTypeId 保持 string，允许节点扩展协议。
  *
  * 核心约束：
  * - 发送方完全不感知目标节点（无 `to` / `targetNode` 字段）

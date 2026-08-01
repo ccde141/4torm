@@ -147,6 +147,7 @@ export async function executeTool(
   // meta 仅通过此回调外溢给调用方转发前端，绝不进入 LLM 结果字符串。不传则丢弃 meta。
   onMeta?: (meta: unknown) => void,
   signal?: AbortSignal,
+  onOutput?: (stream: 'stdout' | 'stderr', text: string) => void,
 ): Promise<string> {
   if (signal?.aborted) throw createAbortError();
   // MCP 工具：本执行器只认本地工具/技能注册表，mcp: 前缀必须直接走 MCP client。
@@ -174,7 +175,7 @@ export async function executeTool(
     workspaceDirOverride,
     sandboxLevelOverride,
   );
-  const ctx = { ...resolvedContext, signal };
+  const ctx = { ...resolvedContext, signal, onOutput };
 
   if (toolDef.executorType === 'template' && toolDef.executorTemplate) {
     return executeTemplateTool(dataDir, toolDef, args, ctx, signal);

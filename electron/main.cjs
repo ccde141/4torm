@@ -2,15 +2,18 @@
  * Electron 主进程入口（HTTP-on-localhost 架构）
  *
  * - dev：窗口加载 Vite dev server（http://localhost:5173），/api 由 Vite 代理转发到 Fastify(:3001)。
- *   Fastify 与 Vite 由根目录 `npm run dev`（concurrently）启动，本进程不重复拉起。
- * - prod：本进程拉起 Fastify（SERVE_STATIC=1，自托管 dist/），窗口加载 http://localhost:3001。
+ * - prod：窗口加载 Fastify 自托管的 dist。
+ * - 两种模式都由 Electron 托管 Fastify，并向它传入专用桌面浏览器桥接配置。
  *   触发条件：打包后（app.isPackaged）或显式 ELECTRON_PROD=1（未打包的生产预览）。
  *
  * 前端业务代码 / fetch / 流式接口均无需改动。
  */
 
-const { app, BrowserWindow, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, nativeImage } = require('electron');
+const { createSurfaceRegistry } = require('./surface-registry.cjs');
+const { createDesktopBrowserBridge, createDesktopBrowserBridgeServer } = require('./desktop-browser-bridge.cjs');
 const { spawn } = require('node:child_process');
+const { randomBytes } = require('node:crypto');
 const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -22,10 +25,13 @@ const shouldOpenDevTools = isDev && process.env.ELECTRON_OPEN_DEVTOOLS === '1';
 const DEV_URL = process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173';
 const PROD_PORT = parseInt(process.env.PORT || '3001', 10);
 const PROD_URL = process.env.ELECTRON_PROD_URL || `http://localhost:${PROD_PORT}`;
+const SERVER_URL = `http://localhost:${PROD_PORT}`;
 
 // 应用名 + 任务栏标识（覆盖 package.json 的 npm 包名，避免显示 agent-dashboard）
 app.setName('4torm');
 if (process.platform === 'win32') app.setAppUserModelId('com.4torm.app');
+const ownsSingleInstance = app.requestSingleInstanceLock();
+if (!ownsSingleInstance) app.quit();
 
 // 应用图标（风暴 logo，由 public/favicon.svg 光栅化生成）。Win 用 .ico，其余用 .png
 const ICON_PATH = path.join(
@@ -40,23 +46,43 @@ if (!APP_ICON || APP_ICON.isEmpty()) console.warn('[electron] 应用图标加载
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
-/** @type {import('node:child_process').ChildProcess | null} 生产模式下本进程托管的 Fastify 子进程 */
+const executionSurfaceRegistry = createSurfaceRegistry({ WebContentsView, getWindow: () => mainWindow });
+/** @type {import('node:child_process').ChildProcess | null} 本进程托管的 Fastify 子进程 */
 let serverProc = null;
+let desktopBridgeServer = null;
 
-/** 拉起 Fastify（生产自托管）。dev 模式不调用——服务由 npm run dev 提供。 */
-function startServer() {
+/** 拉起 Fastify，并把桌面浏览器桥接能力限定为此子进程可见。 */
+function startServer(bridge) {
   const serverDir = path.join(__dirname, '..', 'server');
-  // 未打包预览用 tsx 直跑 TS；打包后同样随附 server 源码 + node_modules（extraResources）。
-  serverProc = spawn('npx', ['tsx', 'src/index.ts'], {
+  const serverArgs = isProd ? ['tsx', 'src/index.ts'] : ['tsx', 'watch', 'src/index.ts'];
+  serverProc = spawn('npx', serverArgs, {
     cwd: serverDir,
-    env: { ...process.env, SERVE_STATIC: '1', NODE_ENV: 'production', PORT: String(PROD_PORT) },
+    env: {
+      ...process.env,
+      SERVE_STATIC: isProd ? '1' : '',
+      NODE_ENV: isProd ? 'production' : 'development',
+      PORT: String(PROD_PORT),
+      FOURTORM_DESKTOP_BRIDGE: bridge.endpoint,
+      FOURTORM_DESKTOP_BROWSER_TOKEN: bridge.token,
+    },
     stdio: 'inherit',
+    windowsHide: true,
     shell: process.platform === 'win32', // Windows 上 npx 是 .cmd，需 shell
   });
   serverProc.on('exit', (code) => {
     console.log(`[electron] server 进程退出 code=${code}`);
     serverProc = null;
   });
+}
+
+async function startDesktopBrowserBridge() {
+  const token = randomBytes(32).toString('hex');
+  const endpoint = `\\\\.\\pipe\\4torm-browser-${process.pid}-${randomBytes(12).toString('hex')}`;
+  const bridge = createDesktopBrowserBridge({ token, registry: executionSurfaceRegistry });
+  const server = createDesktopBrowserBridgeServer({ bridge, endpoint });
+  await server.listen();
+  desktopBridgeServer = server;
+  return { endpoint, token };
 }
 
 /** 轮询健康检查，等 Fastify 起来再加载窗口，避免白屏/连接拒绝 */
@@ -113,29 +139,88 @@ function createWindow() {
   mainWindow.loadURL(isDev ? DEV_URL : PROD_URL);
   if (shouldOpenDevTools) mainWindow.webContents.openDevTools({ mode: 'detach' });
 
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    executionSurfaceRegistry.dispose();
+  });
 }
 
-app.whenReady().then(async () => {
-  if (isProd) {
-    startServer();
+ipcMain.handle('execution-surface:show', (event, input) => {
+  assertMainWindowSender(event);
+  const request = parseSurfaceRequest(input);
+  executionSurfaceRegistry.show(request.executionId, request.bounds, request.leaseId);
+});
+
+ipcMain.handle('execution-surface:hide', (event, input) => {
+  assertMainWindowSender(event);
+  const request = parseSurfaceReference(input);
+  executionSurfaceRegistry.hide(request.executionId, request.leaseId);
+});
+
+ipcMain.handle('execution-surface:set-input-enabled', (event, input) => {
+  assertMainWindowSender(event);
+  if (!input || typeof input !== 'object' || typeof input.enabled !== 'boolean') throw new Error('execution surface input state is invalid');
+  executionSurfaceRegistry.setInputEnabled(parseSurfaceId(input.executionId), input.enabled);
+});
+
+function assertMainWindowSender(event) {
+  if (event.sender !== mainWindow?.webContents) throw new Error('execution surface request came from an unknown renderer');
+}
+
+function parseSurfaceRequest(input) {
+  if (!input || typeof input !== 'object') throw new Error('execution surface request is invalid');
+  return { executionId: parseSurfaceId(input.executionId), bounds: input.bounds, leaseId: parseSurfaceLease(input.leaseId) };
+}
+
+function parseSurfaceReference(input) {
+  if (!input || typeof input !== 'object') throw new Error('execution surface request is invalid');
+  return { executionId: parseSurfaceId(input.executionId), leaseId: parseSurfaceLease(input.leaseId) };
+}
+
+function parseSurfaceId(value) {
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9-]{1,128}$/.test(value)) throw new Error('execution surface id is invalid');
+  return value;
+}
+
+function parseSurfaceLease(value) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9-]{1,128}$/.test(value)) throw new Error('execution surface lease is invalid');
+  return value;
+}
+
+if (ownsSingleInstance) {
+  app.on('second-instance', () => focusMainWindow());
+  app.whenReady().then(async () => {
+    const bridge = await startDesktopBrowserBridge();
+    startServer(bridge);
     try {
-      await waitForServer(PROD_URL);
+      await waitForServer(SERVER_URL);
     } catch (e) {
       console.error('[electron]', e.message, '—— 仍尝试加载窗口');
     }
-  }
-  createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    createWindow();
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      else focusMainWindow();
+    });
   });
-});
 
-// 退出前掐掉托管的 server 子进程，避免端口残留
-app.on('before-quit', () => {
-  if (serverProc) { serverProc.kill(); serverProc = null; }
-});
+  // 退出前掐掉托管的 server 子进程，避免端口残留
+  app.on('before-quit', () => {
+    if (serverProc) { serverProc.kill(); serverProc = null; }
+    if (desktopBridgeServer) {
+      void desktopBridgeServer.close().catch(error => console.error('[electron] desktop browser bridge close failed:', error));
+      desktopBridgeServer = null;
+    }
+  });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
+}
+
+function focusMainWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+}

@@ -21,10 +21,11 @@ export interface ExecToolOpts {
   signal?: AbortSignal;
   /** UI 侧通道：接收执行器回传的展示元数据（如覆盖写入旧内容），不影响 LLM 结果字符串 */
   onMeta?: (meta: unknown) => void;
+  observation?: { scope: 'conversation' | 'cyclone'; ownerId: string };
 }
 
 export async function execToolUnified(opts: ExecToolOpts): Promise<string> {
-  const { tool, args, agentId, workspaceDir, sandboxLevel, signal, onMeta } = opts;
+  const { tool, args, agentId, workspaceDir, sandboxLevel, signal, onMeta, observation } = opts;
 
   // MCP 工具：直接走 MCP client
   if (tool.startsWith('mcp:')) {
@@ -36,6 +37,7 @@ export async function execToolUnified(opts: ExecToolOpts): Promise<string> {
   const body: Record<string, any> = { tool, args, agentId };
   if (workspaceDir) body.workspaceDirOverride = workspaceDir;
   if (sandboxLevel) body.sandboxLevelOverride = sandboxLevel;
+  if (observation) body.observation = observation;
 
   const res = await fetch(url, {
     method: 'POST',

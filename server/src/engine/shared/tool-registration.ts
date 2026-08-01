@@ -7,7 +7,7 @@ import { toolExecutorDir, toolRegistryFile } from '../../services/data-paths.js'
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const RESERVED_NAMES = new Set([
   'ask', 'delegate', 'task_board', 'review_changes', 'register_tool',
-  'list_agents', 'create_workflow', 'list_workflows', 'update_workflow',
+  'list_agents', 'create_workflow', 'list_workflows', 'update_workflow', 'start_workflow',
   'create_automation', 'update_automation', 'list_automations',
   'contact', 'dispatch', 'bulletin', 'complete_task',
 ]);

@@ -99,6 +99,19 @@ await runAsync('失败时同时保留 stdout 与 stderr 并清理终端颜色码
   )
 })
 
+await runAsync('执行期间逐块报告 stdout 与 stderr', async () => {
+  const executable = JSON.stringify(process.execPath)
+  const chunks = []
+  await runCommand(`${executable} -e "process.stdout.write('OUT');process.stderr.write('ERR')"`, {
+    cwd: process.cwd(), timeout: 5_000,
+    onOutput: (stream, text) => chunks.push({ stream, text }),
+  })
+  assert.deepEqual(chunks, [
+    { stream: 'stdout', text: 'OUT' },
+    { stream: 'stderr', text: 'ERR' },
+  ])
+})
+
 console.log('ok')
 
 async function runAsync(name, fn) {

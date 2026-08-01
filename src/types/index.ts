@@ -105,6 +105,7 @@ export interface ToolStep {
   /** UI 侧通道元数据，与独立 ToolCall 卡片保持一致。 */
   diff?: ToolCall['diff'];
   pendingAutomation?: ToolCall['pendingAutomation'];
+  workflowExecution?: ToolCall['workflowExecution'];
   /**
    * delegate 专用：sub-agent 的思考流 + 子步骤 + 汇总。
    * 存在时该 step 用 DelegateCard inline 渲染，落在 toolSteps 的调用顺序里
@@ -135,6 +136,13 @@ export interface ToolCall {
     taskId: string; name: string; schedule: string; repeatCount: number; perpetual: boolean;
     selfLoop: boolean; windowN: number; enabled: boolean; agentName: string; sandboxLevel: string;
     canWriteFiles: boolean; promptPreview: string;
+  };
+  /** 季风启动信风后的执行凭证；状态仍以信风服务端为准。 */
+  workflowExecution?: {
+    workflowId: string;
+    workflowName: string;
+    executionId: string;
+    status: 'running';
   };
   /** delegate 子步骤 */
   steps?: Array<{ type: 'tool' | 'thought'; tool?: string; args?: Record<string, string>; result?: string; ok?: boolean; text?: string }>;

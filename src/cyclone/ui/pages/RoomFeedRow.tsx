@@ -60,8 +60,8 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
   }
   const actions = m.sourceIndex === undefined ? null : (
     <div className="chat__bubble-actions">
-      <button className="chat__msg-action-btn" title="编辑" onClick={onStartEdit}>✏</button>
-      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={onDelete}>🗑</button>
+      <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={onStartEdit}>✏</button>
+      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={onDelete}>🗑</button>
     </div>
   );
   if (m.isHuman) {

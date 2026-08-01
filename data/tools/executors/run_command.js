@@ -74,7 +74,7 @@ function terminateProcessTree(child) {
   })
 }
 
-function createCollector(target, output, isStopped, stop) {
+function createCollector(target, output, isStopped, stop, stream, onOutput) {
   return chunk => {
     if (isStopped()) return
     const buffer = Buffer.from(chunk)
@@ -84,10 +84,11 @@ function createCollector(target, output, isStopped, stop) {
       return
     }
     target.push(buffer)
+    onOutput?.(stream, buffer.toString('utf-8').replace(ANSI_PATTERN, ''))
   }
 }
 
-function observeCommand(child, { timeout, signal }) {
+function observeCommand(child, { timeout, signal, onOutput }) {
   return new Promise((resolve, reject) => {
     const combined = []
     const output = { bytes: 0 }
@@ -118,8 +119,8 @@ function observeCommand(child, { timeout, signal }) {
 
     signal?.addEventListener('abort', onAbort, { once: true })
     const isStopped = () => settled || !!stopError
-    child.stdout.on('data', createCollector(combined, output, isStopped, stop))
-    child.stderr.on('data', createCollector(combined, output, isStopped, stop))
+    child.stdout.on('data', createCollector(combined, output, isStopped, stop, 'stdout', onOutput))
+    child.stderr.on('data', createCollector(combined, output, isStopped, stop, 'stderr', onOutput))
     child.once('error', error => finish(error))
     child.once('close', code => {
       if (stopError) return finish(stopError)
@@ -131,7 +132,7 @@ function observeCommand(child, { timeout, signal }) {
 }
 
 /** 异步运行 shell 命令；AbortSignal/超时会终止整棵子进程树。 */
-export function runCommand(command, { cwd, timeout, signal }) {
+export function runCommand(command, { cwd, timeout, signal, onOutput }) {
   if (signal?.aborted) return Promise.reject(abortError())
   const wrapped = process.platform === 'win32' ? `chcp 65001 > nul && ${command}` : command
   const child = spawn(wrapped, {
@@ -140,7 +141,7 @@ export function runCommand(command, { cwd, timeout, signal }) {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
   })
-  return observeCommand(child, { timeout, signal })
+  return observeCommand(child, { timeout, signal, onOutput })
 }
 
 export default async function (args, ctx) {
@@ -159,5 +160,5 @@ export default async function (args, ctx) {
   const cwd = ctx.workspaceDir || ctx.projectDir
   // 超时可由 agent 传参覆盖（毫秒），夹在 [1s, 10min]
   const timeout = Math.min(MAX_TIMEOUT, Math.max(1000, parseInt(args.timeout, 10) || DEFAULT_TIMEOUT))
-  return runCommand(cmd, { cwd, timeout, signal: ctx.signal })
+  return runCommand(cmd, { cwd, timeout, signal: ctx.signal, onOutput: ctx.onOutput })
 }

@@ -13,11 +13,11 @@ import '../../styles/components/sidebar.css';
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'agent', label: '控制台', icon: 'agents' },
-  { id: 'chat', label: '对话 · 季风', icon: 'chat' },
-  { id: 'convection', label: '会议室 · 对流', icon: 'convection' },
-  { id: 'cyclone', label: '工作室 · 气旋', icon: 'cyclone' },
-  { id: 'tradewind', label: '工作流 · 信风', icon: 'tradewind' },
-  { id: 'tide', label: '自动化 · 潮汐', icon: 'tide' },
+  { id: 'chat', label: '季风 · 对话', icon: 'chat' },
+  { id: 'convection', label: '对流 · 会议室', icon: 'convection' },
+  { id: 'cyclone', label: '气旋 · 工作室', icon: 'cyclone' },
+  { id: 'tradewind', label: '信风 · 工作流', icon: 'tradewind' },
+  { id: 'tide', label: '潮汐 · 自动化任务', icon: 'tide' },
 ];
 
 const CAPABILITY_ITEMS: NavItem[] = [
@@ -112,27 +112,46 @@ const ICONS: Record<string, React.FC<{ className?: string }>> = {
 
 interface SidebarProps {
   activePage: string;
+  collapsed: boolean;
   onNavigate: (page: string) => void;
+  onToggle: () => void;
 }
 
-const Sidebar = memo(function Sidebar({ activePage, onNavigate }: SidebarProps) {
+const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onToggle }: SidebarProps) {
   const [skin, setSkin] = useState<SkinConfig>(getSkinConfig());
   useEffect(() => subscribeSkin(setSkin), []);
   const badge = skin.badge;
   const showBadge = badge?.enabled && (badge.text.trim() || badge.subtitle.trim());
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${collapsed ? ' sidebar--collapsed' : ''}`}>
       {/* Brand */}
       <div className="sidebar__brand">
-        <div className="sidebar__brand-icon">
-          <img className="sidebar__brand-logo" src="/favicon.svg" alt="4torm" />
+        <div className="sidebar__brand-identity" aria-hidden={collapsed}>
+          <div className="sidebar__brand-icon">
+            <img className="sidebar__brand-logo" src="/favicon.svg" alt="4torm" />
+          </div>
+          <span className="sidebar__brand-text">4TORM</span>
         </div>
-        <span className="sidebar__brand-text">4TORM</span>
+        <button
+          className="sidebar__toggle"
+          type="button"
+          onClick={onToggle}
+          title={collapsed ? '展开功能区' : '收起功能区'}
+          aria-label={collapsed ? '展开功能区' : '收起功能区'}
+          aria-controls="app-sidebar-navigation"
+          aria-expanded={!collapsed}
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+            <rect x="3.5" y="4" width="17" height="16" rx="3" />
+            <path d="M9 4v16" />
+          </svg>
+        </button>
       </div>
 
-      {/* Navigation */}
-      <nav className="sidebar__nav">
+      {/* Keep content mounted so expanding reveals stable layout instead of remounting it. */}
+      <div className="sidebar__body" inert={collapsed} aria-hidden={collapsed}>
+      <nav id="app-sidebar-navigation" className="sidebar__nav">
         <div className="sidebar__nav-group">
           <div className="sidebar__nav-label">工作台</div>
           {NAV_ITEMS.map(item => {
@@ -228,6 +247,7 @@ const Sidebar = memo(function Sidebar({ activePage, onNavigate }: SidebarProps) 
             )}
           </div>
         )}
+      </div>
       </div>
     </aside>
   );

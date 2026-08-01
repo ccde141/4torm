@@ -29,6 +29,7 @@ import { drainCycloneDispatches, resumeCycloneDispatches } from './engine/cyclon
 import { initMcpManager, shutdownMcpManager } from './engine/shared/mcp-manager.js';
 import { performGracefulShutdown } from './services/graceful-shutdown.js';
 import { agentActivityRoutes } from './routes/agent-activity.js';
+import { executionObserver } from './services/execution-observer.js';
 
 applyDeveloperMode();
 
@@ -90,6 +91,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 // 启动自愈：释放 Agent 死锁，并把中断的信风运行标记为 crashed
 import { recoverStartupState } from './services/startup-recovery.js';
 const recovery = await recoverStartupState(DATA_DIR);
+const crashedObservations = await executionObserver.restore(path.join(DATA_DIR, 'runtime', 'execution-observations.json'));
 if (recovery.releasedAgents.length > 0) {
   console.log(`[startup] 释放死锁 Agent: ${recovery.releasedAgents.join(', ')}`);
 }
@@ -102,6 +104,7 @@ if (recovery.removedTempFiles > 0) {
 if (recovery.failedCycloneDispatches > 0) {
   console.log(`[startup] 标记异常中断的气旋派发: ${recovery.failedCycloneDispatches}`);
 }
+if (crashedObservations > 0) console.log(`[startup] 标记异常中断的终端观察: ${crashedObservations}`);
 
 // 注册路由
 await app.register(storageRoutes, { prefix: '/api/storage' });
@@ -181,7 +184,7 @@ function requestShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
     stopTradewind: stopActiveTradewindExecution,
     drainTide: drainScheduler,
     drainCyclone: drainCycloneDispatches,
-    drainWrites: drainAtomicWrites,
+    drainWrites: async () => { await executionObserver.flush(); await drainAtomicWrites(); },
     shutdownMcp: shutdownMcpManager,
     closeServer: () => app.close(),
   }).then(() => {

@@ -16,6 +16,7 @@ import ToolCallMessage from './ToolCallMessage';
 import DelegateCard from './DelegateCard';
 import AskCard from './AskCard';
 import AutomationDraftCard from './AutomationDraftCard';
+import WorkflowExecutionCard from './WorkflowExecutionCard';
 import { renderTextWithCode } from '../../engine/markdown';
 import { formatTimestamp } from '../../utils/time';
 import type { ChatMessage, ToolStep } from '../../types';
@@ -44,6 +45,9 @@ function renderToolStep(step: ToolStep, key: string, timestamp: string) {
   }
   if ((step.tool === 'create_automation' || step.tool === 'update_automation') && step.pendingAutomation) {
     return <AutomationDraftCard key={`automation-${key}`} pending={step.pendingAutomation} timestamp={formatTimestamp(timestamp)} />;
+  }
+  if (step.tool === 'start_workflow' && step.workflowExecution) {
+    return <WorkflowExecutionCard key={`workflow-${key}`} execution={step.workflowExecution} timestamp={formatTimestamp(timestamp)} />;
   }
   return (
     <ToolCallMessage
@@ -127,13 +131,16 @@ function MessageItemInner({
     if ((msg.toolCall.toolName === 'create_automation' || msg.toolCall.toolName === 'update_automation') && msg.toolCall.pendingAutomation) {
       return <AutomationDraftCard pending={msg.toolCall.pendingAutomation} timestamp={formatTimestamp(msg.timestamp)} />;
     }
+    if (msg.toolCall.toolName === 'start_workflow' && msg.toolCall.workflowExecution) {
+      return <WorkflowExecutionCard execution={msg.toolCall.workflowExecution} timestamp={formatTimestamp(msg.timestamp)} />;
+    }
     return msg.toolCall.toolName === 'delegate' ? (
       <DelegateCard
         toolCall={msg.toolCall}
         content={msg.content}
         timestamp={msg.timestamp}
         actions={
-          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
         }
       />
     ) : (
@@ -141,7 +148,7 @@ function MessageItemInner({
         toolCall={msg.toolCall}
         timestamp={msg.timestamp}
         actions={
-          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
         }
       />
     );
@@ -209,8 +216,8 @@ function MessageItemInner({
             timestamp={msg.timestamp}
             actions={
               <>
-                <button className="chat__msg-action-btn" title="编辑" onClick={() => onStartEdit(msg)}>✏</button>
-                <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+                <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={() => onStartEdit(msg)}>✏</button>
+                <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
               </>
             }
           />
@@ -227,8 +234,8 @@ function MessageItemInner({
             <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>
             {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
             <div className="chat__bubble-actions">
-              <button className="chat__msg-action-btn" title="编辑" onClick={() => onStartEdit(msg)}>✏</button>
-              <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+              <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={() => onStartEdit(msg)}>✏</button>
+              <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
             </div>
           </div>
         </div>
@@ -247,8 +254,8 @@ function MessageItemInner({
         {msg.content && <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>}
         {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
         <div className="chat__bubble-actions">
-          <button className="chat__msg-action-btn" title="编辑" onClick={() => onStartEdit(msg)}>✏</button>
-          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+          <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={() => onStartEdit(msg)}>✏</button>
+          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
         </div>
       </div>
     </div>

@@ -108,6 +108,32 @@ test('user-created tools and skills stay local while built-ins remain versioned'
   assert.match(gitignore, /^!data\/skills\/web-search\/$/m);
 });
 
+test('browser is a versioned skill with one runtime-backed tool entry', async () => {
+  const [gitignore, toolsText] = await Promise.all([
+    fs.readFile(new URL('../.gitignore', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../data/skills/browser/tools.json', import.meta.url), 'utf8'),
+  ]);
+  const tools = JSON.parse(toolsText) as Array<{ name?: string; executorType?: string }>;
+
+  assert.match(gitignore, /^!data\/skills\/browser\/$/m);
+  assert.match(gitignore, /^!data\/skills\/browser\/\*\*$/m);
+  assert.deepEqual(tools.map(tool => tool.name), ['browser']);
+  assert.equal(tools[0]?.executorType, 'builtin');
+});
+
+test('architecture documents only the browser surface users can access', async () => {
+  const overview = await fs.readFile(
+    new URL('../docs/architecture/overview.md', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(overview, /## 浏览器/);
+  assert.match(overview, /季风会话和气旋普通工位私聊/);
+  assert.match(overview, /浏览器不会自动打开/);
+  assert.match(overview, /任务板的执行记录/);
+  assert.doesNotMatch(overview, /Computer Capability|Application UI Capability|plugin loader/);
+});
+
 test('system status definitions do not depend on the obsolete data file', async () => {
   const statusStore = await fs.readFile(
     new URL('../src/store/statuses.ts', import.meta.url),
@@ -214,7 +240,6 @@ test('public docs omit internal collaboration engine relationships', async () =>
 
 const publicDocs = [
   '../README.md',
-  '../docs/architecture/behavior-freeze.md',
   '../docs/architecture/overview.md',
   '../docs/architecture/security.md',
   '../docs/modes/tide.md',
@@ -358,11 +383,11 @@ test('扩展文档区分内置文件守卫、自定义执行器与 MCP', async (
   assert.match(mcp, /本地工具的工作区边界不会自动作用于 MCP Server/);
 });
 
-test('README 与架构基线不再保留旧三档权限说明', async () => {
+test('README 与公开架构文档不再保留旧三档权限说明', async () => {
   const files = [
     '../README.md',
-    '../docs/architecture/behavior-freeze.md',
     '../docs/architecture/data-layout.md',
+    '../docs/architecture/security.md',
   ];
   const docs = await Promise.all(files.map(async file => ({
     file,
@@ -373,9 +398,52 @@ test('README 与架构基线不再保留旧三档权限说明', async () => {
     assert.doesNotMatch(text, /`strict`|`relaxed`|三级权限|三档/, file);
   }
   assert.match(docs[0].text, /项目级.*无限制/s);
-  assert.match(docs[1].text, /旧值.*映射为项目级/);
-  assert.match(docs[1].text, /符号链接/);
-  assert.match(docs[2].text, /执行权限配置/);
+  assert.match(docs[1].text, /执行权限配置/);
+  assert.match(docs[2].text, /项目级.*无限制/s);
+});
+
+test('public docs exclude temporary implementation snapshots and use canonical feature names', async () => {
+  await assert.rejects(
+    fs.access(new URL('../docs/architecture/behavior-freeze.md', import.meta.url)),
+    { code: 'ENOENT' },
+  );
+
+  const [overview, config, home, readme] = await Promise.all([
+    fs.readFile(new URL('../docs/architecture/overview.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/.vitepress/config.ts', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/index.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../README.md', import.meta.url), 'utf8'),
+  ]);
+  assert.doesNotMatch(overview, /behavior-freeze|行为冻结/);
+  for (const label of ['季风 · 对话', '对流 · 会议室', '气旋 · 工作室', '信风 · 工作流', '潮汐 · 自动化任务']) {
+    assert.ok(config.includes(label), label);
+  }
+  assert.doesNotMatch(home, /^## 一批人，五种协作方式$/m);
+  assert.doesNotMatch(readme, /^## (?:多 Agent 协作|可视化工作流)$/m);
+});
+
+test('source comments no longer cite missing planning documents or completed phases', async () => {
+  const files = [
+    '../src/cyclone/ui/pages/CyclonePage.tsx',
+    '../server/src/routes/cyclone.ts',
+    '../server/src/engine/cyclone/types.ts',
+    '../server/src/engine/cyclone/room-runner.ts',
+    '../src/tradewind/types/envelope.ts',
+    '../src/tradewind/types/context.ts',
+    '../src/tradewind/types/archive.ts',
+    '../src/tradewind/types/events.ts',
+    '../server/src/engine/tradewind/foundation/archive-paths.ts',
+    '../server/src/engine/tradewind/foundation/envelope-router.ts',
+    '../server/src/engine/tradewind/foundation/event-bus.ts',
+    '../server/src/engine/tradewind/foundation/types/envelope.ts',
+    '../server/src/engine/tradewind/foundation/types/context.ts',
+    '../server/src/engine/tradewind/foundation/types/archive.ts',
+    '../server/src/engine/tradewind/foundation/types/events.ts',
+  ];
+  const contents = await Promise.all(files.map(file => fs.readFile(new URL(file, import.meta.url), 'utf8')));
+  for (const content of contents) {
+    assert.doesNotMatch(content, /workflow-design-v2\.0|tradewind-build-guide|Phase \d/i);
+  }
 });
 
 test('模型提供商文档覆盖协议、模型配置与图片检测边界', async () => {

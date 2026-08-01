@@ -1,7 +1,6 @@
 /**
  * 事件类型定义 —— 全局事件 ID 表的契约
  *
- * 设计依据：workflow-design-v2.0.md §6.3
  *
  * 核心思路：
  * - 事件 ID 表由引擎维护，新节点在 Executor.events 中声明，启动时合并
@@ -30,7 +29,6 @@ export interface EventTypeDef {
 /**
  * 事件日志条目（写入 events.jsonl 的一行）。
  *
- * 设计依据：workflow-design-v2.0.md §8.2 / §8.3
  */
 export interface EventLog {
   /** ISO 8601 时间戳 */
@@ -49,7 +47,7 @@ export interface EventLog {
 /**
  * 内置事件 ID 常量（引擎自带，新节点只需声明扩展事件）。
  *
- * 与 workflow-design-v2.0.md §6.3 内置事件表保持一致。
+ * 这些 ID 是运行时协议；修改时必须同步生产者、消费者与持久化读取。
  * 修改此常量需同步设计文档。
  */
 export const BUILTIN_EVENT_IDS = {

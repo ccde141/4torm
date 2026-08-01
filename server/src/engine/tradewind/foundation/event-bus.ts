@@ -1,8 +1,6 @@
 /**
  * 事件总线 —— emit 事件 + append 写 events.jsonl + SSE 推送
  *
- * 设计依据：workflow-design-v2.0.md §8.3
- *
  * 核心约束：
  * - 「文件是真相，SSE 只是渲染通道」(§8 核心原则)：每条事件必须先落盘后推送
  * - fs.appendFile 单次 write 在常见数据量下原子，先朴素实现，后续按需加锁
@@ -26,7 +24,7 @@ interface SSESubscriber {
  * 单次执行的事件总线实例。
  *
  * 每次工作流执行新建一个，不复用——隔离最干净。
- * Phase 3 决策：Runner 实例 per execution（详见 §4.3 隐性 bug 清单 R3）
+ * 每次工作流执行新建一个实例，不跨 execution 复用。
  */
 export class EventBus {
   private readonly eventsFile: string;

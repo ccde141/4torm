@@ -15,6 +15,7 @@ import AskCard from '../../../components/chat/AskCard';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import TaskBoardDrawer, { RAIL_W } from '../../../components/chat/TaskBoardDrawer';
+import { useTaskboardObservations } from '../../../components/chat/useTaskboardObservations';
 import { loadSeatTaskboard, saveSeatTaskboard, type TaskBoard } from '../../../utils/taskboard';
 import { contextToDisplay, type DisplayMessage } from './messageDisplay';
 import type { SeatStreamRunners } from './useSeatStreamRunners';
@@ -71,6 +72,9 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   }, [runners, seatId]);
   // 桌面端：拖入文件 → 路径进工位主对话框；会长实例(chairBase)始终绕开
   useDroppedPathInput(setInput, inputRef, active && !chairBase);
+  useEffect(() => {
+    if (!input) inputRef.current?.style.removeProperty('height');
+  }, [input]);
 
   const runner = runners.getRunner(seatId);
   // 即使 done 也继续显示 live，直到 reload 完成 + clearIfDone 删除 runner，避免终答闪空
@@ -81,6 +85,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   const activeDispatch = isChair ? null : findActiveSeatDispatch(dispatches, seatId);
   const dispatchActivity = activeDispatch ? formatSeatDispatchActivity(activeDispatch) : null;
   const busy = streaming || !!activeDispatch;
+  const taskboardObservations = useTaskboardObservations('cyclone', `${workshopId}:${seatId}`, streaming && !isChair);
   const dispatchStatuses = useRef(new Map<string, CycloneDispatch['status']>());
   const receiptStates = useRef(new Map<string, CycloneDispatch['receiptState']>());
   const dispatchTextRef = useRef<(text: string) => void>(() => {});
@@ -423,7 +428,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
         </div>
       </div>
       {/* 任务板挂在整列层：竖条/抽屉贯穿全高，输入栏 z-index 高于抽屉→展开也不挡发送按钮（与季风同构） */}
-      {!isChair && <TaskBoardDrawer board={board} onChange={onTbChange} expanded={tbOpen} onToggle={toggleTb} glow={tbUnseen} />}
+      {!isChair && <TaskBoardDrawer board={board} onChange={onTbChange} expanded={tbOpen} onToggle={toggleTb} glow={tbUnseen} observations={taskboardObservations} observationScope="cyclone" observationOwnerId={`${workshopId}:${seatId}`} />}
     </div>
   );
 }
@@ -463,8 +468,8 @@ function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onS
   }
   const actions = msg.sourceIndex === undefined ? null : (
     <div className="chat__bubble-actions">
-      <button className="chat__msg-action-btn" title="编辑" onClick={onStartEdit}>✏</button>
-      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={onDelete}>🗑</button>
+      <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={onStartEdit}>✏</button>
+      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={onDelete}>🗑</button>
     </div>
   );
   if (msg.role === 'user') {
