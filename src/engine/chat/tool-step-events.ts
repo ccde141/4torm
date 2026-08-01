@@ -11,7 +11,7 @@ export function finishLatestToolStep(
   messageId: string,
   result: string,
   ok: boolean,
-  meta?: { before?: string; pendingAutomation?: ToolStep['pendingAutomation'] },
+  meta?: { before?: string; pendingAutomation?: ToolStep['pendingAutomation']; workflowExecution?: ToolStep['workflowExecution'] },
 ): ChatMessage[] {
   return messages.map(message => {
     if (message.id !== messageId || !message.toolSteps) return message;
@@ -22,6 +22,7 @@ export function finishLatestToolStep(
       ...steps[index], result, status: ok ? 'done' : 'error',
       ...(typeof meta?.before === 'string' ? { diff: { before: meta.before } } : {}),
       ...(meta?.pendingAutomation ? { pendingAutomation: meta.pendingAutomation } : {}),
+      ...(meta?.workflowExecution ? { workflowExecution: meta.workflowExecution } : {}),
     };
     return { ...message, toolSteps: steps };
   });

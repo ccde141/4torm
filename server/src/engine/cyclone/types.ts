@@ -3,7 +3,7 @@
  *
  * 气旋 = 季风会话 + 对流会议室的组合版，不是新引擎、无常驻 runner。
  * 工位（Seat）= 角色提示词 + 绑定框架内 agent + 一个后端持久化的私聊会话。
- * 群聊（Room，Phase 1）= 同一工作室下随时建/删的讨论场。
+ * 群聊（Room）= 同一工作室下随时建/删的讨论场。
  *
  * 边界铁律：本模块只 import shared/，绝不 import conversation/ 或 convection/。
  * 哪怕结构与对流的 session.ts 相似，也各写一份，零交叉代码。
@@ -13,8 +13,8 @@
  *     meta.json            WorkshopData（工位/群聊 id 列表 + 元信息）
  *     workspace/           共享工作区（所有工位 + 群聊共用）
  *     seats/{seatId}.json  SeatData（角色提示词 + 绑定 agentId + 私聊历史）
- *     rooms/{roomId}.json  RoomData（Phase 1）
- *     bak/                 /reset /compact 归档（Phase 3）
+ *     rooms/{roomId}.json  RoomData
+ *     bak/                 /reset /compact 归档
  */
 
 import type { ContextMessage } from '../shared/types';
@@ -39,7 +39,7 @@ export interface CycloneTokenUsage {
   totalTokens: number;
 }
 
-/** 压缩状态（Phase 3 用，先占位） */
+/** 会话压缩与归档状态。 */
 export interface CycloneCompactState {
   disabled: boolean;
   archiveSeq: number;
@@ -93,7 +93,7 @@ export interface SeatData {
 
 /**
  * 工作室（Workshop）：一个工作区容器。
- * 挂载多个工位会话 + 多个群聊会话（Phase 1）+ 一个共享 workspace。
+ * 挂载多个工位会话、多个群聊会话和一个共享 workspace。
  */
 export interface WorkshopData {
   id: string;
@@ -102,7 +102,7 @@ export interface WorkshopData {
   chairAgentId?: string;
   /** 工位 id 列表（顺序即创建顺序） */
   seatIds: string[];
-  /** 群聊 id 列表（Phase 1） */
+  /** 群聊 id 列表 */
   roomIds: string[];
   createdAt: string;
   updatedAt: string;

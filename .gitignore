@@ -44,6 +44,7 @@ __pycache__/
 
 # API Key 敏感数据
 data/providers.json
+data/runtime/
 
 # Agent 数据（全部本地为王，不入仓库：配置/工作区/提示词/注册表/会话/产出）
 data/agents/
@@ -96,6 +97,8 @@ data/skills/*
 !data/skills/code-review/**
 !data/skills/web-search/
 !data/skills/web-search/**
+!data/skills/browser/
+!data/skills/browser/**
 
 # 信风模块运行时数据（执行归档不入仓库；工作流定义放开白名单）
 data/tradewind/runs/

@@ -2,8 +2,7 @@
  * 气旋工作室 Fastify 路由适配层
  *
  * 直接调用 engine/cyclone/ 下的业务函数。HTTP 层很薄。
- * Phase 0：工作室/工位 CRUD + 工位私聊（chat/resume，SSE 流式）。
- * Phase 1：群聊 CRUD + 拉工位 + 串行发言（speak，SSE 流式）。
+ * 提供工作室、工位、群聊及其流式会话接口。
  */
 
 import type { FastifyInstance, FastifyReply } from 'fastify';

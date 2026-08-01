@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { isBlocked, runCommand } from './run_command.js'
+import { buildShellInvocation, isBlocked, runCommand } from './run_command.js'
 
 function run(name, fn) { fn(); console.log(`  ✓ ${name}`) }
 
@@ -38,6 +38,15 @@ run('其它破坏性命令仍拦', () => {
 run('正常命令放行', () => {
   assert.equal(isBlocked('npm test'), null)
   assert.equal(isBlocked('go build ./...'), null)
+})
+
+run('Windows 明确使用 cmd.exe 契约，而非依赖 Node 的隐式 shell', () => {
+  const invocation = buildShellInvocation('echo first & echo second', 'win32', 'C:\\Windows\\System32\\cmd.exe')
+  assert.deepEqual(invocation, {
+    file: 'C:\\Windows\\System32\\cmd.exe',
+    args: ['/d', '/s', '/c', '"chcp 65001 > nul && echo first & echo second"'],
+    windowsVerbatimArguments: true,
+  })
 })
 
 await runAsync('长命令不阻塞事件循环，并可由 AbortSignal 中止', async () => {
@@ -97,6 +106,19 @@ await runAsync('失败时同时保留 stdout 与 stderr 并清理终端颜色码
       && /FINAL/.test(error.message)
       && !error.message.includes('\u001b['),
   )
+})
+
+await runAsync('执行期间逐块报告 stdout 与 stderr', async () => {
+  const executable = JSON.stringify(process.execPath)
+  const chunks = []
+  await runCommand(`${executable} -e "process.stdout.write('OUT');process.stderr.write('ERR')"`, {
+    cwd: process.cwd(), timeout: 5_000,
+    onOutput: (stream, text) => chunks.push({ stream, text }),
+  })
+  assert.deepEqual(chunks, [
+    { stream: 'stdout', text: 'OUT' },
+    { stream: 'stderr', text: 'ERR' },
+  ])
 })
 
 console.log('ok')

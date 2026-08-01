@@ -106,7 +106,7 @@
   },
   {
     "name": "run_command",
-    "description": "在终端执行一条系统命令",
+    "description": "在工作区终端执行命令。Windows 使用 cmd.exe；分隔命令请使用 &、&& 或 ||，`;` 不会分隔命令。复杂 JSON 或多行逻辑建议先写入脚本文件再执行。",
     "category": "system",
     "dangerous": true,
     "executorType": "builtin",
@@ -116,7 +116,7 @@
       "properties": {
         "command": {
           "type": "string",
-          "description": "要执行的 shell 命令"
+          "description": "要执行的命令。Windows 遵循 cmd.exe 语义：分隔命令请使用 &、&& 或 ||；完整重定向使用 > file 2>&1。"
         },
         "timeout": {
           "type": "integer",

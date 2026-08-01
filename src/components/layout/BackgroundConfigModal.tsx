@@ -87,7 +87,7 @@ const BackgroundConfigModal: React.FC<Props> = ({ config, onApply, onClose }) =>
         <button
           className="bg-config-inline__close"
           onClick={onClose}
-          aria-label="关闭"
+          aria-label="关闭背景设置"
         >×</button>
       </div>
 

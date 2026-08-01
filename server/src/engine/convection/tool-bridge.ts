@@ -9,6 +9,7 @@
  */
 
 import { callMcpTool } from '../shared/mcp-manager.js';
+import { readToolBridgeResponse } from '../shared/tool-bridge-response.js';
 
 /** dev server loopback 地址。环境变量 TRADEWIND_BASE_URL 可覆盖 */
 const DEFAULT_BASE_URL = 'http://localhost:3001';
@@ -26,10 +27,6 @@ export interface ConvectionToolCallParams {
   agentId: string;
   /** workspace 相对路径（项目根相对） */
   workspaceDir: string;
-}
-
-interface ToolCallResult {
-  result: string;
 }
 
 interface ConvectionToolDeps {
@@ -67,19 +64,7 @@ async function callLocalTool(
       signal: controller.signal,
     });
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`工具调用 HTTP ${res.status}: ${text.slice(0, 300)}`);
-    }
-
-    const data = (await res.json().catch(() => null)) as ToolCallResult | { error?: string } | null;
-    if (!data) throw new Error('工具调用返回非 JSON');
-    if ('error' in data && data.error) throw new Error(`工具调用错误：${data.error}`);
-    if (typeof (data as ToolCallResult).result !== 'string') {
-      throw new Error('工具调用返回结构异常：缺少 result 字段');
-    }
-
-    return (data as ToolCallResult).result;
+    return (await readToolBridgeResponse(res)).result;
   } catch (e: any) {
     if (e.name === 'AbortError') {
       throw new Error(`工具 ${tool} 执行超时（${TOOL_TIMEOUT_MS}ms）`, { cause: e });

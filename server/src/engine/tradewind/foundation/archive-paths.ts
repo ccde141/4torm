@@ -1,8 +1,6 @@
 /**
  * 归档路径工厂 —— 统一管理 runs/{wfId}/{execId}/ 下的二级路径
  *
- * 设计依据：tradewind-build-guide.md §6.5 归档路径规范
- *
  * 职责边界：
  * - 本文件只管 runDir 之下的相对路径计算，不管 runDir 本身（那由 runner.ts 算）
  * - 所有需要 nodeId、tool 名等的路径合法化也在这里完成

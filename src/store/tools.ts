@@ -65,13 +65,21 @@ export function mergeBuiltinToolDefaults(existing: ToolDef[]): { tools: ToolDef[
     if (builtin.name !== 'run_command') continue;
     const current = tools[index];
     const properties = current.parameters.properties as Record<string, unknown> | undefined;
-    if (properties?.timeout !== undefined) continue;
     const defaults = builtin.parameters.properties as Record<string, unknown>;
+    const legacyDescription = current.description === '在终端执行一条系统命令';
+    const legacyCommand = (properties?.command as { description?: string } | undefined)?.description === '要执行的 shell 命令';
+    const needsTimeout = properties?.timeout === undefined;
+    if (!legacyDescription && !legacyCommand && !needsTimeout) continue;
     tools[index] = {
       ...current,
+      description: legacyDescription ? builtin.description : current.description,
       parameters: {
         ...current.parameters,
-        properties: { ...properties, timeout: defaults.timeout },
+        properties: {
+          ...properties,
+          ...(legacyCommand ? { command: defaults.command } : {}),
+          ...(needsTimeout ? { timeout: defaults.timeout } : {}),
+        },
       },
     };
     changed = true;
@@ -117,12 +125,12 @@ export const BUILTIN_TOOLS: ToolDef[] = [
   },
   {
     name: 'run_command',
-    description: '在终端执行一条系统命令',
+    description: '在工作区终端执行命令。Windows 使用 cmd.exe；分隔命令请使用 &、&& 或 ||，`;` 不会分隔命令。复杂 JSON 或多行逻辑建议先写入脚本文件再执行。',
     category: 'system', dangerous: true, executorType: 'builtin', executorFile: 'run_command',
     parameters: {
       type: 'object',
       properties: {
-        command: { type: 'string', description: '要执行的 shell 命令' },
+        command: { type: 'string', description: '要执行的命令。Windows 遵循 cmd.exe 语义：分隔命令请使用 &、&& 或 ||；完整重定向使用 > file 2>&1。' },
         timeout: {
           type: 'integer',
           description: '可选，超时毫秒数；范围 1000 至 600000，默认 120000',

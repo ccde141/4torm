@@ -8,9 +8,7 @@ import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { getAgents } from '../../../store/agent';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
 import { renderTextWithCode } from '../../../engine/markdown';
-import StructuredMessage from '../../../components/chat/StructuredMessage';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
-import ToolActivityList from '../../../components/chat/ToolActivityGroup';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { formatTimestamp } from '../../../utils/time';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
@@ -18,6 +16,7 @@ import { getConvectionCreateError } from './convection-guards';
 import { shouldLoadConvectionSession } from './convection-session-guards';
 import { ConvectionHttpError, streamConvectionSSE } from './convection-sse';
 import { convectionReasoningProps, restoreConvectionMessage } from './convection-message-map';
+import ConvectionTurnCard, { type ConvectionToolStep, type ConvectionTurnMessage } from './ConvectionTurnCard';
 import {
   getConvectionComposerMode,
   normalizeConvectionRound,
@@ -28,9 +27,9 @@ import { createLatestRequestGuard } from '../../../lib/latest-request';
 import '../../../styles/components/convection.css';
 import type { Agent } from '../../../types';
 
-interface ToolStep { tool: string; args: Record<string, string>; result?: string; status: 'pending' | 'running' | 'done' | 'error' }
-interface WaitingInfo { phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
-interface ConvMsg { speaker: string; content: string; streaming?: boolean; rawContent?: string; toolCalls?: ToolStep[]; waitingInfo?: WaitingInfo; timestamp?: string; reasoning?: string }
+type ConvMsg = ConvectionTurnMessage;
+type ToolStep = ConvectionToolStep;
+type WaitingInfo = NonNullable<ConvectionTurnMessage['waitingInfo']>;
 interface CMsg { role: string; content: string; streaming?: boolean; waitingInfo?: WaitingInfo; timestamp?: string; reasoning?: string }
 interface SessionSummary { id: string; title: string; chairAgentId: string; participantAgentIds: string[]; topic: string; messageCount: number; tokenEstimate: number; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number }; updatedAt: string }
 
@@ -86,8 +85,15 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   const queue = activeId ? (queueRef.current.get(activeId) ?? []) : [];
   const convRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const cInputRef = useRef<HTMLTextAreaElement>(null);
   // 桌面端：拖入文件 → 路径进「主对话框（发言）」，绕开会长私聊栏（cInput）
   useDroppedPathInput(setInput, inputRef, active);
+  useEffect(() => {
+    if (!input) inputRef.current?.style.removeProperty('height');
+  }, [input]);
+  useEffect(() => {
+    if (!cInput) cInputRef.current?.style.removeProperty('height');
+  }, [cInput]);
   // 会长私聊改为悬浮侧板：默认收起（与气旋/任务板一致），状态持久化
   const [chairOpen, setChairOpen] = useState(() => { try { return localStorage.getItem('conv.chairOpen') === '1'; } catch { return false; } });
   const toggleChair = useCallback(() => setChairOpen(o => {
@@ -528,7 +534,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
       {/* Left: session list */}
       <div className="conv__sidebar">
         <div className="conv__sidebar-header">
-          <span className="conv__sidebar-title">会话</span>
+          <span className="conv__sidebar-title">会议室</span>
           <button
             onClick={handleNew}
             className="icon-add-btn"
@@ -542,19 +548,19 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
             const tokens = s.tokenUsage ? s.tokenUsage.totalTokens : s.tokenEstimate;
             const tokenLabel = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}K` : `${tokens}`;
             return (
-            <div key={s.id} onClick={() => loadSession(s.id)} className={`conv__session-card${activeId === s.id ? ' conv__session-card--active' : ''}`}>
-              <div className="conv__session-card-row">
+            <div key={s.id} className={`conv__session-card${activeId === s.id ? ' conv__session-card--active' : ''}`}>
+              <button type="button" onClick={() => loadSession(s.id)} className="conv__session-card-main">
                 <span className="conv__session-card-title">{s.title}</span>
-                {confirmingDeleteId === s.id ? (
-                  <button onClick={e => { e.stopPropagation(); setConfirmingDeleteId(null); handleDelete(s.id); }} className="conv__session-card-del conv__session-card-del--confirm" title="对流工作区及对话气泡将被清空">确认?</button>
-                ) : (
-                  <button onClick={e => { e.stopPropagation(); setConfirmingDeleteId(s.id); setTimeout(() => setConfirmingDeleteId(prev => prev === s.id ? null : prev), 3000); }} className="conv__session-card-del">×</button>
-                )}
-              </div>
-              <div className="conv__session-card-meta">
-                <span className="conv__session-card-id">{s.id}</span>
-                <span className="conv__session-card-tokens">{tokenLabel}</span>
-              </div>
+                <span className="conv__session-card-meta">
+                  <span className="conv__session-card-id">{s.id}</span>
+                  <span className="conv__session-card-tokens">{tokenLabel}</span>
+                </span>
+              </button>
+              {confirmingDeleteId === s.id ? (
+                <button onClick={() => { setConfirmingDeleteId(null); handleDelete(s.id); }} className="conv__session-card-del conv__session-card-del--confirm" title="对流工作区及对话气泡将被清空">确认?</button>
+              ) : (
+                <button onClick={() => { setConfirmingDeleteId(s.id); setTimeout(() => setConfirmingDeleteId(prev => prev === s.id ? null : prev), 3000); }} className="conv__session-card-del" aria-label={`删除会议：${s.title}`}>×</button>
+              )}
             </div>
             );
           })}
@@ -626,76 +632,16 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                         <div className="chat__content">{renderTextWithCode(m.content, `conv-u-${i}`)}</div>
                         {m.timestamp && <div className="chat__timestamp" title={formatTimestamp(m.timestamp, true)}>{formatTimestamp(m.timestamp)}</div>}
                         <div className="chat__bubble-actions">
-                          <button className="chat__msg-action-btn" title="编辑" onClick={() => handleStartEdit(i, m.content)}>✏</button>
-                          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => handleDeleteMsg(i)}>🗑</button>
+                          <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={() => handleStartEdit(i, m.content)}>✏</button>
+                          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={() => handleDeleteMsg(i)}>🗑</button>
                         </div>
                       </div>
                     </div>
                   );
                 }
-                // 流式正文、思考与工具分别来自各自的结构化事件。
-                if (m.streaming) {
-                  const display = m.content.trim();
-                  const tools = m.toolCalls || [];
-                  const waiting = m.waitingInfo;
-                  return (
-                    <div key={i} className="chat__message chat__message--assistant">
-                      <div className="chat__avatar">{m.speaker.slice(0, 2)}</div>
-                      <div className="chat__bubble stmsg-bubble">
-                        <div className="conv__speaker-label">{m.speaker}</div>
-                        {convectionReasoningProps(m.reasoning, !!m.streaming) && (
-                          <ReasoningBlock {...convectionReasoningProps(m.reasoning, !!m.streaming)!} />
-                        )}
-                        {waiting && (
-                          <div className="conv__waiting-hint">
-                            {waiting.phase === 'llm-waiting' ? '等待模型响应' : '执行工具中'}
-                            <span className="conv__waiting-elapsed">{Math.round(waiting.elapsed / 1000)}s</span>
-                            <span className="thinking-card__tool-spinner" />
-                          </div>
-                        )}
-                        {tools.length > 0 && <ToolActivityList items={tools} renderItem={(t, ti) => (
-                          <div key={ti} className={`stmsg-tool stmsg-tool--${t.status}`}>
-                            <div className="stmsg-tool-header">
-                              <span className={`stmsg-tool-icon stmsg-tool-icon--${t.status}`}>{t.status === 'running' ? '⏳' : '✅'}</span>
-                              <span className="stmsg-tool-name">{t.tool}</span>
-                              {t.status === 'running' && <span className="thinking-card__tool-spinner" />}
-                            </div>
-                          </div>
-                        )} />}
-                        {display && <div className="chat__content">{renderTextWithCode(display, `conv-s-${i}`)}▍</div>}
-                        {m.timestamp && <div className="chat__timestamp" title={formatTimestamp(m.timestamp, true)}>{formatTimestamp(m.timestamp)}</div>}
-                      </div>
-                    </div>
-                  );
-                }
-                // 流结束后，工具卡继续使用结构化事件，正文直接展示。
-                const tools = (m.toolCalls || []).map(t => ({ tool: t.tool, args: t.args, result: t.result, status: t.status }));
-                if (tools.length > 0) {
-                  return (
-                    <div key={i}>
-                      <div className="conv__speaker-label conv__speaker-label--offset">{m.speaker}</div>
-                      <StructuredMessage tools={tools} answer={m.content} msgId={`conv-${i}`} timestamp={m.timestamp} reasoning={m.reasoning} actions={<><button className="chat__msg-action-btn" title="编辑" onClick={() => handleStartEdit(i, m.content)}>✏</button><button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => handleDeleteMsg(i)}>🗑</button></>} />
-                    </div>
-                  );
-                }
-                // 无工具调用的普通回复。
-                return (
-                    <div key={i} className="chat__message chat__message--assistant">
-                      <div className="chat__avatar">{m.speaker.slice(0, 2)}</div>
-                      <div className="chat__bubble">
-                        <div className="conv__speaker-label">{m.speaker}</div>
-                        {convectionReasoningProps(m.reasoning, false) && (
-                          <ReasoningBlock {...convectionReasoningProps(m.reasoning, false)!} />
-                        )}
-                        <div className="chat__content">{renderTextWithCode(m.content, `conv-p-${i}`)}</div>
-                        {m.timestamp && <div className="chat__timestamp" title={formatTimestamp(m.timestamp, true)}>{formatTimestamp(m.timestamp)}</div>}
-                        <div className="chat__bubble-actions">
-                        <button className="chat__msg-action-btn" title="编辑" onClick={() => handleStartEdit(i, m.content)}>✏</button>
-                        <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={() => handleDeleteMsg(i)}>🗑</button>
-                      </div>
-                    </div>
-                  </div>
-                );
+                // 对流拥有自己的回合实现；与气旋只统一视觉契约，不建立跨功能依赖。
+                return <ConvectionTurnCard key={i} message={m} messageId={`conv-${i}`}
+                  onEdit={() => handleStartEdit(i, m.content)} onDelete={() => handleDeleteMsg(i)} />;
               })}
             </div>
             {/* Input */}
@@ -733,13 +679,13 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
             </div>
           </>
         ) : (
-          <div className="conv__empty">选择或创建一个会话</div>
+          <div className="conv__empty">选择或创建一个会议室</div>
         )}
       </div>
 
       {/* Right: chair private — 悬浮侧板（收起为细标签，展开浮出盖在群聊上，不挤占布局） */}
       <div style={chairWrapStyle}>
-        <button onClick={toggleChair} title="展开会长私聊" aria-hidden={chairOpen} tabIndex={chairOpen ? -1 : 0} style={{ ...chairTabStyle, opacity: chairOpen ? 0 : 1, pointerEvents: chairOpen ? 'none' : 'auto' }}>
+        <button onClick={toggleChair} title="展开会长私聊" aria-label="展开会长私聊" aria-hidden={chairOpen} tabIndex={chairOpen ? -1 : 0} style={{ ...chairTabStyle, opacity: chairOpen ? 0 : 1, pointerEvents: chairOpen ? 'none' : 'auto' }}>
           <span style={{ fontSize: '13px' }}>🗣️</span>
           <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontWeight: 'var(--font-semibold)' }}>会长 · 私聊</span>
           <span style={{ writingMode: 'vertical-rl', fontSize: '10px', color: 'var(--color-accent)', marginTop: 'auto' }}>展开‹</span>
@@ -749,7 +695,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
           <span className="conv__chair-name">{activeSession ? getName(activeSession.chairAgentId) : '会长'}</span>
           <span className="conv__chair-label">私聊</span>
           <div style={{ flex: 1 }} />
-          <button onClick={toggleChair} title="收起" style={chairCollapseBtnStyle}>×</button>
+          <button onClick={toggleChair} title="收起" aria-label="收起会长私聊" style={chairCollapseBtnStyle}>×</button>
         </div>
         <div ref={cRef} className="conv__chair-messages">
           {cMsgs.map((m, i) => (
@@ -773,7 +719,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         </div>
         <div className="chat__input-area">
           <div className="chat__input-wrapper">
-            <textarea className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={!activeId ? '' : chairComposerMode === 'blocked' ? '公共讨论进行中…' : '私聊会长...（Shift+Enter 换行）'} disabled={!activeId} rows={1} />
+            <textarea ref={cInputRef} className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={!activeId ? '' : chairComposerMode === 'blocked' ? '公共讨论进行中…' : '私聊会长...（Shift+Enter 换行）'} disabled={!activeId} rows={1} />
             {cBusy ? (
               <button className="chat__stop-btn" onClick={() => {
                 cAbortRef.current?.abort();

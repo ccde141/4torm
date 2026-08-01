@@ -1,0 +1,96 @@
+.convection-turn {
+  width: min(85%, 760px);
+  max-width: min(85%, 760px);
+}
+
+.convection-turn__bubble { flex: 1; width: 100%; }
+
+.convection-turn__process {
+  margin: var(--space-2) 0 var(--space-3);
+  overflow: hidden;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg-soft);
+}
+
+.convection-turn__process-summary,
+.convection-turn__tool-trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  color: var(--color-text-secondary);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.convection-turn__process-summary {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  list-style: none;
+}
+
+.convection-turn__process-arrow,
+.convection-turn__tool-arrow {
+  font-size: 10px;
+  transition: transform var(--duration-fast) var(--ease-out-expo);
+}
+
+.convection-turn__process--open .convection-turn__process-arrow,
+.convection-turn__tool-arrow--open { transform: rotate(90deg); }
+
+.convection-turn__process-state,
+.convection-turn__tool-state {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.convection-turn__process-body {
+  padding: 0 var(--space-3) var(--space-3);
+  border-top: 1px solid var(--glass-border);
+}
+
+.convection-turn__tool { border-bottom: 1px solid var(--glass-border); }
+.convection-turn__tool:last-child { border-bottom: 0; }
+
+.convection-turn__tool-trigger {
+  min-height: 34px;
+  padding: var(--space-1) 0;
+}
+
+.convection-turn__tool-trigger code { color: var(--color-accent); font-size: var(--text-xs); }
+.convection-turn__tool--error .convection-turn__tool-trigger code { color: var(--color-error); }
+.convection-turn__tool-body { padding: 0 0 var(--space-2) calc(var(--space-2) + 10px); }
+.convection-turn__tool-detail + .convection-turn__tool-detail { margin-top: var(--space-2); }
+
+.convection-turn__tool-detail > div {
+  margin-bottom: 2px;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.convection-turn__tool-detail pre {
+  max-height: 200px;
+  margin: 0;
+  padding: var(--space-2);
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-primary);
+  white-space: pre-wrap;
+  font: var(--text-xs)/var(--leading-normal) var(--font-mono);
+}
+
+.convection-turn__answer + .chat__bubble-actions { margin-top: var(--space-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  .convection-turn__process-arrow,
+  .convection-turn__tool-arrow { transition: none; }
+}

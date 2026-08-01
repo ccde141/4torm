@@ -1,14 +1,12 @@
 /**
  * 信封路由器 —— 按 graph.edges 把信封投到目标节点的入口缓冲
  *
- * 设计依据：workflow-design-v2.0.md §6.4
- *
  * 核心约束：
  * - 发送方（Executor）调 sendHandoff(content, eventTypeId) 时不指定目标
  * - 路由器按 source nodeId + 出线索引查 edges → 找到目标节点 + targetPort
  * - 自动填入 Envelope.portIndex，投到目标的 InputBuffer
  *
- * Phase 4 极简：仅支持 handoff edge。
+ * 当前只把 handoff 作为工作入线。
  * 一个源节点可能有多条 handoff 出线（Note 那种"一对多"广播），按所有 handoff 出线复制投递。
  */
 
@@ -55,7 +53,7 @@ export class EnvelopeRouter {
 
 /**
  * 按 graph 计算每个节点的 work 入线数（用于初始化 InputBuffer 容量）。
- * Phase 4 仅 handoff 即 work 入线；Phase 5 起 consult/note 不计入此数。
+ * 只有 handoff 计入工作入线；consult / note 不占用此容量。
  */
 export function countWorkInputs(edges: WorkflowEdge[]): Map<string, number> {
   const counts = new Map<string, number>();

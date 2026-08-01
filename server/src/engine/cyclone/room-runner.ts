@@ -5,7 +5,7 @@
  * 每个工位看公共快照、回一句、追加（下一个能看到）→ 落盘。
  *
  * 群聊是讨论场：剥离 ask/delegate（不阻塞串行循环），保留真实工具。
- * contact（工位间联络）在 Phase 1b 接入。
+ * contact 负责群聊与工位之间的同步联络。
  * 工位群里发言只落 room.publicMessages，不落工位私聊会话（seat.messages）。
  *
  * 只 import shared/ 与本目录模块，零交叉代码。

@@ -14,22 +14,23 @@ test('气旋工位使用气旋自己的轻量工具活动卡', () => {
   assert.match(blockRows, /<BlockRow/);
 });
 
-test('气旋群聊使用气旋自己的轻量工具活动卡', () => {
+test('气旋群聊把一名 Agent 的工具和正文收进同一个回合气泡', () => {
   const source = fs.readFileSync('src/cyclone/ui/pages/RoomFeedRow.tsx', 'utf8');
 
-  assert.match(source, /CycloneToolActivityList/);
-  assert.doesNotMatch(source, /<ToolActivityList/);
-  assert.match(source, /<ToolCallMessage/);
+  assert.match(source, /cyclone-room-turn/);
+  assert.match(source, /cyclone-room-turn__bubble/);
+  assert.match(source, /CycloneTurnWorklog/);
+  assert.doesNotMatch(source, /ToolCallMessage/);
 });
 
-test('气旋群聊按季风层级独立展示思考、工具与正文气泡', () => {
+test('气旋群聊保留真实分段顺序但不为每个分段创建独立回复气泡', () => {
   const source = fs.readFileSync('src/cyclone/ui/pages/RoomFeedRow.tsx', 'utf8');
 
-  assert.match(source, /conv__speaker-label conv__speaker-label--offset/);
-  assert.match(source, /m\.segments \? m\.segments\.map/);
-  assert.match(source, /segment\.kind === 'tools'/);
-  assert.match(source, /segment\.kind === 'dispatch'/);
-  assert.match(source, /<AssistantBubble/);
+  assert.match(source, /splitTurnSegments/);
+  assert.match(source, /workSegments/);
+  assert.match(source, /finalContent/);
+  assert.doesNotMatch(source, /<AssistantBubble/);
+  assert.doesNotMatch(source, /conv__speaker-label--offset/);
 });
 
 test('气旋群聊收到 dispatch-created 时立即刷新派发卡片', () => {

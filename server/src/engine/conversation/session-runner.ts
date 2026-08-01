@@ -23,8 +23,10 @@ import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import type { ToolPreparationProgress } from '../shared/tool-progress';
 import type { SandboxLevel } from '../shared/sandbox-prompt';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
+import { readToolBridgeResponse } from '../shared/tool-bridge-response';
 import { execListAgents, execCreateWorkflow } from '../shared/workflow-builder';
 import { execListWorkflows, execUpdateWorkflow } from '../shared/workflow-editor';
+import { execStartWorkflow } from '../shared/workflow-starter';
 import { buildVirtualToolDefs, shouldAttachToolCaller } from './virtual-tools';
 import { execMemoryTool, MEMORY_TOOL_NAMES, buildMemoryToolDefs } from '../shared/agent-memory';
 import { execCreateAutomation, execUpdateAutomation, execListAutomations } from '../shared/automation-builder';
@@ -342,6 +344,15 @@ export class SessionRunner {
           onEvent({ type: 'tool-result', tool, result, ok });
           return result;
         }
+        if (tool === 'start_workflow') {
+          onEvent({ type: 'tool-call', tool, args });
+          const outcome = await execStartWorkflow(dataDir, args, {
+            sessionId: this.opts.sessionId,
+            agentId: this.opts.agentId,
+          });
+          onEvent({ type: 'tool-result', tool, result: outcome.result, ok: outcome.ok, meta: outcome.meta });
+          return outcome.result;
+        }
         // create/update_automation：AI 增改潮汐任务（enabled 恒由人控制），信息卡展示；写盘走专用工具+控制面保护
         if (tool === 'create_automation' || tool === 'update_automation') {
           onEvent({ type: 'tool-call', tool, args });
@@ -463,17 +474,13 @@ export class SessionRunner {
         agentId: this.opts.agentId,
         workspaceDirOverride: this.opts.workspace,
         sandboxLevelOverride: this.opts.sandboxLevel,
+        observation: this.opts.sessionId ? { scope: 'conversation', ownerId: this.opts.sessionId } : undefined,
       }),
       signal: this.abortController?.signal,
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
-    }
-    const data = await res.json() as { result?: string; error?: string; meta?: unknown };
-    if (data.error) throw new Error(data.error);
+    const data = await readToolBridgeResponse(res);
     if (data.meta !== undefined && data.meta !== null) onMeta?.(data.meta);
-    return data.result ?? '';
+    return data.result;
   }
 
   /** 执行 delegate（SubAgent 委托） */

@@ -9,6 +9,7 @@ import { useConfirm } from '../common/ConfirmDialog';
 import { useStreamRunners } from './useStreamRunners';
 import QueuedChips, { MAX_QUEUE } from './QueuedChips';
 import TaskBoardDrawer, { RAIL_W } from './TaskBoardDrawer';
+import { useTaskboardObservations } from './useTaskboardObservations';
 import { loadTaskboard, saveTaskboard, type TaskBoard } from '../../utils/taskboard';
 import { runStreamLoop } from '../../engine/chat/streamLoop';
 import { appendToolStep, finishLatestToolStep } from '../../engine/chat/tool-step-events';
@@ -119,6 +120,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     compactSession,
     setActiveSessionId,
   } = useSessionList(selectedAgent, selectedModel, models, setSelectedAgent, setMessages, setStreaming, setSelectedModel, streamRunners);
+  const taskboardObservations = useTaskboardObservations('conversation', activeSessionId || '', streaming);
   // 同步 activeSessionId 到 ref 供 emit 读最新值（effect 中写，避免 render 期改 ref）
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
   useEffect(() => {
@@ -177,6 +179,9 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
 
   // 图片进入附件预览；其他文件仍按原行为把本地路径写进输入框。
   useDroppedPathInput(setInput, inputRef, active !== false, IS_NOT_IMAGE);
+  useEffect(() => {
+    if (!input) inputRef.current?.style.removeProperty('height');
+  }, [input]);
   useEffect(() => {
     if (active === false) return;
     const onDrop = (event: Event) => {
@@ -455,7 +460,8 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
             const before = (ev as any).meta?.before;
             // ev.meta.pendingAutomation = AI 自建潮汐草稿，存进 toolCall 供确认卡渲染
             const pendingAutomation = (ev as any).meta?.pendingAutomation;
-            allMessages = finishLatestToolStep(allMessages, assistantMsgId, ev.result, ev.ok !== false, { before, pendingAutomation });
+            const workflowExecution = (ev as any).meta?.workflowExecution;
+            allMessages = finishLatestToolStep(allMessages, assistantMsgId, ev.result, ev.ok !== false, { before, pendingAutomation, workflowExecution });
             allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, streamingPhase: 'llm-waiting', phaseElapsed: 0, streamingTool: undefined, streamingArgumentChars: undefined } : m);
             emit([...allMessages]);
           } else if (isDelegateStreamEvent(ev)) {
@@ -720,7 +726,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
               <div style={sectionLabelStyle}>会话</div>
-              <button onClick={() => newSession()} className="icon-add-btn" title="新建会话">+</button>
+              <button onClick={() => newSession()} className="icon-add-btn" title="新建会话" aria-label="新建会话">+</button>
             </div>
             <div className="session-list" style={{ flex: 1, overflowY: 'auto' }}>
               {sessions.length === 0 && <div style={{ padding: 'var(--space-4)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center', textShadow: 'var(--text-halo)' }}>暂无会话，点击 + 创建</div>}
@@ -848,7 +854,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               </div>
             </div>
             {/* 任务板挂在整列层（非消息区内），竖条/抽屉贯穿全高：上过标题栏、下达输入栏，与气旋/对流会长同构 */}
-            <TaskBoardDrawer board={taskboard} onChange={handleTaskboardChange} expanded={taskboardOpen} onToggle={toggleTaskboard} glow={taskboardUnseen} />
+            <TaskBoardDrawer board={taskboard} onChange={handleTaskboardChange} expanded={taskboardOpen} onToggle={toggleTaskboard} glow={taskboardUnseen} observations={taskboardObservations} observationScope="conversation" observationOwnerId={activeSessionId || ''} />
           </>
         )}
       </div>

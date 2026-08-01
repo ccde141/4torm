@@ -9,6 +9,7 @@
  */
 
 import { callMcpTool } from './mcp-manager';
+import { readToolBridgeResponse } from './tool-bridge-response';
 
 const TOOL_BRIDGE_URL = (process.env.TOOL_BRIDGE_URL || 'http://localhost:3001').replace(/\/+$/, '');
 
@@ -21,10 +22,11 @@ export interface ExecToolOpts {
   signal?: AbortSignal;
   /** UI 侧通道：接收执行器回传的展示元数据（如覆盖写入旧内容），不影响 LLM 结果字符串 */
   onMeta?: (meta: unknown) => void;
+  observation?: { scope: 'conversation' | 'cyclone'; ownerId: string };
 }
 
 export async function execToolUnified(opts: ExecToolOpts): Promise<string> {
-  const { tool, args, agentId, workspaceDir, sandboxLevel, signal, onMeta } = opts;
+  const { tool, args, agentId, workspaceDir, sandboxLevel, signal, onMeta, observation } = opts;
 
   // MCP 工具：直接走 MCP client
   if (tool.startsWith('mcp:')) {
@@ -36,6 +38,7 @@ export async function execToolUnified(opts: ExecToolOpts): Promise<string> {
   const body: Record<string, any> = { tool, args, agentId };
   if (workspaceDir) body.workspaceDirOverride = workspaceDir;
   if (sandboxLevel) body.sandboxLevelOverride = sandboxLevel;
+  if (observation) body.observation = observation;
 
   const res = await fetch(url, {
     method: 'POST',
@@ -44,13 +47,7 @@ export async function execToolUnified(opts: ExecToolOpts): Promise<string> {
     signal,
   });
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`tool-bridge error (${res.status}): ${text}`);
-  }
-
-  const data = await res.json() as { result?: string; error?: string; meta?: unknown };
-  if (data.error) throw new Error(data.error);
+  const data = await readToolBridgeResponse(res);
   if (data.meta !== undefined && data.meta !== null) onMeta?.(data.meta);
-  return data.result ?? '';
+  return data.result;
 }

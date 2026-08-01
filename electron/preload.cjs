@@ -5,7 +5,7 @@
  * 必须用 webUtils.getPathForFile(file)，且只能在 preload（主世界之外）调用。
  */
 
-const { contextBridge, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('desktop', {
   isElectron: true,
@@ -22,5 +22,16 @@ contextBridge.exposeInMainWorld('desktop', {
     } catch {
       return '';
     }
+  },
+  executionSurface: {
+    show(executionId, bounds, leaseId) {
+      return ipcRenderer.invoke('execution-surface:show', { executionId, bounds, leaseId });
+    },
+    hide(executionId, leaseId) {
+      return ipcRenderer.invoke('execution-surface:hide', { executionId, leaseId });
+    },
+    setInputEnabled(executionId, enabled) {
+      return ipcRenderer.invoke('execution-surface:set-input-enabled', { executionId, enabled });
+    },
   },
 });

@@ -23,26 +23,27 @@ import { atomicWriteFile } from '../engine/shared/atomic-io';
 import type { FastifyInstance } from 'fastify';
 import { getAppContext } from '../services/app-context.js';
 import type { WorkflowGraph, WorkflowMode } from '../engine/tradewind/foundation/types';
-import { Orchestrator, LoopController } from '../engine/tradewind/orchestrator';
-import type { LoopConfig } from '../engine/tradewind/orchestrator';
-import { loadProfiles, saveProfiles, findProfile, autoProfileToLoopConfig } from '../engine/shared/profile-store';
+import { loadProfiles, saveProfiles } from '../engine/shared/profile-store';
 import type { AutoProfile } from '../engine/tradewind/foundation/types';
-import { EntryExecutor } from '../engine/tradewind/nodes/entry';
-import { OutputExecutor } from '../engine/tradewind/nodes/output';
-import { AgentExecutor, activeNodeRunners } from '../engine/tradewind/nodes/agent';
-import { MeetingExecutor, activeMeetings } from '../engine/tradewind/nodes/meeting';
-import { NoteExecutor } from '../engine/tradewind/nodes/note';
-import { HumanGateExecutor, activeHumanGates } from '../engine/tradewind/nodes/human-gate';
+import { activeNodeRunners } from '../engine/tradewind/nodes/agent';
+import { activeMeetings } from '../engine/tradewind/nodes/meeting';
+import { activeHumanGates } from '../engine/tradewind/nodes/human-gate';
 import { handleSpeak, handleChair, handleEnd } from '../engine/tradewind/execution/meeting-handlers';
 import { compactMeetingIfNeeded, MEETING_COMPACT_THRESHOLD } from '../engine/tradewind/execution/context-compactor';
 import { addClient, removeClient, broadcastToMeeting, clearClients } from '../engine/tradewind/streaming/meeting-broadcast';
 import { addUnifiedClient, removeUnifiedClient } from '../engine/tradewind/streaming/unified-stream';
 import { getEnvelopePending } from '../engine/tradewind/foundation/node-status-store';
 import { getMeetingsDir, getMeetingFileName } from '../engine/tradewind/foundation/archive-paths';
-import { validateWorkflow } from '../engine/tradewind/foundation/workflow-validator';
 import { loadAgent } from '../engine/shared/agent-loader';
 import { agentRegistryFile, tradewindRunDir, tradewindWorkflowsDir } from '../services/data-paths.js';
 import { deleteTradewindWorkflowData } from '../services/tradewind-workflow-files.js';
+import {
+  getActiveTradewindLoop,
+  getActiveTradewindOrchestrator,
+  isTradewindExecutionRunning,
+  startTradewindExecution,
+  stopActiveTradewindExecution,
+} from '../services/tradewind-execution.js';
 
 /** 获取会长的 model key（用于压缩摘要 LLM 调用） */
 async function getChairModel(dataDir: string, chairAgentId: string): Promise<string> {
@@ -50,43 +51,13 @@ async function getChairModel(dataDir: string, chairAgentId: string): Promise<str
   return agent?.model || '';
 }
 
-/** 当前活跃的 orchestrator 实例（单执行，后续改为 Map）。循环模式下指向当前圈。 */
-let activeOrchestrator: Orchestrator | null = null;
-/** 当前活跃的循环控制器（循环模式）；单次运行时为 null */
-let activeLoop: LoopController | null = null;
-
-/** 统一存活判定：循环存活（含圈间 gap）或单圈存活 */
-function isExecutionRunning(): boolean {
-  return !!(activeLoop?.isRunning() || activeOrchestrator?.isRunning());
-}
-
-export async function stopActiveTradewindExecution(): Promise<void> {
-  if (activeLoop?.isRunning()) {
-    await activeLoop.stop();
-    activeLoop = null;
-    return;
-  }
-  if (activeOrchestrator?.isRunning()) await activeOrchestrator.stop();
-}
+export { stopActiveTradewindExecution } from '../services/tradewind-execution.js';
 
 export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
   const { dataDir } = getAppContext(app);
 
-  // 注册内置 executor
-  const executors = new Map();
-  executors.set('entry', new EntryExecutor());
-  executors.set('output', new OutputExecutor());
-  executors.set('agent', new AgentExecutor());
-  executors.set('meeting', new MeetingExecutor());
-  executors.set('note', new NoteExecutor());
-  executors.set('human-gate', new HumanGateExecutor());
-
   /** POST /run — 启动工作流 */
   app.post('/run', async (req, reply) => {
-    if (isExecutionRunning()) {
-      return reply.status(409).send({ error: 'Execution already running' });
-    }
-
     const body = req.body as {
       graph: WorkflowGraph;
       workflowId: string;
@@ -100,73 +71,31 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'Missing graph or workflowId' });
     }
 
-    const mode: WorkflowMode = body.mode === 'auto' ? 'auto' : 'manual';
-
-    // 启动前校验图结构（基础：无环 / 入出线 / 类型 / agent 引用 …；
-    // 自动模式追加：否决会议室/暂停点 + 模型须 native）。前端据 errors[].nodeId 高亮否决。
-    const knownNodeTypes = new Set(executors.keys());
-    const errors = await validateWorkflow(body.graph, dataDir, knownNodeTypes, mode);
-    if (errors.length > 0) {
-      return reply.status(400).send({ error: '工作流校验未通过', errors });
-    }
-
-    // 循环内生于 auto：manual 一律不循环；auto 且指定了可映射的 profile 才起 LoopController。
-    let loopConfig: LoopConfig | null = null;
-    if (mode === 'auto' && body.profileId) {
-      const profiles = await loadProfiles(dataDir, body.workflowId);
-      const profile = findProfile(profiles, body.profileId);
-      if (!profile) {
-        return reply.status(404).send({ error: `档案不存在：${body.profileId}` });
-      }
-      loopConfig = autoProfileToLoopConfig(profile);
-      // absolute（潮汐）档本刀不支持循环执行 → 降级单圈 + 日志说明
-      if (!loopConfig) {
-        console.warn(`[tradewind] profile ${body.profileId} 为 absolute 档，本刀不支持循环，降级单圈`);
-      }
-    }
-
-    // 循环模式：LoopController 常驻，每圈起跑时把当前 Orchestrator 挂到 activeOrchestrator
-    if (loopConfig) {
-      activeLoop = new LoopController({
-        graph: body.graph,
+    try {
+      const result = await startTradewindExecution({
         dataDir,
+        graph: body.graph,
         workflowId: body.workflowId,
-        executors,
         initialInput: body.initialInput,
-        mode,
-        loop: loopConfig,
-        onLapStart: (orch) => { activeOrchestrator = orch; },
+        mode: body.mode,
+        profileId: body.profileId,
+        trigger: { source: 'user' },
       });
-      await activeLoop.start();
-      // start 后 onLapStart 已同步设好首圈 activeOrchestrator
-      return reply.send({
-        executionId: activeOrchestrator?.getExecutionId() ?? '',
-        runDir: activeOrchestrator?.getRunDir() ?? '',
-        loop: true,
-      });
+      return reply.send(result);
+    } catch (error) {
+      const cause = error as Error & { validationErrors?: unknown };
+      if (cause.validationErrors) {
+        return reply.status(400).send({ error: cause.message, errors: cause.validationErrors });
+      }
+      const status = cause.message.includes('正在运行') ? 409
+        : cause.message.startsWith('档案不存在') ? 404 : 500;
+      return reply.status(status).send({ error: cause.message });
     }
-
-    // 单次运行（manual，或 auto 无 profile / absolute 降级）：行为与循环无关，完全不变
-    activeLoop = null;
-    activeOrchestrator = new Orchestrator({
-      graph: body.graph,
-      dataDir,
-      workflowId: body.workflowId,
-      executors,
-      initialInput: body.initialInput,
-      mode,
-    });
-
-    await activeOrchestrator.start();
-    return reply.send({
-      executionId: activeOrchestrator.getExecutionId(),
-      runDir: activeOrchestrator.getRunDir(),
-    });
   });
 
   /** POST /stop — 停止当前执行 */
   app.post('/stop', async (_req, reply) => {
-    if (!isExecutionRunning()) {
+    if (!isTradewindExecutionRunning()) {
       return reply.status(404).send({ error: 'No running execution' });
     }
     await stopActiveTradewindExecution();
@@ -175,10 +104,12 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
 
   /** GET /status — 当前执行状态（用于前端刷新后恢复） */
   app.get('/status', async (_req, reply) => {
+    const activeOrchestrator = getActiveTradewindOrchestrator();
+    const activeLoop = getActiveTradewindLoop();
     if (!activeOrchestrator) {
       return reply.send({ running: false });
     }
-    if (!isExecutionRunning()) {
+    if (!isTradewindExecutionRunning()) {
       return reply.send({
         running: false,
         executionId: activeOrchestrator.getExecutionId(),
@@ -197,8 +128,10 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
 
   /** GET /nodes/status — 所有节点的运行时状态（前端轮询用） */
   app.get('/nodes/status', async (_req, reply) => {
+    const activeOrchestrator = getActiveTradewindOrchestrator();
+    const activeLoop = getActiveTradewindLoop();
     // 循环模式下用统一存活判定：圈间 gap 期 activeLoop 仍存活，不能因当前圈已 stop 就误报 stopped。
-    if (!isExecutionRunning()) {
+    if (!isTradewindExecutionRunning()) {
       return reply.send({
         running: false,
         nodes: {},
@@ -272,6 +205,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
 
   /** GET /events — SSE 事件流 */
   app.get('/events', (req, reply) => {
+    const activeOrchestrator = getActiveTradewindOrchestrator();
     if (!activeOrchestrator) {
       return reply.status(404).send({ error: 'No execution' });
     }
@@ -374,7 +308,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
   /** DELETE /workflow/:id — 删除工作流 */
   app.delete('/workflow/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    if (isExecutionRunning() && activeOrchestrator?.getWorkflowId() === id) {
+    if (isTradewindExecutionRunning() && getActiveTradewindOrchestrator()?.getWorkflowId() === id) {
       return reply.status(409).send({ error: '当前工作流正在运行，请先停止后再删除' });
     }
     try {
@@ -432,7 +366,7 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
   /** GET /health — 健康检查 */
   app.get('/health', async (_req, reply) => {
     return reply.send({
-      status: activeOrchestrator?.isRunning() ? 'running' : 'idle',
+      status: getActiveTradewindOrchestrator()?.isRunning() ? 'running' : 'idle',
     });
   });
 
@@ -564,8 +498,9 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({ messages: runner.getMessages() });
     }
     // fallback：从磁盘读取持久化的 messages（runDir = runs/{workflowId}/{executionId}）
-    const execId = activeOrchestrator?.getExecutionId?.();
-    const wfId = activeOrchestrator?.getWorkflowId?.();
+    const activeOrchestrator = getActiveTradewindOrchestrator();
+    const execId = activeOrchestrator?.getExecutionId();
+    const wfId = activeOrchestrator?.getWorkflowId();
     if (execId && wfId) {
       const msgPath = path.join(tradewindRunDir(dataDir, wfId, execId), 'nodes', nodeId, 'messages.json');
       try {
@@ -599,8 +534,9 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       return reply.send(runner.getSnapshot());
     }
     // 节点未激活：回退磁盘 messages，无进行中轮次
-    const execId = activeOrchestrator?.getExecutionId?.();
-    const wfId = activeOrchestrator?.getWorkflowId?.();
+    const activeOrchestrator = getActiveTradewindOrchestrator();
+    const execId = activeOrchestrator?.getExecutionId();
+    const wfId = activeOrchestrator?.getWorkflowId();
     if (execId && wfId) {
       const msgPath = path.join(tradewindRunDir(dataDir, wfId, execId), 'nodes', nodeId, 'messages.json');
       try {

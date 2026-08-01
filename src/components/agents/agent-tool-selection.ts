@@ -9,6 +9,8 @@ interface SkillItem {
 
 export type ToolMode = 'all' | 'selected';
 
+const EXPLICIT_GRANT_SKILL_IDS = new Set(['browser']);
+
 export function getInitialToolSelection<T extends LocalTool>(
   allTools: readonly T[],
   configuredNames: readonly string[],
@@ -29,7 +31,12 @@ export function getDefaultSkillSelection<T extends SkillItem>(
   configuredIds: readonly string[],
   isCreate: boolean,
 ): Set<string> {
-  return new Set(isCreate ? allSkills.map(skill => skill.id) : configuredIds);
+  const selectedIds = isCreate
+    ? allSkills
+      .filter(skill => !EXPLICIT_GRANT_SKILL_IDS.has(skill.id))
+      .map(skill => skill.id)
+    : configuredIds;
+  return new Set(selectedIds);
 }
 
 export function getEffectiveLocalTools<T extends LocalTool>(

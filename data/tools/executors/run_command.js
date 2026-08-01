@@ -18,6 +18,14 @@ const MAX_OUTPUT_CHARS = 30000   // 返回给模型的输出字符上限（头�
 const MAX_BUFFER = 10 * 1024 * 1024  // 子进程缓冲 10MB，避免大输出直接 ENOBUFS 抛错
 const ANSI_PATTERN = /\x1B\[[0-?]*[ -/]*[@-~]/g
 
+export class CommandExecutionError extends Error {
+  constructor(exitCode, output) {
+    super(`(命令退出码 ${exitCode ?? '未知'})\n${output}`)
+    this.name = 'CommandExecutionError'
+    this.exitCode = exitCode
+  }
+}
+
 /** 命中破坏性/超长模式返回原因串，否则 null。导出供单测。 */
 export function isBlocked(cmd) {
   if (cmd.length > MAX_COMMAND_LENGTH) {
@@ -74,7 +82,7 @@ function terminateProcessTree(child) {
   })
 }
 
-function createCollector(target, output, isStopped, stop) {
+function createCollector(target, output, isStopped, stop, stream, onOutput) {
   return chunk => {
     if (isStopped()) return
     const buffer = Buffer.from(chunk)
@@ -84,10 +92,11 @@ function createCollector(target, output, isStopped, stop) {
       return
     }
     target.push(buffer)
+    onOutput?.(stream, buffer.toString('utf-8').replace(ANSI_PATTERN, ''))
   }
 }
 
-function observeCommand(child, { timeout, signal }) {
+function observeCommand(child, { timeout, signal, onOutput }) {
   return new Promise((resolve, reject) => {
     const combined = []
     const output = { bytes: 0 }
@@ -118,29 +127,45 @@ function observeCommand(child, { timeout, signal }) {
 
     signal?.addEventListener('abort', onAbort, { once: true })
     const isStopped = () => settled || !!stopError
-    child.stdout.on('data', createCollector(combined, output, isStopped, stop))
-    child.stderr.on('data', createCollector(combined, output, isStopped, stop))
+    child.stdout.on('data', createCollector(combined, output, isStopped, stop, 'stdout', onOutput))
+    child.stderr.on('data', createCollector(combined, output, isStopped, stop, 'stderr', onOutput))
     child.once('error', error => finish(error))
     child.once('close', code => {
       if (stopError) return finish(stopError)
       const text = clampOutput(decodeOutput(combined))
-      if (code !== 0) return finish(new Error(`(命令退出码 ${code ?? '未知'})\n${text}`))
+      if (code !== 0) return finish(new CommandExecutionError(code, text))
       finish(null, text || '(命令执行完毕，无输出)')
     })
   })
 }
 
+/**
+ * 固定 shell 契约，避免 Node 版本或宿主环境改变 `shell: true` 的实际解释器。
+ * Windows 命令始终遵循 cmd.exe 语义：`;` 不是分隔符。
+ */
+export function buildShellInvocation(command, platform = process.platform, comspec = process.env.ComSpec) {
+  if (platform === 'win32') {
+    return {
+      file: comspec || 'cmd.exe',
+      args: ['/d', '/s', '/c', `"chcp 65001 > nul && ${command}"`],
+      windowsVerbatimArguments: true,
+    }
+  }
+  return { file: '/bin/sh', args: ['-c', command] }
+}
+
 /** 异步运行 shell 命令；AbortSignal/超时会终止整棵子进程树。 */
-export function runCommand(command, { cwd, timeout, signal }) {
+export function runCommand(command, { cwd, timeout, signal, onOutput }) {
   if (signal?.aborted) return Promise.reject(abortError())
-  const wrapped = process.platform === 'win32' ? `chcp 65001 > nul && ${command}` : command
-  const child = spawn(wrapped, {
-    cwd, shell: true, windowsHide: true,
+  const invocation = buildShellInvocation(command)
+  const child = spawn(invocation.file, invocation.args, {
+    cwd, shell: false, windowsHide: true,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
   })
-  return observeCommand(child, { timeout, signal })
+  return observeCommand(child, { timeout, signal, onOutput })
 }
 
 export default async function (args, ctx) {
@@ -159,5 +184,5 @@ export default async function (args, ctx) {
   const cwd = ctx.workspaceDir || ctx.projectDir
   // 超时可由 agent 传参覆盖（毫秒），夹在 [1s, 10min]
   const timeout = Math.min(MAX_TIMEOUT, Math.max(1000, parseInt(args.timeout, 10) || DEFAULT_TIMEOUT))
-  return runCommand(cmd, { cwd, timeout, signal: ctx.signal })
+  return runCommand(cmd, { cwd, timeout, signal: ctx.signal, onOutput: ctx.onOutput })
 }

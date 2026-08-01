@@ -1,9 +1,9 @@
 /**
- * 气旋工作室页面（Phase 0 私聊最小闭环）
+ * 气旋工作室页面
  *
  * 功能：建/选工作室 → 加工位(绑 agent + 角色提示词) → 与工位一对一私聊。
  * 支持 ask 挂起：工位提问时显示输入框，回答后 resume。
- * 群聊（Room）在 Phase 1 接入，此页先只做私聊。
+ * 管理工作室、工位、群聊、公告板和会长私聊。
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -290,13 +290,15 @@ export default function CyclonePage({ active }: { active?: boolean }) {
       <div style={leftPanelStyle}>
         <div style={sectionHeadStyle}>
           <span style={sectionLabelStyle}>工作室</span>
-          <button onClick={() => setView({ kind: 'create-workshop' })} className="icon-add-btn icon-add-btn--sm" title="新建工作室">+</button>
+          <button onClick={() => setView({ kind: 'create-workshop' })} className="icon-add-btn icon-add-btn--sm" title="新建工作室" aria-label="新建工作室">+</button>
         </div>
         {workshops.map(w => (
-          <div key={w.id} onClick={() => { setActiveWid(w.id); setView(null); }}
+          <div key={w.id}
             style={{ ...itemStyle, display: 'flex', alignItems: 'center', gap: 4, ...(w.id === activeWid ? itemActiveStyle : null) }}>
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{w.title} <span style={{ opacity: .5 }}>({w.seatCount})</span></span>
-            <button onClick={e => { e.stopPropagation(); deleteWorkshop(w.id, w.title); }} style={delBtnStyle} title="删除工作室">×</button>
+            <button type="button" onClick={() => { setActiveWid(w.id); setView(null); }} style={itemMainStyle}>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{w.title} <span style={{ opacity: .5 }}>({w.seatCount})</span></span>
+            </button>
+            <button onClick={() => deleteWorkshop(w.id, w.title)} style={delBtnStyle} title="删除工作室" aria-label={`删除工作室：${w.title}`}>×</button>
           </div>
         ))}
         {activeWid && (
@@ -309,22 +311,24 @@ export default function CyclonePage({ active }: { active?: boolean }) {
           <>
             <div style={sectionHeadStyle}>
               <span style={sectionLabelStyle}>工位</span>
-              <button onClick={() => setView({ kind: 'create-seat' })} className="icon-add-btn icon-add-btn--sm" title="添加工位">+</button>
+              <button onClick={() => setView({ kind: 'create-seat' })} className="icon-add-btn icon-add-btn--sm" title="添加工位" aria-label="添加工位">+</button>
             </div>
             {seats.map(s => (
-              <div key={s.id} onClick={() => { setActiveSeatId(s.id); setView({ kind: 'seat', id: s.id }); }}
+              <div key={s.id}
                 style={{ ...itemStyle, display: 'flex', alignItems: 'center', gap: 4, ...(view?.kind === 'seat' && view.id === s.id ? itemActiveStyle : null) }}>
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title}{s.pending ? ' ❓' : ''}</span>
+                <button type="button" onClick={() => { setActiveSeatId(s.id); setView({ kind: 'seat', id: s.id }); }} style={itemMainStyle}>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title}{s.pending ? ' ❓' : ''}</span>
+                </button>
                 {dispatches.some(item => item.targetSeatId === s.id && (item.status === 'queued' || item.status === 'running')) && (
                   <span className="cyclone-room__dispatch-mark cyclone-room__dispatch-mark--active" title="异步任务执行中" />
                 )}
-                <button onClick={e => { e.stopPropagation(); openEditSeat(s.id); }} style={delBtnStyle} title="工位设置">⚙</button>
-                <button onClick={e => { e.stopPropagation(); deleteSeat(s.id, s.title); }} style={delBtnStyle} title="删除工位">×</button>
+                <button onClick={() => openEditSeat(s.id)} style={delBtnStyle} title="工位设置" aria-label={`设置工位：${s.title}`}>⚙</button>
+                <button onClick={() => deleteSeat(s.id, s.title)} style={delBtnStyle} title="删除工位" aria-label={`删除工位：${s.title}`}>×</button>
               </div>
             ))}
             <div style={sectionHeadStyle}>
               <span style={sectionLabelStyle}>群聊</span>
-              <button onClick={() => setView({ kind: 'create-room' })} className="icon-add-btn icon-add-btn--sm" title="新建群聊">+</button>
+              <button onClick={() => setView({ kind: 'create-room' })} className="icon-add-btn icon-add-btn--sm" title="新建群聊" aria-label="新建群聊">+</button>
             </div>
             {rooms.map(rm => {
               const items = dispatches.filter(item => item.sourceRoomId === rm.id);
@@ -336,12 +340,14 @@ export default function CyclonePage({ active }: { active?: boolean }) {
                 || !!seatRunners.getRunner(chairStreamKey(rm.id))?.streaming;
               const unread = items.some(item => item.readState === 'unread' && (item.status === 'completed' || item.status === 'failed'));
               return (
-                <div key={rm.id} onClick={() => setView({ kind: 'room', id: rm.id })}
+                <div key={rm.id}
                   style={{ ...itemStyle, display: 'flex', alignItems: 'center', gap: 8, ...(view?.kind === 'room' && view.id === rm.id ? itemActiveStyle : null) }}>
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}># {rm.title}</span>
+                  <button type="button" onClick={() => setView({ kind: 'room', id: rm.id })} style={itemMainStyle}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}># {rm.title}</span>
+                  </button>
                   {(running || unread) && <span className={`cyclone-room__dispatch-mark${running ? ' cyclone-room__dispatch-mark--active' : ''}`} title={running ? '异步任务执行中' : '有未读异步结果'} />}
-                  <button disabled={running} onClick={e => { e.stopPropagation(); deleteRoom(rm.id, rm.title); }}
-                    style={{ ...delBtnStyle, opacity: running ? .35 : 1 }} title="删除群聊">×</button>
+                  <button disabled={running} onClick={() => deleteRoom(rm.id, rm.title)}
+                    style={{ ...delBtnStyle, opacity: running ? .35 : 1 }} title="删除群聊" aria-label={`删除群聊：${rm.title}`}>×</button>
                 </div>
               );
             })}
@@ -428,6 +434,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
 const leftPanelStyle: React.CSSProperties = { width: '240px', borderRight: '1px solid var(--border-color)', padding: 'var(--space-4)', overflowY: 'auto', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '2px', background: 'var(--glass-bg-strong)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))' };
 const sectionHeadStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'var(--space-3)', marginBottom: 'var(--space-1)' };
 const sectionLabelStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-secondary)' };
-const itemStyle: React.CSSProperties = { padding: 'var(--space-2) var(--space-3)', cursor: 'pointer', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', border: '1px solid transparent', transition: 'all var(--duration-fast) var(--ease-out-expo)' };
+const itemStyle: React.CSSProperties = { padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', border: '1px solid transparent', transition: 'background var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo)' };
+const itemMainStyle: React.CSSProperties = { minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', padding: 0, border: 'none', background: 'transparent', color: 'inherit', font: 'inherit', textAlign: 'left', cursor: 'pointer' };
 const itemActiveStyle: React.CSSProperties = { background: 'var(--color-accent-subtle)', borderColor: 'var(--color-accent)', color: 'var(--color-accent)', fontWeight: 600 };
 const delBtnStyle: React.CSSProperties = { width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: 'var(--color-text-tertiary)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-md)', cursor: 'pointer', lineHeight: 1, flexShrink: 0, padding: 0 };

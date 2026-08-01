@@ -102,7 +102,7 @@ export default function AgentConfigModal(props: Props) {
             <h3>{isCreate ? '创建 Agent' : `配置 ${agent?.name}`}</h3>
             <p className="config-modal-subtitle">{isCreate ? '分步填写' : `${agent?.role} · ${agent?.id}`}</p>
           </div>
-          <button className="config-modal-close" onClick={close}>✕</button>
+          <button className="config-modal-close" onClick={close} aria-label="关闭 Agent 配置">✕</button>
         </div>
 
         <AgentConfigTabs active={tab} onChange={setTab} />
@@ -132,13 +132,13 @@ export default function AgentConfigModal(props: Props) {
                       <option value="">无标签</option>
                       {allLabels.map(l => (<option key={l.id} value={l.id}>{l.label}</option>))}
                     </select>
-                    <button onClick={() => setShowAddLabel(!showAddLabel)} title="新建标签" className="icon-add-btn icon-add-btn--sm">+</button>
+                    <button onClick={() => setShowAddLabel(!showAddLabel)} title="新建标签" aria-label="新建标签" className="icon-add-btn icon-add-btn--sm">+</button>
                   </div>
                   {showAddLabel && (
                     <div style={{ marginTop: 'var(--space-2)', padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
                       <input value={newLabelName} onChange={e => setNewLabelName(e.target.value)} placeholder="标签名" style={{ ...inputStyle, flex: 1, fontSize: 'var(--text-xs)' }} />
                       <div style={{ display: 'flex', gap: '2px' }}>{getPresetColors().slice(0, 5).map(c => (
-                        <button key={c} onClick={() => setNewLabelColor(c)} style={{ width: 16, height: 16, borderRadius: '50%', background: c, border: newLabelColor === c ? '2px solid #fff' : '1px solid transparent' }} />
+                        <button key={c} onClick={() => setNewLabelColor(c)} aria-label={`选择标签颜色 ${c}`} style={{ width: 16, height: 16, borderRadius: '50%', background: c, border: newLabelColor === c ? '2px solid #fff' : '1px solid transparent' }} />
                       ))}</div>
                       <input value={newLabelColor} onChange={e => setNewLabelColor(e.target.value)} style={{ ...inputStyle, width: '65px', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' }} />
                       <button onClick={handleAddLabel} style={{ ...miniBtn, background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none' }}>添加</button>

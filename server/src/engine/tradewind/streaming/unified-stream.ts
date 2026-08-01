@@ -29,3 +29,11 @@ export function pushUnified(scope: 'agent' | 'meeting', nodeId: string, ev: Reco
     try { res.write(data); } catch {}
   }
 }
+
+export function pushExecutionLifecycle(event: Record<string, unknown>): void {
+  if (clients.size === 0) return;
+  const data = `data: ${JSON.stringify({ ...event, scope: 'execution' })}\n\n`;
+  for (const res of clients) {
+    try { res.write(data); } catch {}
+  }
+}

@@ -9,6 +9,11 @@ export interface DesktopBridge {
   isElectron: true;
   /** File → 绝对磁盘路径（仅 Electron）。失败返回空串。 */
   getPathForFile(file: File): string;
+  executionSurface: {
+    show(executionId: string, bounds: { x: number; y: number; width: number; height: number }, leaseId?: string): Promise<void>;
+    hide(executionId: string, leaseId?: string): Promise<void>;
+    setInputEnabled(executionId: string, enabled: boolean): Promise<void>;
+  };
 }
 
 declare global {

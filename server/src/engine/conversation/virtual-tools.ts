@@ -165,6 +165,18 @@ export function buildVirtualToolDefs(
           required: ['workflowId', 'params'],
         },
       },
+      {
+        name: 'start_workflow',
+        description: '启动一个已经保存的信风工作流。只有用户明确要求执行，或已经通过 ask 确认执行时才能调用；讨论、设计或修改工作流时不得擅自启动。',
+        parameters: {
+          type: 'object',
+          properties: {
+            workflowId: { type: 'string', description: '要启动的工作流 id；不确定时先调用 list_workflows。' },
+            initialInput: { type: 'string', description: '可选。交给 Entry 节点的本次任务输入。' },
+          },
+          required: ['workflowId'],
+        },
+      },
     );
   }
 

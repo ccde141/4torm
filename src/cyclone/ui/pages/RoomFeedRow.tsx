@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { renderTextWithCode } from '../../../engine/markdown';
-import ToolCallMessage from '../../../components/chat/ToolCallMessage';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
-import CycloneToolActivityList from './CycloneToolActivityList';
 import type { FeedMsg } from './useRoomStreamRunners';
+import type { FeedTool, RoomReplySegment } from './room-reply-segments';
+import { splitTurnSegments } from './cyclone-room-turn';
 import DispatchCard from './DispatchCard';
 import type { CycloneDispatch } from './dispatch-timeline';
 import type { DispatchAction } from './useWorkshopDispatches';
+import './cyclone-room-turn.css';
 
 export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEditContent,
   onStartEdit, onSaveEdit, onCancelEdit, onDelete, dispatches, highlightedId,
@@ -60,8 +61,8 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
   }
   const actions = m.sourceIndex === undefined ? null : (
     <div className="chat__bubble-actions">
-      <button className="chat__msg-action-btn" title="编辑" onClick={onStartEdit}>✏</button>
-      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" onClick={onDelete}>🗑</button>
+      <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={onStartEdit}>✏</button>
+      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={onDelete}>🗑</button>
     </div>
   );
   if (m.isHuman) {
@@ -72,52 +73,94 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
       </div>
     );
   }
+
+  const { workSegments, finalContent } = splitTurnSegments(m);
   return (
-    <>
-      <div className="conv__speaker-label conv__speaker-label--offset">{m.speaker}</div>
-      {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} defaultOpen={false} />}
-      {m.segments ? m.segments.map((segment, segmentIndex) => {
-        if (segment.kind === 'tools') return <CycloneToolActivityList key={segmentIndex} items={segment.tools} renderItem={(tool, toolIndex) => (
-          <ToolCallMessage key={toolIndex} toolCall={{ toolName: tool.tool, params: tool.args, result: tool.result, status: tool.status }} />
-        )} />;
-        if (segment.kind === 'dispatch') {
+    <div className={`chat__message chat__message--assistant cyclone-room-turn${m.isArchiveSummary ? ' chat__message--archive-summary' : ''}`}>
+      <div className="chat__avatar">{m.isArchiveSummary ? '档' : m.speaker.slice(0, 2)}</div>
+      <div className="chat__bubble cyclone-room-turn__bubble">
+        <div className="conv__speaker-label">{m.speaker}</div>
+        {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} defaultOpen={false} />}
+        <CycloneTurnWorklog segments={workSegments} dispatches={dispatches}
+          highlightedId={highlightedId} onDispatchAction={onDispatchAction} onOpenSeat={onOpenSeat}
+          idPrefix={`room-${prefix}w-${idx}`} />
+        {m.phase && <div className="chat__streaming-phase">{m.phase}</div>}
+        {finalContent && <div className="chat__content cyclone-room-turn__answer">
+          {renderTextWithCode(finalContent, `room-${prefix}s-${idx}`)}{m.streaming ? '▍' : ''}
+        </div>}
+        {!m.streaming && actions}
+      </div>
+    </div>
+  );
+}
+
+function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAction, onOpenSeat, idPrefix }: {
+  segments: RoomReplySegment[];
+  dispatches: CycloneDispatch[];
+  highlightedId: string | null;
+  onDispatchAction: (id: string, action: DispatchAction) => Promise<void>;
+  onOpenSeat: (seatId: string) => void;
+  idPrefix: string;
+}) {
+  if (!segments.length) return null;
+  const tools = segments.flatMap(segment => segment.kind === 'tools' ? segment.tools : []);
+  const operationCount = tools.length + segments.filter(segment => segment.kind === 'dispatch').length;
+  const failed = tools.filter(tool => tool.status === 'error').length;
+  const running = tools.some(tool => tool.status === 'running');
+  const state = failed ? `${failed} 项失败` : running ? '正在执行' : '已完成';
+  return (
+    <details className="cyclone-room-turn__worklog" open={failed > 0 || running}>
+      <summary className="cyclone-room-turn__worklog-summary">
+        <span className="cyclone-room-turn__worklog-arrow">▶</span>
+        <span>工作过程{operationCount ? ` · ${operationCount} 项操作` : ''}</span>
+        <span className="cyclone-room-turn__worklog-state">{state}</span>
+        {running && <span className="thinking-card__tool-spinner" />}
+      </summary>
+      <div className="cyclone-room-turn__worklog-body">
+        {segments.map((segment, segmentIndex) => {
+          if (segment.kind === 'text') return (
+            <div key={segmentIndex} className="cyclone-room-turn__work-note">
+              {renderTextWithCode(segment.content, `${idPrefix}-${segmentIndex}`)}
+            </div>
+          );
+          if (segment.kind === 'tools') return segment.tools.map((tool, toolIndex) => (
+            <CycloneTurnToolItem key={`${segmentIndex}-${toolIndex}`} tool={tool} />
+          ));
           const item = dispatches.find(dispatch => dispatch.id === segment.dispatchId);
           return item ? <DispatchCard key={segment.dispatchId} item={item}
             highlighted={highlightedId === item.id}
             onAction={action => onDispatchAction(item.id, action)}
             onOpenSeat={() => onOpenSeat(item.targetSeatId)} /> : null;
-        }
-        return <AssistantBubble key={segmentIndex} m={m} content={segment.content}
-          id={`room-${prefix}s-${idx}-${segmentIndex}`} />;
-      }) : <CycloneToolActivityList items={m.tools} renderItem={(tool, toolIndex) => (
-        <ToolCallMessage key={toolIndex} toolCall={{ toolName: tool.tool, params: tool.args, result: tool.result, status: tool.status }} />
-      )} />}
-      {!m.segments && (m.phase || m.content || (!m.streaming && actions)) && (
-        <div className={`chat__message chat__message--assistant${m.isArchiveSummary ? ' chat__message--archive-summary' : ''}`}>
-          <div className="chat__avatar">{m.isArchiveSummary ? '档' : m.speaker.slice(0, 2)}</div>
-          <div className="chat__bubble">
-            {m.phase && <div className="chat__streaming-phase">{m.phase}</div>}
-            {m.content && <div className="chat__content" style={{ whiteSpace: 'pre-wrap' }}>{renderTextWithCode(m.content, `room-${prefix}s-${idx}`)}{m.streaming ? '▍' : ''}</div>}
-            {!m.streaming && actions}
-          </div>
-        </div>
-      )}
-      {m.segments && m.phase && <AssistantBubble m={m} content="" id={`room-${prefix}p-${idx}`} />}
-      {m.segments && !m.streaming && actions}
-    </>
+        })}
+      </div>
+    </details>
   );
 }
 
-function AssistantBubble({ m, content, id }: { m: FeedMsg; content: string; id: string }) {
+function CycloneTurnToolItem({ tool }: { tool: FeedTool }) {
+  const [expanded, setExpanded] = useState(false);
+  const running = tool.status === 'running';
+  const resultLines = (tool.result || '').split('\n').filter(Boolean);
+  const summary = resultLines.length > 1 ? `${resultLines.length} 行输出` : resultLines[0]?.slice(0, 60);
   return (
-    <div className={`chat__message chat__message--assistant${m.isArchiveSummary ? ' chat__message--archive-summary' : ''}`}>
-      <div className="chat__avatar">{m.isArchiveSummary ? '档' : m.speaker.slice(0, 2)}</div>
-      <div className="chat__bubble">
-        {m.phase && !content && <div className="chat__streaming-phase">{m.phase}</div>}
-        {content && <div className="chat__content" style={{ whiteSpace: 'pre-wrap' }}>
-          {renderTextWithCode(content, id)}{m.streaming ? '▍' : ''}
-        </div>}
-      </div>
+    <div className={`cyclone-room-turn__tool cyclone-room-turn__tool--${tool.status}`}>
+      <button type="button" className="cyclone-room-turn__tool-trigger"
+        aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
+        <span className={`cyclone-room-turn__tool-arrow${expanded ? ' cyclone-room-turn__tool-arrow--open' : ''}`}>▶</span>
+        <code>{tool.tool}</code>
+        <span className="cyclone-room-turn__tool-state">{running ? '执行中' : tool.status === 'error' ? '失败' : summary || '已完成'}</span>
+        {running && <span className="thinking-card__tool-spinner" />}
+      </button>
+      {expanded && (
+        <div className="cyclone-room-turn__tool-body">
+          {Object.keys(tool.args).length > 0 && <ToolDetail label="参数" value={JSON.stringify(tool.args, null, 2)} />}
+          {tool.result && <ToolDetail label="结果" value={tool.result} />}
+        </div>
+      )}
     </div>
   );
+}
+
+function ToolDetail({ label, value }: { label: string; value: string }) {
+  return <section className="cyclone-room-turn__tool-detail"><div>{label}</div><pre>{value}</pre></section>;
 }

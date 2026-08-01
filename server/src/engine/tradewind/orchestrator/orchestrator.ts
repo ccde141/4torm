@@ -42,6 +42,7 @@ export interface OrchestratorOptions {
    * Entry 会据此给出线信封盖上信封皮（lap / loopNote / idempotencyKey）。
    */
   loopContext?: LoopContext;
+  trigger?: { source: 'user' | 'conversation'; sessionId?: string; agentId?: string };
 }
 
 /** 循环上下文：单圈在循环中的位置与续跑框定 */
@@ -70,6 +71,7 @@ export class Orchestrator {
   private readonly initialInput: string;
   private readonly mode: WorkflowMode;
   private readonly loopContext?: LoopContext;
+  private readonly trigger?: OrchestratorOptions['trigger'];
 
   private router!: EnvelopeRouter;
   private activator!: NodeActivator;
@@ -95,6 +97,7 @@ export class Orchestrator {
     this.initialInput = options.initialInput ?? '';
     this.mode = options.mode ?? 'manual';
     this.loopContext = options.loopContext;
+    this.trigger = options.trigger;
 
     this.runDir = path.join(
       options.dataDir, 'tradewind', 'runs',
@@ -173,7 +176,7 @@ export class Orchestrator {
     });
 
     // 5. 初始化 ArchiveManager 并写入 meta
-    this.archive = new ArchiveManager(this.runDir, this.executionId, this.workflowId);
+    this.archive = new ArchiveManager(this.runDir, this.executionId, this.workflowId, this.trigger);
     await this.archive.writeStart();
 
     // 5.1 写入 graph 快照（启动时的工作流拓扑，供回溯）

@@ -5,14 +5,14 @@ import { BUILTIN_TOOLS, mergeBuiltinToolDefaults, type ToolDef } from './tools.j
 function staleRunCommand(): ToolDef {
   return {
     name: 'run_command',
-    description: '保留用户已有描述',
+    description: '在终端执行一条系统命令',
     category: 'system',
     dangerous: true,
     executorType: 'builtin',
     executorFile: 'run_command',
     parameters: {
       type: 'object',
-      properties: { command: { type: 'string', description: '命令' } },
+      properties: { command: { type: 'string', description: '要执行的 shell 命令' } },
       required: ['command'],
     },
   };
@@ -28,13 +28,14 @@ test('run_command 种子公开可选 timeout 参数', () => {
   assert.deepEqual(runCommand?.parameters.required, ['command']);
 });
 
-test('种子迁移只补缺失参数并保持幂等', () => {
+test('种子迁移补齐 run_command 契约并保持幂等', () => {
   const first = mergeBuiltinToolDefaults([staleRunCommand()]);
   const migrated = first.tools.find(tool => tool.name === 'run_command');
   const properties = migrated?.parameters.properties as Record<string, unknown>;
 
   assert.equal(first.changed, true);
-  assert.equal(migrated?.description, '保留用户已有描述');
+  assert.match(migrated?.description ?? '', /Windows 使用 cmd\.exe/);
+  assert.match((properties.command as { description: string }).description, /分隔命令请使用 &、&& 或 \|\|/);
   assert.equal((properties.timeout as { type: string }).type, 'integer');
 
   const second = mergeBuiltinToolDefaults(first.tools);

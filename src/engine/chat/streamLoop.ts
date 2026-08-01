@@ -264,7 +264,8 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
       if (!target?.toolSteps) break;
       const before = typeof ev.meta?.before === 'string' ? ev.meta.before : undefined;
       const pendingAutomation = ev.meta?.pendingAutomation;
-      const finished = finishLatestToolStep(ctx.allMessages, ctx.assistantMsgId, ev.result, ev.ok !== false, { before, pendingAutomation });
+      const workflowExecution = ev.meta?.workflowExecution;
+      const finished = finishLatestToolStep(ctx.allMessages, ctx.assistantMsgId, ev.result, ev.ok !== false, { before, pendingAutomation, workflowExecution });
       ctx.setAllMessages(finished.map(m => m.id === ctx.assistantMsgId ? {
         ...m, streamingPhase: 'llm-waiting' as const, phaseElapsed: 0,
         streamingTool: undefined, streamingArgumentChars: undefined,

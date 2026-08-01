@@ -1,0 +1,51 @@
+[
+  {
+    "name": "browser",
+    "description": "在当前会话所属的隔离浏览器中执行操作。先用 open 打开 URL；每次操作或等待后读取最新 sessionId、revision 与 targetId。人类接管期间会拒绝 Agent 操作，必须等待交还后重新 inspect。",
+    "category": "browser",
+    "dangerous": true,
+    "executorType": "builtin",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "open=打开或复用页面；inspect=读取当前页面；click=点击目标；click_at=点击截图坐标；type=写入文本；press=发送按键；wait=等待页面更新。浏览器会话由用户界面关闭。"
+        },
+        "url": {
+          "type": "string",
+          "description": "仅 action=open 时使用的完整 URL。"
+        },
+        "targetId": {
+          "type": "string",
+          "description": "click、type 使用；press 可选。必须来自上一份页面快照。"
+        },
+        "x": {
+          "type": "number",
+          "description": "仅 click_at 使用的当前截图 x 坐标。"
+        },
+        "y": {
+          "type": "number",
+          "description": "仅 click_at 使用的当前截图 y 坐标。"
+        },
+        "text": {
+          "type": "string",
+          "description": "action=type 时为完整文本；action=wait 时为 1-10000 的等待毫秒数。"
+        },
+        "key": {
+          "type": "string",
+          "description": "仅 action=press 使用，例如 Enter、Tab、Escape。"
+        },
+        "revision": {
+          "type": "string",
+          "description": "inspect、click、click_at、type、press、wait 使用；必须是最近一次页面快照返回的 revision。"
+        },
+        "engine": {
+          "type": "string",
+          "description": "可选。Windows 默认使用系统 Edge；playwright-chromium 可显式请求隔离 Chromium。"
+        }
+      },
+      "required": ["action"]
+    }
+  }
+]

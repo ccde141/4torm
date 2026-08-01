@@ -220,7 +220,10 @@ function makeToolCaller(opts: {
       }
       onEvent({ type: 'tool-call', tool, args });
       try {
-        const result = await execToolUnified({ tool, args, agentId, workspaceDir: wsDir, sandboxLevel, signal });
+        const result = await execToolUnified({
+          tool, args, agentId, workspaceDir: wsDir, sandboxLevel, signal,
+          observation: { scope: 'cyclone', ownerId: `${workshopId}:${seatId}` },
+        });
         onEvent({ type: 'tool-result', tool, result, ok: true });
         return result;
       } catch (e) {

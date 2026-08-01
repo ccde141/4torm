@@ -125,7 +125,7 @@ export default function MemoryPanel({ agentId, agentName, onClose }: Props) {
             <h2 className="config-modal-title">🧠 长期记忆</h2>
             <p className="config-modal-subtitle">{agentName} · 跨会话积累的经验（您可以随时查看与编辑）</p>
           </div>
-          <button className="config-modal-close" onClick={onClose}>✕</button>
+          <button className="config-modal-close" onClick={onClose} aria-label="关闭长期记忆">✕</button>
         </div>
 
         <div className="config-modal-body" style={{ overflowY: 'auto' }}>
@@ -150,8 +150,8 @@ export default function MemoryPanel({ agentId, agentName, onClose }: Props) {
                           {CATEGORY_META[e.category].label}
                         </span>
                         <span className="mem-actions">
-                          <button className="mem-icon-btn" title="编辑" onClick={() => startEdit(e)}>✎</button>
-                          <button className="mem-icon-btn mem-icon-btn--danger" title="删除" onClick={() => remove(e.slug)}>🗑</button>
+                          <button className="mem-icon-btn" title="编辑" aria-label="编辑记忆" onClick={() => startEdit(e)}>✎</button>
+                          <button className="mem-icon-btn mem-icon-btn--danger" title="删除" aria-label="删除记忆" onClick={() => remove(e.slug)}>🗑</button>
                         </span>
                       </div>
                       <p className="mem-detail">{e.detail}</p>

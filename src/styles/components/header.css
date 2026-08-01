@@ -51,7 +51,10 @@
   color: var(--color-text-primary);
   font-size: var(--text-sm);
   font-family: var(--font-sans);
-  transition: all var(--duration-fast) var(--ease-out-expo);
+  transition:
+    width var(--duration-fast) var(--ease-out-expo),
+    border-color var(--duration-fast) var(--ease-out-expo),
+    box-shadow var(--duration-fast) var(--ease-out-expo);
   outline: none;
 }
 
@@ -86,7 +89,11 @@
   background: var(--color-bg-tertiary);
   color: var(--color-text-secondary);
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out-expo);
+  transition:
+    transform var(--duration-fast) var(--ease-out-back),
+    border-color var(--duration-fast) var(--ease-out-expo),
+    background var(--duration-fast) var(--ease-out-expo),
+    color var(--duration-fast) var(--ease-out-expo);
 }
 
 .header__btn:hover {

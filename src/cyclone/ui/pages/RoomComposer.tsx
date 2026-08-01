@@ -1,4 +1,4 @@
-import type { RefObject } from 'react';
+import { useEffect, type RefObject } from 'react';
 import ExecutionStatusBar from '../../../components/chat/ExecutionStatusBar';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 
@@ -14,6 +14,10 @@ export default function RoomComposer({ inputRef, input, streaming, phase, queue,
   onStop: () => void;
   onRemoveQueued: (index: number) => void;
 }) {
+  useEffect(() => {
+    if (!input) inputRef.current?.style.removeProperty('height');
+  }, [input, inputRef]);
+
   return (
     <div className="chat__input-area">
       <ExecutionStatusBar label={streaming ? phase : undefined} />

@@ -36,3 +36,28 @@ test('executeTool passes the caller AbortSignal to custom executors', async () =
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('executeTool passes optional output observation to custom executors', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-tool-output-'));
+  const dataDir = path.join(root, 'data');
+  const executorDir = path.join(dataDir, 'tools', 'executors');
+  await fs.mkdir(executorDir, { recursive: true });
+  await fs.writeFile(path.join(dataDir, 'tools', 'registry.json'), JSON.stringify([{
+    name: 'emit_output', description: 'test', executorType: 'custom', executorFile: 'emit_output',
+  }]));
+  await fs.writeFile(path.join(executorDir, 'emit_output.js'), `
+    export default (_args, ctx) => { ctx.onOutput('stdout', 'live'); return { result: 'done' }; }
+  `);
+
+  try {
+    const output: Array<[string, string]> = [];
+    const result = await executeTool(
+      dataDir, 'emit_output', {}, '', undefined, undefined, undefined, undefined,
+      (stream, text) => output.push([stream, text]),
+    );
+    assert.equal(result, 'done');
+    assert.deepEqual(output, [['stdout', 'live']]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

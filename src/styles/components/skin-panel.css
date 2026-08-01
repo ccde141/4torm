@@ -181,7 +181,7 @@
   font-weight: var(--font-medium);
   font-family: inherit;
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out-expo);
+  transition: background var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo);
   text-align: center;
 }
 

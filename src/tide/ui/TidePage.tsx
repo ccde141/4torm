@@ -225,7 +225,7 @@ export default function TidePage({ active = true }: { active?: boolean }) {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={sectionLabel}>任务 ({tasks.length})</div>
-          <button onClick={() => { setShowForm(true); setViewingSession(null); setSelectedTask(null); }} className="icon-add-btn icon-add-btn--sm">+</button>
+          <button onClick={() => { setShowForm(true); setViewingSession(null); setSelectedTask(null); }} className="icon-add-btn icon-add-btn--sm" title="新增自动化任务" aria-label="新增自动化任务">+</button>
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', marginTop: 'var(--space-2)' }}>

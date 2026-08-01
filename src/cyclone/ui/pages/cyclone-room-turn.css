@@ -1,0 +1,104 @@
+.cyclone-room-turn {
+  width: min(85%, 760px);
+  max-width: min(85%, 760px);
+}
+
+.cyclone-room-turn__bubble { flex: 1; width: 100%; }
+
+.cyclone-room-turn__worklog {
+  margin: var(--space-2) 0 var(--space-3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg-soft);
+  overflow: hidden;
+}
+
+.cyclone-room-turn__worklog-summary,
+.cyclone-room-turn__tool-trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  color: var(--color-text-secondary);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cyclone-room-turn__worklog-summary {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  list-style: none;
+}
+
+.cyclone-room-turn__worklog-summary::-webkit-details-marker { display: none; }
+
+.cyclone-room-turn__worklog-arrow,
+.cyclone-room-turn__tool-arrow {
+  font-size: 10px;
+  transition: transform var(--duration-fast) var(--ease-out-expo);
+}
+
+.cyclone-room-turn__worklog[open] .cyclone-room-turn__worklog-arrow,
+.cyclone-room-turn__tool-arrow--open { transform: rotate(90deg); }
+
+.cyclone-room-turn__worklog-state,
+.cyclone-room-turn__tool-state {
+  margin-left: auto;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cyclone-room-turn__worklog-body {
+  padding: 0 var(--space-3) var(--space-3);
+  border-top: 1px solid var(--glass-border);
+}
+
+.cyclone-room-turn__work-note {
+  padding: var(--space-3) 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.cyclone-room-turn__tool { border-bottom: 1px solid var(--glass-border); }
+.cyclone-room-turn__tool:last-child { border-bottom: 0; }
+
+.cyclone-room-turn__tool-trigger {
+  min-height: 34px;
+  padding: var(--space-1) 0;
+}
+
+.cyclone-room-turn__tool-trigger code { color: var(--color-accent); font-size: var(--text-xs); }
+.cyclone-room-turn__tool--error .cyclone-room-turn__tool-trigger code { color: var(--color-error); }
+.cyclone-room-turn__tool-body { padding: 0 0 var(--space-2) calc(var(--space-2) + 10px); }
+.cyclone-room-turn__tool-detail + .cyclone-room-turn__tool-detail { margin-top: var(--space-2); }
+
+.cyclone-room-turn__tool-detail > div {
+  margin-bottom: 2px;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.cyclone-room-turn__tool-detail pre {
+  max-height: 200px;
+  margin: 0;
+  padding: var(--space-2);
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-primary);
+  white-space: pre-wrap;
+  font: var(--text-xs)/var(--leading-normal) var(--font-mono);
+}
+
+.cyclone-room-turn__answer + .chat__bubble-actions { margin-top: var(--space-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cyclone-room-turn__worklog-arrow,
+  .cyclone-room-turn__tool-arrow { transition: none; }
+}

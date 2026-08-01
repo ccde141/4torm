@@ -5,6 +5,7 @@
  */
 
 .sidebar {
+  --sidebar-collapsed-width: 48px;
   width: var(--sidebar-width);
   height: 100vh;
   background: var(--glass-bg);
@@ -14,9 +15,14 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  transition: transform var(--duration-normal) var(--ease-out-expo);
+  overflow: hidden;
+  transition: width var(--motion-drawer-duration) var(--motion-drawer-ease);
   z-index: 100;
   box-shadow: var(--glass-shadow);
+}
+
+.sidebar--collapsed {
+  width: var(--sidebar-collapsed-width);
 }
 
 .sidebar__brand {
@@ -26,6 +32,69 @@
   gap: var(--space-3);
   padding: 0 var(--space-6);
   border-bottom: 1px solid var(--glass-border);
+  position: relative;
+}
+
+.sidebar--collapsed .sidebar__brand {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar__brand-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  opacity: 1;
+  transition: opacity var(--motion-exit-duration) var(--motion-exit-ease);
+}
+
+.sidebar--collapsed .sidebar__brand-identity {
+  position: absolute;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.sidebar__toggle {
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: var(--border-radius-md);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition:
+    transform var(--duration-fast) var(--ease-out-back),
+    border-color var(--duration-fast) var(--ease-out-expo),
+    background var(--duration-fast) var(--ease-out-expo),
+    color var(--duration-fast) var(--ease-out-expo);
+}
+
+.sidebar--collapsed .sidebar__toggle { margin-left: 0; }
+.sidebar__toggle svg { width: 17px; height: 17px; }
+.sidebar__toggle:hover { border-color: var(--border-color); background: var(--glass-bg-hover); color: var(--color-text-primary); transform: translateY(-1px) scale(1.03); }
+.sidebar__toggle:active { transform: scale(0.94); }
+
+.sidebar__body {
+  width: var(--sidebar-width);
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  opacity: 1;
+  visibility: visible;
+  transition: opacity var(--motion-enter-duration) var(--motion-enter-ease);
+}
+
+.sidebar--collapsed .sidebar__body {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .sidebar__brand-icon {
@@ -45,13 +114,6 @@
 .sidebar__brand-icon:has(.sidebar__brand-logo) {
   background: none;
   box-shadow: none;
-}
-
-/* hover：边缘提亮 + 轻微放大，做出按钮感（不依赖白底图，配合透明 svg） */
-.sidebar__brand-icon:hover {
-  transform: scale(1.08);
-  border-color: var(--border-color-hover);
-  box-shadow: 0 0 14px var(--color-accent-glow);
 }
 
 .sidebar__brand-icon svg,
@@ -108,7 +170,10 @@
   border-radius: var(--border-radius-md);
   color: var(--color-text-secondary);
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out-expo);
+  transition:
+    background var(--duration-fast) var(--ease-out-expo),
+    color var(--duration-fast) var(--ease-out-expo),
+    transform var(--duration-fast) var(--ease-out-expo);
   font-size: var(--text-sm);
   font-weight: var(--font-medium);
   border: none;
@@ -134,7 +199,7 @@
 .sidebar__nav-item:hover {
   background: var(--glass-bg-hover);
   color: var(--color-text-primary);
-  padding-left: calc(var(--space-3) + 6px);
+  transform: translateX(4px);
 }
 
 .sidebar__nav-item:hover::before {
@@ -151,7 +216,7 @@
 }
 
 .sidebar__nav-item--active:hover {
-  padding-left: calc(var(--space-3) + 2px);
+  transform: none;
 }
 
 .sidebar__nav-item--active:hover::before {
@@ -221,7 +286,9 @@
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
   text-decoration: none;
-  transition: all var(--duration-fast) var(--ease-out-expo);
+  transition:
+    background var(--duration-fast) var(--ease-out-expo),
+    color var(--duration-fast) var(--ease-out-expo);
   cursor: pointer;
 }
 

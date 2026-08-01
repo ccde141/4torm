@@ -18,6 +18,7 @@ import type { SandboxLevel } from '../../shared/sandbox-prompt';
 import { atomicWriteFile } from '../../shared/atomic-io';
 import { callLLM } from '../../shared/llm-bridge';
 import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
+import { readToolBridgeResponse } from '../../shared/tool-bridge-response';
 import {
   runReActLoop,
   type LLMCaller,
@@ -534,13 +535,8 @@ export class NodeRunner {
       }),
       signal: this.opts.signal,
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
-    }
-    const data = await res.json() as { result?: string; error?: string; meta?: unknown };
-    if (data.error) throw new Error(data.error);
+    const data = await readToolBridgeResponse(res);
     if (data.meta !== undefined && data.meta !== null) onMeta?.(data.meta);
-    return data.result ?? '';
+    return data.result;
   }
 }

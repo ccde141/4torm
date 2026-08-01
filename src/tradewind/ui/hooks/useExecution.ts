@@ -15,7 +15,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { WorkflowGraph, WorkflowMode } from '../../types';
 import { requestStop } from '../execution-client';
-import { phaseFromExecutionStatus, type ExecutionOutcome, type ExecutionPhase } from './execution-phase';
+import { type ExecutionOutcome, type ExecutionPhase } from './execution-phase';
+import { mergeExecutionStatus, type ExecutionIdentityState, type ExecutionStatusUpdate } from './execution-sync';
+import { subscribeAll, unsubscribeAll } from '../stream/unified-client';
 
 export interface NodeStatus {
   busy: boolean;
@@ -45,11 +47,31 @@ export function useExecution(): ExecutionState & ExecutionActions {
   const [error, setError] = useState<string | null>(null);
   const [lap, setLap] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const stateRef = useRef<ExecutionIdentityState>({ running: false, executionId: null, workflowId: null, phase: 'idle' });
 
-  // 挂载时恢复后端真实运行状态
+  const applyStatus = useCallback((status: ExecutionStatusUpdate) => {
+    const next = mergeExecutionStatus(stateRef.current, status);
+    stateRef.current = next;
+    setRunning(next.running);
+    setExecutionId(next.executionId);
+    setWorkflowId(next.workflowId);
+    setPhase(next.phase);
+  }, []);
+
+  // SSE 提供即时启动信号；后端状态仍是唯一事实来源。
+  useEffect(() => {
+    const onEvent = (event: { scope?: string; type?: string; executionId?: string; workflowId?: string }) => {
+      if (event.scope !== 'execution' || event.type !== 'execution-started' || !event.executionId) return;
+      applyStatus({ running: true, executionId: event.executionId, workflowId: event.workflowId });
+    };
+    subscribeAll(onEvent);
+    return () => unsubscribeAll(onEvent);
+  }, [applyStatus]);
+
+  // SSE 可能在页面休眠期间断开；低频对账负责刷新与漏事件恢复。
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    const sync = async () => {
       try {
         const res = await fetch('/api/tradewind/status');
         if (!res.ok) return;
@@ -57,18 +79,21 @@ export function useExecution(): ExecutionState & ExecutionActions {
           running: boolean; executionId?: string; workflowId?: string; outcome?: ExecutionOutcome | null;
         };
         if (cancelled) return;
-        setWorkflowId(data.workflowId ?? null);
-        setPhase(current => phaseFromExecutionStatus(data, current));
-        if (data.running && data.executionId) {
-          setRunning(true);
-          setExecutionId(data.executionId);
-        }
+        applyStatus(data);
       } catch {
-        // 后端不可达时静默
+        // 下一次对账会重试；不以空状态覆盖已知执行。
       }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+    };
+    void sync();
+    const id = setInterval(() => { void sync(); }, 5_000);
+    const onVisibility = () => { if (!document.hidden) void sync(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [applyStatus]);
 
   // running 时轮询节点状态
   useEffect(() => {
@@ -88,12 +113,9 @@ export function useExecution(): ExecutionState & ExecutionActions {
           executionId?: string; workflowId?: string; outcome?: ExecutionOutcome | null;
         };
         if (stopped) return;
-        setPhase(current => phaseFromExecutionStatus(data, current));
-        if (data.workflowId) setWorkflowId(data.workflowId);
+        applyStatus(data);
         // 后端工作流已结束 → 同步前端状态
-        if (!data.running) { setRunning(false); setExecutionId(null); }
         // 循环模式每圈全新 executionId：同步到前端，驱动会话面板随圈重置（gap 期无 executionId 时保持不变）
-        else if (data.executionId) setExecutionId(prev => (prev === data.executionId ? prev : data.executionId!));
         // 循环模式回传 lap；单次运行无此字段 → null
         setLap(typeof data.lap === 'number' ? data.lap : null);
         (window as any).__tw_node_status = data.nodes || {};
@@ -105,7 +127,7 @@ export function useExecution(): ExecutionState & ExecutionActions {
     tick();
     const id = setInterval(tick, 1000);
     return () => { stopped = true; clearInterval(id); };
-  }, [running]);
+  }, [applyStatus, running]);
 
   const start = useCallback(async (graph: WorkflowGraph, workflowId: string, initialInput?: string, mode: WorkflowMode = 'manual', profileId?: string) => {
     setError(null);
@@ -126,10 +148,7 @@ export function useExecution(): ExecutionState & ExecutionActions {
         throw new Error(baseMsg);
       }
       const data = await res.json() as { executionId: string };
-      setExecutionId(data.executionId);
-      setWorkflowId(workflowId);
-      setPhase('running');
-      setRunning(true);
+      applyStatus({ running: true, executionId: data.executionId, workflowId });
     } catch (e) {
       setPhase('failed');
       setError((e as Error).message);
@@ -139,14 +158,12 @@ export function useExecution(): ExecutionState & ExecutionActions {
   const stop = useCallback(async () => {
     try {
       await requestStop();
-      setRunning(false);
-      setExecutionId(null);
-      setPhase('stopped');
+      applyStatus({ running: false, executionId: stateRef.current.executionId ?? undefined, outcome: 'stopped' });
       abortRef.current?.abort();
     } catch (cause) {
       setError((cause as Error).message || '停止工作流失败');
     }
-  }, []);
+  }, [applyStatus]);
 
   return { running, executionId, workflowId, phase, error, lap, start, stop };
 }
