@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getTools, saveTools, seedTools, CATEGORY_LABELS, buildToolsPrompt } from '../../store/tools';
+import { getTools, saveTools, CATEGORY_LABELS, buildToolsPrompt } from '../../store/tools';
 import type { ToolDef } from '../../store/tools';
 
 export default function ToolsPage() {
@@ -8,7 +8,7 @@ export default function ToolsPage() {
   const [editingName, setEditingName] = useState<string | null>(null);
 
   useEffect(() => {
-    seedTools().then(() => getTools().then(setTools));
+    getTools().then(setTools);
   }, []);
 
   const refresh = () => getTools().then(setTools);
@@ -17,9 +17,9 @@ export default function ToolsPage() {
     <div style={{ padding: 'var(--space-6)', maxWidth: '900px', margin: '0 auto', height: '100%', overflowY: 'auto', background: 'var(--glass-bg-soft)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-6)' }}>
         <div style={{ textShadow: 'var(--text-halo)' }}>
-          <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-bold)', margin: '0 0 var(--space-1) 0' }}>全局工具注册表</h2>
+          <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-bold)', margin: '0 0 var(--space-1) 0' }}>工具目录</h2>
           <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', margin: 0 }}>
-            注册一次，所有 Agent 共用。在 Agent 配置中勾选即可启用。
+            框架工具由系统维护；自定义工具注册后，可在 Agent 配置中按需开放。
           </p>
         </div>
         {!adding && (
@@ -31,7 +31,7 @@ export default function ToolsPage() {
 
       {adding && (
         <ToolForm
-          onSave={async (tool) => { await saveTools([...tools, tool]); setAdding(false); refresh(); }}
+          onSave={async (tool) => { await saveTools([...tools, { ...tool, source: 'custom', readonly: false }]); setAdding(false); refresh(); }}
           onCancel={() => setAdding(false)}
         />
       )}
@@ -39,18 +39,18 @@ export default function ToolsPage() {
       {tools.length === 0 && !adding && (
         <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', textShadow: 'var(--text-halo)' }}>
           <p style={{ fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>还没有注册任何工具</p>
-          <p style={{ fontSize: 'var(--text-xs)' }}>点击右上角「注册工具」开始，或系统会自动导入 4 个内置工具模板</p>
+          <p style={{ fontSize: 'var(--text-xs)' }}>点击右上角「注册工具」添加自定义工具</p>
         </div>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', marginTop: adding ? 'var(--space-4)' : 0 }}>
         {tools.map(t => (
           // 编辑时在原位用表单替换卡片，避免表单跳到页面顶部、看起来「没反应」
-          t.name === editingName ? (
+          t.name === editingName && !t.readonly ? (
             <ToolForm
               key={t.name}
               initial={t}
-              onSave={async (tool) => { await saveTools(tools.map(x => x.name === editingName ? tool : x)); setEditingName(null); refresh(); }}
+              onSave={async (tool) => { await saveTools(tools.map(x => x.name === editingName ? { ...tool, source: 'custom', readonly: false } : x)); setEditingName(null); refresh(); }}
               onCancel={() => setEditingName(null)}
             />
           ) : (
@@ -72,12 +72,18 @@ function ToolCard({ tool, onEdit, onDelete }: { tool: ToolDef; onEdit: () => voi
         <div>
           <span style={{ fontSize: 'var(--text-base)', fontWeight: 'var(--font-semibold)', fontFamily: 'var(--font-mono)' }}>{tool.name}</span>
           <span style={{ marginLeft: 'var(--space-2)', padding: '1px 6px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{CATEGORY_LABELS[tool.category]}</span>
+          {tool.readonly && <span style={{ marginLeft: 'var(--space-1)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-xs)' }}>框架内置 · 只读</span>}
           {tool.dangerous && <span style={{ marginLeft: 'var(--space-1)', color: '#fbbf24', fontSize: 'var(--text-xs)' }}>⚠ 需确认</span>}
+          <span style={{ marginLeft: 'var(--space-1)', color: tool.executionMode === 'detachable' ? 'var(--color-accent)' : 'var(--color-text-tertiary)', fontSize: 'var(--text-xs)' }}>
+            {tool.executionMode === 'detachable' ? '可后台化' : '同步完成'}
+          </span>
         </div>
-        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-          <button onClick={onEdit} style={ghostBtnStyle}>编辑</button>
-          <button onClick={onDelete} style={{ ...ghostBtnStyle, color: '#f87171' }}>删除</button>
-        </div>
+        {!tool.readonly && (
+          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            <button onClick={onEdit} style={ghostBtnStyle}>编辑</button>
+            <button onClick={onDelete} style={{ ...ghostBtnStyle, color: '#f87171' }}>删除</button>
+          </div>
+        )}
       </div>
       <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-2)' }}>{tool.description}</div>
       <pre style={{
@@ -106,9 +112,10 @@ function ToolForm({ initial, onSave, onCancel }: {
   const [description, setDescription] = useState(initial?.description ?? '');
   const [category, setCategory] = useState<ToolDef['category']>(initial?.category ?? 'custom');
   const [dangerous, setDangerous] = useState(initial?.dangerous ?? false);
-  const [executorType, setExecutorType] = useState<ToolDef['executorType']>(initial?.executorType ?? 'builtin');
+  const [executorType, setExecutorType] = useState<ToolDef['executorType']>(initial?.executorType ?? 'custom');
   const [executorFile, setExecutorFile] = useState(initial?.executorFile ?? '');
   const [executorTemplate, setExecutorTemplate] = useState(initial?.executorTemplate ?? '');
+  const [executionMode, setExecutionMode] = useState<NonNullable<ToolDef['executionMode']>>(initial?.executionMode ?? 'sync');
   const [paramsJson, setParamsJson] = useState(initial ? JSON.stringify(initial.parameters, null, 2) : '{\n  \n}');
   const [jsonError, setJsonError] = useState('');
 
@@ -121,7 +128,7 @@ function ToolForm({ initial, onSave, onCancel }: {
       setJsonError('JSON 格式无效，请检查语法');
       return;
     }
-    onSave({ name: name.trim(), description, category, dangerous, executorType, executorFile: executorFile || undefined, executorTemplate: executorTemplate || undefined, parameters: params });
+    onSave({ name: name.trim(), description, category, dangerous, executorType, executorFile: executorFile || undefined, executorTemplate: executorTemplate || undefined, executionMode, parameters: params });
   };
 
   return (
@@ -153,6 +160,25 @@ function ToolForm({ initial, onSave, onCancel }: {
         危险操作 — 选中后，Agent 执行此工具前会弹窗请求人工确认
       </label>
 
+      <div style={{ marginBottom: 'var(--space-4)' }}>
+        <label style={labelStyle}>执行生命周期</label>
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          {(['sync', 'detachable'] as const).map(mode => (
+            <button key={mode} type="button" onClick={() => setExecutionMode(mode)} style={{
+              ...tinyBtn,
+              padding: 'var(--space-2) var(--space-3)',
+              background: executionMode === mode ? 'var(--color-accent)' : 'var(--color-surface)',
+              color: executionMode === mode ? 'var(--color-on-accent)' : 'var(--color-text-secondary)',
+            }}>
+              {mode === 'sync' ? '同步完成' : '允许后台化'}
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)', lineHeight: 1.5 }}>
+          默认同步完成。只有耗时、可安全中止并监听 ctx.signal 的执行器才能允许后台化。
+        </div>
+      </div>
+
       <div style={{ display: 'flex', gap: 'var(--space-6)' }}>
         <div style={{ flex: 1 }}>
           <label style={labelStyle}>
@@ -162,13 +188,13 @@ function ToolForm({ initial, onSave, onCancel }: {
       <div style={{ marginBottom: 'var(--space-4)' }}>
         <label style={labelStyle}>执行方式 <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 'var(--font-normal)' }}>— 内置无需代码，模板填命令即可，自定义需写 JS</span></label>
         <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
-          {(['builtin', 'template', 'custom'] as const).map(t => (
+          {(['template', 'custom'] as const).map(t => (
             <button key={t} onClick={() => setExecutorType(t)} style={{
               ...tinyBtn, padding: 'var(--space-1) var(--space-3)',
               background: executorType === t ? 'var(--color-accent)' : 'var(--color-surface)',
               color: executorType === t ? 'var(--color-on-accent)' : 'var(--color-text-secondary)',
             }}>
-              {{ builtin: '内置', template: '命令模板', custom: '自定义 JS' }[t]}
+              {{ template: '命令模板', custom: '自定义 JS' }[t]}
             </button>
           ))}
         </div>
@@ -220,7 +246,7 @@ function ToolForm({ initial, onSave, onCancel }: {
             margin: 0,
             minHeight: '100px',
           }}>
-            {buildToolsPrompt([{ name: previewName, description: description || '（描述）', category, dangerous, executorType, parameters: (() => { try { return JSON.parse(paramsJson); } catch { return {}; } })() }])}
+            {buildToolsPrompt([{ name: previewName, description: description || '（描述）', category, dangerous, executorType, executionMode, parameters: (() => { try { return JSON.parse(paramsJson); } catch { return {}; } })() }])}
           </pre>
         </div>
       </div>

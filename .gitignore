@@ -70,6 +70,7 @@ _release/
 
 # 工具权限设置（用户数据）
 data/tools/permissions.json
+data/tools/registry.json
 
 # User-created executors stay local. Framework executors remain versioned.
 data/tools/executors/*

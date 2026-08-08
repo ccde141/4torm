@@ -155,7 +155,8 @@ test('desktop bridge exposes bounded surface controls while the main process val
   assert.match(main, /startDesktopBrowserBridge\(\)/);
   assert.match(main, /app\.requestSingleInstanceLock\(\)/);
   assert.match(main, /FOURTORM_DESKTOP_BRIDGE/);
-  assert.match(main, /isProd \? \['tsx', 'src\/index\.ts'\] : \['tsx', 'watch', 'src\/index\.ts'\]/);
+  assert.match(main, /spawn\(nodeRuntime, \[tsxCli, 'src\/index\.ts'\]/);
+  assert.match(main, /shell:\s*false/);
   assert.match(registrySource, /sendInputEvent/);
   assert.match(main, /FOURTORM_DESKTOP_BRIDGE/);
   assert.match(main, /FOURTORM_DESKTOP_BROWSER_TOKEN/);

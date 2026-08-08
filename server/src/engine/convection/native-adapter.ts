@@ -16,9 +16,10 @@ import {
   type LLMCaller,
   type ToolCaller,
   type ReActLoopResult,
-} from '../conversation/react-loop';
+} from '../shared/react/native-loop';
 import { callTool } from './tool-bridge';
-import type { ToolCallRecord, ConvectionReActEvent } from './react-loop';
+import type { ToolCallRecord, ConvectionReActEvent } from './convection-react-adapter';
+import { executeConvectionMemoryTool } from './convection-memory.js';
 
 /**
  * 对流原生模式协议段：工具调用由 provider 的结构化通道承载。
@@ -63,8 +64,17 @@ export async function runConvectionReActNative(
   const wsPath = `data/convection/sessions/${sessionId}/workspace`;
 
   const llm: LLMCaller = {
-    async call(msgs, _opts, onChunk, sig, tools) {
-      return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools });
+    async call(msgs, _opts, onChunk, sig, tools, onReasoning) {
+      return callLLM({
+        dataDir,
+        fullModelKey: model,
+        messages: msgs,
+        options: { temperature },
+        onChunk,
+        signal: sig,
+        tools,
+        onReasoning,
+      });
     },
   };
 
@@ -73,7 +83,8 @@ export async function runConvectionReActNative(
       onEvent?.({ type: 'tool-call', label, tool, args });
       let result: string;
       try {
-        result = await callTool({ tool, args, agentId, workspaceDir: wsPath });
+        const memoryResult = await executeConvectionMemoryTool(dataDir, agentId, tool, args);
+        result = memoryResult ?? await callTool({ tool, args, agentId, workspaceDir: wsPath, signal });
       } catch (e) {
         const errMsg = `错误：${(e as Error).message}`;
         onEvent?.({ type: 'tool-result', label, tool, result: errMsg });
@@ -88,6 +99,7 @@ export async function runConvectionReActNative(
   const onLoopEvent = onEvent
     ? (ev: { type: string; chunk?: string; tool?: string; args?: Record<string, string>; result?: string; phase?: string; elapsed?: number; message?: string }) => {
         if (ev.type === 'token') onEvent({ type: 'token', label, chunk: ev.chunk! });
+        else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', label, chunk: ev.chunk! });
         else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label, phase: ev.phase as 'llm-waiting' | 'tool-exec', elapsed: ev.elapsed! });
         else if (ev.type === 'error') onEvent({ type: 'error', label, message: ev.message! });
       }

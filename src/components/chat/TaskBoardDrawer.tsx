@@ -18,13 +18,13 @@ function cycleStatus(s: TaskStatus): TaskStatus {
 }
 
 const MIN_W = 240, MAX_W = 560, DEFAULT_W = 320;
-/** 收起态竖条的横向占位宽度：父列据此为滚动条让出一条，使收起时滚动条落在竖条左侧、可点可拖（对齐会长抽屉 TAB_W 结构） */
+/** 收起态竖条的横向占位宽度：父列据此为滚动条让出一条，使收起时滚动条落在竖条左侧、可点可拖（对齐会议助理抽屉 TAB_W 结构） */
 export const RAIL_W = 42;
 const HINT = 'AI 的多步任务计划与进度';
 
 /**
  * 会话任务板：右缘常驻的凸出标签（“通道”式入口），默认收起。
- * - 收起态 → 竖向标签「任务板 · 当前目标」（对齐会长条），整条即展开热区；悬停浮出一行说明；agent 更新且未看时整块发光。
+ * - 收起态 → 竖向标签「任务板 · 当前目标」（对齐会议助理条），整条即展开热区；悬停浮出一行说明；agent 更新且未看时整块发光。
  * - 展开态 → 完整清单，左缘可拖动调宽；无板子时给空态引导，可手动新增。
  * 始终反映 taskboard.json（后端单一真相源）。
  */
@@ -97,10 +97,10 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
     const message = observation.status === 'waiting' && lifecycle.waitingConfirmMessage
       ? lifecycle.waitingConfirmMessage
       : lifecycle.confirmMessage;
-    if (!await confirm({ title: lifecycle.confirmTitle, message, confirmText: lifecycle.confirmLabel, danger: true })) return;
-    const query = new URLSearchParams({ scope: observationScope, ownerId: observationOwnerId }).toString();
     setClosingObservation(id); setExecutionError('');
     try {
+      if (!await confirm({ title: lifecycle.confirmTitle, message, confirmText: lifecycle.confirmLabel, danger: true })) return;
+      const query = new URLSearchParams({ scope: observationScope, ownerId: observationOwnerId }).toString();
       const response = await fetch(`/api/tools/observations/${encodeURIComponent(id)}/${lifecycle.endpoint}?${query}`, { method: 'POST' });
       if (!response.ok) throw new Error((await response.json() as { error?: string }).error || lifecycle.failureMessage || 'Unable to update execution');
     } catch (error) { setExecutionError((error as Error).message); }
@@ -125,7 +125,7 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
           {glow && <span style={dotStyle} />}
           {activeObservations.length > 0 && <span style={runningCountStyle}>{activeObservations.length}</span>}
           <span style={{ fontSize: '16px', lineHeight: 1 }}>📋</span>
-          {/* 静态标题，对齐气旋/对流会长条「会长 · 参谋」 */}
+          {/* 静态标题，对齐气旋/对流会议助理条「会议助理 · 参谋」 */}
           <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', color: 'var(--color-text-secondary)', textShadow: 'var(--text-halo)' }}>任务板 · 当前目标</span>
           {total > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: 'auto' }}>{done}/{total}</span>}
         </button>

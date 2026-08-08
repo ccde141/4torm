@@ -12,7 +12,6 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { renderTextWithCode } from '../../../engine/markdown';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
 import AskCard from '../../../components/chat/AskCard';
-import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import TaskBoardDrawer, { RAIL_W } from '../../../components/chat/TaskBoardDrawer';
 import { useTaskboardObservations } from '../../../components/chat/useTaskboardObservations';
@@ -31,7 +30,9 @@ import {
 import { SeatDispatchReceipt, SeatOutboundDispatch } from './SeatDispatchCard';
 import { useSmartChatScroll } from './useSmartChatScroll';
 import { buildSeatDisplayHistory, hasUnansweredAsk } from './cyclone-reply-sequence';
-import { BlockRows, LiveReplySegments } from './CycloneBlockRows';
+import SeatTurnCard from './SeatTurnCard';
+import { createLiveSeatTurn, projectSeatTimeline } from './seat-turn-projection';
+import { useSeatExternalActivity } from './useSeatExternalActivity';
 
 interface SeatStatus {
   id: string; title: string;
@@ -43,9 +44,9 @@ interface SeatStatus {
 export default function SeatChat({ workshopId, seatId, runners, dispatches = [], onReloaded, chairBase, active = false }: {
   workshopId: string; seatId: string; runners: SeatStreamRunners; onReloaded?: () => void;
   dispatches?: CycloneDispatch[];
-  /** 会长模式下覆盖端点前缀（如 /api/cyclone/workshop/{wid}/room/{rid}/chair）。普通工位不传。 */
+  /** 会议助理模式下覆盖端点前缀（如 /api/cyclone/workshop/{wid}/room/{rid}/chair）。普通工位不传。 */
   chairBase?: string;
-  /** 当前工作室页是否可见。仅用于桌面拖拽路径接收，会长实例（chairBase 存在）始终不接收。 */
+  /** 当前工作室页是否可见。仅用于桌面拖拽路径接收，会议助理实例（chairBase 存在）始终不接收。 */
   active?: boolean;
 }) {
   const confirm = useConfirm();
@@ -70,24 +71,30 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
       return next;
     });
   }, [runners, seatId]);
-  // 桌面端：拖入文件 → 路径进工位主对话框；会长实例(chairBase)始终绕开
+  // 桌面端：拖入文件 → 路径进工位主对话框；会议助理实例(chairBase)始终绕开
   useDroppedPathInput(setInput, inputRef, active && !chairBase);
   useEffect(() => {
     if (!input) inputRef.current?.style.removeProperty('height');
   }, [input]);
 
-  const runner = runners.getRunner(seatId);
-  // 即使 done 也继续显示 live，直到 reload 完成 + clearIfDone 删除 runner，避免终答闪空
-  const live = runner ? runner.live : null;
-  const streaming = !!runner?.streaming;
-  const queue = runners.getQueue(seatId);
   const isChair = seatId.startsWith('__chair__');
+  const runner = runners.getRunner(seatId);
+  const externalActivity = useSeatExternalActivity(workshopId, seatId, !isChair);
+  // 即使 done 也继续显示 live，直到 reload 完成 + clearIfDone 删除 runner，避免终答闪空
+  const externalRunning = !!externalActivity?.running;
+  const externalActivityId = externalActivity?.id;
+  const localStreaming = !!runner?.streaming;
+  const live = runner?.live
+    ?? (externalActivity?.kind === 'contact' && externalRunning ? externalActivity.live : null);
+  const streaming = localStreaming || externalRunning;
+  const queue = runners.getQueue(seatId);
   const activeDispatch = isChair ? null : findActiveSeatDispatch(dispatches, seatId);
   const dispatchActivity = activeDispatch ? formatSeatDispatchActivity(activeDispatch) : null;
   const busy = streaming || !!activeDispatch;
   const taskboardObservations = useTaskboardObservations('cyclone', `${workshopId}:${seatId}`, streaming && !isChair);
   const dispatchStatuses = useRef(new Map<string, CycloneDispatch['status']>());
   const receiptStates = useRef(new Map<string, CycloneDispatch['receiptState']>());
+  const externalStateRef = useRef('');
   const dispatchTextRef = useRef<(text: string) => void>(() => {});
   const seatLiveSignal = [
     ...(live?.segments.map(segment => `${segment.content.length}:${segment.blocks.length}`) ?? []),
@@ -104,7 +111,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
     liveContent: seatLiveSignal,
   });
 
-  // ── 任务板（工位=会话，与季风同构；会长无工具，不挂板） ──
+  // ── 任务板（工位=会话，与季风同构；会议助理无工具，不挂板） ──
   const [board, setBoard] = useState<TaskBoard | null>(null);
   const [tbOpen, setTbOpen] = useState(() => { try { return localStorage.getItem('cyclone.taskboard.open') === '1'; } catch { return false; } });
   const [tbUnseen, setTbUnseen] = useState(false);
@@ -137,7 +144,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
     saveSeatTaskboard(workshopId, seatId, next).catch(e => console.error('[cyclone] 任务板保存失败', e));
   }, [workshopId, seatId]);
 
-  /** 拉取工位/会长会话。notifyParent=true 时通知父级刷新侧栏 */
+  /** 拉取工位/会议助理会话。notifyParent=true 时通知父级刷新侧栏 */
   const reload = useCallback(async (notifyParent = false) => {
     const isChair = seatId.startsWith('__chair__');
     const url = isChair
@@ -146,7 +153,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
     const r = await fetch(url);
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
-      const msg = e?.error || `加载${isChair ? '会长' : '工位'}失败（HTTP ${r.status}）`;
+      const msg = e?.error || `加载${isChair ? '会议助理' : '工位'}失败（HTTP ${r.status}）`;
       console.error('[cyclone] 会话加载失败', msg);
       setLoadError(msg);
       return;
@@ -154,7 +161,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
     setLoadError(null);
     const raw = await r.json();
     const s: SeatStatus = isChair
-      ? { id: '__chair__', title: `会长 / ${raw.chairAgentId}`, messages: raw.messages, pending: raw.pending }
+      ? { id: '__chair__', title: `会议助理 / ${raw.chairAgentId}`, messages: raw.messages, pending: raw.pending }
       : raw;
     setSeat(s);
     setHistory(contextToDisplay(s.messages));
@@ -208,13 +215,30 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
     return () => window.clearInterval(timer);
   }, [active, isChair, reload, seatId, streaming, workshopId]);
 
-  // runner 结束后：reload 落库历史，再清出 runner 释放 live 缓冲
-  const doneSeatId = runner?.done ? seatId : null;
+  // Contact / 入会摘要由其他界面发起：开始时刷新入站消息，结束时刷新最终结果并继续排队输入。
   useEffect(() => {
-    if (!doneSeatId) return;
-    const wasStopped = !!runners.getRunner(doneSeatId)?.userStopped;
+    if (!externalActivityId) return;
+    const state = `${externalActivityId}:${externalRunning ? 'running' : 'done'}`;
+    if (externalStateRef.current === state) return;
+    externalStateRef.current = state;
+    void reload(!externalRunning).then(() => {
+      if (externalRunning) return;
+      const next = runners.dequeue(seatId);
+      if (next != null) dispatchTextRef.current(next);
+    });
+  }, [externalActivityId, externalRunning, reload, runners, seatId]);
+
+  // runner 结束后：reload 落库历史，再清出 runner 释放 live 缓冲
+  const doneRunner = runner?.done ? runner : null;
+  const doneSeatId = doneRunner ? seatId : null;
+  useEffect(() => {
+    if (!doneSeatId || !doneRunner) return;
+    const wasStopped = doneRunner.userStopped;
     (async () => {
       await reload(true);
+      // Ask 的旧回合结束后，用户可能已经点击回答并启动了 resume runner。
+      // 旧 effect 此时才完成 reload，不能清理或出队新 runner 的状态。
+      if (runners.getRunner(doneSeatId) !== doneRunner) return;
       runners.clearIfDone(doneSeatId);   // runner 删除后 streaming 归零，下条可发
       if (wasStopped) {
         // 用户「停止」：不续发，把排队项 + 当前草稿合并退回输入框，交回用户
@@ -229,7 +253,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
       }
       forceTick(t => t + 1);
     })();
-  }, [doneSeatId, reload, runners]);
+  }, [doneRunner, doneSeatId, reload, runners]);
 
   /** 统一发送：chat（新消息）/ resume（回答挂起的 ask） */
   function run(action: 'chat' | 'resume', text: string) {
@@ -238,12 +262,10 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
     let optimisticUser: DisplayMessage | null = null;
     if (action === 'chat') {
       optimisticUser = { id: `u${Date.now()}`, role: 'user', content: text };
-      setHistory(h => [...h, optimisticUser!]);
     } else if (seat?.pending) {
       const p = seat.pending;
       optimisticUser = { id: `ask${Date.now()}`, role: 'assistant', content: '',
         blocks: [{ kind: 'ask', question: p.question, options: p.options, answered: true, reply: text }] };
-      setHistory(h => [...h, optimisticUser!]);
     }
     const isChair = seatId.startsWith('__chair__');
     runners.startStream({
@@ -255,7 +277,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   async function resetContext(mode: 'clear' | 'summary') {
     if (busy) return;
     const isChair = seatId.startsWith('__chair__');
-    const label = isChair ? '会长私聊' : '工位私聊';
+    const label = isChair ? '会议助理私聊' : '工位私聊';
     if (!(await confirm({ title: `${mode === 'summary' ? '归档并摘要重置' : '归档并清空'}当前${label}上下文？`, message: '共享工作区文件不会被删除。', confirmText: mode === 'summary' ? '归档重置' : '归档清空', danger: true }))) return;
     const url = isChair
       ? `${chairBase}/reset-context`
@@ -340,12 +362,13 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
 
   if (!seat) {
     if (loadError) return <div style={{ opacity: .65, margin: 'auto', padding: 'var(--space-4)', textAlign: 'center', color: 'var(--color-danger)' }}>{loadError}</div>;
-    return <div style={{ opacity: .5, margin: 'auto' }}>{seatId.startsWith('__chair__') ? '加载会长…' : '加载工位…'}</div>;
+    return <div style={{ opacity: .5, margin: 'auto' }}>{seatId.startsWith('__chair__') ? '加载会议助理…' : '加载工位…'}</div>;
   }
   // 挂起态：若历史尚未包含 AskCard，才使用 seat.pending 兼容旧数据。
   const pending = !busy ? seat.pending : undefined;
   const optimistic = runner?.pendingUser ?? null;
   const visibleHistory = buildSeatDisplayHistory(history, optimistic);
+  const timeline = projectSeatTimeline(visibleHistory);
   const orphanedDispatches = isChair ? [] : selectOrphanedSeatDispatches(
     dispatches, seatId, [...visibleHistory, ...(live?.segments ?? [])],
   );
@@ -355,27 +378,22 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
       {/* 有任务板且收起时：让出竖条宽度，滚动条落在竖条左侧可点可拖；展开态抽屉浮层覆盖，无需让位 */}
       <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginRight: (!isChair && !tbOpen) ? RAIL_W : 0 }}>
       <div className="chat__messages" ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)', ...(!isChair && tbOpen ? { paddingRight: 'calc(var(--space-4) + 30px)' } : {}) }}>
-        {visibleHistory.map(m => <DisplayRow
-          key={m.id}
-          msg={m}
-          editing={editingMessageIndex === m.sourceIndex}
-          editContent={editMessageContent}
-          onEditContent={setEditMessageContent}
-          onStartEdit={() => startEditMessage(m)}
-          onSaveEdit={saveEditMessage}
-          onCancelEdit={cancelEditMessage}
-          onDelete={() => deleteMessage(m)}
-          dispatches={dispatches}
-        />)}
+        {timeline.map(item => item.kind === 'message' ? <DisplayRow
+          key={item.message.id} msg={item.message}
+          editing={editingMessageIndex === item.message.sourceIndex}
+          editContent={editMessageContent} onEditContent={setEditMessageContent}
+          onStartEdit={() => startEditMessage(item.message)} onSaveEdit={saveEditMessage}
+          onCancelEdit={cancelEditMessage} onDelete={() => deleteMessage(item.message)}
+        /> : <SeatTurnCard key={item.turn.id} turn={item.turn} dispatches={dispatches}
+          editing={editingMessageIndex === item.turn.actionMessage?.sourceIndex}
+          editContent={editMessageContent} onEditContent={setEditMessageContent}
+          onStartEdit={startEditMessage} onSaveEdit={saveEditMessage} onCancelEdit={cancelEditMessage}
+          onDelete={deleteMessage} onAskReply={answer => run('resume', answer)} />)}
         {orphanedDispatches.map(item => <SeatOutboundDispatch key={item.id} item={item} />)}
         {activeDispatch && <SeatDispatchActivity item={activeDispatch} />}
-        {live && (
-          <>
-            {live.reasoning && <ReasoningBlock reasoning={live.reasoning} isStreaming />}
-            <LiveReplySegments live={live} dispatches={dispatches}
-              onAskReply={(answer) => run('resume', answer)} />
-          </>
-        )}
+        {live && <SeatTurnCard turn={createLiveSeatTurn(live.segments, live.reasoning)}
+          dispatches={dispatches} streaming={streaming} phase={live.phase}
+          onAskReply={answer => run('resume', answer)} />}
         {pending && !runner && !hasUnansweredAsk(visibleHistory) && (
           <AskCard question={pending.question} options={pending.options} answered={false} onReply={(a) => run('resume', a)} />
         )}
@@ -388,8 +406,8 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
 
       <div className="chat__input-area">
         <ExecutionStatusBar
-          label={streaming ? live?.phase : dispatchActivity?.label}
-          target={streaming ? live?.activityTarget : dispatchActivity?.target}
+          label={localStreaming ? live?.phase : externalRunning ? (live?.phase || externalActivity?.label) : dispatchActivity?.label}
+          target={localStreaming ? live?.activityTarget : externalRunning ? live?.activityTarget : dispatchActivity?.target}
         />
         <QueuedChips items={queue} onRemove={i => runners.removeQueued(seatId, i)} />
         <div className="chat__input-wrapper">
@@ -407,7 +425,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
                 title={queue.length >= MAX_QUEUE ? '队列已满（最多 3 条）' : '加入队列'}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
               </button>
-              {streaming && (
+              {localStreaming && (
                 <button className="chat__stop-btn" onClick={stop} title="停止生成">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                 </button>
@@ -441,7 +459,7 @@ const inputHintStyle: React.CSSProperties = {
 };
 
 /** 单条已落库展示消息 */
-function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onSaveEdit, onCancelEdit, onDelete, dispatches }: {
+function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onSaveEdit, onCancelEdit, onDelete }: {
   msg: DisplayMessage;
   editing: boolean;
   editContent: string;
@@ -450,7 +468,6 @@ function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onS
   onSaveEdit: () => void;
   onCancelEdit: () => void;
   onDelete: () => void;
-  dispatches: CycloneDispatch[];
 }) {
   if (msg.kind === 'dispatch-receipt') {
     return <SeatDispatchReceipt content={msg.content} id={msg.id} />;
@@ -488,17 +505,5 @@ function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onS
       </div>
     );
   }
-  return (
-    <>
-      {msg.reasoning && <ReasoningBlock reasoning={msg.reasoning} isStreaming={false} />}
-      {msg.content && (
-        <div className="chat__message chat__message--assistant">
-          <div className="chat__avatar">AI</div>
-          <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>{actions}</div>
-        </div>
-      )}
-      {msg.blocks && <BlockRows blocks={msg.blocks} prefix={`${msg.id}-b`} dispatches={dispatches} />}
-      {!msg.content && actions}
-    </>
-  );
+  return null;
 }

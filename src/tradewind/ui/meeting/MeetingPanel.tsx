@@ -2,7 +2,7 @@
  * 信风 Meeting 节点浮动会议面板
  *
  * 从 src/convection/ui/pages/ConvectionPage.tsx 复制解耦，独立演进。
- * 双面板：左侧公共会议 + 右侧会长私聊。
+ * 双面板：左侧公共会议 + 右侧会议助理私聊。
  * 通过 React Portal 渲染到 body 层级。
  *
  * 信风独立副本，可自主演进。
@@ -226,12 +226,12 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
       const content = summaryStreamRef.current;
       setPublicMsgs(prev => {
         const last = prev[prev.length - 1];
-        if (last?.speaker === '[会长总结]' && last.streaming) {
+        if (last?.speaker === '[会议助理总结]' && last.streaming) {
           const next = [...prev];
           next[next.length - 1] = { ...last, content };
           return next;
         }
-        return [...prev, { speaker: '[会长总结]', content, timestamp: Date.now(), streaming: true }];
+        return [...prev, { speaker: '[会议助理总结]', content, timestamp: Date.now(), streaming: true }];
       });
     }
     summaryFrameDirtyRef.current = false;
@@ -426,16 +426,16 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         flushStreamFrame();
         setBusy(false);
         setWaitingSince(null);
-        // 定稿会长总结
+        // 定稿会议助理总结
         setPublicMsgs(prev => {
           const last = prev[prev.length - 1];
-          if (last && last.speaker === '[会长总结]') {
+          if (last && last.speaker === '[会议助理总结]') {
             const next = [...prev];
             next[next.length - 1] = { ...last, content: ev.minutes, streaming: false };
             return next;
           }
           return [...prev, {
-            speaker: '[会长总结]', content: ev.minutes, timestamp: Date.now(),
+            speaker: '[会议助理总结]', content: ev.minutes, timestamp: Date.now(),
           }];
         });
         summaryStreamRef.current = '';
@@ -558,7 +558,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     // 成功时不设 busy=false——等 round-done 事件
   }, [publicInput, busy, nodeId]);
 
-  // 会长私聊（fire-and-forget，事件通过 /events 流返回）
+  // 会议助理私聊（fire-and-forget，事件通过 /events 流返回）
   const handleChair = useCallback(async () => {
     const text = chairInput.trim();
     if (!text || chairBusy) return;
@@ -616,7 +616,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     waitingLabel,
     waitingElapsed,
   });
-  const chairStateLabel = chairBusy ? '会长思考中' : isOpening ? '等待开场' : '等待交流';
+  const chairStateLabel = chairBusy ? '会议助理思考中' : isOpening ? '等待开场' : '等待交流';
 
   return createPortal(
     <div className="tw-meeting-overlay" style={{ display: visible ? undefined : 'none' }}>
@@ -646,7 +646,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         )}
         {isEnded && (
           <div className="tw-meeting-panel__opening-banner">
-            会议已结束，公共发言锁定。会长私聊仍可用，可继续提问。
+            会议已结束，公共发言锁定。会议助理私聊仍可用，可继续提问。
           </div>
         )}
         <div className="tw-meeting-panel__body">
@@ -667,11 +667,11 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
               aria-pressed={activeView === 'chair'}
             >
               <span className="tw-meeting-panel__nav-icon">席</span>
-              <span className="tw-meeting-panel__nav-copy"><strong>会长私聊</strong><small>{chairStateLabel}</small></span>
+              <span className="tw-meeting-panel__nav-copy"><strong>会议助理 私聊</strong><small>{chairStateLabel}</small></span>
               {chairBusy && <span className="tw-meeting-panel__nav-pulse" />}
             </button>
             <div className="tw-meeting-panel__rail-spacer" />
-            <span className="tw-meeting-panel__rail-foot">会长的回复将会来自其对当前会议快照的审阅</span>
+            <span className="tw-meeting-panel__rail-foot">会议助理的回复将会来自其对当前会议快照的审阅</span>
           </aside>
           <div className="tw-meeting-panel__workspace">
           <section
@@ -742,7 +742,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
             aria-hidden={activeView !== 'chair'}
           >
             <div className="tw-meeting-panel__conversation-head">
-              <div><span className="tw-meeting-panel__section-title">会长私聊</span><small>只属于你与会长的独立上下文</small></div>
+              <div><span className="tw-meeting-panel__section-title">会议助理 私聊</span><small>只属于你与会议助理的独立上下文</small></div>
             </div>
             <div className="tw-meeting-panel__messages" ref={chairContainerRef}>
               {chairMsgs.filter(m => m.role !== 'system').map((m, i) => (
@@ -767,7 +767,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
                 value={chairInput}
                 onChange={(e) => setChairInput(e.target.value)}
                 onKeyDown={chairKeyDown}
-                placeholder={isOpening ? '入会摘要中，请稍候…' : '私聊会长...'}
+                placeholder={isOpening ? '入会摘要中，请稍候…' : '私聊会议助理...'}
                 rows={1}
                 disabled={isOpening || chairBusy}
               />

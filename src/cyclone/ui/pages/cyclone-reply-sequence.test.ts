@@ -69,3 +69,36 @@ test('Ask 乐观回复替换原挂起卡，而不是追加重复卡', () => {
   assert.equal(visible.length, 1);
   assert.deepEqual(visible[0].blocks, optimistic.blocks);
 });
+
+test('Ask 乐观回复即使短暂存在于历史和 runner 两处也只显示一次', () => {
+  const pending: DisplayMessage = {
+    id: 'ask-old', role: 'assistant', content: '',
+    blocks: [{ kind: 'ask', question: '选择发布方式', answered: false }],
+  };
+  const optimistic: DisplayMessage = {
+    id: 'ask-new', role: 'assistant', content: '',
+    blocks: [{ kind: 'ask', question: '选择发布方式', answered: true, reply: '稳定发布' }],
+  };
+
+  const visible = buildSeatDisplayHistory([pending, optimistic], optimistic);
+
+  assert.equal(visible.length, 1);
+  assert.deepEqual(visible[0].blocks, optimistic.blocks);
+});
+
+test('Ask 已回答历史与 resume runner 重叠时仍只显示一张卡', () => {
+  const persisted: DisplayMessage = {
+    id: 'ask-persisted', role: 'assistant', content: '',
+    blocks: [{ kind: 'ask', question: '选择发布方式', answered: true, reply: '稳定发布' }],
+  };
+  const optimistic: DisplayMessage = {
+    id: 'ask-optimistic', role: 'assistant', content: '',
+    blocks: [{ kind: 'ask', question: '选择发布方式', answered: true, reply: '稳定发布' }],
+  };
+
+  const visible = buildSeatDisplayHistory([persisted], optimistic);
+
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].id, persisted.id);
+  assert.deepEqual(visible[0].blocks, optimistic.blocks);
+});

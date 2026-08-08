@@ -58,7 +58,7 @@ export default function ExecutionSurfaceOverlay({
           <button className="execution-surface-action execution-surface-action--icon" type="button" onClick={onClose} title="收起运行窗口" aria-label="收起运行窗口" style={closeStyle}>×</button>
         </header>
         <div style={contentStyle}>
-          <ExecutionSurfaceViewport scope={scope} ownerId={ownerId} item={selected} onBack={onClose} />
+          <ExecutionSurfaceViewport scope={scope} ownerId={ownerId} item={selected} onBack={onClose} suspendNativeSurface={closingId === selected.id} />
         </div>
       </section>
     </div>

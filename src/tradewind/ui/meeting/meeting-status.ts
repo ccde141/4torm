@@ -10,7 +10,7 @@ interface MeetingPublicState {
 
 export function getMeetingPublicStateLabel(state: MeetingPublicState): string {
   if (state.phase === 'opening') return '成员入会中';
-  if (state.endingRequested || state.phase === 'ending') return '会长整理会议纪要';
+  if (state.endingRequested || state.phase === 'ending') return '会议助理整理会议纪要';
   if (state.busy) {
     return state.waitingLabel
       ? `${state.waitingLabel} · ${state.waitingElapsed}s`

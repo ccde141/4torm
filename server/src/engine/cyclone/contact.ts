@@ -16,7 +16,8 @@ import { resolveNativeMode } from '../shared/llm-bridge';
 import { loadAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execToolUnified } from '../shared/exec-tool';
-import { runReActLoop, runReActLoopNative, type ToolCaller, type LLMCaller } from './react-loop';
+import { runReActLoopNative, type ToolCaller, type LLMCaller } from '../shared/react/native-loop';
+import { runReActLoop } from '../shared/react/text-loop';
 import { callLLM } from '../shared/llm-bridge';
 import { buildSeatContactSystemPrompt } from './seat-prompt';
 import {
@@ -31,6 +32,8 @@ import { loadSeat, saveSeat, tryAcquireSeatLock } from './seat-store';
 import { findSeatIdByTitle, listOtherSeats, tryRegisterWait, clearWait } from './contact-registry';
 import { workshopWorkspace } from './paths';
 import type { SeatData } from './types';
+import { beginExternalSeatActivity } from './seat-activity.js';
+import { toSeatProgressEvent, type LoopProgressEvent } from './loop-event-forwarder.js';
 import path from 'node:path';
 
 /** 嵌套联络深度上限（A→B→C→…），超过即拒绝，防失控递归 */
@@ -63,10 +66,24 @@ function wsRel(dataDir: string, workshopId: string): string {
 
 function makeLLM(dataDir: string, model: string, temperature: number): LLMCaller {
   return {
-    async call(msgs, _opts, onChunk, sig, tools) {
-      return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools });
+    async call(msgs, _opts, onChunk, sig, tools, onReasoning, onToolProgress) {
+      return callLLM({
+        dataDir, fullModelKey: model, messages: msgs, options: { temperature },
+        onChunk, signal: sig, tools, onReasoning, onToolProgress,
+      });
     },
   };
+}
+
+function forwardContactEvent(
+  event: LoopProgressEvent,
+  emit: (event: Record<string, unknown>) => void,
+): void {
+  const progress = toSeatProgressEvent(event);
+  if (progress) emit({ ...progress });
+  if (event.type === 'tool-call') emit({ type: 'tool-call', tool: event.tool, args: event.args });
+  if (event.type === 'tool-result') emit({ type: 'tool-result', tool: event.tool, result: event.result, ok: true });
+  if (event.type === 'error') emit({ type: 'error', message: event.message });
 }
 
 /**
@@ -101,12 +118,17 @@ export async function execContact(ctx: ContactCtx, target: string, message: stri
     return `联络失败：「${target}」当前正忙（正在被其他会话占用），请稍后再试或改由人类协调。`;
   }
 
+  const activity = beginExternalSeatActivity(
+    workshopId, targetSeatId, 'contact', `正在处理来自「${fromTitle}」的联络`,
+  );
   try {
-    const answer = await runContactedTurn(ctx, targetSeatId, message);
+    const answer = await runContactedTurn(ctx, targetSeatId, message, activity.emit);
     return `[系统信息：来自工位「${target}」的回复]\n\n${answer}`;
   } catch (e) {
+    activity.emit({ type: 'error', message: (e as Error).message });
     return `联络「${target}」失败：${(e as Error).message}`;
   } finally {
+    activity.finish();
     release();
     clearWait(workshopId, fromSeatId);
   }
@@ -116,7 +138,12 @@ export async function execContact(ctx: ContactCtx, target: string, message: stri
  * 目标工位被联络后的一轮处理：加载会话 → 追加联络消息 → 跑一轮 → 落盘 → 返回干净回复。
  * 目标在本轮可继续 contact（嵌套深度 +1），其工具调用器内含 contact 分支。
  */
-async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: string): Promise<string> {
+async function runContactedTurn(
+  ctx: ContactCtx,
+  targetSeatId: string,
+  message: string,
+  emit: (event: Record<string, unknown>) => void,
+): Promise<string> {
   const { dataDir, workshopId, fromTitle, depth, signal } = ctx;
 
   const seat = await loadSeat(dataDir, workshopId, targetSeatId);
@@ -189,9 +216,17 @@ async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: 
   // 被联络方剥 ask（无人类在场），保留 delegate + 嵌套 contact
   const nativeToolDefs = [...toolDefs, ...buildSeatVirtualToolDefs({ allowAsk: false, allowDelegate: true, contactTargets })];
 
+  const onEvent = (event: LoopProgressEvent) => forwardContactEvent(event, emit);
   const result = native
-    ? await runReActLoopNative({ messages, llm, tools: toolCaller, toolDefs: nativeToolDefs, signal })
-    : await runReActLoop({ messages, llm, tools: toolDefs.length > 0 || contactTargets.length > 0 ? toolCaller : undefined, signal });
+    ? await runReActLoopNative({ messages, llm, tools: toolCaller, toolDefs: nativeToolDefs, onEvent, signal })
+    : await runReActLoop({
+        messages,
+        llm,
+        tools: toolDefs.length > 0 || contactTargets.length > 0 ? toolCaller : undefined,
+        allowedTools: nativeToolDefs.map(tool => tool.name),
+        onEvent,
+        signal,
+      });
 
   // 落盘目标会话（剔除 system）
   // react-loop 最终回答只 return、不 push，气旋后端持久化需在此补 push（同 driveSeat）
@@ -211,6 +246,8 @@ async function runContactedTurn(ctx: ContactCtx, targetSeatId: string, message: 
     };
   }
   await saveSeat(dataDir, workshopId, seat);
+
+  emit({ type: 'answer', content: result.content, rawContent: result.rawContent });
 
   return result.content || '（对方未给出有效回复）';
 }

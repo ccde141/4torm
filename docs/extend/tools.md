@@ -24,9 +24,12 @@
 | `search_content` | 递归搜索文件内容 |
 | `run_command` | 在当前工作区执行命令 |
 | `webfetch` | 获取网页或 API 文本 |
+| `webfetch_advanced` | 使用浏览器获取动态网页内容 |
 | `use_skill` | 按需加载已经启用的技能说明 |
 
 `ask`、`delegate`、任务板等由功能区提供的系统工具不属于全局工具，不会出现在 Tools 管理页面中。
+
+框架内置工具定义固定在 `server/src/tools/framework/catalog.json`，由服务端维护并在 Tools 页面中显示为只读。用户注册表不能用同名定义覆盖它们。
 
 ## 创建和管理工具
 
@@ -40,7 +43,13 @@
 - **功能描述**用于说明工具能做什么、适合在什么情况下使用。
 - **参数 Schema**使用 JSON Schema 描述参数名称、类型和必填项。
 - **危险标记**用于标明写入、删除或命令执行能力。
+- **执行生命周期**分为同步完成和允许后台运行。
 - **执行方式**可以选择命令模板或自定义 JavaScript。
+
+每个自定义工具必须选择一种执行生命周期：
+
+- **同步完成**：当前工具调用会等待执行器返回结果，适合短操作以及不能安全终止的执行器。
+- **允许后台运行**：耗时操作可以在同步等待窗口结束后转入后台。只有执行器能够响应终止信号，并能安全停止子进程、网络请求或定时器时，才应选择此模式。
 
 编辑工具定义后，新的定义会从 Agent 下一次装配工具列表时生效；删除工具只会移除注册信息，不会自动删除已有执行器文件或历史工具记录。
 
@@ -52,9 +61,9 @@
 
 注册成功后，工具会出现在 Tools 管理页面和 Agent 配置页面中，但不会自动加入已有 Agent 保存的显式工具清单；需要使用时，应回到控制台为对应 Agent 启用。
 
-潮汐、信风和对流不提供工具注册；气旋群聊、会长私聊以及无人联络回合也不会触发注册确认。
+潮汐、信风和对流不提供工具注册；气旋群聊、会议助理私聊以及无人联络回合也不会触发注册确认。
 
-工具注册表属于框架控制面，新增、编辑或删除工具定义时，应使用 Tools 管理页面或 Agent 的注册流程，不建议直接修改 `data/tools/registry.json`。
+自定义工具注册表属于框架控制面，新增、编辑或删除定义时，应使用 Tools 管理页面或 Agent 的注册流程，不建议直接修改 `data/tools/registry.json`。
 
 ### 最小创建流程
 
@@ -73,12 +82,13 @@ Agent 提交注册时使用 `register_tool`：
   "name": "word_count",
   "description": "统计文本文件的字符数和行数",
   "dangerous": "false",
+  "executionMode": "sync",
   "executorFile": "word_count",
   "parameters": "{\"type\":\"object\",\"properties\":{\"filePath\":{\"type\":\"string\",\"description\":\"文件路径\"}},\"required\":[\"filePath\"]}"
 }
 ```
 
-`executorFile` 不包含 `.js`，`parameters` 需要传入序列化后的 JSON Schema 字符串；执行器不存在、参数格式错误或工具名称重复时，注册会被拒绝。
+`executorFile` 不包含 `.js`，`parameters` 需要传入序列化后的 JSON Schema 字符串；`executionMode` 使用 `sync` 表示同步完成，使用 `detachable` 表示允许后台运行。执行器不存在、参数格式错误、生命周期无效或工具名称重复时，注册会被拒绝。
 
 ## 工具定义
 
@@ -92,6 +102,7 @@ Agent 提交注册时使用 `register_tool`：
   "dangerous": false,
   "executorType": "custom",
   "executorFile": "word_count",
+  "executionMode": "sync",
   "parameters": {
     "type": "object",
     "properties": {
@@ -147,7 +158,7 @@ export default async function (args, ctx) {
 
 ## 长时间任务
 
-普通构建、安装或下载可以使用 `run_command`。它默认等待两分钟，也可以通过可选的 `timeout` 参数设置 `1000` 至 `600000` 毫秒：
+普通构建、安装或下载可以使用 `run_command`。命令自身的超时默认是两分钟，也可以通过 `timeout` 参数设置为 `1000` 至 `600000` 毫秒：
 
 ```json
 {
@@ -156,9 +167,11 @@ export default async function (args, ctx) {
 }
 ```
 
-超过十分钟、需要流式写入文件或需要专门进度管理的任务，更适合使用自定义 JavaScript 执行器，通过 `spawn`、文件流或网络流完成。自定义执行器不受命令模板的 15 秒限制。
+在季风会话和气旋普通工位私聊中，`run_command` 如果在约 3 秒内没有结束，会先返回执行编号并在后台继续。Agent 可以查询状态、最多等待 30 秒，或者终止该执行；人类可以从任务板查看持续输出并手动终止。
 
-工具执行期间，界面会持续显示工具名称、处理目标和经过时间，因此长任务即使暂时没有文本输出，也可以判断 Agent 仍在运行。
+需要自行管理进度的任务也可以使用自定义 JavaScript 执行器。若要让自定义工具具备同样的后台生命周期，应选择“允许后台运行”，监听 `ctx.signal`，并通过 `ctx.onOutput` 报告输出。自定义执行器不受命令模板的 15 秒限制。
+
+其他功能区和 MCP 工具目前保持原有的同步执行方式。
 
 ## 执行器上下文
 
@@ -170,6 +183,8 @@ JavaScript 执行器会收到以下上下文：
   workspaceDir: string
   projectDir: string
   sandboxLevel: 'project' | 'unrestricted'
+  signal?: AbortSignal
+  onOutput?: (stream: 'stdout' | 'stderr', text: string) => void
 }
 ```
 
@@ -177,6 +192,8 @@ JavaScript 执行器会收到以下上下文：
 - `workspaceDir` 是当前会话实际使用的工作区。
 - `projectDir` 是 4torm 项目根目录。
 - `sandboxLevel` 是当前 Agent 的执行权限。
+- `signal` 会在调用方停止当前回合、人工终止后台执行或程序关闭时触发。声明为允许后台运行的执行器必须监听该信号，并停止自己创建的子进程、网络请求和定时器。
+- `onOutput` 用于逐段报告标准输出和错误输出。通过该入口报告的内容会持续显示在执行视窗中。
 
 框架内置文件工具会自动执行路径校验，相对路径从当前工作区解析；项目级允许访问 4torm 项目和当前工作区，无限制则允许访问其他外部路径。
 
@@ -215,8 +232,12 @@ MCP 工具名称使用 `mcp:服务名:工具名` 的形式，以免与本地工�
 本地工具使用以下目录：
 
 ```text
+server/src/tools/framework/
+  catalog.json              # 框架工具，只读
+
 data/tools/
-  registry.json
+  registry.json             # 本机自定义工具，运行时生成
+  registry.template.json    # 空白副本模板
   executors/
     {executorFile}.js
 ```
@@ -225,12 +246,16 @@ data/tools/
 
 | 方法 | 路径 | 用途 |
 |------|------|------|
-| `GET` | `/api/storage/read?path=tools/registry.json` | 读取工具列表 |
-| `PUT` | `/api/storage/write?path=tools/registry.json` | Tools 页面保存工具列表 |
+| `GET` | `/api/tools/catalog` | 读取框架工具和自定义工具合并目录 |
+| `PUT` | `/api/tools/custom` | 保存自定义工具；拒绝覆盖框架工具 |
 | `POST` | `/api/tools/exec` | 执行本地工具 |
+
+任务板与执行视窗通过独立的执行观察接口读取状态并进行接管、刷新、关闭或终止，不属于工具注册接口。
 
 工具装配和执行的主要代码位于：
 
+- `server/src/tools/framework/catalog.json`
+- `server/src/tools/custom-registry.ts`
 - `src/store/tools.ts`
 - `server/src/engine/shared/tool-defs-loader.ts`
 - `server/src/services/tool-executor.ts`

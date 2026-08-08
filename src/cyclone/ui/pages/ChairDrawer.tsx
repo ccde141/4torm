@@ -1,10 +1,10 @@
 /**
- * 气旋会长私聊抽屉 —— 每场会议（room）的场外参谋，右侧可折叠抽屉
+ * 气旋会议助理私聊抽屉 —— 每场会议（room）的场外参谋，右侧可折叠抽屉
  *
- * - 会长按会议隔离：私聊落 room.chairMessages，只读本 room 会议快照，换会议不串台（对齐对流）
+ * - 会议助理按会议隔离：私聊落 room.chairMessages，只读本 room 会议快照，换会议不串台（对齐对流）
  * - 贝塞尔曲线动画：外壳宽度走 --ease-out-expo 平滑伸缩，面板淡入 + 轻微回弹滑入（--ease-out-back），不僵硬
- * - 头部 <select> 设置/更换/清空会长（工作室级 chairAgentId，对齐对流配置栏）
- * - 已设会长 → 内嵌 SeatChat（纯文本私聊，端点指向本 room 的 chair）；未设 → 引导选会长
+ * - 头部 <select> 设置/更换/清空会议助理（工作室级 chairAgentId，对齐对流配置栏）
+ * - 已设会议助理 → 内嵌 SeatChat（纯文本私聊，端点指向本 room 的 chair）；未设 → 引导选会议助理
  * - 流按 roomId 独立键（__chair__:roomId），切会议不串台
  */
 
@@ -12,12 +12,12 @@ import type { Agent } from '../../../types';
 import SeatChat from './SeatChat';
 import type { SeatStreamRunners } from './useSeatStreamRunners';
 
-/** 会长流在注册表里的键（按会议/room 隔离，避免跨会议串台） */
+/** 会议助理流在注册表里的键（按会议/room 隔离，避免跨会议串台） */
 export function chairStreamKey(roomId: string): string {
   return `__chair__:${roomId}`;
 }
 
-/** 会长端点前缀（按会议/room 隔离） */
+/** 会议助理端点前缀（按会议/room 隔离） */
 function chairBaseUrl(workshopId: string, roomId: string): string {
   return `/api/cyclone/workshop/${workshopId}/room/${roomId}/chair`;
 }
@@ -26,7 +26,7 @@ const PANEL_W = 360;
 const TAB_W = 34;
 
 export default function ChairDrawer({
-  workshopId, roomId, roomTitle, chairAgentId, agents, runners, open, onToggle, onSetChair, onReloaded,
+  workshopId, roomId, chairAgentId, agents, runners, open, onToggle, onSetChair, onReloaded,
 }: {
   workshopId: string;
   roomId: string;
@@ -39,21 +39,19 @@ export default function ChairDrawer({
   onSetChair: (agentId: string) => void;
   onReloaded?: () => void;
 }) {
-  const chairName = chairAgentId ? (agents.find(a => a.id === chairAgentId)?.name ?? chairAgentId) : '';
-
   return (
     <div style={wrapperStyle}>
       {/* 收起态竖条 tab：常驻细标签，展开时淡出并让出点击 */}
       <button
         onClick={onToggle}
-        title="展开会长私聊"
-        aria-label="展开会长私聊"
+        title="展开会议助理私聊"
+        aria-label="展开会议助理私聊"
         aria-hidden={open}
         tabIndex={open ? -1 : 0}
         style={{ ...tabStyle, opacity: open ? 0 : 1, pointerEvents: open ? 'none' : 'auto' }}
       >
         <span style={{ fontSize: '13px' }}>🗣️</span>
-        <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontWeight: 'var(--font-semibold)' }}>会长 · 参谋</span>
+        <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontWeight: 'var(--font-semibold)' }}>会议助理 · 参谋</span>
         <span style={{ writingMode: 'vertical-rl', fontSize: '10px', color: 'var(--color-accent)', marginTop: 'auto' }}>展开‹</span>
       </button>
 
@@ -70,21 +68,21 @@ export default function ChairDrawer({
         <div style={headerStyle}>
           <span
             style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-            title={roomTitle ? `会长 · ${roomTitle}` : '会长'}
+            title="会议助理 私聊"
           >
-            会长{chairName ? ` · ${chairName}` : ''}
+            会议助理 私聊
           </span>
           <div style={{ flex: 1 }} />
           <select
             value={chairAgentId ?? ''}
             onChange={e => onSetChair(e.target.value)}
             style={selectStyle}
-            title="设置 / 更换 / 清空会长"
+            title="设置 / 更换 / 清空会议助理"
           >
-            <option value="">未设会长</option>
+            <option value="">未设会议助理</option>
             {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
-          <button onClick={onToggle} style={collapseBtnStyle} title="收起" aria-label="收起会长私聊">×</button>
+          <button onClick={onToggle} style={collapseBtnStyle} title="收起" aria-label="收起会议助理私聊">×</button>
         </div>
 
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -99,8 +97,8 @@ export default function ChairDrawer({
             />
           ) : (
             <div style={{ margin: 'auto', padding: 'var(--space-5)', textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
-              从上方选择一个 agent 作为会长。<br />
-              会长不进群聊，<br />只在这里和你单独私聊，<br />俯瞰这场会议的快照给你出主意。
+              从上方选择一个 agent 作为会议助理。<br />
+              会议助理不进群聊，<br />只在这里和你单独私聊，<br />俯瞰这场会议的快照给你出主意。
             </div>
           )}
         </div>

@@ -1,7 +1,7 @@
 /**
  * 气旋创建工作室配置面板
  *
- * 替代 prompt：右侧主界面填工作室名 + 选会长 agent（场外参谋，可不选）。
+ * 替代 prompt：右侧主界面填工作室名 + 选会议助理 agent（场外参谋，可不选）。
  * 取消即放弃，不会误建。
  */
 
@@ -35,13 +35,13 @@ export default function CreateWorkshopPanel({ agents, onCreate, onCancel }: {
       <input autoFocus value={title} onChange={e => setTitle(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') submit(); }} style={inputStyle} />
 
-      <label style={labelStyle}>会长 agent（场外参谋，可不设）</label>
+      <label style={labelStyle}>会议助理 agent（场外参谋，可不设）</label>
       <select value={chairAgentId} onChange={e => setChairAgentId(e.target.value)} style={inputStyle}>
-        <option value="">不设会长</option>
+        <option value="">不设会议助理</option>
         {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
       </select>
       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-5)' }}>
-        会长不占工位，负责场外私聊参谋与整理，可之后再设。
+        会议助理不占工位，负责场外私聊参谋与整理，可之后再设。
       </div>
 
       <div style={{ display: 'flex', gap: 'var(--space-2)' }}>

@@ -15,6 +15,7 @@ async function setupProposal(name: string) {
     name,
     description: '首次提交的定义',
     dangerous: 'false',
+    executionMode: 'sync',
     executorFile: name,
     parameters: '{"type":"object","properties":{}}',
   });

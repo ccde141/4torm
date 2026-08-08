@@ -1,7 +1,7 @@
-﻿/**
+/**
  * ConvectionPage — 对流（多 Agent 持续协作会话）
  *
- * 布局：左侧会话列表 | 中间公共群聊（顶部 Agent 配置栏）| 右侧会长私聊
+ * 布局：左侧会话列表 | 中间公共群聊（顶部 Agent 配置栏）| 右侧会议助理私聊
  */
 
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
@@ -24,6 +24,7 @@ import {
   type ConvectionRound,
 } from './convection-round-state';
 import { createLatestRequestGuard } from '../../../lib/latest-request';
+import { fetchConvectionRead } from './convection-load-retry';
 import '../../../styles/components/convection.css';
 import type { Agent } from '../../../types';
 
@@ -86,7 +87,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   const convRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const cInputRef = useRef<HTMLTextAreaElement>(null);
-  // 桌面端：拖入文件 → 路径进「主对话框（发言）」，绕开会长私聊栏（cInput）
+  // 桌面端：拖入文件 → 路径进「主对话框（发言）」，绕开会议助理私聊栏（cInput）
   useDroppedPathInput(setInput, inputRef, active);
   useEffect(() => {
     if (!input) inputRef.current?.style.removeProperty('height');
@@ -94,7 +95,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   useEffect(() => {
     if (!cInput) cInputRef.current?.style.removeProperty('height');
   }, [cInput]);
-  // 会长私聊改为悬浮侧板：默认收起（与气旋/任务板一致），状态持久化
+  // 会议助理私聊改为悬浮侧板：默认收起（与气旋/任务板一致），状态持久化
   const [chairOpen, setChairOpen] = useState(() => { try { return localStorage.getItem('conv.chairOpen') === '1'; } catch { return false; } });
   const toggleChair = useCallback(() => setChairOpen(o => {
     const next = !o;
@@ -107,7 +108,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   useEffect(() => { if (!active) return; refreshAgents(); const t = setInterval(refreshAgents, 5000); return () => clearInterval(t); }, [refreshAgents, active]);
 
   const refreshSessions = useCallback(async () => {
-    try { const r = await fetch('/api/convection/list'); if (r.ok) setSessions(await r.json()); else console.error(await readErrorMessage(r, '加载对流列表失败')); } catch (e) { console.error('[convection] 加载对流列表失败', e); }
+    try { const r = await fetchConvectionRead('/api/convection/list'); if (r.ok) setSessions(await r.json()); else console.error(await readErrorMessage(r, '加载对流列表失败')); } catch (e) { console.error('[convection] 加载对流列表失败', e); }
   }, []);
   useEffect(() => { refreshSessions(); }, [refreshSessions]);
 
@@ -127,7 +128,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
     setActiveRound(null);
     localStorage.setItem(ACTIVE_SESSION_KEY, id);
     try {
-      const r = await fetch(`/api/convection/session/${id}/status`);
+      const r = await fetchConvectionRead(`/api/convection/session/${id}/status`);
       if (!request.isCurrent()) return;
       if (!r.ok) {
         if (r.status === 404 && localStorage.getItem(ACTIVE_SESSION_KEY) === id) {
@@ -243,7 +244,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   };
   const handleSetChair = async (agentId: string) => {
     if (!activeId) return;
-    if (await postSessionAction(activeId, 'set-chair', { agentId }, '设置会长失败')) refreshSessions();
+    if (await postSessionAction(activeId, 'set-chair', { agentId }, '设置会议助理失败')) refreshSessions();
   };
   const handleReorder = async (fromIdx: number, toIdx: number) => {
     if (!activeSession) return;
@@ -410,7 +411,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
           reasoningContent = '';
           pendingTools = [];
         } else if (ev.type === 'compact-start') {
-          setMsgs(p => [...p, { speaker: '系统', content: '会长正在整理对话记录...', streaming: true, toolCalls: [], timestamp: new Date().toISOString() }]);
+          setMsgs(p => [...p, { speaker: '系统', content: '会议助理正在整理对话记录...', streaming: true, toolCalls: [], timestamp: new Date().toISOString() }]);
         } else if (ev.type === 'compact-done') {
           setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === '系统' && m.streaming
             ? { ...m, content: `对话记录已压缩（归档 ${(ev as any).archivedCycles} 个周期，摘要 ${Math.round(((ev as any).summaryLength || 0) / 1000)}K 字符）`, streaming: false }
@@ -587,7 +588,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
             </div>
             {/* Config bar */}
             <div className="conv__config">
-              <span className="conv__config-label">会长:</span>
+              <span className="conv__config-label">会议助理:</span>
               <select value={activeSession.chairAgentId} onChange={e => handleSetChair(e.target.value)} className="conv__config-select">
                 {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
@@ -648,9 +649,9 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
             <div className="chat__input-area">
               <QueuedChips items={queue} onRemove={i => { if (activeId) removeQueuedMsg(activeId, i); }} />
               <div className="chat__input-wrapper">
-                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder={publicComposerMode === 'blocked' ? '会长私聊进行中…' : busy ? '发言中…（可继续输入，发送将排队）' : '发言...（Shift+Enter 换行）'} rows={1} />
+                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder={publicComposerMode === 'blocked' ? '会议助理私聊进行中…' : busy ? '发言中…（可继续输入，发送将排队）' : '发言...（Shift+Enter 换行）'} rows={1} />
                 {publicComposerMode === 'blocked' ? (
-                  <button className="chat__send-btn" disabled title="会长私聊进行中">
+                  <button className="chat__send-btn" disabled title="会议助理私聊进行中">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
                   </button>
                 ) : busy ? (
@@ -685,17 +686,16 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
 
       {/* Right: chair private — 悬浮侧板（收起为细标签，展开浮出盖在群聊上，不挤占布局） */}
       <div style={chairWrapStyle}>
-        <button onClick={toggleChair} title="展开会长私聊" aria-label="展开会长私聊" aria-hidden={chairOpen} tabIndex={chairOpen ? -1 : 0} style={{ ...chairTabStyle, opacity: chairOpen ? 0 : 1, pointerEvents: chairOpen ? 'none' : 'auto' }}>
+        <button onClick={toggleChair} title="展开会议助理私聊" aria-label="展开会议助理私聊" aria-hidden={chairOpen} tabIndex={chairOpen ? -1 : 0} style={{ ...chairTabStyle, opacity: chairOpen ? 0 : 1, pointerEvents: chairOpen ? 'none' : 'auto' }}>
           <span style={{ fontSize: '13px' }}>🗣️</span>
-          <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontWeight: 'var(--font-semibold)' }}>会长 · 私聊</span>
+          <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontWeight: 'var(--font-semibold)' }}>会议助理</span>
           <span style={{ writingMode: 'vertical-rl', fontSize: '10px', color: 'var(--color-accent)', marginTop: 'auto' }}>展开‹</span>
         </button>
         <div aria-hidden={!chairOpen} className="conv__chair-panel" style={{ ...chairPanelStyle, opacity: chairOpen ? 1 : 0, transform: chairOpen ? 'translateX(0) scale(1)' : 'translateX(30px) scale(0.985)', pointerEvents: chairOpen ? 'auto' : 'none' }}>
         <div className="conv__chair-header">
-          <span className="conv__chair-name">{activeSession ? getName(activeSession.chairAgentId) : '会长'}</span>
-          <span className="conv__chair-label">私聊</span>
+          <span className="conv__chair-name">会议助理 私聊</span>
           <div style={{ flex: 1 }} />
-          <button onClick={toggleChair} title="收起" aria-label="收起会长私聊" style={chairCollapseBtnStyle}>×</button>
+          <button onClick={toggleChair} title="收起" aria-label="收起会议助理私聊" style={chairCollapseBtnStyle}>×</button>
         </div>
         <div ref={cRef} className="conv__chair-messages">
           {cMsgs.map((m, i) => (
@@ -719,7 +719,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         </div>
         <div className="chat__input-area">
           <div className="chat__input-wrapper">
-            <textarea ref={cInputRef} className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={!activeId ? '' : chairComposerMode === 'blocked' ? '公共讨论进行中…' : '私聊会长...（Shift+Enter 换行）'} disabled={!activeId} rows={1} />
+            <textarea ref={cInputRef} className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={!activeId ? '' : chairComposerMode === 'blocked' ? '公共讨论进行中…' : '私聊会议助理...（Shift+Enter 换行）'} disabled={!activeId} rows={1} />
             {cBusy ? (
               <button className="chat__stop-btn" onClick={() => {
                 cAbortRef.current?.abort();
@@ -744,7 +744,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   );
 });
 
-// ── 会长悬浮侧板样式（与气旋 ChairDrawer / 季风任务板统一：玻璃 + 企宣缓动滑入） ──
+// ── 会议助理悬浮侧板样式（与气旋 ChairDrawer / 季风任务板统一：玻璃 + 企宣缓动滑入） ──
 const CHAIR_TAB_W = 34;
 const CHAIR_PANEL_W = 360;
 /** 外壳：只占细标签宽度，展开面板绝对定位悬浮在其左侧，不撑宽布局 */

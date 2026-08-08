@@ -50,7 +50,7 @@ test('本地工具继续请求工具桥并保留会议工作区', async () => {
   });
 });
 
-test('tool timeout keeps the original abort error as its cause', async () => {
+test('tool abort errors pass through the shared execution channel', async () => {
   const abortError = new Error('aborted');
   abortError.name = 'AbortError';
 
@@ -62,6 +62,6 @@ test('tool timeout keeps the original abort error as its cause', async () => {
         fetcher: async () => { throw abortError; },
       },
     ),
-    (error: Error & { cause?: unknown }) => error.cause === abortError,
+    (error: Error) => error === abortError,
   );
 });

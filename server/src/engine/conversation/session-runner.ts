@@ -13,23 +13,23 @@
 
 import type { ContextMessage } from '../shared/types';
 import {
-  runReActLoop,
   runReActLoopNative,
   SuspendSignal,
   type LLMCaller,
   type ToolCaller,
-} from './react-loop';
+} from '../shared/react/native-loop';
+import { runReActLoop } from '../shared/react/text-loop';
 import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import type { ToolPreparationProgress } from '../shared/tool-progress';
 import type { SandboxLevel } from '../shared/sandbox-prompt';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
-import { readToolBridgeResponse } from '../shared/tool-bridge-response';
-import { execListAgents, execCreateWorkflow } from '../shared/workflow-builder';
-import { execListWorkflows, execUpdateWorkflow } from '../shared/workflow-editor';
-import { execStartWorkflow } from '../shared/workflow-starter';
+import { execToolUnified } from '../shared/exec-tool';
+import { execListAgents, execCreateWorkflow } from '../../services/tradewind-tools/builder';
+import { execListWorkflows, execUpdateWorkflow } from '../../services/tradewind-tools/editor';
+import { execStartWorkflow } from '../../services/tradewind-tools/starter';
 import { buildVirtualToolDefs, shouldAttachToolCaller } from './virtual-tools';
 import { execMemoryTool, MEMORY_TOOL_NAMES, buildMemoryToolDefs } from '../shared/agent-memory';
-import { execCreateAutomation, execUpdateAutomation, execListAutomations } from '../shared/automation-builder';
+import { execCreateAutomation, execUpdateAutomation, execListAutomations } from '../../services/tide/automation-tools';
 import { execTaskBoard, taskboardFile } from '../shared/taskboard';
 import {
   prepareToolRegistration,
@@ -37,6 +37,12 @@ import {
 } from '../shared/tool-registration.js';
 import { applyToolRegistrationAnswer } from '../shared/tool-registration-response.js';
 import { formatTextToolResult } from '../shared/text-tool-protocol.js';
+import {
+  buildBackgroundExecutionToolDefs,
+  executeBackgroundExecutionTool,
+  isBackgroundExecutionTool,
+  withBackgroundExecutionGuidance,
+} from '../shared/background-execution-tools.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -220,7 +226,10 @@ export class SessionRunner {
     // 仅内存、仅本次运行（一个用户回合内的多次编辑），不落盘、不跨回合。
     const changeLedger: FileChange[] = [];
 
-    const toolDefs = await loadAgentToolDefs(dataDir, this.opts.toolNames, this.opts.skillIds, this.opts.toolMode);
+    const loadedToolDefs = await loadAgentToolDefs(dataDir, this.opts.toolNames, this.opts.skillIds, this.opts.toolMode);
+    const toolDefs = this.opts.sessionId
+      ? withBackgroundExecutionGuidance(loadedToolDefs)
+      : loadedToolDefs;
     // 原生模式：把虚拟工具（ask/delegate/list_agents/create_workflow）也作为 schema
     // 注入 tools 参数，否则模型在原生通道看不见它们。执行端 toolCaller 按 name 拦截不变。
     // create_automation 仅在可交互会话（有 sessionId）注入：潮汐无人值守运行不给，避免自我繁殖。
@@ -230,6 +239,7 @@ export class SessionRunner {
         allowAsk: this.opts.allowAsk,
         allowDelegate: this.opts.allowDelegate,
       }),
+      ...(this.opts.sessionId ? buildBackgroundExecutionToolDefs() : []),
       ...buildMemoryToolDefs(),
     ];
 
@@ -276,7 +286,7 @@ export class SessionRunner {
             const proposal = await prepareToolRegistration(dataDir, args);
             this.pendingToolRegistration = proposal;
             throw new SuspendSignal(
-              `注册全局工具「${proposal.tool.name}」？\n${proposal.tool.description}`,
+              `注册全局工具「${proposal.tool.name}」？\n${proposal.tool.description}\n执行生命周期：${proposal.tool.executionMode === 'detachable' ? '允许后台化' : '同步完成'}`,
               ['注册', '取消'],
             );
           } catch (error) {
@@ -295,6 +305,23 @@ export class SessionRunner {
             return result;
           }
           return await this.execDelegate(args, onEvent);
+        }
+        if (isBackgroundExecutionTool(tool)) {
+          onEvent({ type: 'tool-call', tool, args });
+          if (!this.opts.sessionId) {
+            const result = '操作失败：当前入口没有可交互会话身份。';
+            onEvent({ type: 'tool-result', tool, result, ok: false });
+            return result;
+          }
+          const result = await executeBackgroundExecutionTool({
+            tool,
+            args,
+            scope: 'conversation',
+            ownerId: this.opts.sessionId,
+          });
+          const ok = !result.startsWith('操作失败');
+          onEvent({ type: 'tool-result', tool, result, ok });
+          return result;
         }
         // 长期记忆工具：引擎侧内联执行，补 source='conversation'+时间戳
         if ((MEMORY_TOOL_NAMES as readonly string[]).includes(tool)) {
@@ -427,6 +454,7 @@ export class SessionRunner {
           messages: chatMessages,
           llm,
           tools: enableTools ? toolCaller : undefined,
+          allowedTools: nativeToolDefs.map(tool => tool.name),
           onEvent: (ev) => {
             if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
             else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', content: ev.chunk });
@@ -459,28 +487,16 @@ export class SessionRunner {
 
   /** 执行普通工具（MCP 工具走 MCP client；其余 HTTP 调 /api/tools/exec） */
   private async execTool(tool: string, args: Record<string, string>, onMeta?: (meta: unknown) => void): Promise<string> {
-    // MCP 工具：本地工具 HTTP 执行器不认 mcp: 前缀，必须直接走 MCP client（对齐 cyclone execToolUnified）
-    if (tool.startsWith('mcp:')) {
-      const { callMcpTool } = await import('../shared/mcp-manager');
-      return callMcpTool(tool, args);
-    }
-    const url = (process.env.TOOL_BRIDGE_URL || 'http://localhost:3001').replace(/\/+$/, '') + '/api/tools/exec';
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        tool,
-        args,
-        agentId: this.opts.agentId,
-        workspaceDirOverride: this.opts.workspace,
-        sandboxLevelOverride: this.opts.sandboxLevel,
-        observation: this.opts.sessionId ? { scope: 'conversation', ownerId: this.opts.sessionId } : undefined,
-      }),
+    return execToolUnified({
+      tool,
+      args,
+      agentId: this.opts.agentId,
+      workspaceDir: this.opts.workspace,
+      sandboxLevel: this.opts.sandboxLevel,
       signal: this.abortController?.signal,
+      onMeta,
+      observation: this.opts.sessionId ? { scope: 'conversation', ownerId: this.opts.sessionId } : undefined,
     });
-    const data = await readToolBridgeResponse(res);
-    if (data.meta !== undefined && data.meta !== null) onMeta?.(data.meta);
-    return data.result;
   }
 
   /** 执行 delegate（SubAgent 委托） */

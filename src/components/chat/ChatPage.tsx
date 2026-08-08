@@ -853,7 +853,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                 <span>/compact 压缩上下文</span>
               </div>
             </div>
-            {/* 任务板挂在整列层（非消息区内），竖条/抽屉贯穿全高：上过标题栏、下达输入栏，与气旋/对流会长同构 */}
+            {/* 任务板挂在整列层（非消息区内），竖条/抽屉贯穿全高：上过标题栏、下达输入栏，与气旋/对流会议助理同构 */}
             <TaskBoardDrawer board={taskboard} onChange={handleTaskboardChange} expanded={taskboardOpen} onToggle={toggleTaskboard} glow={taskboardUnseen} observations={taskboardObservations} observationScope="conversation" observationOwnerId={activeSessionId || ''} />
           </>
         )}

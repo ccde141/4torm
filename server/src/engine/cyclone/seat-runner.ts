@@ -1,7 +1,8 @@
 /**
  * 气旋工位执行器 —— 无常驻实例，状态全落 SeatData 文件
  *
- * 边界铁律：只 import shared/ 与本目录模块。react-loop 是季风忠实副本（cyclone 自有）。
+ * 边界铁律：只 import shared/ 与本目录模块。ReAct 算法来自 shared，
+ * 工位挂起、持久化、Prompt 与工具策略仍由气旋独立维护。
  *
  * 与季风 SessionRunner 的本质差异（文档 §2 复用陷阱）：
  * - 季风 runner 是内存常驻实例，挂起态存内存；
@@ -17,14 +18,20 @@ import type { SandboxLevel } from '../shared/sandbox-prompt';
 import { loadAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execToolUnified } from '../shared/exec-tool';
+import {
+  buildBackgroundExecutionToolDefs,
+  executeBackgroundExecutionTool,
+  isBackgroundExecutionTool,
+  withBackgroundExecutionGuidance,
+} from '../shared/background-execution-tools.js';
 import { withAgentActivity } from '../shared/agent-activity.js';
 import {
-  runReActLoop,
   runReActLoopNative,
   SuspendSignal,
   type LLMCaller,
   type ToolCaller,
-} from './react-loop';
+} from '../shared/react/native-loop';
+import { runReActLoop } from '../shared/react/text-loop';
 import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { buildSeatSystemPrompt } from './seat-prompt';
 import { workshopWorkspace } from './paths';
@@ -160,7 +167,7 @@ function makeToolCaller(opts: {
           const proposal = await prepareToolRegistration(dataDir, args);
           onToolRegistration(proposal);
           throw new SuspendSignal(
-            `注册全局工具「${proposal.tool.name}」？\n${proposal.tool.description}`,
+            `注册全局工具「${proposal.tool.name}」？\n${proposal.tool.description}\n执行生命周期：${proposal.tool.executionMode === 'detachable' ? '允许后台化' : '同步完成'}`,
             ['注册', '取消'],
           );
         } catch (error) {
@@ -218,6 +225,17 @@ function makeToolCaller(opts: {
         onEvent({ type: 'contact-done', contactId, reply: result, ok });
         return result;
       }
+      if (isBackgroundExecutionTool(tool)) {
+        onEvent({ type: 'tool-call', tool, args });
+        const result = await executeBackgroundExecutionTool({
+          tool,
+          args,
+          scope: 'cyclone',
+          ownerId: `${workshopId}:${seatId}`,
+        });
+        onEvent({ type: 'tool-result', tool, result, ok: !result.startsWith('操作失败') });
+        return result;
+      }
       onEvent({ type: 'tool-call', tool, args });
       try {
         const result = await execToolUnified({
@@ -267,10 +285,10 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
     agentId: agent.id, sandboxLevel: agent.sandboxLevel, wsDir, signal, onEvent,
     onToolRegistration: proposal => { pendingToolRegistration = proposal; },
   });
-  const nativeToolDefs = [...toolDefs, ...buildSeatVirtualToolDefs({
+  const nativeToolDefs = [...withBackgroundExecutionGuidance(toolDefs), ...buildSeatVirtualToolDefs({
     allowAsk: true, allowDelegate: true, allowDispatch: true,
     allowToolRegistration: true, contactTargets,
-  })];
+  }), ...buildBackgroundExecutionToolDefs()];
   let reasoning = '';
   const generatedContextStart = messages.length;
 
@@ -289,6 +307,7 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
       })
     : await runReActLoop({
         messages, llm, tools: toolCaller,
+        allowedTools: nativeToolDefs.map(tool => tool.name),
         onEvent: (ev) => {
           if (ev.type === 'reasoning') reasoning += ev.chunk;
           const progress = toSeatProgressEvent(ev);

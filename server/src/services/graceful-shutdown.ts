@@ -3,6 +3,7 @@ export interface GracefulShutdownHooks {
   stopTradewind(): Promise<void>;
   drainTide(): Promise<void>;
   drainCyclone(): Promise<void>;
+  stopBackgroundExecutions(): Promise<void>;
   drainWrites(): Promise<void>;
   shutdownMcp(): void;
   closeServer(): Promise<void>;
@@ -13,6 +14,7 @@ async function runShutdownSteps(hooks: GracefulShutdownHooks): Promise<void> {
   await hooks.stopTradewind();
   await hooks.drainTide();
   await hooks.drainCyclone();
+  await hooks.stopBackgroundExecutions();
   await hooks.drainWrites();
   hooks.shutdownMcp();
   await hooks.closeServer();

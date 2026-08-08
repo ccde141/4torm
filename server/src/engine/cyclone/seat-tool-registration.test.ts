@@ -17,7 +17,7 @@ async function setupSeat(name: string) {
   seat.pending = {
     question: '注册工具？', native: false,
     toolRegistration: await prepareToolRegistration(dataDir, {
-      name, description: '工位创建的工具', dangerous: 'false', executorFile: name,
+      name, description: '工位创建的工具', dangerous: 'false', executionMode: 'sync', executorFile: name,
       parameters: '{"type":"object","properties":{}}',
     }),
   };

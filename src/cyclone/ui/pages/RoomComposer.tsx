@@ -46,7 +46,7 @@ export default function RoomComposer({ inputRef, input, streaming, phase, queue,
       <div className="cyclone-room__input-hint">
         <span>快捷指令：</span><code>/reset</code><span>清空公共上下文</span>
         <code>/reset summary</code><span>摘要重置公共上下文</span>
-        <code>/reset all</code><span>连同会长私聊一起清空</span>
+        <code>/reset all</code><span>连同会议助理私聊一起清空</span>
       </div>
     </div>
   );

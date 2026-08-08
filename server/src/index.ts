@@ -30,6 +30,7 @@ import { initMcpManager, shutdownMcpManager } from './engine/shared/mcp-manager.
 import { performGracefulShutdown } from './services/graceful-shutdown.js';
 import { agentActivityRoutes } from './routes/agent-activity.js';
 import { executionObserver } from './services/execution-observer.js';
+import { backgroundExecutions } from './services/background-execution.js';
 
 applyDeveloperMode();
 
@@ -184,6 +185,7 @@ function requestShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
     stopTradewind: stopActiveTradewindExecution,
     drainTide: drainScheduler,
     drainCyclone: drainCycloneDispatches,
+    stopBackgroundExecutions: () => backgroundExecutions.shutdown(),
     drainWrites: async () => { await executionObserver.flush(); await drainAtomicWrites(); },
     shutdownMcp: shutdownMcpManager,
     closeServer: () => app.close(),

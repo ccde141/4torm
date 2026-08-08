@@ -10,10 +10,10 @@ const { createDesktopBrowserBridge, createDesktopBrowserBridgeServer } = require
   createDesktopBrowserBridgeServer(deps: { bridge: { handle(input: unknown): Promise<unknown> }; endpoint: string }): { listen(): Promise<void>; close(): Promise<void> };
 };
 
-test('Electron hides its managed server process window on Windows', () => {
+test('Electron hides its directly managed server process window without a shell', () => {
   const main = fs.readFileSync('electron/main.cjs', 'utf8');
 
-  assert.match(main, /serverProc = spawn\('npx',[\s\S]*?windowsHide: true,[\s\S]*?shell: process\.platform === 'win32'/);
+  assert.match(main, /serverProc = spawn\(nodeRuntime, \[tsxCli, 'src\/index\.ts'\],[\s\S]*?windowsHide: true,[\s\S]*?shell: false/);
 });
 
 test('desktop browser bridge authenticates open and returns a JSON-safe frame', async () => {

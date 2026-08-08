@@ -9,22 +9,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { skillDir, toolRegistryFile } from '../../services/data-paths.js';
 import { resolveMcpTools } from './mcp-manager';
+import { FRAMEWORK_TOOLS, isFrameworkToolName } from '../../tools/framework/catalog.js';
+import type { ToolDefinition } from '../../tools/tool-definition.js';
 
-/** 与 src/store/tools.ts 的 ToolDef 同构 */
-export interface ToolDef {
-  name: string;
-  description: string;
-  category?: string;
-  dangerous?: boolean;
-  parameters?: {
-    type?: string;
-    properties?: Record<string, { type?: string; description?: string }>;
-    required?: string[];
-  };
-  executorType?: string;
-  executorFile?: string;
-  executorTemplate?: string;
-}
+export type ToolDef = ToolDefinition;
 
 async function readJsonSafe<T>(file: string): Promise<T | null> {
   try {
@@ -35,11 +23,11 @@ async function readJsonSafe<T>(file: string): Promise<T | null> {
   }
 }
 
-async function loadRegistryTools(dataDir: string, names?: string[]): Promise<ToolDef[]> {
+async function loadCustomTools(dataDir: string, names?: string[]): Promise<ToolDef[]> {
   const all = await readJsonSafe<ToolDef[]>(toolRegistryFile(dataDir));
   if (!Array.isArray(all)) return [];
-  const valid = all.filter(t => t && typeof t.name === 'string');
-  if (names === undefined) return valid.filter(t => t.executorType === 'builtin');
+  const valid = all.filter(t => t && typeof t.name === 'string' && !isFrameworkToolName(t.name));
+  if (names === undefined) return valid;
   if (names.length === 0) return [];
   const set = new Set(names);
   return valid.filter(t => set.has(t.name));
@@ -55,9 +43,10 @@ async function loadSkillTools(dataDir: string, skillId: string): Promise<ToolDef
  * 加载某 Agent 实体可用的全部工具定义。
  *
  * 合并规则：
- * - toolMode=all 时加载 registry.json 中的框架内置工具（兼容旧空配置）
+ * - toolMode=all 时加载代码内固定的框架工具
  * - toolMode=selected 时只加载 tools[] 命中的工具，空数组表示不启用本地工具
- * - skills[] 携带的工具（去重，registry 优先）
+ * - data/tools/registry.json 只保存用户自定义工具
+ * - skills[] 携带的工具（去重，框架/自定义工具优先）
  * - skills[] 非空时自动补充 use_skill，并动态写入可用技能说明
  */
 export async function loadAgentToolDefs(
@@ -69,16 +58,25 @@ export async function loadAgentToolDefs(
   const result: ToolDef[] = [];
   const seenNames = new Set<string>();
 
-  // 1) 从 registry 加载 toolNames（排除 mcp: 前缀的）
+  // 1) 框架工具来自代码内固定清单；用户工具来自 data 注册表。
   const localNames = toolNames.filter(n => !n.startsWith('mcp:'));
   if (skillIds.length > 0 && !localNames.includes('use_skill')) localNames.push('use_skill');
   const mcpNames = toolNames.filter(n => n.startsWith('mcp:'));
 
-  const registryTools = await loadRegistryTools(
-    dataDir,
-    toolMode === 'all' ? undefined : localNames,
-  );
-  for (const t of registryTools) {
+  const selectedNames = new Set(localNames);
+  const frameworkTools = toolMode === 'all'
+    ? FRAMEWORK_TOOLS
+    : FRAMEWORK_TOOLS.filter(tool => selectedNames.has(tool.name));
+  for (const t of frameworkTools) {
+    if (!seenNames.has(t.name)) {
+      // 运行时会按 Agent 技能改写 use_skill 描述；不能修改只读框架清单本体。
+      result.push({ ...t });
+      seenNames.add(t.name);
+    }
+  }
+
+  const customTools = await loadCustomTools(dataDir, toolMode === 'all' ? [] : localNames);
+  for (const t of customTools) {
     if (!seenNames.has(t.name)) {
       result.push(t);
       seenNames.add(t.name);

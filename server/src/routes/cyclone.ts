@@ -32,6 +32,15 @@ import { callLLM } from '../engine/shared/llm-bridge';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
 import { deleteContextMessage, editContextMessage } from '../engine/cyclone/message-mutations';
 import { completeAwaitingDispatch, kickDispatchQueue } from '../engine/cyclone/dispatch-queue';
+import { planSeatCompaction } from '../engine/cyclone/seat-compaction';
+import { applySeatCompaction } from '../engine/cyclone/seat-compaction-store';
+import {
+  generateSeatCompactionSummary, resolveSeatCompactionModel,
+} from '../engine/cyclone/seat-compaction-summary';
+import {
+  beginExternalSeatActivity,
+  readExternalSeatActivity,
+} from '../engine/cyclone/seat-activity.js';
 
 /** 活跃轮次 AbortController：`${workshopId}/${seatId}` 或 `${workshopId}/room/${roomId}` → ctrl */
 const activeAborts = new Map<string, AbortController>();
@@ -108,6 +117,58 @@ async function summarizeWithAgent(dataDir: string, agentId: string, subject: str
     options: { temperature: 0.2, maxTokens: 900 },
   });
   return result.content.trim();
+}
+
+function seatCompactionPlanError(plan: Exclude<ReturnType<typeof planSeatCompaction>, { ok: true }>): string {
+  if (plan.reason === 'below-threshold') {
+    return `当前上下文约 ${plan.estimatedTokens} token，不足 8000，无需压缩`;
+  }
+  if (plan.reason === 'not-enough-turns') return '当前上下文不足四个完整回合，无需压缩';
+  return '没有可压缩的早期上下文';
+}
+
+async function streamSeatCompaction(
+  dataDir: string, workshopId: string, seatId: string, reply: FastifyReply,
+): Promise<void> {
+  const lockKey = `${workshopId}/${seatId}`;
+  const release = tryAcquireSeatLock(workshopId, seatId);
+  if (!release) {
+    reply.status(409).send({ error: '该工位正在处理消息，暂时不能压缩上下文' });
+    return;
+  }
+  try {
+    const seat = await loadSeat(dataDir, workshopId, seatId);
+    if (!seat) { reply.status(404).send({ error: '工位不存在' }); return; }
+    if (seat.pending) { reply.status(409).send({ error: '该工位存在挂起提问，请先完成回答' }); return; }
+    if (seat.compactState?.disabled) { reply.status(409).send({ error: '该工位的上下文压缩已停用' }); return; }
+    const plan = planSeatCompaction(seat.messages || [], seat.tokenUsage?.promptTokens);
+    if (!plan.ok) { reply.status(400).send({ error: seatCompactionPlanError(plan) }); return; }
+    const model = await resolveSeatCompactionModel(dataDir, seat.agentId);
+    const controller = new AbortController();
+    activeAborts.set(lockKey, controller);
+    reply.hijack();
+    initSSE(reply);
+    const stopHeartbeat = startHeartbeat(reply);
+    pushSSE(reply, { type: 'start', compressedCount: plan.archivedMessages.length, keptTurnCount: 3 });
+    try {
+      const summary = await generateSeatCompactionSummary({
+        dataDir, fullModelKey: model, subject: `工位「${seat.title}」私聊`,
+        summaryInput: plan.summaryInput, signal: controller.signal,
+        onChunk: chunk => pushSSE(reply, { type: 'token', content: chunk }),
+      });
+      const result = await applySeatCompaction(dataDir, workshopId, seat, plan, summary);
+      pushSSE(reply, { type: 'done', archivedCount: result.archivedCount, keptTurnCount: 3 });
+    } catch (error) {
+      const message = controller.signal.aborted ? '上下文压缩已停止' : (error as Error).message;
+      pushSSE(reply, { type: 'error', error: message, message });
+    } finally {
+      stopHeartbeat();
+      activeAborts.delete(lockKey);
+      endSSE(reply);
+    }
+  } finally {
+    release();
+  }
 }
 
 export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
@@ -252,6 +313,11 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
     const body = (req.body as any) || {};
     const lockKey = `${workshopId}/${seatId}`;
 
+    if (action === 'activity') {
+      const since = Number((req.query as { since?: string } | undefined)?.since || 0);
+      return reply.send(readExternalSeatActivity(workshopId, seatId, Number.isFinite(since) ? since : 0));
+    }
+
     if (action === 'revision') {
       const seat = await loadSeat(dataDir, workshopId, seatId);
       if (!seat) return reply.status(404).send({ error: '工位不存在' });
@@ -262,6 +328,11 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       const seat = await loadSeat(dataDir, workshopId, seatId);
       if (!seat) return reply.status(404).send({ error: '工位不存在' });
       return reply.send(seat);
+    }
+
+    if (action === 'compact') {
+      await streamSeatCompaction(dataDir, workshopId, seatId, reply);
+      return;
     }
 
     if (action === 'update-role') {
@@ -636,13 +707,26 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
           if (it.behavior === 'none') continue;
           const seat = await loadSeat(dataDir, workshopId, it.seatId);
           if (!seat) continue;
-          pushSSE(reply, { type: 'seat-start', speaker: seat.title });
-          const speech = await generateJoinSpeech(
-            dataDir, workshopId, room, it.seatId, it.behavior,
-            (chunk) => pushSSE(reply, { type: 'token', speaker: seat.title, content: chunk }),
-            abort.signal,
+          const releaseSeat = tryAcquireSeatLock(workshopId, it.seatId);
+          if (!releaseSeat) {
+            pushSSE(reply, { type: 'error', message: `工位「${seat.title}」正在处理其他任务，已跳过入会发言` });
+            continue;
+          }
+          const activity = beginExternalSeatActivity(
+            workshopId, it.seatId, 'join-summary', `正在为「${room.title}」整理入会摘要`,
           );
-          if (speech) pushSSE(reply, { type: 'seat-done', speaker: seat.title, content: speech });
+          pushSSE(reply, { type: 'seat-start', speaker: seat.title });
+          try {
+            const speech = await generateJoinSpeech(
+              dataDir, workshopId, room, it.seatId, it.behavior,
+              (chunk) => pushSSE(reply, { type: 'token', speaker: seat.title, content: chunk }),
+              abort.signal,
+            );
+            if (speech) pushSSE(reply, { type: 'seat-done', speaker: seat.title, content: speech });
+          } finally {
+            activity.finish();
+            releaseSeat();
+          }
         }
         pushSSE(reply, { type: 'done' });
       } catch (e) {

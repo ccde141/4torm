@@ -19,7 +19,7 @@ export function validateGraph(graph: WorkflowGraph, mode: WorkflowMode = 'manual
     }
     if (node.type === 'meeting') {
       const config = node.config as { chairAgentId?: string; participantNodeIds?: string[] };
-      if (!config.chairAgentId) errors.push(`会议室「${node.label}」未选择会长`);
+      if (!config.chairAgentId) errors.push(`会议室「${node.label}」未选择会议助理`);
       if (!config.participantNodeIds?.length) errors.push(`会议室「${node.label}」未选择参与者`);
     }
   }

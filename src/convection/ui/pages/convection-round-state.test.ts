@@ -11,7 +11,7 @@ test('公共轮次运行时仅公共输入允许排队', () => {
   assert.equal(getConvectionComposerMode('public', 'chair'), 'blocked');
 });
 
-test('会长轮次运行时公共输入被阻止', () => {
+test('会议助理轮次运行时公共输入被阻止', () => {
   assert.equal(getConvectionComposerMode('chair', 'chair'), 'running');
   assert.equal(getConvectionComposerMode('chair', 'public'), 'blocked');
 });

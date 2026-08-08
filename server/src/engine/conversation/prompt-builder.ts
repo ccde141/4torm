@@ -16,7 +16,7 @@
 import type { ToolDef } from '../shared/tool-defs-loader';
 import { recallMemory } from '../shared/agent-memory';
 import { buildSandboxSection, type SandboxLevel } from '../shared/sandbox-prompt';
-import { buildWorkflowToolsSection } from '../shared/workflow-builder';
+import { buildWorkflowToolsSection } from '../../services/tradewind-tools/builder';
 import { buildSelfManagementSection, buildTextToolProtocol } from '../shared/prompt';
 import { buildTaskBoardSection, readTaskboard, taskboardFile } from '../shared/taskboard';
 import { buildAgentMeta } from '../shared/meta-prompt.js';

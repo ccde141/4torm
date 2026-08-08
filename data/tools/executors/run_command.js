@@ -117,7 +117,9 @@ function observeCommand(child, { timeout, signal, onOutput }) {
     const stop = error => {
       if (settled || stopError) return
       stopError = error
-      void terminateProcessTree(child).catch(finish)
+      // Windows 下 taskkill 是进程树终止的最终结果；继续等待 child close
+      // 可能让已终止的命令仍长时间占住调用方。
+      void terminateProcessTree(child).then(() => finish(error), finish)
     }
     const onAbort = () => stop(abortError())
     const timer = setTimeout(

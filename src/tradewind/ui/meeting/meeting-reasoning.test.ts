@@ -27,7 +27,7 @@ test('原生 reasoning 与文本 think 都保留且不重复', () => {
   assert.equal(combineReasoning('相同思考', '相同思考'), '相同思考');
 });
 
-test('会长流定稿同时保留正文与独立思考', () => {
+test('会议助理流定稿同时保留正文与独立思考', () => {
   const messages = applyChairStreamSnapshot(
     [{ role: 'user', content: '审阅会议' }, { role: 'assistant', content: '' }],
     '这是回复',

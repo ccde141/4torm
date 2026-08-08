@@ -7,7 +7,7 @@ import {
   runReActLoopNative,
   type LLMCaller,
   type ToolCaller,
-} from '../conversation/react-loop.js';
+} from './react/native-loop.js';
 
 export interface NativeSubAgentResult {
   status: 'success' | 'timeout' | 'aborted' | 'error';

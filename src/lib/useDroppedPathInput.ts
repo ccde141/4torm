@@ -5,8 +5,8 @@
  * 追加到给定输入框的 state，并复用「高度自适应 + 聚焦」逻辑。
  *
  * 用 `enabled` 守卫调用方的可见性 / 归属：页面常驻（display:none 切换）时，
- * 多个对话框会同时挂载，必须只让当前可见的「主对话框」接收，且绕开会长栏
- * （会长无工具能力，路径无意义）。
+ * 多个对话框会同时挂载，必须只让当前可见的「主对话框」接收，且绕开会议助理栏
+ * （会议助理无工具能力，路径无意义）。
  */
 
 import { useEffect, type Dispatch, type SetStateAction, type RefObject } from 'react';

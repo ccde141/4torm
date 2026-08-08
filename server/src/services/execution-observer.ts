@@ -41,6 +41,8 @@ export interface ExecutionObservation {
   error?: string;
   progress?: string;
   outputTruncated?: boolean;
+  /** 已明确脱离调用方的终端任务立即进入任务板，不再等待时间门槛。 */
+  promoted?: boolean;
   output: Array<{ stream: ObservationStream; text: string }>;
   viewerState?: VisualObservationState;
 }
@@ -98,6 +100,14 @@ export class ExecutionObserver {
     const entry = this.entries.get(id);
     if (!entry || !isActive(entry.status) || entry.status === 'cancelling') return false;
     entry.status = 'cancelling';
+    this.schedulePersist(true);
+    return true;
+  }
+
+  promote(id: string): boolean {
+    const entry = this.entries.get(id);
+    if (!entry || entry.promoted) return false;
+    entry.promoted = true;
     this.schedulePersist(true);
     return true;
   }
@@ -189,6 +199,7 @@ export class ExecutionObserver {
   }
 
   private isPromoted(entry: ExecutionObservation): boolean {
+    if (entry.promoted) return true;
     const endedAt = entry.finishedAt ?? this.now();
     return endedAt - entry.startedAt >= OBSERVATION_PROMOTION_MS;
   }
@@ -216,7 +227,8 @@ function isObservation(value: unknown): value is ExecutionObservation {
     && (entry.kind === undefined || ['terminal', 'browser', 'computer'].includes(entry.kind))
     && (entry.viewer === undefined || ['terminal', 'browser', 'computer'].includes(entry.viewer))
     && (entry.progress === undefined || typeof entry.progress === 'string')
-    && (entry.outputTruncated === undefined || typeof entry.outputTruncated === 'boolean');
+    && (entry.outputTruncated === undefined || typeof entry.outputTruncated === 'boolean')
+    && (entry.promoted === undefined || typeof entry.promoted === 'boolean');
 }
 
 function isActive(status: ObservationStatus): boolean {

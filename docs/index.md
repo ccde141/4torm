@@ -27,7 +27,7 @@ features:
     linkText: 进入引导
   - icon: 🌀
     title: 对流 · 会议室
-    details: 让多个 Agent 围绕同一议题依次发言，由会长在侧栏提供私聊建议
+    details: 让多个 Agent 围绕同一议题依次发言，由会议助理在侧栏提供私聊建议
     link: /modes/convection
     linkText: 进入引导
   - icon: 🏢

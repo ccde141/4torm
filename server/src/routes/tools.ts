@@ -7,17 +7,39 @@
 
 import type { FastifyInstance } from 'fastify';
 import { getAppContext } from '../services/app-context.js';
-import { executeTool } from '../services/tool-executor.js';
+import { executeTool, getToolExecutionMode, ToolPermissionError } from '../services/tool-executor.js';
 import type { ObservationScope } from '../services/execution-observation-contract.js';
 import { executionObserver } from '../services/execution-observer.js';
 import { executionLifecycle } from '../services/execution-lifecycle.js';
+import { backgroundExecutions, type BackgroundExecutionSnapshot } from '../services/background-execution.js';
 import { visualArtifactStore } from '../services/visual-artifact-store.js';
 import { browserExecutionProducer } from '../services/browser-execution-producer.js';
 import { normalizeBrowserEngine } from '../services/browser-engine.js';
 import { executionCapabilities } from '../services/builtin-execution-capabilities.js';
+import { listToolCatalog, replaceCustomTools } from '../tools/custom-registry.js';
 
-export async function toolRoutes(app: FastifyInstance): Promise<void> {
+export interface ToolRouteOptions {
+  executeTool?: typeof executeTool;
+  /** 测试可缩短；生产默认给短命令 3 秒同步完成窗口。 */
+  backgroundGraceMs?: number;
+}
+
+export async function toolRoutes(app: FastifyInstance, options: ToolRouteOptions = {}): Promise<void> {
   const { dataDir } = getAppContext(app);
+  const executeLocalTool = options.executeTool ?? executeTool;
+
+  // 框架工具只读；data/tools/registry.json 仅承载用户自定义工具。
+  app.get('/catalog', async () => ({ tools: await listToolCatalog(dataDir) }));
+
+  app.put('/custom', async (req, reply) => {
+    try {
+      const body = req.body as { tools?: unknown } | undefined;
+      const tools = await replaceCustomTools(dataDir, body?.tools);
+      return reply.send({ tools });
+    } catch (error) {
+      return reply.status(400).send({ error: (error as Error).message });
+    }
+  });
 
   // POST /api/tools/exec
   app.post('/exec', async (req, reply) => {
@@ -29,8 +51,17 @@ export async function toolRoutes(app: FastifyInstance): Promise<void> {
     const controller = new AbortController();
     let tracked: ReturnType<typeof executionObserver.start> | undefined;
     let requestDisconnected = false;
+    let detached = false;
     let releaseLifecycle: (() => void) | undefined;
-    const abort = () => { requestDisconnected = true; controller.abort(); };
+    let backgroundOwner: { id: string; scope: ObservationScope; ownerId: string } | undefined;
+    const abort = () => {
+      requestDisconnected = true;
+      if (detached) return;
+      controller.abort();
+      if (backgroundOwner) {
+        void backgroundExecutions.terminate(backgroundOwner.id, backgroundOwner.scope, backgroundOwner.ownerId);
+      }
+    };
     req.raw.once('aborted', abort);
     reply.raw.once('close', abort);
     try {
@@ -42,36 +73,117 @@ export async function toolRoutes(app: FastifyInstance): Promise<void> {
         return reply.send({ result: await capabilityTool.execute({ dataDir, agentId: agentId || '', args: args || {}, observation: ownedObservation, signal: controller.signal }) });
       }
       let meta: unknown;
-      tracked = tool === 'run_command' && isObservationScope(observation?.scope) && typeof observation?.ownerId === 'string'
-        ? executionObserver.start({ scope: observation.scope, ownerId: observation.ownerId, command: String(args?.command || args?.cmd || ''), kind: 'terminal', viewer: 'terminal' })
+      const executionMode = await getToolExecutionMode(dataDir, tool);
+      tracked = executionMode === 'detachable' && isObservationScope(observation?.scope) && typeof observation?.ownerId === 'string'
+        ? executionObserver.start({
+            scope: observation.scope,
+            ownerId: observation.ownerId,
+            command: tool === 'run_command' ? String(args?.command || args?.cmd || '') : tool,
+            kind: 'terminal',
+            viewer: 'terminal',
+          })
         : undefined;
-      if (tracked) releaseLifecycle = executionLifecycle.register(tracked, () => controller.abort());
-      const result = await executeTool(
+      if (tracked) {
+        const trackedEntry = tracked;
+        const ownedObservation = { scope: trackedEntry.scope, ownerId: trackedEntry.ownerId };
+        backgroundOwner = { id: trackedEntry.id, ...ownedObservation };
+        releaseLifecycle = executionLifecycle.register(trackedEntry, async () => {
+          await backgroundExecutions.terminate(trackedEntry.id, ownedObservation.scope, ownedObservation.ownerId);
+        });
+
+        const finishObservation = (snapshot: BackgroundExecutionSnapshot) => {
+          if (snapshot.status === 'completed') {
+            executionObserver.finish(trackedEntry.id, { status: 'completed', exitCode: 0 });
+          } else if (snapshot.status === 'cancelled') {
+            executionObserver.finish(trackedEntry.id, { status: 'cancelled', error: snapshot.error });
+          } else if (snapshot.status === 'failed') {
+            executionObserver.finish(trackedEntry.id, {
+              status: 'failed',
+              error: snapshot.error,
+              exitCode: typeof snapshot.exitCode === 'number' ? snapshot.exitCode : undefined,
+            });
+          }
+          releaseLifecycle?.();
+          releaseLifecycle = undefined;
+        };
+
+        const background = await backgroundExecutions.start({
+          executionId: trackedEntry.id,
+          scope: ownedObservation.scope,
+          ownerId: ownedObservation.ownerId,
+          label: trackedEntry.command,
+          graceMs: options.backgroundGraceMs ?? 3_000,
+          run: signal => executeLocalTool(
+            dataDir,
+            tool,
+            args || {},
+            agentId || '',
+            workspaceDirOverride,
+            sandboxLevelOverride,
+            (m) => { meta = m; },
+            signal,
+            (stream, text) => executionObserver.append(trackedEntry.id, stream, text),
+          ),
+          onSettled: finishObservation,
+        });
+
+        if (background.status === 'running' || background.status === 'cancelling') {
+          executionObserver.promote(trackedEntry.id);
+          detached = true;
+          backgroundOwner = undefined;
+          return reply.send({
+            result: formatBackgroundResult(background),
+            meta,
+            observationId: trackedEntry.id,
+            executionId: trackedEntry.id,
+          });
+        }
+        if (background.status === 'failed') {
+          return reply.send({
+            ok: false,
+            error: background.error,
+            exitCode: background.exitCode,
+            observationId: trackedEntry.id,
+            executionId: trackedEntry.id,
+          });
+        }
+        if (background.status === 'cancelled') {
+          if (requestDisconnected) return;
+          return reply.status(409).send({ error: 'execution cancelled' });
+        }
+        return reply.send({
+          result: background.result ?? '',
+          meta,
+          observationId: trackedEntry.id,
+          executionId: trackedEntry.id,
+        });
+      }
+      const result = await executeLocalTool(
         dataDir, tool, args || {}, agentId || '', workspaceDirOverride, sandboxLevelOverride,
         (m) => { meta = m; },
         controller.signal,
-        (stream, text) => { if (tracked) executionObserver.append(tracked.id, stream, text); },
+        undefined,
       );
       if (controller.signal.aborted) {
-        if (tracked) executionObserver.finish(tracked.id, { status: 'cancelled' });
         return reply.status(409).send({ error: 'execution cancelled' });
       }
-      if (tracked) executionObserver.finish(tracked.id, { status: 'completed', exitCode: 0 });
-      return reply.send({ result, meta, observationId: tracked?.id });
+      return reply.send({ result, meta });
     } catch (e) {
+      const permissionFailure = e instanceof ToolPermissionError;
       const commandFailure = isCommandExecutionError(e) ? e : undefined;
       if (tracked) executionObserver.finish(tracked.id, {
         status: controller.signal.aborted ? 'cancelled' : 'failed',
         error: (e as Error).message,
         exitCode: commandFailure && typeof commandFailure.exitCode === 'number' ? commandFailure.exitCode : undefined,
       });
+      if (permissionFailure) return reply.status(403).send({ error: (e as Error).message });
       if (requestDisconnected) return;
       if (controller.signal.aborted) return reply.status(409).send({ error: 'execution cancelled' });
       // 子进程非零退出是命令的业务结果，不是 HTTP 服务故障。
       if (commandFailure) return reply.send({ ok: false, error: commandFailure.message, exitCode: commandFailure.exitCode, observationId: tracked?.id });
       return reply.status(500).send({ error: (e as Error).message });
     } finally {
-      releaseLifecycle?.();
+      if (!detached) releaseLifecycle?.();
       req.raw.removeListener('aborted', abort);
       reply.raw.removeListener('close', abort);
     }
@@ -160,11 +272,20 @@ export async function toolRoutes(app: FastifyInstance): Promise<void> {
     const item = executionObserver.get(id);
     if (!item || item.scope !== query.scope || item.ownerId !== query.ownerId) return reply.status(404).send({ error: 'execution not found' });
     if (item.status === 'cancelling') return reply.status(202).send({ status: 'cancelling' });
-    const terminated = await executionLifecycle.terminate(id, query.scope, query.ownerId);
+    const terminated = await executionLifecycle.terminate(id, query.scope, query.ownerId)
+      || await backgroundExecutions.terminate(id, query.scope, query.ownerId);
     if (!terminated) return reply.status(409).send({ error: 'execution can no longer be terminated' });
     executionObserver.requestCancellation(id);
     return reply.status(202).send({ status: 'cancelling' });
   });
+}
+
+function formatBackgroundResult(snapshot: BackgroundExecutionSnapshot): string {
+  return [
+    '工具已启动，当前仍在后台运行。',
+    `executionId: ${snapshot.executionId}`,
+    '可使用 inspect_execution 查看状态、wait_execution 有限等待，或 terminate_execution 终止。',
+  ].join('\n');
 }
 
 function isCommandExecutionError(error: unknown): error is Error & { exitCode: number | null } {

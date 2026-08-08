@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { buildTaskBoardSection } from './taskboard';
-import { buildWorkflowToolsSection } from './workflow-builder';
+import { buildWorkflowToolsSection } from '../../services/tradewind-tools/builder';
 
 function assertNoLegacyXml(prompt: string): void {
   assert.doesNotMatch(prompt, /<action|<answer|<think|<result/);

@@ -49,12 +49,12 @@ interface SeatRunner {
   backgroundedAt: number;
 }
 const MAX_BG = 3;
-function emptyLive(): Live {
+export function emptyLive(): Live {
   return { segments: [], phase: formatStreamStatus('llm-waiting') };
 }
 
 /** 把一个 SeatEvent 应用到 Live 累积态（流式 + 重载共用的卡片块构建逻辑）。 */
-function applyEvent(ev: any, ls: Live): void {
+export function applyEvent(ev: any, ls: Live): void {
   switch (ev.type) {
     case 'token':
       appendReplyText(ls.segments, ev.content); ls.phase = formatStreamStatus('model-output'); ls.activityTarget = undefined; break;

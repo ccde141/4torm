@@ -24,6 +24,9 @@ test('tool registration instructions appear only in interactive prompts', () => 
   const interactive = buildSelfManagementSection({ allowToolRegistration: true });
   const unattended = buildSelfManagementSection({ allowToolRegistration: false });
   assert.match(interactive, /register_tool/);
+  assert.match(interactive, /executionMode/);
+  assert.match(interactive, /ctx\.signal/);
+  assert.match(interactive, /detachable/);
   assert.match(interactive, /"type":"tool_call","name":"register_tool"/);
   assert.doesNotMatch(interactive, /<action/);
   assert.doesNotMatch(unattended, /register_tool/);

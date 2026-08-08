@@ -67,14 +67,18 @@ export function buildSeatDisplayHistory(
     ? history
     : [...history, optimistic];
   const withoutOptimistic = history.filter(message => message.id !== optimistic.id);
+  // resume 开始后，服务端会先持久化 ask 的 tool result，再继续后续 ReAct。
+  // 此时一次迟到的 status reload 可能已经把“已回答 Ask”放进 history，
+  // runner 中又仍保留同一条乐观回答。无论历史卡尚未回答还是已经回答，
+  // 同一个问题的最新卡片都应由 runner 的即时状态接管，不能再追加第二张。
   const askIndex = withoutOptimistic.findLastIndex(message => message.blocks?.some(block => (
-    block.kind === 'ask' && !block.answered && block.question === answer.question
+    block.kind === 'ask' && block.question === answer.question
   )));
   if (askIndex < 0) return [...withoutOptimistic, optimistic];
   return withoutOptimistic.map((message, index) => index === askIndex ? {
     ...message,
     blocks: message.blocks?.map(block => (
-      block.kind === 'ask' && !block.answered && block.question === answer.question ? answer : block
+      block.kind === 'ask' && block.question === answer.question ? answer : block
     )),
   } : message);
 }

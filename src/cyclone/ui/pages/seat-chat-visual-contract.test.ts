@@ -4,9 +4,7 @@ import test from 'node:test';
 
 test('气旋工位使用气旋自己的轻量工具活动卡', () => {
   const source = fs.readFileSync('src/cyclone/ui/pages/CycloneBlockRows.tsx', 'utf8');
-  const start = source.indexOf('export function BlockRows');
-  const end = source.indexOf('function AssistantTextBubble', start);
-  const blockRows = start >= 0 && end > start ? source.slice(start, end) : '';
+  const blockRows = source.slice(source.indexOf('export function BlockRows'));
 
   assert.ok(blockRows, '应存在独立的 BlockRows 渲染入口');
   assert.match(blockRows, /CycloneToolActivityList/);
@@ -57,14 +55,26 @@ test('Ask 接续时隐藏旧的未回答卡，只保留历史中的单一卡片'
   assert.match(source, /pending && !runner && !hasUnansweredAsk\(visibleHistory\) && \(/);
 });
 
-test('气旋回复按季风语义先展示正文，再展示该轮工具', () => {
+test('气旋工位把历史和实时回复投影到同一个回合组件', () => {
   const source = fs.readFileSync('src/cyclone/ui/pages/SeatChat.tsx', 'utf8');
-  const start = source.indexOf('function DisplayRow');
-  const assistant = source.slice(source.indexOf('  return (', start));
-  const answerPosition = assistant.indexOf('msg.content &&');
-  const toolsPosition = assistant.indexOf('msg.blocks &&');
 
-  assert.ok(answerPosition >= 0 && toolsPosition > answerPosition, '正文必须位于该轮工具之前');
+  assert.match(source, /projectSeatTimeline\(visibleHistory\)/);
+  assert.match(source, /createLiveSeatTurn\(live\.segments, live\.reasoning\)/);
+  assert.match(source, /<SeatTurnCard/);
+  assert.doesNotMatch(source, /<LiveReplySegments/);
+});
+
+test('气旋工位回合用一个气泡承载工作过程和最终回答', () => {
+  const source = fs.readFileSync('src/cyclone/ui/pages/SeatTurnCard.tsx', 'utf8');
+
+  assert.match(source, /cyclone-seat-turn__bubble/);
+  assert.match(source, /SeatTurnWorklog/);
+  assert.match(source, /turn\.finalContent/);
+  assert.match(source, /turn\.actionMessage/);
+  assert.match(source, /streaming \|\| blocks\.some/);
+  assert.match(source, /aria-label="编辑最终回复"/);
+  assert.match(source, /aria-label="删除最终回复"/);
+  assert.doesNotMatch(source, /!msg\.content && actions/);
 });
 
 test('气旋系统工具使用本地语义气泡，普通工具仍走普通工具卡', () => {
@@ -80,5 +90,11 @@ test('工位 dispatch 状态优先关联原调用卡，仅为孤儿追加尾卡'
   const source = fs.readFileSync('src/cyclone/ui/pages/SeatChat.tsx', 'utf8');
 
   assert.match(source, /orphanedDispatches\.map\(item => <SeatOutboundDispatch/);
-  assert.match(source, /<LiveReplySegments[\s\S]*dispatches=\{dispatches\}/);
+  assert.match(source, /<SeatTurnCard turn=\{createLiveSeatTurn[\s\S]*dispatches=\{dispatches\}/);
+});
+
+test('历史 Ask 在统一回合内继续使用真实 resume 回调', () => {
+  const source = fs.readFileSync('src/cyclone/ui/pages/SeatChat.tsx', 'utf8');
+
+  assert.match(source, /<SeatTurnCard key=\{item\.turn\.id\}[\s\S]*onAskReply=\{answer => run\('resume', answer\)\}/);
 });

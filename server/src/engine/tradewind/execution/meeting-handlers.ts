@@ -27,7 +27,7 @@ import {
   runReActLoop,
   type LLMCaller,
   type ToolCaller,
-} from './react-loop';
+} from './tradewind-react-adapter';
 import { activeNodeRunners } from '../nodes/agent';
 import { runTradewindReActNative } from './native-adapter';
 import { buildVirtualToolDefs } from './virtual-tools';
@@ -211,7 +211,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       // toolCaller：双路径共用，contact 路由不变
       //
       // tool-call/tool-result 事件来源：
-      // - text 路径：由 runReActLoop 内部 emit（react-loop.ts），handleSpeak 在 onEvent 里翻译
+      // - text 路径：由 shared text loop emit，handleSpeak 在 onEvent 里翻译
       // - native 路径：runReActLoopNative 内部不发 tool-* 事件，需 toolCaller 自己 emit
       //
       // 为避免 text 路径下重复事件，emitToolEvents 仅在 native 路径下为 true。
@@ -295,7 +295,15 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         // ── text 路径（原有逻辑）──
         const llm: LLMCaller = {
           async call(msgs, _opts, onChunk, sig, onReasoning) {
-            return callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal: sig, onReasoning });
+            return callLLM({
+              dataDir,
+              fullModelKey: agent.model,
+              messages: msgs,
+              options: { temperature: agent.temperature ?? 0.7 },
+              onChunk,
+              signal: sig,
+              onReasoning,
+            });
           },
         };
 
@@ -303,6 +311,13 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           messages,
           llm,
           tools: toolCaller,
+          allowedTools: [
+            ...toolDefs,
+            ...buildVirtualToolDefs({
+              allowDelegate: false,
+              contactTargets: session.participants.filter(p => p.label !== label).map(p => p.label),
+            }),
+          ].map(tool => tool.name),
           maxTurns: 100,
           onEvent: (ev) => {
             if (ev.type === 'token') {

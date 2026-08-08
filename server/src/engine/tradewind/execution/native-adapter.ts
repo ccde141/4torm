@@ -6,7 +6,7 @@
  * - 调用 runReActLoopNative（core 循环，不含业务挂起语义）
  * - 信风不需要 onToolError hook（无 ask / 无挂起）
  *
- * 信风文本循环保留在 react-loop.ts（含 delegate nudge / reminder），native 路径独立。
+ * 信风文本协议适配保留在 tradewind-react-adapter.ts，native 路径独立。
  */
 
 import type { ContextMessage } from '../../shared/types';
@@ -17,8 +17,8 @@ import {
   type LLMCaller,
   type ToolCaller,
   type ReActLoopResult,
-} from '../../conversation/react-loop';
-import type { ToolCallRecord } from './react-loop';
+} from '../../shared/react/native-loop';
+import type { ToolCallRecord } from './tradewind-react-adapter';
 import type { NodeRunnerEvent } from './node-runner';
 
 export interface NativeAdapterParams {
@@ -31,7 +31,7 @@ export interface NativeAdapterParams {
   toolCaller: ToolCaller;
   onEvent?: (ev: NodeRunnerEvent) => void;
   signal?: AbortSignal;
-  /** 自动模式：显式终结工具门（传入则启用 complete_task 终结语义，见 conversation/react-loop.ts） */
+  /** 自动模式：显式终结工具门（传入则启用 shared native loop 的 completion 语义） */
   completion?: { tool: string };
 }
 

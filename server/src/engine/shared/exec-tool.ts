@@ -8,7 +8,6 @@
  * 各引擎（信风/对流/季风）统一调用此函数。
  */
 
-import { callMcpTool } from './mcp-manager';
 import { readToolBridgeResponse } from './tool-bridge-response';
 
 const TOOL_BRIDGE_URL = (process.env.TOOL_BRIDGE_URL || 'http://localhost:3001').replace(/\/+$/, '');
@@ -25,12 +24,28 @@ export interface ExecToolOpts {
   observation?: { scope: 'conversation' | 'cyclone'; ownerId: string };
 }
 
-export async function execToolUnified(opts: ExecToolOpts): Promise<string> {
+export interface ExecToolDeps {
+  callMcp: (tool: string, args: Record<string, string>) => Promise<string>;
+  fetcher: typeof fetch;
+}
+
+const defaultDeps: ExecToolDeps = {
+  callMcp: async (tool, args) => {
+    const { callMcpTool } = await import('./mcp-manager.js');
+    return callMcpTool(tool, args);
+  },
+  fetcher: fetch,
+};
+
+export async function execToolUnified(
+  opts: ExecToolOpts,
+  deps: ExecToolDeps = defaultDeps,
+): Promise<string> {
   const { tool, args, agentId, workspaceDir, sandboxLevel, signal, onMeta, observation } = opts;
 
   // MCP 工具：直接走 MCP client
   if (tool.startsWith('mcp:')) {
-    return callMcpTool(tool, args);
+    return deps.callMcp(tool, args);
   }
 
   // 本地工具：走 tool-bridge HTTP
@@ -40,7 +55,7 @@ export async function execToolUnified(opts: ExecToolOpts): Promise<string> {
   if (sandboxLevel) body.sandboxLevelOverride = sandboxLevel;
   if (observation) body.observation = observation;
 
-  const res = await fetch(url, {
+  const res = await deps.fetcher(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

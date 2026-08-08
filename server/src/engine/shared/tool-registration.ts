@@ -2,10 +2,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { atomicWriteFile } from './atomic-io.js';
 import type { ToolDef } from './tool-defs-loader.js';
+import type { ToolExecutionMode } from '../../tools/tool-definition.js';
 import { toolExecutorDir, toolRegistryFile } from '../../services/data-paths.js';
+import { FRAMEWORK_TOOLS } from '../../tools/framework/catalog.js';
 
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const RESERVED_NAMES = new Set([
+  ...FRAMEWORK_TOOLS.map(tool => tool.name),
   'ask', 'delegate', 'task_board', 'review_changes', 'register_tool',
   'list_agents', 'create_workflow', 'list_workflows', 'update_workflow', 'start_workflow',
   'create_automation', 'update_automation', 'list_automations',
@@ -19,6 +22,7 @@ export interface RegisteredToolDefinition {
   dangerous: boolean;
   executorType: 'custom';
   executorFile: string;
+  executionMode: ToolExecutionMode;
   parameters: Record<string, unknown>;
 }
 
@@ -57,6 +61,11 @@ function parseDangerous(value: unknown): boolean {
   if (value === true || value === 'true') return true;
   if (value === false || value === 'false') return false;
   throw new Error('dangerous 必须为 true 或 false');
+}
+
+function parseExecutionMode(value: unknown): ToolExecutionMode {
+  if (value === 'sync' || value === 'detachable') return value;
+  throw new Error('executionMode 必须为 sync 或 detachable');
 }
 
 function parseParameters(value: unknown): Record<string, unknown> {
@@ -133,6 +142,7 @@ export async function prepareToolRegistration(
       dangerous: parseDangerous(args.dangerous),
       executorType: 'custom',
       executorFile,
+      executionMode: parseExecutionMode(args.executionMode),
       parameters: parseParameters(args.parameters),
     },
   };
@@ -184,6 +194,7 @@ export function toolRegistrationArgs(proposal: ToolRegistrationProposal): Record
     name: proposal.tool.name,
     description: proposal.tool.description,
     dangerous: String(proposal.tool.dangerous),
+    executionMode: proposal.tool.executionMode,
     executorFile: proposal.tool.executorFile,
     parameters: JSON.stringify(proposal.tool.parameters),
   };
@@ -192,17 +203,18 @@ export function toolRegistrationArgs(proposal: ToolRegistrationProposal): Record
 export function buildRegisterToolDef(): ToolDef {
   return {
     name: 'register_tool',
-    description: '注册一个已经写好执行器的独立全局工具。调用后系统会向人类展示确认，确认前不会修改工具注册表。',
+    description: '注册一个已经写好执行器的独立全局工具。必须明确选择同步执行或允许后台化；调用后系统会向人类展示确认，确认前不会修改工具注册表。',
     parameters: {
       type: 'object',
       properties: {
         name: { type: 'string', description: '工具名称：小写字母、数字和下划线，以字母开头' },
         description: { type: 'string', description: '工具用途和适用场景' },
         dangerous: { type: 'string', description: "是否具有写入、删除或命令执行能力：'true' 或 'false'" },
+        executionMode: { type: 'string', description: "执行生命周期：'sync'=必须完成后继续；'detachable'=耗时任务可后台化。只有执行器响应 ctx.signal、可被安全终止且结果可稍后查询时才能选 detachable" },
         executorFile: { type: 'string', description: 'data/tools/executors/ 下不含 .js 的执行器文件名' },
         parameters: { type: 'string', description: '工具参数的 JSON Schema 对象，序列化为 JSON 字符串' },
       },
-      required: ['name', 'description', 'dangerous', 'executorFile', 'parameters'],
+      required: ['name', 'description', 'dangerous', 'executionMode', 'executorFile', 'parameters'],
     },
   };
 }

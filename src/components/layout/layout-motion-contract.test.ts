@@ -36,6 +36,18 @@ test('approved shared controls animate explicit properties only', () => {
   assert.doesNotMatch(global, /\.icon-add-btn\s*\{[\s\S]*?transition:\s*all/);
 });
 
+test('meeting assistant side panels use a role title without an Agent identity', () => {
+  const convection = read('src/convection/ui/pages/ConvectionPage.tsx');
+  const cyclone = read('src/cyclone/ui/pages/ChairDrawer.tsx');
+  const tradewind = read('src/tradewind/ui/meeting/MeetingPanel.tsx');
+
+  assert.match(convection, /conv__chair-name">会议助理 私聊/);
+  assert.doesNotMatch(convection, /getName\(activeSession\.chairAgentId\)/);
+  assert.match(cyclone, />\s*会议助理 私聊\s*</);
+  assert.doesNotMatch(cyclone, /const chairName/);
+  assert.match(tradewind, /tw-meeting-panel__section-title">会议助理 私聊/);
+});
+
 test('shared icon controls expose Chinese accessible names', () => {
   const header = read('src/components/layout/Header.tsx');
   const chat = read('src/components/chat/ChatPage.tsx');
@@ -86,5 +98,5 @@ test('approved modal controls avoid broad transitions and name icon actions', ()
   assert.match(read('src/components/agents/AgentConfigModal.tsx'), /aria-label="关闭 Agent 配置"/);
   assert.match(read('src/components/agents/MemoryPanel.tsx'), /aria-label="关闭长期记忆"/);
   assert.match(read('src/components/chat/MessageItem.tsx'), /aria-label="编辑消息"/);
-  assert.match(read('src/cyclone/ui/pages/ChairDrawer.tsx'), /aria-label="收起会长私聊"/);
+  assert.match(read('src/cyclone/ui/pages/ChairDrawer.tsx'), /aria-label="收起会议助理私聊"/);
 });

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { loadAgentToolDefs } from './tool-defs-loader.js';
+import { FRAMEWORK_TOOLS } from '../../tools/framework/catalog.js';
 
 const builtin = {
   name: 'read_file',
@@ -44,7 +45,7 @@ async function main(): Promise<void> {
   {
     const dataDir = await createDataDir();
     const tools = await loadAgentToolDefs(dataDir, [], [], 'all');
-    assert.deepEqual(tools.map(tool => tool.name), ['read_file', 'use_skill']);
+    assert.deepEqual(tools.map(tool => tool.name), FRAMEWORK_TOOLS.map(tool => tool.name));
   }
 
   {

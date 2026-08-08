@@ -170,7 +170,7 @@ export default function AgentConfigModal(props: Props) {
 
           {tab === '技能' && (
             <div className="config-field" style={{ marginTop: 'var(--space-4)' }}>
-              <label className="config-label">已安装技能<span className="config-hint">创建 Agent 时默认全部启用，可按需取消。技能内容由 use_skill 按需加载，不会长期占用上下文</span></label>
+              <label className="config-label">已安装技能<span className="config-hint">创建 Agent 时默认全部启用，可按需取消。技能内容由 use_skill 按需加载，不会议助理期占用上下文</span></label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: 'var(--space-3)' }}>
                 {allSkills.length === 0 && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>暂无技能 — 去「技能」页创建或安装</span>}
                 {allSkills.map(s => {

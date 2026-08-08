@@ -45,7 +45,7 @@ export interface MeetingStatus {
   nodeId: string;
   round: number;
   busy: boolean;
-  /** opening=入会摘要；discussion=讨论；ending=会长整理纪要；ended=会议结束 */
+  /** opening=入会摘要；discussion=讨论；ending=会议助理整理纪要；ended=会议结束 */
   phase?: 'opening' | 'discussion' | 'ending' | 'ended';
   messageCount: number;
   participants: MeetingParticipant[];
@@ -96,7 +96,7 @@ export async function sendSpeak(nodeId: string, message: string, signal?: AbortS
   return { ok: false, error: text || `HTTP ${res.status}` };
 }
 
-/** 发送会长私聊（fire-and-forget，事件通过 /events 流返回） */
+/** 发送会议助理私聊（fire-and-forget，事件通过 /events 流返回） */
 export async function sendChair(nodeId: string, message: string, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`/api/tradewind/meeting/${nodeId}/chair`, {
     method: 'POST',
@@ -109,7 +109,7 @@ export async function sendChair(nodeId: string, message: string, signal?: AbortS
   return { ok: false, error: text || `HTTP ${res.status}` };
 }
 
-/** 人类结束会议 → 会长生成纪要 */
+/** 人类结束会议 → 会议助理生成纪要 */
 export async function endMeeting(nodeId: string): Promise<{ minutes: string }> {
   const res = await fetch(`/api/tradewind/meeting/${nodeId}/end`, {
     method: 'POST',

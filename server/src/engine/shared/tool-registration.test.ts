@@ -29,6 +29,7 @@ function args(name: string): Record<string, string> {
     name,
     description: `${name} description`,
     dangerous: 'false',
+    executionMode: 'sync',
     executorFile: name,
     parameters: JSON.stringify({
       type: 'object',
@@ -84,6 +85,19 @@ test('registration approval accepts explicit confirmation only', () => {
   assert.equal(isToolRegistrationApproved('确认'), true);
   assert.equal(isToolRegistrationApproved('取消'), false);
   assert.equal(isToolRegistrationApproved('以后再说'), false);
+});
+
+test('registration requires an explicit valid execution lifecycle', async (t) => {
+  const dataDir = await createDataDir();
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await writeExecutor(dataDir, 'lifecycle_tool');
+  const missing = args('lifecycle_tool');
+  delete missing.executionMode;
+  await assert.rejects(() => prepareToolRegistration(dataDir, missing), /executionMode/);
+  await assert.rejects(() => prepareToolRegistration(dataDir, { ...args('lifecycle_tool'), executionMode: 'automatic' }), /executionMode/);
+
+  const proposal = await prepareToolRegistration(dataDir, { ...args('lifecycle_tool'), executionMode: 'detachable' });
+  assert.equal(proposal.tool.executionMode, 'detachable');
 });
 
 test('registration resolution leaves cancellation untouched and commits the original proposal', async (t) => {

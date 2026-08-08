@@ -50,12 +50,17 @@ const executionSurfaceRegistry = createSurfaceRegistry({ WebContentsView, getWin
 /** @type {import('node:child_process').ChildProcess | null} 本进程托管的 Fastify 子进程 */
 let serverProc = null;
 let desktopBridgeServer = null;
+let desktopBridgeConfig = null;
 
 /** 拉起 Fastify，并把桌面浏览器桥接能力限定为此子进程可见。 */
 function startServer(bridge) {
+  if (serverProc) return;
   const serverDir = path.join(__dirname, '..', 'server');
-  const serverArgs = isProd ? ['tsx', 'src/index.ts'] : ['tsx', 'watch', 'src/index.ts'];
-  serverProc = spawn('npx', serverArgs, {
+  const tsxCli = path.join(__dirname, '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const nodeRuntime = process.env.npm_node_execpath || process.execPath;
+  // Electron 自己管理服务端生命周期，不再额外套 npx/shell/watch 子进程树。
+  // 这样关闭窗口时 kill 的就是实际服务进程，也不会留下下一次启动误连的残留后端。
+  serverProc = spawn(nodeRuntime, [tsxCli, 'src/index.ts'], {
     cwd: serverDir,
     env: {
       ...process.env,
@@ -64,15 +69,34 @@ function startServer(bridge) {
       PORT: String(PROD_PORT),
       FOURTORM_DESKTOP_BRIDGE: bridge.endpoint,
       FOURTORM_DESKTOP_BROWSER_TOKEN: bridge.token,
+      ELECTRON_RUN_AS_NODE: '1',
     },
     stdio: 'inherit',
     windowsHide: true,
-    shell: process.platform === 'win32', // Windows 上 npx 是 .cmd，需 shell
+    shell: false,
   });
   serverProc.on('exit', (code) => {
     console.log(`[electron] server 进程退出 code=${code}`);
     serverProc = null;
   });
+}
+
+function isServerReady(url) {
+  return new Promise((resolve) => {
+    const req = http.get(url + '/api/health', (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.setTimeout(1200, () => { req.destroy(); resolve(false); });
+  });
+}
+
+async function ensureServerReady() {
+  if (await isServerReady(SERVER_URL)) return;
+  if (!desktopBridgeConfig) throw new Error('桌面浏览器桥接尚未初始化');
+  startServer(desktopBridgeConfig);
+  await waitForServer(SERVER_URL);
 }
 
 async function startDesktopBrowserBridge() {
@@ -189,9 +213,22 @@ function parseSurfaceLease(value) {
 }
 
 if (ownsSingleInstance) {
-  app.on('second-instance', () => focusMainWindow());
+  app.on('second-instance', () => {
+    void (async () => {
+      const recovered = !(await isServerReady(SERVER_URL));
+      try {
+        await ensureServerReady();
+        if (!mainWindow) createWindow();
+        else if (recovered) mainWindow.webContents.reload();
+      } catch (error) {
+        console.error('[electron] 重新唤醒时恢复 server 失败：', error.message);
+      }
+      focusMainWindow();
+    })();
+  });
   app.whenReady().then(async () => {
     const bridge = await startDesktopBrowserBridge();
+    desktopBridgeConfig = bridge;
     startServer(bridge);
     try {
       await waitForServer(SERVER_URL);
@@ -200,8 +237,12 @@ if (ownsSingleInstance) {
     }
     createWindow();
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
-      else focusMainWindow();
+      void ensureServerReady()
+        .then(() => {
+          if (BrowserWindow.getAllWindows().length === 0) createWindow();
+          else focusMainWindow();
+        })
+        .catch(error => console.error('[electron] 激活时恢复 server 失败：', error.message));
     });
   });
 

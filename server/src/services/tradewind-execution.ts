@@ -9,7 +9,7 @@ import { AgentExecutor } from '../engine/tradewind/nodes/agent.js';
 import { MeetingExecutor } from '../engine/tradewind/nodes/meeting.js';
 import { NoteExecutor } from '../engine/tradewind/nodes/note.js';
 import { HumanGateExecutor } from '../engine/tradewind/nodes/human-gate.js';
-import { autoProfileToLoopConfig, findProfile, loadProfiles } from '../engine/shared/profile-store.js';
+import { autoProfileToLoopConfig, findProfile, loadProfiles } from '../engine/tradewind/foundation/profile-store.js';
 import { pushExecutionLifecycle } from '../engine/tradewind/streaming/unified-stream.js';
 import { tradewindWorkflowDir } from './data-paths.js';
 

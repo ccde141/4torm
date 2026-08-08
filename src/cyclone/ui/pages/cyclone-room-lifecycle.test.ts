@@ -21,14 +21,14 @@ test('服务端确认删除后才清理双会话运行态与当前视图', () =>
   assert.match(handler, /setView\(null\)/);
 });
 
-test('运行中的公共会话、会长私聊或异步派发禁止触发删除', () => {
+test('运行中的公共会话、会议助理私聊或异步派发禁止触发删除', () => {
   assert.match(page, /roomRunners\.getRunner\(rm\.id\)\?\.streaming/);
   assert.match(page, /seatRunners\.getRunner\(chairStreamKey\(rm\.id\)\)\?\.streaming/);
   assert.match(page, /item\.status === 'awaiting_human'/);
   assert.match(page, /disabled=\{running\}/);
 });
 
-test('删除会长会话时即使没有 runner 也会清理队列与草稿', () => {
+test('删除会议助理会话时即使没有 runner 也会清理队列与草稿', () => {
   const start = seatRunners.indexOf('const kill = useCallback');
   const block = seatRunners.slice(start, seatRunners.indexOf('/** SeatChat reload', start));
   const earlyReturn = block.indexOf('if (!r) return');

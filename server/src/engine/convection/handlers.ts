@@ -25,13 +25,17 @@ import {
   runConvectionReAct,
   type ToolCallRecord,
   type ConvectionReActEvent,
-} from './react-loop';
+} from './convection-react-adapter';
 import { buildNativeConvectionProtocol, runConvectionReActNative } from './native-adapter';
 import { appendConvectionReasoning, buildConvectionMessage } from './convection-reasoning';
 import {
   buildConvectionChairPrompt,
   buildConvectionParticipantMeta,
 } from './prompt-profiles.js';
+import {
+  buildConvectionMemoryPrompt,
+  withConvectionMemoryTools,
+} from './convection-memory.js';
 
 const LLM_TIMEOUT_MS = 3_600_000;
 const HEARTBEAT_INTERVAL_MS = 5_000;
@@ -88,7 +92,9 @@ async function buildAgentMessages(
   native?: boolean,
 ): Promise<{ messages: ContextMessage[]; agent: LoadedAgent; toolDefs: ToolDef[] }> {
   const agent = await getAgent(dataDir, agentId);
-  const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode);
+  const toolDefs = withConvectionMemoryTools(
+    await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode),
+  );
   const wsPath = sessionWorkspace(dataDir, session.id);
   const projectDir = path.resolve(dataDir, '..');
 
@@ -117,12 +123,21 @@ async function buildAgentMessages(
     if (baseline.trim()) parts.push(baseline.trim());
   } catch { /* 文件不存在时跳过 */ }
 
-  // 5. 协议段
+  // 5. 当前参与 Agent 的私有长期记忆；按会议话题和最近人类输入相关召回。
+  const latestHuman = [...session.publicMessages].reverse().find(message => message.speaker === '人类');
+  const memorySection = await buildConvectionMemoryPrompt(
+    dataDir,
+    agent.id,
+    [session.topic, latestHuman?.content].filter(Boolean).join('\n'),
+  );
+  if (memorySection.trim()) parts.push(memorySection.trim());
+
+  // 6. 协议段
   if (toolDefs.length > 0) {
     parts.push(native ? buildNativeConvectionProtocol(toolDefs) : buildSystemPrompt(toolDefs));
   }
 
-  // 6. 场景上下文
+  // 7. 场景上下文
   parts.push(`## 当前场景\n你正以「${agent.name}」的身份参加一场多人对话。\n话题：${session.topic}\n请基于对话上下文回应人类的发言。简洁、有观点、有建设性。\n工具调用过程不会展示给其他参与者，只有最终回答会被公开。\n注意：历史消息中的 \`[名字]\` 前缀是系统自动添加的标记，你不需要在自己的回复中加上你的名字或任何类似前缀。`);
 
   const system: ContextMessage = { role: 'system', content: parts.join('\n\n') };
@@ -188,7 +203,7 @@ export async function handleSpeak(
         });
       } else {
         // JSON 文本工具模式
-        const { messages, agent: loadedAgent } = await buildAgentMessages(dataDir, session, agentId, false);
+        const { messages, agent: loadedAgent, toolDefs } = await buildAgentMessages(dataDir, session, agentId, false);
         return await runConvectionReAct({
           dataDir,
           model: loadedAgent.model,
@@ -197,6 +212,7 @@ export async function handleSpeak(
           sessionId: session.id,
           label: loadedAgent.name,
           messages,
+          allowedTools: toolDefs.map(tool => tool.name),
           onEvent: (ev) => {
             if (ev.type === 'reasoning') reasoningContent = appendConvectionReasoning(reasoningContent, ev.chunk!);
             if (!onEvent) return;
@@ -293,7 +309,6 @@ export async function handleChair(
     role: 'system',
     content: buildConvectionChairPrompt({
       chairName: agent.name,
-      rolePrompt: agent.rolePrompt,
       topic: session.topic,
       publicContext: snapshot,
     }),
@@ -336,7 +351,7 @@ export async function handleChair(
     clearTimeout(chairTimer);
     signal?.removeEventListener('abort', onAbort);
     const msg = abortCtrl.signal.aborted
-      ? `会长 LLM 响应超时（${LLM_TIMEOUT_MS / 1000}s），已中止`
+      ? `会议助理 LLM 响应超时（${LLM_TIMEOUT_MS / 1000}s），已中止`
       : (e as Error).message;
     onEvent?.({ type: 'error', message: msg });
     return;

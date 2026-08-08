@@ -18,12 +18,14 @@ function buildRegistrationStep(options: SelfManagementOptions): string {
     return '4. 当前入口不提供独立全局工具注册；可以完成执行器和定义草稿，交由季风会话或气旋工位私聊注册';
   }
   if (options.native) {
-    return `4. 调用 \`register_tool\` 提交工具名称、描述、危险性、执行器文件名和参数 JSON Schema
-5. 系统校验通过后会向人类显示「注册 / 取消」，确认前不会修改全局注册表`;
+    return `4. 判断执行生命周期：默认选 \`sync\`；只有耗时、可安全中止、响应 \`ctx.signal\` 且允许稍后取结果的执行器才选 \`detachable\`
+5. 调用 \`register_tool\` 提交工具名称、描述、危险性、executionMode、执行器文件名和参数 JSON Schema
+6. 系统校验通过后会向人类显示「注册 / 取消」，确认前不会修改全局注册表`;
   }
-  return `4. 调用 \`register_tool\` 提交工具定义，例如：
-\`{"type":"tool_call","name":"register_tool","arguments":{"name":"my_tool","description":"用途","dangerous":"false","executorFile":"my_tool","parameters":"{\\"type\\":\\"object\\",\\"properties\\":{}}"}}\`
-5. 系统校验通过后会向人类显示「注册 / 取消」，确认前不会修改全局注册表`;
+  return `4. 判断执行生命周期：默认选 \`sync\`；只有耗时、可安全中止、响应 \`ctx.signal\` 且允许稍后取结果的执行器才选 \`detachable\`
+5. 调用 \`register_tool\` 提交工具定义，例如：
+\`{"type":"tool_call","name":"register_tool","arguments":{"name":"my_tool","description":"用途","dangerous":"false","executionMode":"sync","executorFile":"my_tool","parameters":"{\\"type\\":\\"object\\",\\"properties\\":{}}"}}\`
+6. 系统校验通过后会向人类显示「注册 / 取消」，确认前不会修改全局注册表`;
 }
 
 export function buildSelfManagementSection(options: SelfManagementOptions = {}): string {
@@ -33,18 +35,20 @@ export function buildSelfManagementSection(options: SelfManagementOptions = {}):
 你可以查看框架内已注册的能力，也能为自己创建新工具和新技能。详细指南在 \`docs/extend/\` 下。
 
 ### 查看当前已注册的能力
-- 工具：读 \`data/tools/registry.json\`（定义）；执行器在 \`data/tools/executors/*.js\`
+- 框架工具：固定清单在 \`server/src/tools/framework/catalog.json\`，只读且不能被用户数据覆盖
+- 自定义工具：定义在 \`data/tools/registry.json\`；执行器在 \`data/tools/executors/*.js\`
 - 技能：用 list_directory 列 \`data/skills/\`；各技能正文在 \`data/skills/{名称}/SKILL.md\`
 - MCP：读 \`data/mcp/servers.json\`；其工具以 \`mcp:服务名:工具名\` 注入，用 \`mcp:服务名:*\` 通配引用
 
 ### 创建新工具（Tool）
 详细参考 \`docs/extend/tools.md\`，简要步骤：
 1. 用 list_directory 探索项目结构，确认 \`data/tools/\` 目录存在
-2. 读取 \`data/tools/registry.json\` 查看已有工具定义（JSON 数组）
+2. 读取 \`data/tools/registry.json\` 查看已有自定义工具定义（JSON 数组）
 3. 创建执行器文件 \`data/tools/executors/{tool名称}.js\`：
    - 格式: \`export default async function(args, ctx) { ... }\`
    - \`args\`: 工具调用参数字典
    - \`ctx\`: { dataDir, workspaceDir, projectDir, sandboxLevel }
+   - 若选择 \`detachable\`，执行器必须监听 \`ctx.signal\`，并通过 \`ctx.onOutput?.('stdout'|'stderr', text)\` 报告过程；不满足时必须选择 \`sync\`
 ${buildRegistrationStep(options)}
 
 ### 创建新技能（Skill）

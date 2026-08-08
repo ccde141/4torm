@@ -3,7 +3,7 @@
  *
  * 功能：建/选工作室 → 加工位(绑 agent + 角色提示词) → 与工位一对一私聊。
  * 支持 ask 挂起：工位提问时显示输入框，回答后 resume。
- * 管理工作室、工位、群聊、公告板和会长私聊。
+ * 管理工作室、工位、群聊、公告板和会议助理私聊。
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -49,7 +49,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   const [, setActiveSeatId] = useState<string | null>(null);
   const [rooms, setRooms] = useState<RoomLite[]>([]);
   const [chairAgentId, setChairAgentId] = useState<string | null>(null);
-  /** 会长私聊抽屉是否展开（常驻右侧，独立于主区 view） */
+  /** 会议助理私聊抽屉是否展开（常驻右侧，独立于主区 view） */
   const [chairOpen, setChairOpen] = useState(false);
   const [, forceChairRunTick] = useState(0);
   /** 工作室公告板条目（工作室级，全体工位可见）—— 作为工作室主区默认页 */
@@ -65,7 +65,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   >(null);
   const viewRef = useRef(view);
   useEffect(() => { viewRef.current = view; }, [view]);
-  /** 当前正在查看的会议（room）id —— 会长私聊绑定到它，换会议即换会长上下文 */
+  /** 当前正在查看的会议（room）id —— 会议助理私聊绑定到它，换会议即换会议助理上下文 */
   const activeRoomId = view?.kind === 'room' ? view.id : null;
 
   const refreshAgents = useCallback(async () => { try { setAgents(await getAgents()); } catch (e) { console.error('[cyclone] 加载 agents 失败', e); } }, []);
@@ -124,7 +124,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     prevViewRef.current = cur;
   }, [view, seatRunners]);
 
-  // 会长抽屉收起 / 切会议 → 该会议的会长流转后台（不掐流，注册表续跑，切回恢复）
+  // 会议助理抽屉收起 / 切会议 → 该会议的会议助理流转后台（不掐流，注册表续跑，切回恢复）
   const prevChairRoomRef = useRef<string | null>(null);
   useEffect(() => {
     const cur = (chairOpen && activeRoomId) ? activeRoomId : null;
@@ -134,21 +134,21 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     prevChairRoomRef.current = cur;
   }, [chairOpen, activeRoomId, seatRunners]);
 
-  // 切换工作室时关上会长抽屉（会长随会议而设）
+  // 切换工作室时关上会议助理抽屉（会议助理随会议而设）
   const prevWidRef = useRef<string | null>(null);
   useEffect(() => {
     if (prevWidRef.current && prevWidRef.current !== activeWid) setChairOpen(false);
     prevWidRef.current = activeWid;
   }, [activeWid]);
 
-  /** 设置 / 更换 / 清空会长（建后也能改，对齐对流配置栏） */
+  /** 设置 / 更换 / 清空会议助理（建后也能改，对齐对流配置栏） */
   const setChair = useCallback(async (agentId: string) => {
     if (!activeWid) return;
     const r = await fetch(`/api/cyclone/workshop/${activeWid}/set-chair`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chairAgentId: agentId }),
     });
-    if (!r.ok) { alert(await readErrorMessage(r, '设置会长失败')); return; }
+    if (!r.ok) { alert(await readErrorMessage(r, '设置会议助理失败')); return; }
     setChairAgentId(agentId || null);
     loadWorkshop(activeWid);
   }, [activeWid, loadWorkshop]);
@@ -172,7 +172,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
 
   async function deleteWorkshop(wid: string, title: string) {
     if (!(await confirm({ title: `删除工作室「${title}」？`, message: '工位、群聊及全部会话将一并删除，不可恢复。', confirmText: '删除', danger: true }))) return;
-    // 删的是当前工作室 → 掐掉其各会议的会长流（仅当前工作室的 rooms 在内存里可知）
+    // 删的是当前工作室 → 掐掉其各会议的会议助理流（仅当前工作室的 rooms 在内存里可知）
     if (activeWid === wid) rooms.forEach(rm => seatRunners.kill(wid, chairStreamKey(rm.id)));
     const r = await fetch(`/api/cyclone/workshop/${wid}/delete`, { method: 'POST' });
     if (!r.ok) { alert(await readErrorMessage(r, '删除工作室失败')); return; }
@@ -236,7 +236,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     if (!activeWid) return;
     if (!(await confirm({
       title: `删除群聊「${title}」？`,
-      message: '公共会议、会长私聊及该群聊的异步派发记录将一并删除，不可恢复。',
+      message: '公共会议、会议助理私聊及该群聊的异步派发记录将一并删除，不可恢复。',
       confirmText: '删除', danger: true,
     }))) return;
     const workshopId = activeWid;
@@ -268,18 +268,13 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     });
     if (!r.ok) { alert(await readErrorMessage(r, '创建群聊失败')); return; }
     const rm = await r.json();
-    // 跑入会发言（若有非 none 行为）。逐条流式落库，等整体结束再进入群聊。
-    const needIntro = cfg.intros.some(i => i.behavior !== 'none');
-    if (needIntro) {
-      try {
-        await fetch(`/api/cyclone/workshop/${activeWid}/room/${rm.id}/intro`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ intros: cfg.intros }),
-        });
-      } catch (e) { console.warn('[cyclone] 入会发言失败，已继续进入群聊', e); }
-    }
     await loadWorkshop(activeWid);
     setView({ kind: 'room', id: rm.id });
+    // 入会发言立即进入群聊流注册表：侧栏显示运行中，房间内逐字展示。
+    const needIntro = cfg.intros.some(i => i.behavior !== 'none');
+    if (needIntro) {
+      roomRunners.startIntro(activeWid, rm.id, cfg.intros);
+    }
   }
 
   if (!active) return null;
@@ -412,7 +407,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
         )}
       </div>
 
-      {/* 右：会长私聊抽屉（可折叠；会长随会议而设，仅进入某群聊时出现，按 room 隔离不串台） */}
+      {/* 右：会议助理私聊抽屉（可折叠；会议助理随会议而设，仅进入某群聊时出现，按 room 隔离不串台） */}
       {activeWid && activeRoomId && (
         <ChairDrawer
           workshopId={activeWid}

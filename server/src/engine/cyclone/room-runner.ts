@@ -16,7 +16,8 @@ import { resolveNativeMode } from '../shared/llm-bridge';
 import { loadAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execToolUnified } from '../shared/exec-tool';
-import { runReActLoop, runReActLoopNative, type ToolCaller } from './react-loop';
+import { runReActLoopNative, type ToolCaller } from '../shared/react/native-loop';
+import { runReActLoop } from '../shared/react/text-loop';
 import { buildSeatRoomSystemPrompt } from './seat-prompt';
 import { execBulletin, readBulletinSync } from './bulletin';
 import { buildSeatVirtualToolDefs } from './virtual-tools';
@@ -210,6 +211,7 @@ async function runSeatInRoom(
       })
     : await runReActLoop({
         messages, llm, tools: toolCaller,
+        allowedTools: nativeToolDefs.map(tool => tool.name),
         onEvent: (ev) => {
           if (ev.type === 'reasoning') reasoningAcc += ev.chunk;
           const progress = toRoomProgressEvent(seat.title, ev);

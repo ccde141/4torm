@@ -10,9 +10,10 @@ test('runtime no longer exposes legacy XML answer cleaners', () => {
   assert.equal(fs.existsSync(path.join(engineDir, 'shared/answer-extractor.ts')), false);
 
   for (const relativePath of [
-    'conversation/react-loop.ts',
-    'cyclone/react-loop.ts',
-    'tradewind/execution/react-loop.ts',
+    'shared/react/native-loop.ts',
+    'shared/react/text-loop.ts',
+    'convection/convection-react-adapter.ts',
+    'tradewind/execution/tradewind-react-adapter.ts',
   ]) {
     const source = fs.readFileSync(path.join(engineDir, relativePath), 'utf8');
     assert.doesNotMatch(source, /function stripInternalTags/);

@@ -296,7 +296,7 @@ test('气旋文档说明正式会议设置与成员生命周期边界', async ()
   assert.match(cyclone, /群聊右上角的「会议设置」/);
   assert.match(cyclone, /「请离会议」只会将工位移出当前群聊/);
   assert.match(cyclone, /成员已加入，但入会发言失败/);
-  assert.match(cyclone, /公共会议、会长私聊或当前群聊的异步派发仍在处理/);
+  assert.match(cyclone, /公共会议、会议助理私聊或当前群聊的异步派发仍在处理/);
 });
 
 test('信风文档说明出口全量交接与会议双会话形态', async () => {
@@ -306,8 +306,8 @@ test('信风文档说明出口全量交接与会议双会话形态', async () =>
   );
 
   assert.match(tradewind, /等待信封全量交接/);
-  assert.match(tradewind, /浮动卡片左侧提供公共会议与会长私聊的切换入口/);
-  assert.match(tradewind, /会长正在整理会议纪要/);
+  assert.match(tradewind, /浮动卡片左侧提供公共会议与会议助理私聊的切换入口/);
+  assert.match(tradewind, /会议助理正在整理会议纪要/);
   assert.match(tradewind, /不能被当作普通回复直接丢弃/);
 });
 

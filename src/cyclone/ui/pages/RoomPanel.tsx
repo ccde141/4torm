@@ -173,7 +173,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
 
   async function resetRoomContext(mode: 'clear' | 'summary', scope: 'public' | 'both' = 'public') {
     if (streaming) return;
-    const label = scope === 'both' ? '群聊与会长私聊' : '群聊公共上下文';
+    const label = scope === 'both' ? '群聊与会议助理私聊' : '群聊公共上下文';
     if (!(await confirm({ title: `${mode === 'summary' ? '归档并摘要重置' : '归档并清空'}当前${label}？`, message: '共享工作区文件不会被删除。', confirmText: mode === 'summary' ? '归档重置' : '归档清空', danger: true }))) return;
     await postAction('reset-context', { mode, scope }, '重置群聊上下文失败');
   }

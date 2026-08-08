@@ -18,12 +18,12 @@ import type { SandboxLevel } from '../../shared/sandbox-prompt';
 import { atomicWriteFile } from '../../shared/atomic-io';
 import { callLLM } from '../../shared/llm-bridge';
 import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
-import { readToolBridgeResponse } from '../../shared/tool-bridge-response';
+import { execToolUnified } from '../../shared/exec-tool';
 import {
   runReActLoop,
   type LLMCaller,
   type ToolCaller,
-} from './react-loop';
+} from './tradewind-react-adapter';
 import { runTradewindReActNative } from './native-adapter';
 import { buildVirtualToolDefs, buildEnvelopeToolDefs } from './virtual-tools';
 import { EnvelopeDraft, execEnvelopeTool, ENVELOPE_TOOL_NAMES, COMPLETE_TASK_TOOL, isEnvelopeRound, classifyRoundInterrupt } from './envelope-draft';
@@ -501,15 +501,33 @@ export class NodeRunner {
 
       // 文本路径（保持不变）
       const llm: LLMCaller = {
-        async call(msgs, _options, onChunk, sig) {
-          return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig });
+        async call(msgs, _options, onChunk, sig, onReasoning) {
+          return callLLM({
+            dataDir,
+            fullModelKey: model,
+            messages: msgs,
+            options: { temperature },
+            onChunk,
+            signal: sig,
+            onReasoning,
+          });
         },
       };
 
       return await runReActLoop({
         messages: [...this.messages],
         llm,
-        tools: toolDefs.length > 0 ? toolCaller : undefined,
+        // 即使 Agent 没配置普通工具，信风仍有记忆、contact 和信封工具。
+        tools: toolCaller,
+        allowedTools: [
+          ...toolDefs,
+          ...buildVirtualToolDefs({
+            allowDelegate: this.opts.allowDelegate ?? true,
+            contactTargets: this.opts.contactTargets ?? [],
+          }),
+          ...buildMemoryToolDefs(),
+          ...(envelopeRound ? buildEnvelopeToolDefs() : []),
+        ].map(tool => tool.name),
         onEvent: (ev) => {
           if (ev.type === 'token') emit({ type: 'token', content: ev.chunk });
           if (ev.type === 'reasoning') emit({ type: 'reasoning', content: ev.chunk });
@@ -523,20 +541,14 @@ export class NodeRunner {
 
   /** 执行普通工具 */
   private async execTool(tool: string, args: Record<string, string>, onMeta?: (meta: unknown) => void): Promise<string> {
-    const url = (process.env.TOOL_BRIDGE_URL || 'http://localhost:3001').replace(/\/+$/, '') + '/api/tools/exec';
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        tool, args,
-        agentId: this.opts.agentId,
-        workspaceDirOverride: this.opts.workspace,
-        sandboxLevelOverride: this.opts.sandboxLevel,
-      }),
+    return execToolUnified({
+      tool,
+      args,
+      agentId: this.opts.agentId,
+      workspaceDir: this.opts.workspace,
+      sandboxLevel: this.opts.sandboxLevel,
       signal: this.opts.signal,
+      onMeta,
     });
-    const data = await readToolBridgeResponse(res);
-    if (data.meta !== undefined && data.meta !== null) onMeta?.(data.meta);
-    return data.result;
   }
 }

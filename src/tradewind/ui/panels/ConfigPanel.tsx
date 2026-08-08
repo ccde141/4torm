@@ -251,13 +251,13 @@ function MeetingFields({ config, onChange, nodes, currentNodeId }: MeetingFields
   return (
     <>
       <div className="tw-config__field">
-        <label className="tw-config__label">会长</label>
+        <label className="tw-config__label">会议助理</label>
         <select
           className="tw-config__select"
           value={chairAgentId}
           onChange={(e) => onChange('chairAgentId', e.target.value)}
         >
-          <option value="">-- 选择会长 --</option>
+          <option value="">-- 选择会议助理 --</option>
           {agents.map(a => (
             <option key={a.id} value={a.id}>{a.name}</option>
           ))}

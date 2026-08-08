@@ -5,7 +5,7 @@ import { isActiveObservationStatus } from './visual-observation-client';
 
 type Scope = 'conversation' | 'cyclone';
 
-export default function NativeObservationView({ scope, ownerId, observationId, onBack }: { scope: Scope; ownerId: string; observationId: string; onBack: () => void }) {
+export default function NativeObservationView({ scope, ownerId, observationId, onBack, suspended = false }: { scope: Scope; ownerId: string; observationId: string; onBack: () => void; suspended?: boolean }) {
   const [surfaceError, setSurfaceError] = useState('');
   const [surfaceReady, setSurfaceReady] = useState(false);
   const [surfaceAttempt, setSurfaceAttempt] = useState(0);
@@ -20,7 +20,7 @@ export default function NativeObservationView({ scope, ownerId, observationId, o
   const presentation = currentItem?.viewerState?.presentation;
   // The detail poll can reach a terminal state before the parent observation
   // snapshot refreshes. Drop visibility here too so the effect cancels retries.
-  const nativeSurface = Boolean(window.desktop && currentItem && isActiveObservationStatus(currentItem.status) && presentation !== 'hidden' && presentation !== 'external-visible');
+  const nativeSurface = Boolean(!suspended && window.desktop && currentItem && isActiveObservationStatus(currentItem.status) && presentation !== 'hidden' && presentation !== 'external-visible');
   const terminalError = currentItem?.status === 'failed' || currentItem?.status === 'crashed' ? currentItem.error || '浏览器运行失败' : '';
   const fatalError = surfaceError || terminalError || observationError;
   const surfacePhase: 'opening' | 'ready' | 'failed' = surfaceReady ? 'ready' : fatalError ? 'failed' : 'opening';

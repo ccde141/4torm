@@ -1,45 +1,36 @@
 # 桌面化 · Electron
 
-4torm 提供可选的 **Electron 桌面外壳**:复用同一套 Web 应用,额外解锁浏览器拿不到的能力——最关键的是**拖入文件的真实绝对路径**。不想用桌面端时,浏览器形态完全照旧。
+4torm 可以在浏览器中运行，也可以使用 Electron 桌面端。两种形态使用相同的界面、功能区和运行数据；桌面端额外提供本地文件路径和原生执行视窗能力。
 
-## 桌面端解锁了什么
+## 启动桌面端
 
-浏览器沙箱下,拖入图片等本地文件**拿不到真实路径**、也无法访问磁盘,只能退而求其次走 base64。桌面外壳通过 `preload` 暴露 `webUtils.getPathForFile`,把拖入文件以**真实路径**交给 Agent(季风 / 对流 / 工作室均已接入);浏览器下自动回退到 base64,同一套界面两种形态无感切换。
-
-## 运行
+桌面开发模式：
 
 ```bash
-# 桌面开发:服务端 + Vite + Electron 窗口,带 HMR
 npm run electron:dev
-
-# 桌面生产:主进程自动拉起自托管服务,起来后再开窗
-npm run build && npm run electron:prod
 ```
 
-## 架构:HTTP-on-localhost
+构建后运行桌面生产模式：
 
-加壳即可,**不改动任何业务代码 / Fastify 路由 / `/api`**。桌面端与浏览器端跑的是同一个后端,只是由 Electron 主进程把它和窗口一起带起来:
-
-```
-浏览器:  Vite(浏览器) ──HTTP──> Fastify(:port)
-桌面:    Electron 主进程 ─┬─ 启动同一个 Fastify(:port)
-                          └─ BrowserWindow 加载 dist/(前端 fetch 仍打 localhost)
+```bash
+npm run build
+npm run electron:prod
 ```
 
-桌面端只比浏览器端多三块:
+## 桌面端能力
 
-1. **Electron 主进程入口** —— 启动 Fastify + 开窗口;开发期由 `vite-plugin-electron` 衔接 HMR
-2. **preload + contextBridge** —— 把"拖入文件的真实路径"以白名单方式安全暴露给前端
-3. **electron-builder** —— 打包配置
+桌面端可以取得拖入文件的真实本地路径，使 Agent 能够按照当前工作区和执行权限访问文件。浏览器模式无法直接取得任意本地路径，会按照对应功能区的上传或输入方式处理文件。
 
-**安全**:renderer 关闭 `nodeIntegration`,仅通过 preload + contextBridge 暴露白名单能力。
+使用浏览器工具时，桌面端可以在应用内显示原生浏览器视窗。用户可以从任务板打开视窗，在 Agent 与人类之间切换控制，并在需要时关闭执行。目前该能力用于季风会话和气旋普通工位私聊。
 
-> 为何选 Electron 而非 Tauri:项目已有完整的 Node(Fastify)后端,加壳即用、零重写;HTTP-on-localhost 对桌面应用是完全合法的长期架构,无需迁 IPC。
+## 服务生命周期
 
-## 生产自托管
+桌面端会启动并连接 4torm 服务端。关闭应用时，桌面端会结束由它托管的服务进程；关闭前应先等待重要任务和后台执行完成。
 
-生产模式由 Fastify(`@fastify/static`)单进程自托管已构建前端,桌面端与纯浏览器端共用这一套:
+直接运行服务端时，服务端收到正常退出信号会执行排空流程。强制结束应用、直接关闭桌面端或系统断电时，尚未写入的运行状态可能丢失。需要保留重要运行数据时，仍应定期备份 `data/` 和项目外部工作区。
 
-- `SERVE_STATIC=1`(或 `NODE_ENV=production`)时托管 `dist/`,对非 `/api`·`/skin` 的 GET 做 SPA 回退到 `index.html`;`/api`·`/skin` 路由优先级更高,不受影响
-- 纯浏览器验证:`npm run start:prod` → 访问 `:3001`
-- 桌面生产:`app.isPackaged` 或 `ELECTRON_PROD=1` 时主进程 `spawn` 该服务、轮询 `/api/health` 起来后再开窗,退出时掐子进程
+## 安全边界
+
+桌面页面不会直接获得完整的 Node.js 能力。文件路径和原生执行视窗通过受限的桌面接口提供；Agent 的文件访问仍受其执行权限和当前工作区约束。
+
+具体数据位置见[数据目录](./data-layout)，文件权限见[安全与隔离](./security)。

@@ -20,6 +20,17 @@ test('short completed commands never become taskboard observations', () => {
   assert.deepEqual(observer.listActive('conversation', 'session-a'), []);
 });
 
+test('detached terminal commands enter the taskboard immediately', () => {
+  let now = 100;
+  const observer = new ExecutionObserver(() => now);
+  const run = observer.start({ scope: 'conversation', ownerId: 'session-a', command: 'long command' });
+  now += 3_000;
+  assert.equal(observer.list('conversation', 'session-a').length, 0);
+  assert.equal(observer.promote(run.id), true);
+  assert.equal(observer.list('conversation', 'session-a')[0]?.id, run.id);
+  assert.equal(observer.promote(run.id), false);
+});
+
 test('long running commands appear only for their owning session', () => {
   let now = 10_000;
   const observer = new ExecutionObserver(() => now);

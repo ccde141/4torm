@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getTools, seedTools, type ToolDef } from '../../store/tools';
+import { getTools, type ToolDef } from '../../store/tools';
 import { listSkills, readSkillFile } from '../../store/skills';
 import type { AgentConfig, SkillMeta } from '../../types';
 import { getDefaultSkillSelection, getInitialToolSelection } from './agent-tool-selection';
@@ -13,7 +13,7 @@ export function useToolSelection(config: AgentConfig | undefined, isCreate: bool
 
   useEffect(() => {
     let active = true;
-    seedTools().then(() => getTools()).then(tools => {
+    getTools().then(tools => {
       if (!active) return;
       setAllTools(tools);
       const seed = initial.current;

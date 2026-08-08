@@ -59,7 +59,7 @@ function applyEvent(ev: any, r: RoomRunner): void {
   switch (ev.type) {
     case 'seat-start':
       r.activeSpeaker = ev.speaker;
-      feed.push({ key: ev.turnId, turnId: ev.turnId, speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: formatStreamStatus('llm-waiting'), tools: [], segments: [] });
+      feed.push({ key: ev.turnId || `intro-${ev.speaker}-${feed.length}`, turnId: ev.turnId, speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: formatStreamStatus('llm-waiting'), tools: [], segments: [] });
       break;
     case 'seat-waiting': {
       const m = feed[feed.length - 1];
@@ -237,14 +237,19 @@ export function useRoomStreamRunners(
     if (r && r.done) runners.current.delete(roomId);
   }, []);
 
-  /** 发起一轮群聊（fire-and-forget，脱离组件生命周期）。 */
-  const startRound = useCallback((workshopId: string, roomId: string, text: string) => {
+  const startRequest = useCallback((opts: {
+    workshopId: string;
+    roomId: string;
+    path: string;
+    body: Record<string, unknown>;
+    initialFeed: FeedMsg[];
+  }) => {
+    const { roomId, path, body, initialFeed } = opts;
     if (runners.current.get(roomId)?.streaming) return;
 
     const ctrl = new AbortController();
     const runner: RoomRunner = {
-      // 人类发言乐观上屏（落库前先展示，存进 runner 避免切走丢失）
-      roundFeed: [{ key: `human-${Date.now()}`, speaker: '人类', content: text, isHuman: true, tools: [] }],
+      roundFeed: initialFeed,
       activeSpeaker: '',
       streaming: true,
       done: false,
@@ -271,8 +276,8 @@ export function useRoomStreamRunners(
     (async () => {
       try {
         await streamSSE(
-          `/api/cyclone/workshop/${workshopId}/room/${roomId}/speak`,
-          { message: text },
+          path,
+          body,
           (ev) => {
             applyEvent(ev, runner);
             if (ev.type === 'dispatch-created') onDispatchCreated(roomId);
@@ -294,7 +299,33 @@ export function useRoomStreamRunners(
     })();
   }, [notify, onDispatchCreated, onRoomFinished]);
 
-  return { subscribe, getRunner, startRound, abortRoom, kill, clearIfDone,
+  /** 发起一轮群聊（fire-and-forget，脱离组件生命周期）。 */
+  const startRound = useCallback((workshopId: string, roomId: string, text: string) => {
+    startRequest({
+      workshopId,
+      roomId,
+      path: `/api/cyclone/workshop/${workshopId}/room/${roomId}/speak`,
+      body: { message: text },
+      initialFeed: [{ key: `human-${Date.now()}`, speaker: '人类', content: text, isHuman: true, tools: [] }],
+    });
+  }, [startRequest]);
+
+  /** 新建群聊后的入会摘要使用和普通群聊相同的流注册表。 */
+  const startIntro = useCallback((
+    workshopId: string,
+    roomId: string,
+    intros: Array<{ seatId: string; behavior: 'summary' | 'intro' | 'none' }>,
+  ) => {
+    startRequest({
+      workshopId,
+      roomId,
+      path: `/api/cyclone/workshop/${workshopId}/room/${roomId}/intro`,
+      body: { intros },
+      initialFeed: [],
+    });
+  }, [startRequest]);
+
+  return { subscribe, getRunner, startRound, startIntro, abortRoom, kill, clearIfDone,
     getQueue, enqueue, dequeue, removeQueued, takeAllQueued, getDraft, setDraft };
 }
 

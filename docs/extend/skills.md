@@ -103,8 +103,9 @@ Skill 可通过 `tools.json` 和 `executors/` 目录携带专属工具。
 当 Agent 调用工具时,服务端(`server/src/services/tool-executor.ts`)按以下顺序查找定义:
 
 ```
-1. findToolInRegistry(tool)   → data/tools/registry.json
-2. findToolInSkills(tool)     → 遍历所有 data/skills/*/tools.json
+1. findFrameworkTool(tool)    → server/src/tools/framework/catalog.json
+2. findToolInRegistry(tool)   → data/tools/registry.json（自定义）
+3. findToolInSkills(tool)     → 遍历所有 data/skills/*/tools.json
    └── 命中后标记 _skillId,执行器查找优先查 skill 自身 executors
 ```
 
@@ -115,7 +116,7 @@ Skill 可通过 `tools.json` 和 `executors/` 目录携带专属工具。
 2. data/tools/executors/{fileName}.js                 ← 全局执行器(回退)
 ```
 
-这意味着 Skill 工具可以**覆盖**全局同名执行器。
+框架工具和全局自定义工具优先，Skill 工具不能覆盖同名定义。仅当工具定义来自 Skill 时，才优先加载该 Skill 自己的执行器。
 
 ### 与全局工具的区别
 
@@ -158,7 +159,7 @@ Skill 的提示词通过内置 `use_skill` 工具按需加载。Agent 被分配 
 |------|------|------|------|
 | 技能列表 | `GET` | `/api/skills/list` | 扫描 `data/skills/`,返回 `SkillMeta[]` |
 | Skill 文件读取 | `GET` | `/api/storage/read?path=skills/{id}/SKILL.md` | 通用存储 API |
-| Skill 删除 | `DELETE` | `/api/storage/delete?path=skills/{id}` | 递归删除目录 |
+| Skill 删除 | `DELETE` | `/api/skills/{id}` | 检查 Agent 引用后删除技能 |
 
 客户端 store 函数(`src/store/skills.ts`):`listSkills()` / `getSkillMeta(id)` / `readSkillFile(id, file)` / `readSkillToolDefs(id)` / `createSkill(id, meta, md)` / `deleteSkill(id)`。
 

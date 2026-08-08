@@ -23,7 +23,7 @@ import { atomicWriteFile } from '../engine/shared/atomic-io';
 import type { FastifyInstance } from 'fastify';
 import { getAppContext } from '../services/app-context.js';
 import type { WorkflowGraph, WorkflowMode } from '../engine/tradewind/foundation/types';
-import { loadProfiles, saveProfiles } from '../engine/shared/profile-store';
+import { loadProfiles, saveProfiles } from '../engine/tradewind/foundation/profile-store';
 import type { AutoProfile } from '../engine/tradewind/foundation/types';
 import { activeNodeRunners } from '../engine/tradewind/nodes/agent';
 import { activeMeetings } from '../engine/tradewind/nodes/meeting';
