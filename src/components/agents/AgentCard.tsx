@@ -3,6 +3,7 @@ import { getAllModels } from '../../llm';
 import { checkModelAvailable } from '../../store/agent';
 import type { Agent } from '../../types';
 import { getAgentRuntimeStatus } from './agent-runtime-status';
+import AgentAvatar from './AgentAvatar';
 import '../../styles/components/agent-card.css';
 
 interface AgentCardProps {
@@ -54,7 +55,7 @@ export default function AgentCard({ agent, onClick, onConfig, onMemory, onDelete
         </button>
       )}
       <div className="agent-card__header">
-        <div className="agent-card__avatar">{agent.name[0]}</div>
+        <AgentAvatar agent={agent} className="agent-card__avatar" fallback={agent.name[0]} />
         <div className="agent-card__info">
           <div className="agent-card__name">{agent.name}</div>
           <div className="agent-card__role">{agent.role}</div>

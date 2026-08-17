@@ -45,6 +45,10 @@
   border: 1px solid var(--border-color);
 }
 
+.agent-card__avatar .agent-avatar__image {
+  border-radius: inherit;
+}
+
 .agent-card__info {
   min-width: 0;
   flex: 1;

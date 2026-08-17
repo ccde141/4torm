@@ -1,5 +1,5 @@
 export interface DispatchStartBuffer {
-  enqueue(seatId: string): void;
+  enqueue(seatId: string, options?: { immediate?: boolean }): void;
   flush(): void;
 }
 
@@ -7,7 +7,13 @@ export interface DispatchStartBuffer {
 export function createDispatchStartBuffer(start: (seatId: string) => void): DispatchStartBuffer {
   const seats = new Set<string>();
   return {
-    enqueue(seatId) { seats.add(seatId); },
+    enqueue(seatId, options) {
+      if (options?.immediate) {
+        start(seatId);
+        return;
+      }
+      seats.add(seatId);
+    },
     flush() {
       for (const seatId of seats) start(seatId);
       seats.clear();

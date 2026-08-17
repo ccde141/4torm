@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { getAgents, deleteAgent, getOfflineAgentIds } from '../../store/agent';
 import { getAllSessions } from '../../store/chat';
 import { SYSTEM_STATUSES, getLabels, type UserLabel } from '../../store/statuses';
@@ -7,6 +7,7 @@ import AgentCard from './AgentCard';
 import AgentConfigModal from './AgentConfigModal';
 import MemoryPanel from './MemoryPanel';
 import { loadDashboardSnapshot } from './dashboard-data';
+import { createLatestRequestGuard } from '../../lib/latest-request';
 import '../../styles/components/dashboard.css';
 
 interface FilterOption {
@@ -26,10 +27,19 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
   const [offlineIds, setOfflineIds] = useState<Set<string>>(new Set());
+  const refreshGuard = useRef(createLatestRequestGuard());
 
   const refresh = useCallback(async () => {
-    const snapshot = await loadDashboardSnapshot({ getAgents, getAllSessions, getOfflineAgentIds });
-    setAgents(snapshot.agents);
+    const request = refreshGuard.current.begin();
+    const snapshot = await loadDashboardSnapshot(
+      { getAgents, getAllSessions, getOfflineAgentIds },
+      nextAgents => {
+        if (!request.isCurrent()) return;
+        setAgents(nextAgents);
+        setLoading(false);
+      },
+    );
+    if (!request.isCurrent()) return;
     setOfflineIds(snapshot.offlineIds);
     setStats(snapshot.stats);
   }, []);
@@ -53,9 +63,13 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
   // 仅页面活跃时执行重量级快照加载，隐藏页面不读取所有会话索引。
   useEffect(() => {
     if (!active) return;
+    const guard = refreshGuard.current;
     refresh().finally(() => setLoading(false));
     const id = setInterval(refresh, 2000);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      guard.cancel();
+    };
   }, [refresh, active]);
 
   const handleDelete = async (id: string) => {

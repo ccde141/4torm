@@ -13,6 +13,7 @@ export type DispatchExecutor = (
 ) => Promise<'completed' | 'awaiting_human' | 'queued' | 'failed'>;
 
 const activeSeats = new Set<string>();
+const dirtySeats = new Set<string>();
 const activeTasks = new Set<Promise<void>>();
 
 function seatKey(workshopId: string, seatId: string): string {
@@ -34,13 +35,28 @@ export async function drainQueuedDispatches(
   }
 }
 
-export function kickDispatchQueue(dataDir: string, workshopId: string, seatId: string): void {
+export function kickDispatchQueue(
+  dataDir: string,
+  workshopId: string,
+  seatId: string,
+  execute: DispatchExecutor = executeDispatchRecord,
+): void {
   const key = seatKey(workshopId, seatId);
-  if (activeSeats.has(key)) return;
+  if (activeSeats.has(key)) {
+    dirtySeats.add(key);
+    return;
+  }
   activeSeats.add(key);
-  const task = drainQueuedDispatches(dataDir, workshopId, seatId)
+  const run = async () => {
+    do {
+      dirtySeats.delete(key);
+      await drainQueuedDispatches(dataDir, workshopId, seatId, execute);
+    } while (dirtySeats.has(key));
+  };
+  const task = run()
     .catch(error => console.error('[cyclone] 异步派发队列失败', error))
     .finally(() => {
+      dirtySeats.delete(key);
       activeSeats.delete(key);
       activeTasks.delete(task);
     });

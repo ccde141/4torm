@@ -10,6 +10,7 @@ export function appendConvectionReasoning(current: string, chunk: string): strin
 
 export function buildConvectionMessage(args: BuildConvectionMessageArgs): ConvectionMessage {
   return {
+    ...(args.agentId ? { agentId: args.agentId } : {}),
     speaker: args.speaker,
     content: args.content,
     timestamp: args.timestamp,

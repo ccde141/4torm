@@ -4,7 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createDispatch, loadDispatch, updateDispatch } from './dispatch-store.js';
-import { completeAwaitingDispatch, drainQueuedDispatches } from './dispatch-queue.js';
+import {
+  completeAwaitingDispatch,
+  drainCycloneDispatches,
+  drainQueuedDispatches,
+  kickDispatchQueue,
+} from './dispatch-queue.js';
 import { createRoom, saveRoom } from './room-store.js';
 import { createWorkshop } from './workshop-store.js';
 
@@ -67,6 +72,75 @@ test('队首等待人类回答时后续派发不能越队', async (t) => {
     return 'completed';
   });
   assert.deepEqual(executed, []);
+});
+
+test('队列运行期间再次 kick 会在当前任务结束后补扫新派发', async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-dispatch-kick-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const first = await createDispatch(dataDir, {
+    workshopId: 'work-a', sourceRoomId: 'room-a', sourceSeatId: 'seat-a',
+    sourceSeatTitle: '调度', sourceTurnId: 'turn-first', sourceRoundSeq: 1,
+    dispatchOrder: 0, targetSeatId: 'seat-b', targetSeatTitle: '后端', task: 'first',
+  });
+  let releaseFirst!: () => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>(resolve => { markStarted = resolve; });
+  const holdFirst = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const executed: string[] = [];
+  const execute = async (_dir: string, item: typeof first) => {
+    executed.push(item.task);
+    if (item.task === 'first') { markStarted(); await holdFirst; }
+    await updateDispatch(dataDir, 'work-a', item.id, { status: 'completed' });
+    return 'completed' as const;
+  };
+
+  kickDispatchQueue(dataDir, 'work-a', 'seat-b', execute);
+  await started;
+  await createDispatch(dataDir, {
+    workshopId: 'work-a', sourceRoomId: 'room-a', sourceSeatId: 'seat-a',
+    sourceSeatTitle: '调度', sourceTurnId: 'turn-second', sourceRoundSeq: 1,
+    dispatchOrder: 1, targetSeatId: 'seat-b', targetSeatTitle: '后端', task: 'second',
+  });
+  kickDispatchQueue(dataDir, 'work-a', 'seat-b', execute);
+  releaseFirst();
+  await drainCycloneDispatches();
+
+  assert.deepEqual(executed, ['first', 'second']);
+});
+
+test('补扫遇到 awaiting_human 时仍不执行后续派发', async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-dispatch-awaiting-kick-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const first = await createDispatch(dataDir, {
+    workshopId: 'work-a', sourceRoomId: 'room-a', sourceSeatId: 'seat-a',
+    sourceSeatTitle: '调度', sourceTurnId: 'turn-first', sourceRoundSeq: 1,
+    dispatchOrder: 0, targetSeatId: 'seat-b', targetSeatTitle: '后端', task: 'first',
+  });
+  let releaseFirst!: () => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>(resolve => { markStarted = resolve; });
+  const holdFirst = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const executed: string[] = [];
+  const execute = async (_dir: string, item: typeof first) => {
+    executed.push(item.task);
+    markStarted();
+    await holdFirst;
+    await updateDispatch(dataDir, 'work-a', item.id, { status: 'awaiting_human' });
+    return 'awaiting_human' as const;
+  };
+
+  kickDispatchQueue(dataDir, 'work-a', 'seat-b', execute);
+  await started;
+  await createDispatch(dataDir, {
+    workshopId: 'work-a', sourceRoomId: 'room-a', sourceSeatId: 'seat-a',
+    sourceSeatTitle: '调度', sourceTurnId: 'turn-second', sourceRoundSeq: 1,
+    dispatchOrder: 1, targetSeatId: 'seat-b', targetSeatTitle: '后端', task: 'second',
+  });
+  kickDispatchQueue(dataDir, 'work-a', 'seat-b', execute);
+  releaseFirst();
+  await drainCycloneDispatches();
+
+  assert.deepEqual(executed, ['first']);
 });
 
 test('人工回答完成后从当前完整轮次重新计算决策期限', async (t) => {

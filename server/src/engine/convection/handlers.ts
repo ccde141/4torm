@@ -64,13 +64,13 @@ async function getAgent(dataDir: string, agentId: string): Promise<LoadedAgent> 
 
 /** SSE 事件类型 */
 export type ConvectionStreamEvent =
-  | { type: 'agent-start'; label: string }
-  | { type: 'token'; label: string; chunk: string }
-  | { type: 'reasoning'; label: string; chunk: string }
-  | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; label: string; tool: string; result: string }
-  | { type: 'agent-done'; label: string; content: string; rawContent: string; reasoning?: string; toolCalls: ToolCallRecord[] }
-  | { type: 'heartbeat'; label: string; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
+  | { type: 'agent-start'; agentId: string; label: string }
+  | { type: 'token'; agentId: string; label: string; chunk: string }
+  | { type: 'reasoning'; agentId: string; label: string; chunk: string }
+  | { type: 'tool-call'; agentId: string; label: string; tool: string; args: Record<string, string> }
+  | { type: 'tool-result'; agentId: string; label: string; tool: string; result: string }
+  | { type: 'agent-done'; agentId: string; label: string; content: string; rawContent: string; reasoning?: string; toolCalls: ToolCallRecord[] }
+  | { type: 'heartbeat'; agentId: string; label: string; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-reasoning'; chunk: string }
   | { type: 'chair-done'; content: string }
@@ -168,7 +168,7 @@ export async function handleSpeak(
     if (signal?.aborted) break;
 
     const agent = await getAgent(dataDir, agentId);
-    onEvent?.({ type: 'agent-start', label: agent.name });
+    onEvent?.({ type: 'agent-start', agentId, label: agent.name });
 
     // 每个 agent 各自决议原生模式（model 可能不同）
     const nativeDecision = await resolveNativeMode(dataDir, agent.model);
@@ -192,11 +192,11 @@ export async function handleSpeak(
           onEvent: (ev) => {
             if (ev.type === 'reasoning') reasoningContent = appendConvectionReasoning(reasoningContent, ev.chunk!);
             if (!onEvent) return;
-            if (ev.type === 'token') onEvent({ type: 'token', label: ev.label, chunk: ev.chunk! });
-            else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', label: ev.label, chunk: ev.chunk! });
-            else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', label: ev.label, tool: ev.tool!, args: ev.args! });
-            else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', label: ev.label, tool: ev.tool!, result: ev.result! });
-            else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
+            if (ev.type === 'token') onEvent({ type: 'token', agentId, label: ev.label, chunk: ev.chunk! });
+            else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', agentId, label: ev.label, chunk: ev.chunk! });
+            else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', agentId, label: ev.label, tool: ev.tool!, args: ev.args! });
+            else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', agentId, label: ev.label, tool: ev.tool!, result: ev.result! });
+            else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', agentId, label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
             else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
           },
           signal,
@@ -216,11 +216,11 @@ export async function handleSpeak(
           onEvent: (ev) => {
             if (ev.type === 'reasoning') reasoningContent = appendConvectionReasoning(reasoningContent, ev.chunk!);
             if (!onEvent) return;
-            if (ev.type === 'token') onEvent({ type: 'token', label: ev.label, chunk: ev.chunk! });
-            else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', label: ev.label, chunk: ev.chunk! });
-            else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', label: ev.label, tool: ev.tool!, args: ev.args! });
-            else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', label: ev.label, tool: ev.tool!, result: ev.result! });
-            else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
+            if (ev.type === 'token') onEvent({ type: 'token', agentId, label: ev.label, chunk: ev.chunk! });
+            else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', agentId, label: ev.label, chunk: ev.chunk! });
+            else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', agentId, label: ev.label, tool: ev.tool!, args: ev.args! });
+            else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', agentId, label: ev.label, tool: ev.tool!, result: ev.result! });
+            else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', agentId, label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
             else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
           },
           signal,
@@ -233,6 +233,7 @@ export async function handleSpeak(
     const content = result.cleanContent;
     if (content && !content.startsWith('[中止]') && !content.startsWith('[错误]')) {
       session.publicMessages.push(buildConvectionMessage({
+        agentId,
         speaker: agent.name,
         content,
         timestamp: Date.now(),
@@ -242,7 +243,7 @@ export async function handleSpeak(
       }));
       updateSessionUsage(session, result.usage);
       onEvent?.({
-        type: 'agent-done', label: agent.name,
+        type: 'agent-done', agentId, label: agent.name,
         content, rawContent: result.rawContent, reasoning: reasoningContent || undefined, toolCalls: result.toolCalls,
       });
     }

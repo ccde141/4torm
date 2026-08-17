@@ -112,6 +112,61 @@
   flex: 1;
 }
 
+.agent-avatar-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.agent-avatar-field__preview {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-primary);
+  color: var(--color-accent);
+  font-weight: var(--font-bold);
+}
+
+.agent-avatar-field__preview img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.agent-avatar-field__actions {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.agent-avatar-field__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.agent-avatar-field__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.agent-avatar-field__error {
+  color: var(--color-danger);
+  font-size: var(--font-xs);
+}
+
 .config-label {
   font-family: var(--font-sans);
   font-size: var(--font-sm);

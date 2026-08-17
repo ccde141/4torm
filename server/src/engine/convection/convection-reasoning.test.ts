@@ -5,6 +5,7 @@ import { appendConvectionReasoning, buildConvectionMessage } from './convection-
 test('对流 reasoning 分片累积后写入最终消息', () => {
   const reasoning = appendConvectionReasoning('分析一', '分析二');
   assert.deepEqual(buildConvectionMessage({
+    agentId: 'agent-a',
     speaker: 'Agent A',
     content: '结论',
     rawContent: '<answer>结论</answer>',
@@ -12,6 +13,7 @@ test('对流 reasoning 分片累积后写入最终消息', () => {
     toolCalls: [],
     timestamp: 1,
   }), {
+    agentId: 'agent-a',
     speaker: 'Agent A',
     content: '结论',
     rawContent: '<answer>结论</answer>',

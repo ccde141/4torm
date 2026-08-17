@@ -46,6 +46,8 @@ export interface ConvectionSessionData {
 }
 
 export interface ConvectionMessage {
+  /** 稳定的 Agent 实体 ID；旧消息可能缺失。 */
+  agentId?: string;
   speaker: string;
   content: string;
   timestamp: number;

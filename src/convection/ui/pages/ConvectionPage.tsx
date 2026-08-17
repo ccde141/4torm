@@ -15,7 +15,7 @@ import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import { getConvectionCreateError } from './convection-guards';
 import { shouldLoadConvectionSession } from './convection-session-guards';
 import { ConvectionHttpError, streamConvectionSSE } from './convection-sse';
-import { convectionReasoningProps, restoreConvectionMessage } from './convection-message-map';
+import { convectionReasoningProps, resolveConvectionAgent, restoreConvectionMessage } from './convection-message-map';
 import ConvectionTurnCard, { type ConvectionToolStep, type ConvectionTurnMessage } from './ConvectionTurnCard';
 import {
   getConvectionComposerMode,
@@ -27,6 +27,7 @@ import { createLatestRequestGuard } from '../../../lib/latest-request';
 import { fetchConvectionRead } from './convection-load-retry';
 import '../../../styles/components/convection.css';
 import type { Agent } from '../../../types';
+import AgentAvatar from '../../../components/agents/AgentAvatar';
 
 type ConvMsg = ConvectionTurnMessage;
 type ToolStep = ConvectionToolStep;
@@ -384,7 +385,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
           streamContent = '';
           reasoningContent = '';
           pendingTools = [];
-          setMsgs(p => [...p, { speaker: ev.label, content: '', streaming: true, toolCalls: [], timestamp: new Date().toISOString() }]);
+          setMsgs(p => [...p, { agentId: ev.agentId, speaker: ev.label, content: '', streaming: true, toolCalls: [], timestamp: new Date().toISOString() }]);
         } else if (ev.type === 'heartbeat') {
           const info: WaitingInfo = { phase: ev.phase, elapsed: ev.elapsed };
           setMsgs(p => p.map((m, i) => i === p.length - 1 && m.streaming ? { ...m, waitingInfo: info } : m));
@@ -613,7 +614,9 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                 if (editingMsgIdx === i) {
                   return (
                     <div key={i} className={`chat__message chat__message--${m.speaker === '人类' ? 'user' : 'assistant'}`}>
-                      <div className="chat__avatar">{m.speaker === '人类' ? '你' : m.speaker.slice(0, 2)}</div>
+                      {m.speaker === '人类'
+                        ? <div className="chat__avatar">你</div>
+                        : <AgentAvatar agent={resolveConvectionAgent(agents, m.speaker, m.agentId)} className="chat__avatar" fallback={m.speaker.slice(0, 2)} />}
                       <div className="chat__bubble chat__bubble--editing">
                         <textarea className="chat__edit-textarea" value={editMsgContent} onChange={e => setEditMsgContent(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') handleCancelEdit(); if (e.key === 'Enter' && e.ctrlKey) handleSaveEdit(); }} rows={4} autoFocus />
                         <div className="chat__edit-actions">
@@ -641,7 +644,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                   );
                 }
                 // 对流拥有自己的回合实现；与气旋只统一视觉契约，不建立跨功能依赖。
-                return <ConvectionTurnCard key={i} message={m} messageId={`conv-${i}`}
+                return <ConvectionTurnCard key={i} message={m} agent={resolveConvectionAgent(agents, m.speaker, m.agentId)} messageId={`conv-${i}`}
                   onEdit={() => handleStartEdit(i, m.content)} onDelete={() => handleDeleteMsg(i)} />;
               })}
             </div>

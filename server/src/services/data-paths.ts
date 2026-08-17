@@ -8,6 +8,10 @@ export function agentWorkspaceDir(dataDir: string, agentId: string): string {
   return path.join(dataDir, 'agents', agentId, '.workspace');
 }
 
+export function agentAvatarFile(dataDir: string, agentId: string): string {
+  return path.join(dataDir, 'agents', agentId, 'profile', 'avatar.webp');
+}
+
 export function agentRolePromptFile(dataDir: string, agentId: string): string {
   return path.join(agentWorkspaceDir(dataDir, agentId), 'role-prompt.md');
 }

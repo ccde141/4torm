@@ -3,7 +3,7 @@ import { applyEvent, emptyLive, type Live } from './useSeatStreamRunners';
 
 export interface SeatExternalActivity {
   id: string;
-  kind: 'contact' | 'join-summary';
+  kind: 'contact' | 'dispatch' | 'join-summary';
   label: string;
   running: boolean;
   live: Live;

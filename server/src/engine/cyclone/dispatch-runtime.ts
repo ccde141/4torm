@@ -6,6 +6,7 @@ import {
   updateDispatch,
 } from './dispatch-store.js';
 import { reduceDispatchActivity } from './dispatch-progress.js';
+import { beginExternalSeatActivity } from './seat-activity.js';
 
 interface SeatExecutionResult {
   content: string;
@@ -26,7 +27,14 @@ async function defaultExecuteSeat(dataDir: string, item: CycloneDispatch): Promi
   let awaitingHuman = false;
   let activity: DispatchActivity | undefined;
   let writes = Promise.resolve<unknown>(undefined);
+  const live = beginExternalSeatActivity(
+    item.workshopId,
+    item.targetSeatId,
+    'dispatch',
+    `正在执行来自「${item.sourceSeatTitle}」的异步派发`,
+  );
   const onEvent = (event: SeatEvent) => {
+    live.emit(event);
     if (event.type === 'ask') awaitingHuman = true;
     const next = reduceDispatchActivity(activity, event);
     if (!next || JSON.stringify(next) === JSON.stringify(activity)) return;
@@ -49,6 +57,7 @@ async function defaultExecuteSeat(dataDir: string, item: CycloneDispatch): Promi
       onEvent,
     );
   } finally {
+    live.finish();
     await writes;
   }
   return { content: result.content, awaitingHuman };

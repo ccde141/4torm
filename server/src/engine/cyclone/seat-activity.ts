@@ -1,6 +1,6 @@
 /** In-memory live events for seat work started outside the seat chat endpoint. */
 
-export type ExternalSeatActivityKind = 'contact' | 'join-summary';
+export type ExternalSeatActivityKind = 'contact' | 'dispatch' | 'join-summary';
 
 export interface ExternalSeatActivityEvent {
   seq: number;

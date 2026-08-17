@@ -84,8 +84,9 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   const externalRunning = !!externalActivity?.running;
   const externalActivityId = externalActivity?.id;
   const localStreaming = !!runner?.streaming;
+  const showsLiveTurn = externalActivity?.kind === 'contact' || externalActivity?.kind === 'dispatch';
   const live = runner?.live
-    ?? (externalActivity?.kind === 'contact' && externalRunning ? externalActivity.live : null);
+    ?? (showsLiveTurn && externalRunning ? externalActivity.live : null);
   const streaming = localStreaming || externalRunning;
   const queue = runners.getQueue(seatId);
   const activeDispatch = isChair ? null : findActiveSeatDispatch(dispatches, seatId);

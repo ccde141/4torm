@@ -60,6 +60,10 @@
   margin-top: 2px;
 }
 
+.chat__avatar .agent-avatar__image {
+  border-radius: inherit;
+}
+
 .chat__message--user .chat__avatar {
   /* 基底与 AI 头像一致，仅叠加白色包边 + 光效 */
   background: var(--color-bg-tertiary);

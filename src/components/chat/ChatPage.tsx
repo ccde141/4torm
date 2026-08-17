@@ -793,6 +793,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                 <div key={msg.id}>
                   <MessageItem
                     msg={msg}
+                    agent={selectedAgent}
                     sessionId={activeSessionId}
                     isStreaming={streaming && msg === messages[messages.length - 1]}
                     isEditing={editingMsgId === msg.id}

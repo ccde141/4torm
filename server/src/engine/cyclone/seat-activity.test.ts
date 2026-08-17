@@ -21,3 +21,15 @@ test('external seat activity streams incremental events and exposes completion',
   activity.finish();
   assert.equal(readExternalSeatActivity('workshop-a', 'seat-b')?.running, false);
 });
+
+test('dispatch can publish a live external seat activity without persisting token text', () => {
+  clearExternalSeatActivities();
+  const activity = beginExternalSeatActivity('workshop-a', 'seat-b', 'dispatch', '正在执行异步派发');
+  activity.emit({ type: 'token', content: '实时正文' });
+
+  const snapshot = readExternalSeatActivity('workshop-a', 'seat-b');
+  assert.equal(snapshot?.kind, 'dispatch');
+  assert.deepEqual(snapshot?.events.map(item => item.event), [
+    { type: 'token', content: '实时正文' },
+  ]);
+});

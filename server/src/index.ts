@@ -29,6 +29,7 @@ import { drainCycloneDispatches, resumeCycloneDispatches } from './engine/cyclon
 import { initMcpManager, shutdownMcpManager } from './engine/shared/mcp-manager.js';
 import { performGracefulShutdown } from './services/graceful-shutdown.js';
 import { agentActivityRoutes } from './routes/agent-activity.js';
+import { agentAvatarRoutes } from './routes/agent-avatar.js';
 import { executionObserver } from './services/execution-observer.js';
 import { backgroundExecutions } from './services/background-execution.js';
 
@@ -120,6 +121,7 @@ await app.register(delegateRoutes, { prefix: '/api/delegate' });
 await app.register(conversationRoutes, { prefix: '/api/conversation' });
 await app.register(conversationAttachmentRoutes, { prefix: '/api/conversation' });
 await app.register(agentActivityRoutes, { prefix: '/api/agents' });
+await app.register(agentAvatarRoutes, { prefix: '/api/agents' });
 await app.register(tideRoutes, { prefix: '/api/tide' });
 import { mcpRoutes } from './routes/mcp';
 await app.register(mcpRoutes, { prefix: '/api/mcp' });

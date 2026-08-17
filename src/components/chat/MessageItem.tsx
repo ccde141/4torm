@@ -23,6 +23,8 @@ import type { ChatMessage, ToolStep } from '../../types';
 import { formatStreamStatus } from './stream-status';
 import ToolActivityList from './ToolActivityGroup';
 import { MessageImages } from './MessageImages';
+import AgentAvatar from '../agents/AgentAvatar';
+import type { Agent } from '../../types';
 
 /**
  * 渲染单个工具步骤：delegate 步 → DelegateCard（含子步骤/思考流/汇总），
@@ -70,6 +72,7 @@ function renderToolSteps(steps: ToolStep[], messageId: string, timestamp: string
 
 export interface MessageItemProps {
   msg: ChatMessage;
+  agent: Agent | null;
   sessionId: string;
   /** 是否为正在流式输出的最后一条（= streaming && msg === messages[last]） */
   isStreaming: boolean;
@@ -84,13 +87,15 @@ export interface MessageItemProps {
 }
 
 function MessageItemInner({
-  msg, sessionId, isStreaming, isEditing, editContent, setEditContent,
+  msg, agent, sessionId, isStreaming, isEditing, editContent, setEditContent,
   onSaveEdit, onCancelEdit, onStartEdit, onDeleteMessage, onAskReply,
 }: MessageItemProps) {
   if (isEditing) {
     return (
       <div className={`chat__message chat__message--${msg.role}`}>
-        <div className="chat__avatar">{msg.role === 'user' ? '你' : msg.role === 'assistant' ? 'AI' : 'S'}</div>
+        {msg.role === 'assistant'
+          ? <AgentAvatar agent={agent} className="chat__avatar" fallback="AI" />
+          : <div className="chat__avatar">{msg.role === 'user' ? '你' : 'S'}</div>}
         <div className="chat__bubble chat__bubble--editing">
           <textarea className="chat__edit-textarea" value={editContent} onChange={e => setEditContent(e.target.value)}
             onKeyDown={e => { if (e.key === 'Escape') onCancelEdit(); if (e.key === 'Enter' && e.ctrlKey) onSaveEdit(); }}
@@ -189,7 +194,7 @@ function MessageItemInner({
           {steps && renderToolSteps(steps, msg.id, msg.timestamp)}
           {/* 流式文本气泡 */}
           <div className="chat__message chat__message--assistant">
-            <div className="chat__avatar">AI</div>
+            <AgentAvatar agent={agent} className="chat__avatar" fallback="AI" />
             <div className="chat__bubble">
               {phaseLabel && <div className="chat__streaming-phase">{phaseLabel}</div>}
               {display && <div style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>{display}▍</div>}
@@ -211,7 +216,7 @@ function MessageItemInner({
           {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
           {renderToolSteps(toolSteps, msg.id, msg.timestamp)}
           <StructuredMessage
-            tools={[]} answer={answer}
+            tools={[]} agent={agent} answer={answer}
             msgId={msg.id}
             timestamp={msg.timestamp}
             actions={
@@ -229,7 +234,7 @@ function MessageItemInner({
         {/* 原生思考流（落定后默认折叠） */}
         {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming={false} />}
         <div className={`chat__message chat__message--assistant`}>
-          <div className="chat__avatar">AI</div>
+          <AgentAvatar agent={agent} className="chat__avatar" fallback="AI" />
           <div className="chat__bubble">
             <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>
             {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
@@ -270,6 +275,8 @@ function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
   if (prev.msg !== next.msg) return false;
   if (prev.isStreaming !== next.isStreaming) return false;
   if (prev.isEditing !== next.isEditing) return false;
+  if (prev.agent?.id !== next.agent?.id || prev.agent?.name !== next.agent?.name) return false;
+  if (prev.agent?.avatar?.version !== next.agent?.avatar?.version) return false;
   if (next.isEditing && prev.editContent !== next.editContent) return false;
   return true;
 }

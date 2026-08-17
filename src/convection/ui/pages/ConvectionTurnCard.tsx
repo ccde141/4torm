@@ -2,6 +2,8 @@ import { useState } from 'react';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import { renderTextWithCode } from '../../../engine/markdown';
 import { formatTimestamp } from '../../../utils/time';
+import AgentAvatar from '../../../components/agents/AgentAvatar';
+import type { Agent } from '../../../types';
 import './convection-turn-card.css';
 
 export interface ConvectionToolStep {
@@ -12,6 +14,7 @@ export interface ConvectionToolStep {
 }
 
 export interface ConvectionTurnMessage {
+  agentId?: string;
   speaker: string;
   content: string;
   streaming?: boolean;
@@ -22,8 +25,9 @@ export interface ConvectionTurnMessage {
   reasoning?: string;
 }
 
-export default function ConvectionTurnCard({ message, messageId, onEdit, onDelete }: {
+export default function ConvectionTurnCard({ message, agent, messageId, onEdit, onDelete }: {
   message: ConvectionTurnMessage;
+  agent?: Agent;
   messageId: string;
   onEdit: () => void;
   onDelete: () => void;
@@ -37,7 +41,7 @@ export default function ConvectionTurnCard({ message, messageId, onEdit, onDelet
 
   return (
     <div className="chat__message chat__message--assistant convection-turn">
-      <div className="chat__avatar">{message.speaker.slice(0, 2)}</div>
+      <AgentAvatar agent={agent} className="chat__avatar" fallback={message.speaker.slice(0, 2)} />
       <div className="chat__bubble convection-turn__bubble">
         <div className="conv__speaker-label">{message.speaker}</div>
         {message.reasoning && <ReasoningBlock reasoning={message.reasoning}

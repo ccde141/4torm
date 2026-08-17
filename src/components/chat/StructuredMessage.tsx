@@ -1,12 +1,14 @@
 import { useState, type ReactNode } from 'react';
 import { renderTextWithCode } from '../../engine/markdown';
 import { formatTimestamp } from '../../utils/time';
-import type { ToolStep } from '../../types';
+import type { Agent, ToolStep } from '../../types';
 import ReasoningBlock from './ReasoningBlock';
 import ToolActivityList from './ToolActivityGroup';
+import AgentAvatar from '../agents/AgentAvatar';
 
 interface Props {
   tools: ToolStep[];
+  agent?: Agent | null;
   answer: string;
   msgId: string;
   timestamp?: string;
@@ -14,7 +16,7 @@ interface Props {
   actions?: ReactNode;
 }
 
-export default function StructuredMessage({ tools, answer, msgId, timestamp, reasoning, actions }: Props) {
+export default function StructuredMessage({ tools, agent, answer, msgId, timestamp, reasoning, actions }: Props) {
   // 完成态默认折叠，运行中默认展开
   const [showTool, setShowTool] = useState<Record<number, boolean>>(() =>
     Object.fromEntries(tools.map((t, i) => [i, t.status === 'running'])),
@@ -26,7 +28,7 @@ export default function StructuredMessage({ tools, answer, msgId, timestamp, rea
 
   return (
     <div className="chat__message chat__message--assistant">
-      <div className="chat__avatar">AI</div>
+      <AgentAvatar agent={agent} className="chat__avatar" fallback="AI" />
       <div className="chat__bubble stmsg-bubble">
         {reasoning && <ReasoningBlock reasoning={reasoning} isStreaming={false} />}
         <ToolActivityList items={tools} renderItem={(t, i) => (

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { updateAgentConfig, createAgent } from '../../store/agent';
+import { updateAgentConfig, createAgent, updateAgent } from '../../store/agent';
 import { getAllModels } from '../../llm';
 import { buildToolsPrompt } from '../../store/tools';
 import { getLabels, addLabel, getPresetColors } from '../../store/statuses';
@@ -8,6 +8,8 @@ import type { UserLabel } from '../../store/statuses';
 import { getEffectiveLocalTools } from './agent-tool-selection';
 import AgentConfigTabs, { type AgentConfigTab } from './AgentConfigTabs';
 import AgentPermissionField from './AgentPermissionField';
+import AgentAvatarField from './AgentAvatarField';
+import { removeAgentAvatar, uploadAgentAvatar } from './agent-avatar-client';
 import { normalizeAgentPermission } from './agent-permission';
 import { useSkillSelection, useToolSelection } from './useAgentCapabilitySelection';
 import '../../styles/components/config-modal.css';
@@ -38,6 +40,9 @@ export default function AgentConfigModal(props: Props) {
   const [label, setLabel] = useState(agent?.label ?? '');
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [avatarDraft, setAvatarDraft] = useState<string | null>(null);
+  const [avatarRemoved, setAvatarRemoved] = useState(false);
+  const [avatarError, setAvatarError] = useState('');
   const [allModels, setAllModels] = useState<{ key: string; label: string }[]>([]);
   const { allTools, checkedTools, setCheckedTools } = useToolSelection(agent?.config, isCreate);
   const { allSkills, checkedSkills, setCheckedSkills, skillPreviews } = useSkillSelection(agent?.config, isCreate);
@@ -76,22 +81,37 @@ export default function AgentConfigModal(props: Props) {
     if (saving || saved) return;
     const config: AgentConfig = { masterPrompt: '', rolePrompt, temperature: temperature || undefined, tools: [...checkedTools], toolMode: 'selected', skills: [...checkedSkills], workspace: workspace || undefined, sandboxLevel };
     setSaving(true);
+    let savedAgent: Agent;
+    let avatarFailed = false;
     try {
       if (isCreate) {
-        await createAgent({ name: name || '新 Agent', role, description, model, config, label: label || undefined });
+        savedAgent = await createAgent({ name: name || '新 Agent', role, description, model, config, label: label || undefined });
       } else {
         const a = agent as Agent;
-        await updateAgentConfig(a.id, config, model);
-        const { updateAgent } = await import('../../store/agent');
-        await updateAgent(a.id, { name, role, description, label: label || undefined });
+        await updateAgentConfig(a.id, config, model, {
+          name, role, description, label: label || undefined,
+        });
+        savedAgent = { ...a, name, role, description, label: label || undefined, model, config };
       }
     } catch {
       setSaving(false);   // 失败：恢复，允许重试
       return;
     }
+    try {
+      if (avatarDraft) {
+        const version = await uploadAgentAvatar(savedAgent.id, avatarDraft);
+        await updateAgent(savedAgent.id, { avatar: { version } });
+      } else if (avatarRemoved && savedAgent.avatar) {
+        await updateAgent(savedAgent.id, { avatar: undefined });
+        await removeAgentAvatar(savedAgent.id);
+      }
+    } catch (error) {
+      avatarFailed = true;
+      setAvatarError(`Agent 已保存，但头像处理失败：${(error as Error).message}`);
+    }
     setSaved(true);       // 成功：转「✓ 已保存」并在关闭前保持禁用
     props.onSave();
-    setTimeout(props.onClose, 600);
+    setTimeout(props.onClose, avatarFailed ? 1800 : 600);
   };
 
   return (
@@ -110,6 +130,10 @@ export default function AgentConfigModal(props: Props) {
         <div className="config-modal-body" style={{ overflowY: 'auto' }}>
           {tab === '基本' && (
             <>
+              <AgentAvatarField agent={agent} name={name} draft={avatarDraft} removed={avatarRemoved}
+                onChange={(draft, removed) => { setAvatarDraft(draft); setAvatarRemoved(removed); setAvatarError(''); }}
+                onError={setAvatarError} />
+              {avatarError && <div className="agent-avatar-field__error" role="alert">{avatarError}</div>}
               <div style={{ display: 'flex', gap: 'var(--space-4)', marginBottom: 'var(--space-4)', marginTop: 'var(--space-4)' }}>
                 <div className="config-field" style={{ flex: 1 }}>
                   <label className="config-label">名称</label>

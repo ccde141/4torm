@@ -12,9 +12,18 @@ export interface DashboardSnapshot {
   stats: DashboardStats;
 }
 
-export async function loadDashboardSnapshot(deps: DashboardDataDeps): Promise<DashboardSnapshot> {
-  const [agents, sessions] = await Promise.all([deps.getAgents(), deps.getAllSessions()]);
-  const offlineIds = await deps.getOfflineAgentIds(agents);
+export async function loadDashboardSnapshot(
+  deps: DashboardDataDeps,
+  onAgentsReady: (agents: Agent[]) => void = () => {},
+): Promise<DashboardSnapshot> {
+  const agentsPromise = deps.getAgents();
+  const sessionsPromise = deps.getAllSessions();
+  const agents = await agentsPromise;
+  onAgentsReady(agents);
+  const [sessions, offlineIds] = await Promise.all([
+    sessionsPromise,
+    deps.getOfflineAgentIds(agents),
+  ]);
   const onlineAgents = agents.filter(agent => (
     agent.status === 'idle' && !agent.busy && !offlineIds.has(agent.id)
   )).length;

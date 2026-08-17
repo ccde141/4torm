@@ -7,6 +7,7 @@ import {
   formatSeatDispatchActivity,
   formatSeatDispatchOrigin,
 } from './seat-dispatch-activity.js';
+import fs from 'node:fs';
 
 function dispatch(id: string, status: CycloneDispatch['status']): CycloneDispatch {
   return {
@@ -49,4 +50,9 @@ test('目标工位能区分群聊派发与工位私聊派发', () => {
   assert.equal(formatSeatDispatchOrigin({
     ...dispatch('seat', 'running'), sourceKind: 'seat', sourceRoomId: '',
   }), '来自工位');
+});
+
+test('目标工位把 dispatch 外部活动接入实时回合', () => {
+  const source = fs.readFileSync('src/cyclone/ui/pages/SeatChat.tsx', 'utf8');
+  assert.match(source, /externalActivity\?\.kind === 'contact' \|\| externalActivity\?\.kind === 'dispatch'/);
 });

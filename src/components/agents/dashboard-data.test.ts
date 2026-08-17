@@ -24,3 +24,21 @@ test('Dashboard 一次刷新生成完整快照且不重复读取', async () => {
   assert.equal(snapshot.stats.totalSessions, 1);
   assert.deepEqual([...snapshot.offlineIds], ['agent-b']);
 });
+
+test('Dashboard 在会话统计完成前先交付 Agent 核心数据', async () => {
+  const agents = [{ id: 'agent-fast', status: 'idle' }] as Agent[];
+  let releaseSessions!: (sessions: unknown[]) => void;
+  const sessions = new Promise<unknown[]>(resolve => { releaseSessions = resolve; });
+  const applied: Agent[][] = [];
+
+  const loading = loadDashboardSnapshot({
+    getAgents: async () => agents,
+    getAllSessions: () => sessions,
+    getOfflineAgentIds: async () => new Set(),
+  }, ready => applied.push(ready));
+
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(applied, [agents]);
+  releaseSessions([]);
+  await loading;
+});

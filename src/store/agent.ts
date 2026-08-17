@@ -120,7 +120,12 @@ export async function updateAgent(id: string, patch: Partial<Agent>) {
   notifyAgentsChanged();
 }
 
-export async function updateAgentConfig(id: string, config: AgentConfig, model: string) {
+export async function updateAgentConfig(
+  id: string,
+  config: AgentConfig,
+  model: string,
+  patch: Partial<Agent> = {},
+) {
   const wd = workspaceDir(id);
   await ensureDir(wd);
 
@@ -137,7 +142,7 @@ export async function updateAgentConfig(id: string, config: AgentConfig, model: 
   };
   await writeJson(`${wd}/config.json`, configObj);
 
-  await updateAgent(id, { config, model });
+  await updateAgent(id, { ...patch, config, model });
 }
 
 export async function deleteAgent(id: string) {

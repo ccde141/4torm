@@ -118,7 +118,9 @@ function makeRoomToolCaller(opts: {
             dispatchOrder: dispatchOrder++, targetSeatTitle: target, task,
           });
           onEvent({ type: 'dispatch-created', dispatch });
-          dispatchStarts.enqueue(dispatch.targetSeatId);
+          dispatchStarts.enqueue(dispatch.targetSeatId, {
+            immediate: dispatch.targetSeatId === seatId,
+          });
           return `异步任务已送达「${target}」，任务 ID：${dispatch.id}。无需等待，请继续当前讨论。`;
         } catch (error) {
           return `异步派发失败：${(error as Error).message}`;

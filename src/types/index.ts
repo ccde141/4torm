@@ -19,6 +19,8 @@ export interface Agent {
   activeSurfaces?: Array<'conversation' | 'convection' | 'cyclone' | 'tradewind' | 'tide'>;
   /** 用户自定义分类标签（纯展示，不影响锁） */
   label?: AgentLabel;
+  /** 本地头像版本；图片存于 data/agents/{id}/profile/avatar.webp。 */
+  avatar?: { version: number };
   model: string;
   description: string;
   config?: AgentConfig;
