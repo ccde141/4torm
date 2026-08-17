@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { getAgents, getOfflineAgentIds } from '../../store/agent';
+import { AGENTS_CHANGED_EVENT } from '../../store/agent-events';
 import { SYSTEM_STATUSES } from '../../store/statuses';
 import { getAllModels } from '../../llm';
 import MessageItem from './MessageItem';
@@ -283,11 +284,13 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     return () => clearTimeout(t);
   }, [activeSessionId, scrollToBottom]);
 
+  const refreshAgents = useCallback(async () => {
+    const list = await getAgents();
+    setAgents(list);
+    setOfflineIds(await getOfflineAgentIds(list));
+  }, []);
+
   useEffect(() => {
-    getAgents().then(async list => {
-      setAgents(list);
-      setOfflineIds(await getOfflineAgentIds(list));
-    });
     getAllModels().then(list => {
       setModels(list);
       setSelectedModel(prev => { if (list.length && !list.some(m => m.key === prev)) return list[0].key; return prev; });
@@ -305,16 +308,18 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     });
   }, [active]);
 
-  // 2s 轮询 agent 状态（仅当前页面活跃时跑，避免切走后后台持续刷请求）
+  // 激活或 Agent 配置变化时立即刷新；2s 轮询保留为跨进程状态同步兜底。
   useEffect(() => {
     if (!active) return;
-    const id = setInterval(async () => {
-      const list = await getAgents();
-      setAgents(list);
-      setOfflineIds(await getOfflineAgentIds(list));
-    }, 2000);
-    return () => clearInterval(id);
-  }, [active]);
+    void refreshAgents();
+    const onAgentsChanged = () => { void refreshAgents(); };
+    window.addEventListener(AGENTS_CHANGED_EVENT, onAgentsChanged);
+    const id = setInterval(() => { void refreshAgents(); }, 2000);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener(AGENTS_CHANGED_EVENT, onAgentsChanged);
+    };
+  }, [active, refreshAgents]);
 
   // 模型小卡跟随 agent 配置：在 Agent 页改了当前 agent 的模型后，小卡无条件归位到新模型。
   // 触发点是「agent 本体模型变更」——平时手动快切覆盖有效（只动 selectedModel，不动 agent.model）；
