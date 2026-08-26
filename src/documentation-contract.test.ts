@@ -2,6 +2,18 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import test from 'node:test';
 
+test('repository README defaults to English and keeps Chinese one click away', async () => {
+  const [readme, chineseReadme] = await Promise.all([
+    fs.readFile(new URL('../README.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../README.zh-CN.md', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(readme, /^## Five Workspaces$/m);
+  assert.match(readme, /href="\.\/README\.zh-CN\.md">简体中文<\/a>/);
+  assert.match(chineseReadme, /^## 五个功能区$/m);
+  assert.match(chineseReadme, /href="\.\/README\.md">English<\/a>/);
+});
+
 test('normal install and desktop development prepare the documentation site', async () => {
   const packageJson = JSON.parse(await fs.readFile(
     new URL('../package.json', import.meta.url),
@@ -386,6 +398,7 @@ test('扩展文档区分内置文件守卫、自定义执行器与 MCP', async (
 test('README 与公开架构文档不再保留旧三档权限说明', async () => {
   const files = [
     '../README.md',
+    '../README.zh-CN.md',
     '../docs/architecture/data-layout.md',
     '../docs/architecture/security.md',
   ];
@@ -397,9 +410,10 @@ test('README 与公开架构文档不再保留旧三档权限说明', async () =
   for (const { file, text } of docs) {
     assert.doesNotMatch(text, /`strict`|`relaxed`|三级权限|三档/, file);
   }
-  assert.match(docs[0].text, /项目级.*无限制/s);
-  assert.match(docs[1].text, /执行权限配置/);
-  assert.match(docs[2].text, /项目级.*无限制/s);
+  assert.match(docs[0].text, /\*\*Project\*\*.*\*\*Unrestricted\*\*/s);
+  assert.match(docs[1].text, /项目级.*无限制/s);
+  assert.match(docs[2].text, /执行权限配置/);
+  assert.match(docs[3].text, /项目级.*无限制/s);
 });
 
 test('public docs exclude temporary implementation snapshots and use canonical feature names', async () => {

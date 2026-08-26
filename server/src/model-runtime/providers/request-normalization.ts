@@ -9,6 +9,10 @@ import { normalizeLlamaCppConfig } from '../config/llama-cpp-config.js';
 import { normalizeOllamaConfig } from '../config/ollama-config.js';
 import { normalizeDeepSeekConfig } from '../config/deepseek-config.js';
 import { normalizeVllmConfig } from '../config/vllm-config.js';
+import { normalizeKimiConfig } from '../config/kimi-config.js';
+import { normalizeZhipuConfig } from '../config/zhipu-config.js';
+import { normalizeDashScopeConfig } from '../config/dashscope-config.js';
+import { normalizeMiniMaxConfig } from '../config/minimax-config.js';
 import { mergeCustomRequestParameters } from './custom-request-parameters.js';
 
 export type { ProviderModelCapabilities, ProviderModelIdentity } from '../contracts/provider-adapter.js';
@@ -44,6 +48,18 @@ export function resolveMaxOutputTokens(
   if (adapter.id === 'vllm') {
     return vllmConfig(identity).generationDefaults.maxOutputTokens;
   }
+  if (adapter.id === 'kimi') {
+    return kimiConfig(identity).generationDefaults.maxOutputTokens;
+  }
+  if (adapter.id === 'zhipu-glm') {
+    return zhipuConfig(identity).generationDefaults.maxOutputTokens;
+  }
+  if (adapter.id === 'dashscope') {
+    return dashScopeConfig(identity).generationDefaults.maxOutputTokens;
+  }
+  if (adapter.id === 'minimax') {
+    return miniMaxConfig(identity).generationDefaults.maxOutputTokens;
+  }
   return adapter.capabilities.defaultMaxOutputTokens ?? 8192;
 }
 
@@ -63,6 +79,15 @@ export function resolveRequestTemperature(
   }
   if (resolveProviderAdapter(identity).id === 'vllm') {
     return vllmConfig(identity).generationDefaults.temperature ?? undefined;
+  }
+  if (resolveProviderAdapter(identity).id === 'zhipu-glm') {
+    return zhipuConfig(identity).generationDefaults.temperature ?? undefined;
+  }
+  if (resolveProviderAdapter(identity).id === 'dashscope') {
+    return dashScopeConfig(identity).generationDefaults.temperature ?? undefined;
+  }
+  if (resolveProviderAdapter(identity).id === 'minimax') {
+    return miniMaxConfig(identity).generationDefaults.temperature ?? undefined;
   }
   return 0.7;
 }
@@ -84,6 +109,22 @@ function deepSeekConfig(identity: ProviderModelIdentity) {
 
 function vllmConfig(identity: ProviderModelIdentity) {
   return normalizeVllmConfig({ generationDefaults: identity.generationDefaults });
+}
+
+function kimiConfig(identity: ProviderModelIdentity) {
+  return normalizeKimiConfig({ generationDefaults: identity.generationDefaults });
+}
+
+function zhipuConfig(identity: ProviderModelIdentity) {
+  return normalizeZhipuConfig({ generationDefaults: identity.generationDefaults });
+}
+
+function dashScopeConfig(identity: ProviderModelIdentity) {
+  return normalizeDashScopeConfig({ generationDefaults: identity.generationDefaults });
+}
+
+function miniMaxConfig(identity: ProviderModelIdentity) {
+  return normalizeMiniMaxConfig({ generationDefaults: identity.generationDefaults });
 }
 
 export function resolveSafePromptTokens(

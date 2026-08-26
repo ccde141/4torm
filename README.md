@@ -1,13 +1,13 @@
 # 4torm
 
-<p align="right"><a href="./README.en.md">English</a></p>
+<p align="right"><a href="./README.zh-CN.md">简体中文</a></p>
 
 <p align="center">
   <img src="./public/4TORM.png" alt="4torm" width="160" />
 </p>
 
 <p align="center">
-  <strong>让 AI 像公司员工一样长期存在，按需协作</strong>
+  <strong>Keep AI agents around like long-term team members, ready to collaborate when needed</strong>
 </p>
 
 <p align="center">
@@ -17,46 +17,46 @@
   <img src="https://img.shields.io/badge/Fastify-5-000000?logo=fastify" alt="Fastify 5" />
 </p>
 
-4torm 是一个多 Agent 协作框架，可以创建多个长期保留的 Agent，让它们独立对话、组队讨论、按工作流接力，或按照时间表自动执行任务
+4torm is a multi-agent collaboration framework. It lets you create persistent agents that can hold independent conversations, discuss problems as a team, hand work along workflows, or run tasks automatically on a schedule.
 
-同一个 Agent 可以在不同功能区中复用。模型、提示词、工具和技能只需配置一次，之后根据任务选择合适的协作方式
+The same agent can be reused across different workspaces. Configure its model, prompt, tools, and skills once, then choose the collaboration mode that fits each task.
 
 <p align="center">
-  <img src="./docs/public/images/guide/agent-console-overview.webp" alt="Agent 控制台" width="100%" />
+  <img src="./docs/public/images/guide/agent-console-overview.webp" alt="Agent Console" width="100%" />
 </p>
 
-## 五个功能区
+## Five Workspaces
 
-| 功能区 | 管理对象 | 适合处理 |
-|--------|----------|----------|
-| 季风 | 对话 | 与单个 Agent 持续交流、调用工具或委托 SubAgent |
-| 对流 | 会议室 | 让多个 Agent 临时讨论，由会议助理提供独立私聊建议 |
-| 气旋 | 工作室 | 让固定工位长期协作，支持私聊、群聊、同步联络和异步派发 |
-| 信风 | 工作流 | 在可视化画布上组织节点，让任务按照连线流转 |
-| 潮汐 | 自动化任务 | 按照设定时间唤醒 Agent，持续执行巡检、整理和汇报 |
+| Workspace | Manages | Best suited for |
+|-----------|---------|-----------------|
+| Monsoon | Conversations | Ongoing conversations with one agent, tool use, and SubAgent delegation |
+| Convection | Meeting rooms | Temporary multi-agent discussions with independent advice from a meeting assistant |
+| Cyclone | Workshops | Long-term collaboration between fixed seats, with private chat, group chat, synchronous contact, and asynchronous dispatch |
+| Tradewind | Workflows | Visual node-based workflows that pass tasks along connected paths |
+| Tide | Automated tasks | Waking agents on a schedule for recurring checks, organization, and reporting |
 
-五种功能区使用的是同一套 Agent。变化的是协作方式，不是重新创建一批临时角色
+All five workspaces use the same agents. What changes is the form of collaboration—not the creation of another set of temporary roles.
 
-## 工具、技能与 MCP
+## Tools, Skills, and MCP
 
-4torm 通过三种方式扩展 Agent 能力：
+4torm extends agent capabilities in three ways:
 
-- **工具**：为 Agent 提供文件、命令、网络或其他可执行操作
-- **技能**：通过 `SKILL.md` 提供可复用的专业知识与工作方法
-- **MCP**：连接 stdio、Streamable HTTP 和兼容 SSE 的外部工具服务
+- **Tools** give agents executable operations for files, commands, networks, and other systems.
+- **Skills** provide reusable expertise and working methods through `SKILL.md`.
+- **MCP** connects external tool services over stdio, Streamable HTTP, and compatible SSE transports.
 
-新建 Agent 默认启用框架内置工具和已经安装的技能，自定义工具与 MCP 工具需要明确选择
+New agents have the framework's built-in tools and installed skills enabled by default. Custom tools and MCP tools must be selected explicitly.
 
-季风和气旋中的 Agent 还可以根据人类要求创建新的工具或技能，工具注册需要确认，技能目录完成后会自动载入
+Agents in Monsoon and Cyclone can also create new tools or skills at a human's request. Tool registration requires confirmation; completed skill directories are loaded automatically.
 
-## 快速开始
+## Quick Start
 
-### 环境要求
+### Requirements
 
 - Node.js 20+
 - npm 9+
 
-### 安装依赖
+### Install Dependencies
 
 ```bash
 git clone https://github.com/ccde141/4torm.git
@@ -66,88 +66,88 @@ npm install
 npm --prefix server install
 ```
 
-### 启动
+### Start
 
-浏览器开发模式：
+Browser development mode:
 
 ```bash
 npm run dev
 ```
 
-打开 `http://localhost:5173`
+Open `http://localhost:5173`.
 
-桌面开发模式：
+Desktop development mode:
 
 ```bash
 npm run electron:dev
 ```
 
-生产构建与运行：
+Production build and server:
 
 ```bash
 npm run build
 npm run start:prod
 ```
 
-打开 `http://localhost:3001`
+Open `http://localhost:3001`.
 
-### 首次使用
+### First Use
 
-1. 在提供商管理中添加模型接口
-2. 进入控制台创建 Agent
-3. 配置模型、角色提示词、工具和技能
-4. 从季风开始一段对话，或进入其他功能区组织协作
+1. Add a model endpoint in Provider Management.
+2. Create an agent from the Console.
+3. Configure its model, role prompt, tools, and skills.
+4. Start a conversation in Monsoon, or organize collaboration in another workspace.
 
-4torm 使用 OpenAI Chat Completions 兼容格式。其他接口可以通过兼容网关接入
+4torm uses the OpenAI Chat Completions-compatible format. Other APIs can be connected through a compatible gateway.
 
-## 文档
+## Documentation
 
-应用启动后，可以从顶部的「使用文档」进入完整文档站
+Once the app is running, open the full documentation site from **Documentation** in the top navigation bar.
 
-| 内容 | 文档 |
-|------|------|
-| 安装与首次配置 | [快速开始](./docs/guide/getting-started.md) |
-| Agent、会话与工作区 | [核心概念](./docs/guide/concepts.md) |
-| Agent 创建与配置 | [Agent 管理](./docs/guide/agents.md) |
-| 五种功能区 | [季风](./docs/modes/chat.md) · [对流](./docs/modes/convection.md) · [气旋](./docs/modes/cyclone.md) · [信风](./docs/modes/tradewind.md) · [潮汐](./docs/modes/tide.md) |
-| 扩展 Agent 能力 | [工具](./docs/extend/tools.md) · [技能](./docs/extend/skills.md) · [MCP](./docs/extend/mcp.md) |
-| 开发与维护 | [总体架构](./docs/architecture/overview.md) · [数据目录](./docs/architecture/data-layout.md) · [安全边界](./docs/architecture/security.md) |
+| Topic | Documentation |
+|-------|---------------|
+| Installation and initial setup | [Quick Start](./docs/en/guide/getting-started.md) |
+| Agents, sessions, and workspaces | [Core Concepts](./docs/en/guide/concepts.md) |
+| Creating and configuring agents | [Agent Management](./docs/en/guide/agents.md) |
+| Five workspaces | [Monsoon](./docs/en/modes/chat.md) · [Convection](./docs/en/modes/convection.md) · [Cyclone](./docs/en/modes/cyclone.md) · [Tradewind](./docs/en/modes/tradewind.md) · [Tide](./docs/en/modes/tide.md) |
+| Extending agent capabilities | [Tools](./docs/en/extend/tools.md) · [Skills](./docs/en/extend/skills.md) · [MCP](./docs/en/extend/mcp.md) |
+| Development and maintenance | [Architecture](./docs/en/architecture/overview.md) · [Data Layout](./docs/en/architecture/data-layout.md) · [Security Boundaries](./docs/en/architecture/security.md) |
 
-单独预览文档站：
+Preview the documentation site separately:
 
 ```bash
 npm run docs:dev
 ```
 
-打开 `http://localhost:5174`
+Open `http://localhost:5174`.
 
-## 数据与权限
+## Data and Permissions
 
-运行数据保存在 `data/` 目录中，Agent、会话、工作室、工作流和自动化任务分别维护自己的数据边界
+Runtime data is stored under `data/`. Agents, sessions, workshops, workflows, and automated tasks each maintain their own data boundaries.
 
-API Key、MCP 配置以及各功能区的运行数据已经按用途加入 Git 忽略。Git 忽略不等于数据备份，迁移项目前仍应单独备份需要保留的 `data/` 内容
+API keys, MCP configuration, and workspace runtime data are excluded from Git according to their purpose. Git exclusion is not a backup: before moving the project, separately back up any `data/` content you need to keep.
 
-Agent 的内置文件工具提供两档权限：
+An agent's built-in file tools provide two permission levels:
 
-- **项目级**：访问 4torm 项目和当前功能区工作区
-- **无限制**：允许访问项目之外的其他路径
+- **Project**: access the 4torm project and the current workspace.
+- **Unrestricted**: allow access to other paths outside the project.
 
-框架状态仍通过专用入口管理，避免 Agent 绕过功能工具直接改写任务、工作流等控制数据
+Framework state is still managed through dedicated entry points, preventing agents from bypassing feature tools to rewrite tasks, workflows, or other control data directly.
 
-## 技术栈
+## Technology Stack
 
-- React 19、TypeScript、Vite
+- React 19, TypeScript, and Vite
 - Fastify 5
 - Electron
 - XY Flow
 - Server-Sent Events
 - Model Context Protocol
 
-## 许可证
+## License
 
 [MIT](./LICENSE) © Ccde141
 
-## 链接
+## Links
 
 - [GitHub Issues](https://github.com/ccde141/4torm/issues)
 - [Bilibili](https://space.bilibili.com/406091025)

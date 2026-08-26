@@ -364,7 +364,10 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
     body,
   );
   logCustomParameterFields(provider.id, provider.customRequestParameters);
-  return { url, headers, body: normalizedBody, nameMap, protocol };
+  return {
+    url, headers, body: normalizedBody, nameMap, protocol,
+    cumulativeStream: selection.providerType === 'minimax',
+  };
 }
 
 function logCustomParameterFields(providerId: string, parameters: unknown): void {
@@ -437,7 +440,7 @@ export async function callLLM(params: LLMCallParams): Promise<LLMResult> {
 
 async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
   const useStream = typeof params.onChunk === 'function';
-  const { url, headers, body, nameMap, protocol } = await buildRequest(params, useStream);
+  const { url, headers, body, nameMap, protocol, cumulativeStream = false } = await buildRequest(params, useStream);
   const bodyStr = JSON.stringify(body);
 
   // 诊断埋点：每次请求打 prompt 规模，看上下文是否随轮次膨胀（框架侧信号）。
@@ -533,6 +536,7 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
     }
     const result = await parseSSEStream(
       res, onChunk, !!params.tools, nameMap, params.onReasoning, params.onToolProgress,
+      cumulativeStream,
     );
     const normalized = applyTextToolFallback(result, params.tools, nameMap);
     gate?.finish(Boolean(normalized.content));
@@ -583,6 +587,7 @@ async function parseSSEStream(
   nameMap: Map<string, string>,
   onReasoning?: (chunk: string) => void,
   onToolProgress?: (progress: ToolPreparationProgress) => void,
+  cumulativeStream = false,
 ): Promise<LLMResult> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error('LLM 流式响应无 body');
@@ -591,7 +596,7 @@ async function parseSSEStream(
   let buffer = '';
   let full = '';
   let fullReasoning = '';
-  const reasoningDetails: unknown[] = [];
+  let reasoningDetails: unknown[] = [];
   let finishReason: 'stop' | 'length' | 'tool_calls' | null = null;
   let usage: TokenUsage | undefined;
   const toolAcc = native ? makeToolCallAccumulator() : null;
@@ -674,14 +679,18 @@ async function parseSSEStream(
           ?? choice?.delta?.reasoning
           ?? choice?.delta?.thinking;
         if (reasoning) {
-          fullReasoning += reasoning;
-          echo('think', reasoning);
-          if (onReasoning) onReasoning(reasoning);
+          const chunk = cumulativeStream ? cumulativeSuffix(fullReasoning, reasoning) : reasoning;
+          fullReasoning += chunk;
+          echo('think', chunk);
+          if (chunk && onReasoning) onReasoning(chunk);
         }
         if (Array.isArray(choice?.delta?.reasoning_details)) {
-          reasoningDetails.push(...choice.delta.reasoning_details);
+          reasoningDetails = cumulativeStream
+            ? [...choice.delta.reasoning_details]
+            : [...reasoningDetails, ...choice.delta.reasoning_details];
         }
-        const token = choice?.delta?.content;
+        const rawToken = choice?.delta?.content;
+        const token = rawToken && cumulativeStream ? cumulativeSuffix(full, rawToken) : rawToken;
         if (token) {
           full += token;
           chunkCount++;
@@ -788,4 +797,8 @@ async function parseSSEStream(
     usage,
     toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
   };
+}
+
+function cumulativeSuffix(previous: string, current: string): string {
+  return current.startsWith(previous) ? current.slice(previous.length) : current;
 }

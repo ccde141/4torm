@@ -6,6 +6,8 @@ import { DEFAULT_LLAMA_CPP_CONFIG } from '../config/llama-cpp-config.js';
 import { DEFAULT_OLLAMA_CONFIG } from '../config/ollama-config.js';
 import { DEFAULT_DEEPSEEK_CONFIG } from '../config/deepseek-config.js';
 import { DEFAULT_VLLM_CONFIG } from '../config/vllm-config.js';
+import { DEFAULT_DASHSCOPE_CONFIG } from '../config/dashscope-config.js';
+import { DEFAULT_MINIMAX_CONFIG } from '../config/minimax-config.js';
 import { getProviderCatalog } from './provider-catalog.js';
 
 test('provider catalog describes every stable provider identity exactly once', () => {
@@ -23,12 +25,16 @@ test('provider catalog describes every stable provider identity exactly once', (
   }
 });
 
-test('provider creation is limited to the generic OpenAI contract and five qualified implementations', () => {
+test('provider creation is limited to the generic contract and qualified implementations', () => {
   const catalog = getProviderCatalog();
   const selectable = catalog.providers.filter(provider => provider.selectable);
   assert.deepEqual(selectable.map(provider => provider.id), [
     'openai-compatible',
     'deepseek',
+    'kimi',
+    'dashscope',
+    'zhipu',
+    'minimax',
     'llama-cpp',
     'lm-studio',
     'ollama',
@@ -38,6 +44,10 @@ test('provider creation is limited to the generic OpenAI contract and five quali
   assert.deepEqual(catalog.presets.map(preset => preset.id), [
     'openai-compatible',
     'deepseek',
+    'kimi',
+    'dashscope',
+    'zhipu',
+    'minimax',
     'lm-studio',
     'llama-cpp',
     'ollama',
@@ -61,6 +71,97 @@ test('legacy provider identities remain readable without being offered for creat
     assert.equal(catalog.providers.find(provider => provider.id === id)?.selectable, false);
     assert.equal(catalog.presets.some(preset => preset.providerType === id), false);
   }
+});
+
+test('unqualified cloud candidates have stable identities but remain unavailable', () => {
+  const catalog = getProviderCatalog();
+  for (const id of ['openrouter', 'siliconflow'] as const) {
+    const provider = catalog.providers.find(item => item.id === id);
+    assert.ok(provider);
+    assert.equal(provider.selectable, false);
+    assert.equal(provider.verificationState, 'unverified');
+    assert.equal(provider.probeStrategy, 'openai-models');
+    assert.equal(provider.configuration, undefined);
+    assert.equal(catalog.presets.some(preset => preset.providerType === id), false);
+  }
+});
+
+test('MiniMax preset exposes its qualified OpenAI-compatible contract', () => {
+  const catalog = getProviderCatalog();
+  const provider = catalog.providers.find(item => item.id === 'minimax');
+  const preset = catalog.presets.find(item => item.id === 'minimax');
+  assert.ok(provider);
+  assert.ok(preset);
+  assert.equal(provider.selectable, true);
+  assert.equal(provider.verificationState, 'transport-ready');
+  assert.equal(preset.providerType, 'minimax');
+  assert.equal(preset.baseUrl, 'https://api.minimaxi.com/v1');
+  assert.deepEqual(provider.configuration?.defaults, DEFAULT_MINIMAX_CONFIG);
+  assert.deepEqual(provider.configuration?.sections.flatMap(section => section.fields.map(field => field.path)), [
+    'generationDefaults.maxOutputTokens',
+    'generationDefaults.temperature',
+    'generationDefaults.topP',
+    'generationDefaults.thinkingMode',
+  ]);
+});
+
+test('DashScope preset exposes only conservative cross-Qwen controls', () => {
+  const catalog = getProviderCatalog();
+  const provider = catalog.providers.find(item => item.id === 'dashscope');
+  const preset = catalog.presets.find(item => item.id === 'dashscope');
+  assert.ok(provider);
+  assert.ok(preset);
+  assert.equal(provider.selectable, true);
+  assert.equal(provider.verificationState, 'transport-ready');
+  assert.equal(preset.providerType, 'dashscope');
+  assert.equal(preset.baseUrl, 'https://dashscope.aliyuncs.com/compatible-mode/v1');
+  assert.deepEqual(provider.configuration?.defaults, DEFAULT_DASHSCOPE_CONFIG);
+  assert.deepEqual(provider.configuration?.sections.flatMap(section => section.fields.map(field => field.path)), [
+    'generationDefaults.maxOutputTokens',
+    'generationDefaults.temperature',
+    'generationDefaults.topP',
+    'generationDefaults.thinkingMode',
+    'generationDefaults.thinkingBudgetTokens',
+  ]);
+});
+
+test('Zhipu preset exposes only fields supported by the live GLM matrix', () => {
+  const catalog = getProviderCatalog();
+  const provider = catalog.providers.find(item => item.id === 'zhipu');
+  const preset = catalog.presets.find(item => item.id === 'zhipu');
+  assert.ok(provider);
+  assert.ok(preset);
+  assert.equal(provider.selectable, true);
+  assert.equal(provider.verificationState, 'transport-ready');
+  assert.equal(preset.providerType, 'zhipu');
+  assert.equal(preset.baseUrl, 'https://open.bigmodel.cn/api/paas/v4');
+  assert.deepEqual(provider.configuration?.sections.flatMap(section => section.fields.map(field => field.path)), [
+    'generationDefaults.maxOutputTokens',
+    'generationDefaults.temperature',
+    'generationDefaults.topP',
+    'generationDefaults.thinkingMode',
+    'generationDefaults.reasoningEffort',
+  ]);
+});
+
+test('Kimi preset exposes only the fields that passed live qualification', () => {
+  const catalog = getProviderCatalog();
+  const provider = catalog.providers.find(item => item.id === 'kimi');
+  const preset = catalog.presets.find(item => item.id === 'kimi');
+  assert.ok(provider);
+  assert.ok(preset);
+  assert.equal(provider.selectable, true);
+  assert.equal(provider.verificationState, 'transport-ready');
+  assert.equal(preset.providerType, 'kimi');
+  assert.equal(preset.baseUrl, 'https://api.moonshot.cn/v1');
+  assert.deepEqual(
+    provider.configuration?.sections.flatMap(section => section.fields.map(field => field.path)),
+    [
+      'generationDefaults.maxOutputTokens',
+      'generationDefaults.thinkingMode',
+      'generationDefaults.reasoningEffort',
+    ],
+  );
 });
 
 test('vLLM preset exposes request fields and runtime metadata instead of startup arguments', () => {

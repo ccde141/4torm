@@ -8,6 +8,7 @@ import { openAICompatibleAdapter } from './openai-compatible.js';
 import { openRouterAdapter } from './openrouter.js';
 import { ollamaAdapter } from './ollama.js';
 import { siliconFlowThinkingAdapter } from './siliconflow-thinking.js';
+import { siliconFlowAdapter } from './siliconflow.js';
 import type { ProviderAdapter, ProviderModelIdentity } from '../contracts/provider-adapter.js';
 import type { ProviderType } from '../contracts/provider-config.js';
 import { zhipuGlmAdapter } from './zhipu-glm.js';
@@ -24,6 +25,7 @@ const PROVIDER_ADAPTERS: ProviderAdapter[] = [
   dashScopeAdapter,
   openRouterAdapter,
   miniMaxAdapter,
+  siliconFlowAdapter,
   siliconFlowThinkingAdapter,
   openAICompatibleAdapter,
 ];
@@ -32,6 +34,12 @@ const EXPLICIT_PROVIDER_ADAPTERS: Partial<Record<ProviderType, string>> = {
   'openai-cloud': 'openai-compatible',
   'openai-compatible': 'openai-compatible',
   deepseek: 'deepseek',
+  kimi: 'kimi',
+  dashscope: 'dashscope',
+  zhipu: 'zhipu-glm',
+  openrouter: 'openrouter',
+  minimax: 'minimax',
+  siliconflow: 'siliconflow',
   'llama-cpp': 'llama-cpp',
   'lm-studio': 'lmstudio',
   ollama: 'ollama',

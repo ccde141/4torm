@@ -5,13 +5,57 @@ import path from 'node:path';
 import test from 'node:test';
 import { callLLM } from './llm-bridge.js';
 
-async function withProvider(run: (dataDir: string) => Promise<void>) {
+async function withProvider(
+  run: (dataDir: string) => Promise<void>,
+  provider: Record<string, unknown> = {},
+) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-stream-end-'));
   await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [{
-    id: 'pvd_test', baseUrl: 'https://example.test/v1', models: ['test-model'],
+    id: 'pvd_test', baseUrl: 'https://example.test/v1', models: ['test-model'], ...provider,
   }] }));
   try { await run(dataDir); } finally { await fs.rm(dataDir, { recursive: true, force: true }); }
 }
+
+test('MiniMax cumulative SSE values are emitted once and keep the latest reasoning envelope', async () => {
+  await withProvider(async dataDir => {
+    const stream = openSseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: {
+        reasoning_content: '先思考', reasoning_details: [{ type: 'reasoning.text', text: '先思考' }],
+        content: '答',
+      } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: {
+        reasoning_content: '先思考，再检查', reasoning_details: [{ type: 'reasoning.text', text: '先思考，再检查' }],
+        content: '答案',
+      }, finish_reason: 'stop' }] })}`,
+      'data: [DONE]',
+    ]);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => stream.response;
+    try {
+      const chunks: string[] = [];
+      const reasoning: string[] = [];
+      const result = await expectPromptCompletion(callLLM({
+        dataDir,
+        fullModelKey: 'pvd_test:MiniMax-M3',
+        messages: [{ role: 'user', content: 'test' }],
+        onChunk: chunk => chunks.push(chunk),
+        onReasoning: chunk => reasoning.push(chunk),
+      }), stream.close);
+      assert.equal(result.content, '答案');
+      assert.equal(result.reasoningContent, '先思考，再检查');
+      assert.equal(chunks.join(''), '答案');
+      assert.equal(reasoning.join(''), '先思考，再检查');
+      assert.deepEqual(result.reasoningEnvelope?.value, [
+        { type: 'reasoning.text', text: '先思考，再检查' },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }, {
+    baseUrl: 'https://api.minimaxi.com/v1', models: ['MiniMax-M3'],
+    providerType: 'minimax', transport: 'openai-chat-completions',
+  });
+});
 
 function openSseResponse(lines: string[]) {
   const encoder = new TextEncoder();

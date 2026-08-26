@@ -15,8 +15,11 @@ test('provider identity and wire transport remain independent discriminators', (
   assert.equal(isTransportId('llama-cpp'), false);
 });
 
-test('the initial qualification scope includes generic cloud and llama.cpp', () => {
+test('provider identities include the cloud candidates without conflating them with transports', () => {
   assert.ok(PROVIDER_TYPES.includes('openai-compatible'));
   assert.ok(PROVIDER_TYPES.includes('llama-cpp'));
+  for (const provider of ['kimi', 'dashscope', 'zhipu', 'openrouter', 'minimax', 'siliconflow'] as const) {
+    assert.equal(isProviderType(provider), true);
+  }
   assert.ok(TRANSPORT_IDS.includes('openai-chat-completions'));
 });

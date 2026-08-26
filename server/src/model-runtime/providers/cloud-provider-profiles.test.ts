@@ -56,13 +56,13 @@ test('DeepSeek chat and third-party hosted models are not forced into thinking m
   assert.equal(hostedBody.temperature, 0.7);
 });
 
-test('DashScope Qwen reasoning models enable and preserve thinking', () => {
+test('DashScope Qwen reasoning models inherit platform thinking defaults', () => {
   for (const baseUrl of ['https://dashscope.aliyuncs.com/compatible-mode/v1', 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1']) {
     const identity = { baseUrl, model: 'qwen3-max' };
     const body = normalizeChatRequestBody(identity, { ...baseBody, model: identity.model });
     assert.equal(resolveProviderAdapter(identity).id, 'dashscope');
-    assert.equal(body.enable_thinking, true);
-    assert.equal(body.preserve_thinking, true);
+    assert.equal('enable_thinking' in body, false);
+    assert.equal('preserve_thinking' in body, false);
     assert.equal('thinking_budget' in body, false);
     assert.equal(resolveProviderModelCapabilities(identity).reasoningHistory, 'reasoning_content');
   }
@@ -110,4 +110,85 @@ test('unknown or absent profiles fall back to automatic detection', () => {
   assert.equal(resolveProviderAdapter({
     baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen3-235B-A22B',
   }).id, 'openai-compatible');
+});
+
+test('explicit cloud provider identity wins over endpoint and model heuristics', () => {
+  const cases = [
+    ['kimi', 'kimi'],
+    ['dashscope', 'dashscope'],
+    ['zhipu', 'zhipu-glm'],
+    ['openrouter', 'openrouter'],
+    ['minimax', 'minimax'],
+    ['siliconflow', 'siliconflow'],
+  ] as const;
+  for (const [providerType, adapterId] of cases) {
+    assert.equal(resolveProviderAdapter({
+      baseUrl: 'http://localhost:9999/v1', model: 'unrelated-model', providerType,
+    }).id, adapterId);
+  }
+});
+
+test('provider-wide identities do not force model-specific thinking fields', () => {
+  const cases = [
+    { providerType: 'dashscope', model: 'qwen-turbo', forbidden: ['enable_thinking', 'preserve_thinking'] },
+    { providerType: 'zhipu', model: 'glm-4-flash', forbidden: ['thinking'] },
+    { providerType: 'siliconflow', model: 'vendor/plain-chat', forbidden: ['enable_thinking'] },
+  ] as const;
+  for (const item of cases) {
+    const body = normalizeChatRequestBody(
+      { baseUrl: 'http://localhost:9999/v1', model: item.model, providerType: item.providerType },
+      { ...baseBody, model: item.model },
+    );
+    for (const field of item.forbidden) assert.equal(field in body, false);
+  }
+});
+
+test('explicit provider identity applies only explicit model-specific normalization', () => {
+  const dashscope = normalizeChatRequestBody(
+    {
+      baseUrl: 'http://localhost:9999/v1', model: 'qwen3-max', providerType: 'dashscope',
+      generationDefaults: { thinkingMode: 'enabled' },
+    },
+    { ...baseBody, model: 'qwen3-max' },
+  );
+  assert.equal(dashscope.enable_thinking, true);
+  assert.equal('preserve_thinking' in dashscope, false);
+
+  const zhipu = normalizeChatRequestBody(
+    { baseUrl: 'http://localhost:9999/v1', model: 'glm-5.2', providerType: 'zhipu' },
+    { ...baseBody, model: 'glm-5.2' },
+  );
+  assert.deepEqual(zhipu.thinking, { type: 'enabled', clear_thinking: false });
+});
+
+test('Zhipu identity applies qualified GLM generation fields by model generation', () => {
+  const glm53 = normalizeChatRequestBody({
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-5.3', providerType: 'zhipu',
+    generationDefaults: {
+      maxOutputTokens: 4096, temperature: 0.8, topP: 0.9,
+      thinkingMode: 'enabled', reasoningEffort: 'high',
+    },
+  }, { ...baseBody, model: 'glm-5.3', max_tokens: 4096 });
+  assert.deepEqual(glm53.thinking, { type: 'enabled', clear_thinking: false });
+  assert.equal(glm53.reasoning_effort, 'high');
+  assert.equal(glm53.temperature, 0.8);
+  assert.equal(glm53.top_p, 0.9);
+
+  const glm47 = normalizeChatRequestBody({
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.7', providerType: 'zhipu',
+    generationDefaults: { thinkingMode: 'disabled' },
+  }, { ...baseBody, model: 'glm-4.7' });
+  assert.deepEqual(glm47.thinking, { type: 'disabled' });
+  assert.equal('reasoning_effort' in glm47, false);
+});
+
+test('Zhipu refuses model-specific controls that the selected GLM cannot honor', () => {
+  assert.throws(() => normalizeChatRequestBody({
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.7', providerType: 'zhipu',
+    generationDefaults: { reasoningEffort: 'low' },
+  }, { ...baseBody, model: 'glm-4.7' }), /reasoningEffort.*仅适用于 GLM-5\.2 和 GLM-5\.3/);
+  assert.throws(() => normalizeChatRequestBody({
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', providerType: 'zhipu',
+    generationDefaults: { thinkingMode: 'enabled' },
+  }, { ...baseBody, model: 'glm-4-flash' }), /未验证显式思考模式/);
 });
