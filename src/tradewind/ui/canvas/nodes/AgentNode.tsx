@@ -5,8 +5,10 @@ import { useEffect, useRef, useState } from 'react';
 import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
 import { subscribe, unsubscribe } from '../../stream/unified-client';
 import { feedbackFromNodeEvent, type NodeTerminalOutcome } from '../node-feedback';
+import { useLocale } from '../../../../i18n/LocaleContext';
 
 export function AgentNode({ id, data, selected }: NodeProps) {
+  const { t } = useLocale();
   const config = (data as any)?.config ?? {};
   const label = (data as any)?.label ?? 'Agent';
   const memo = (data as any)?.memo ?? '';
@@ -76,9 +78,9 @@ export function AgentNode({ id, data, selected }: NodeProps) {
       <button
         className={`tw-node__chat-btn ${running ? 'tw-node__chat-btn--active' : 'tw-node__chat-btn--idle'}`}
         onClick={openChat}
-        title={running ? '打开对话' : '需要先启动工作流'}
+        title={running ? t('tradewind.canvas.agent.openChat') : t('tradewind.canvas.agent.startFirst')}
       >
-        {running ? '💬 交流' : '未运行'}
+        {running ? t('tradewind.canvas.agent.chat') : t('tradewind.canvas.node.notRunning')}
       </button>
       <Handle type="source" position={Position.Right} className="tw-handle" />
     </div>

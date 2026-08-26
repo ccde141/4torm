@@ -62,3 +62,11 @@ test('opening a workflow workspace uses the stable workflow ID', async (t) => {
 
   assert.equal(requested, '/api/tradewind/workflow/wf%20name%2F01/open-workspace');
 });
+
+test('workflow requests use the caller locale fallback without hiding server status', async (t) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 503 });
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await assert.rejects(deleteWorkflow('wf-stable', 'Failed to delete workflow'), /Failed to delete workflow \(HTTP 503\)/);
+});

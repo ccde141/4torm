@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useLocale } from '../../../i18n/LocaleContext';
 import { renderTextWithCode } from '../../../engine/markdown';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
 import AskCard from '../../../components/chat/AskCard';
@@ -49,6 +50,9 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   /** 当前工作室页是否可见。仅用于桌面拖拽路径接收，会议助理实例（chairBase 存在）始终不接收。 */
   active?: boolean;
 }) {
+  const { t } = useLocale();
+  const tRef = useRef(t);
+  tRef.current = t;
   const confirm = useConfirm();
   const [seat, setSeat] = useState<SeatStatus | null>(null);
   const [history, setHistory] = useState<DisplayMessage[]>([]);
@@ -90,7 +94,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   const streaming = localStreaming || externalRunning;
   const queue = runners.getQueue(seatId);
   const activeDispatch = isChair ? null : findActiveSeatDispatch(dispatches, seatId);
-  const dispatchActivity = activeDispatch ? formatSeatDispatchActivity(activeDispatch) : null;
+  const dispatchActivity = activeDispatch ? formatSeatDispatchActivity(activeDispatch, t) : null;
   const busy = streaming || !!activeDispatch;
   const taskboardObservations = useTaskboardObservations('cyclone', `${workshopId}:${seatId}`, streaming && !isChair);
   const dispatchStatuses = useRef(new Map<string, CycloneDispatch['status']>());
@@ -154,18 +158,18 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
     const r = await fetch(url);
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
-      const msg = e?.error || `加载${isChair ? '会议助理' : '工位'}失败（HTTP ${r.status}）`;
-      console.error('[cyclone] 会话加载失败', msg);
+      const msg = e?.error || tRef.current(isChair ? 'cyclone.seatChat.loadChairFailed' : 'cyclone.seatChat.loadSeatFailed', { status: r.status });
+      console.error(`[cyclone] ${tRef.current('cyclone.seatChat.loadFailedLog')}`, msg);
       setLoadError(msg);
       return;
     }
     setLoadError(null);
     const raw = await r.json();
     const s: SeatStatus = isChair
-      ? { id: '__chair__', title: `会议助理 / ${raw.chairAgentId}`, messages: raw.messages, pending: raw.pending }
+      ? { id: '__chair__', title: tRef.current('cyclone.seatChat.chairTitle', { agent: raw.chairAgentId }), messages: raw.messages, pending: raw.pending }
       : raw;
     setSeat(s);
-    setHistory(contextToDisplay(s.messages));
+    setHistory(contextToDisplay(s.messages, tRef.current('cyclone.seatChat.askFallback')));
     revisionRef.current = s.updatedAt || '';
     if (notifyParent) onReloadedRef.current?.();
   }, [workshopId, seatId, chairBase]);
@@ -278,8 +282,13 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   async function resetContext(mode: 'clear' | 'summary') {
     if (busy) return;
     const isChair = seatId.startsWith('__chair__');
-    const label = isChair ? '会议助理私聊' : '工位私聊';
-    if (!(await confirm({ title: `${mode === 'summary' ? '归档并摘要重置' : '归档并清空'}当前${label}上下文？`, message: '共享工作区文件不会被删除。', confirmText: mode === 'summary' ? '归档重置' : '归档清空', danger: true }))) return;
+    const label = t(isChair ? 'cyclone.seatChat.chairScope' : 'cyclone.seatChat.seatScope');
+    const action = t(mode === 'summary' ? 'cyclone.seatChat.resetSummary' : 'cyclone.seatChat.resetClear');
+    if (!(await confirm({
+      title: t('cyclone.seatChat.resetTitle', { action, scope: label }),
+      message: t('cyclone.seatChat.resetMessage'),
+      confirmText: t(mode === 'summary' ? 'cyclone.seatChat.confirmSummary' : 'cyclone.seatChat.confirmClear'), danger: true,
+    }))) return;
     const url = isChair
       ? `${chairBase}/reset-context`
       : `/api/cyclone/workshop/${workshopId}/seat/${seatId}/reset-context`;
@@ -290,7 +299,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
     });
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
-      alert(e?.error || `重置${label}上下文失败（HTTP ${r.status}）`);
+      alert(e?.error || t('cyclone.seatChat.resetFailed', { scope: label, status: r.status }));
       return;
     }
     await reload(true);
@@ -316,14 +325,14 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ index: editingMessageIndex, content: editMessageContent }),
     });
-    if (!r.ok) { alert((await r.json().catch(() => ({})))?.error || '编辑消息失败'); return; }
+    if (!r.ok) { alert((await r.json().catch(() => ({})))?.error || t('cyclone.seatChat.editFailed')); return; }
     cancelEditMessage();
     await reload(true);
   }
 
   async function deleteMessage(message: DisplayMessage) {
     if (message.sourceIndex === undefined) return;
-    if (!(await confirm({ title: '删除此消息？', message: '此操作不可撤销。', confirmText: '删除', danger: true }))) return;
+    if (!(await confirm({ title: t('cyclone.seatChat.deleteTitle'), message: t('cyclone.seatChat.deleteMessage'), confirmText: t('common.delete'), danger: true }))) return;
     const url = isChair && chairBase
       ? `${chairBase}/delete-message`
       : `/api/cyclone/workshop/${workshopId}/seat/${seatId}/delete-message`;
@@ -331,7 +340,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ index: message.sourceIndex }),
     });
-    if (!r.ok) { alert((await r.json().catch(() => ({})))?.error || '删除消息失败'); return; }
+    if (!r.ok) { alert((await r.json().catch(() => ({})))?.error || t('cyclone.seatChat.deleteFailed')); return; }
     if (editingMessageIndex === message.sourceIndex) cancelEditMessage();
     await reload(true);
   }
@@ -363,7 +372,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
 
   if (!seat) {
     if (loadError) return <div style={{ opacity: .65, margin: 'auto', padding: 'var(--space-4)', textAlign: 'center', color: 'var(--color-danger)' }}>{loadError}</div>;
-    return <div style={{ opacity: .5, margin: 'auto' }}>{seatId.startsWith('__chair__') ? '加载会议助理…' : '加载工位…'}</div>;
+    return <div style={{ opacity: .5, margin: 'auto' }}>{seatId.startsWith('__chair__') ? t('cyclone.seatChat.loadingChair') : t('cyclone.seatChat.loadingSeat')}</div>;
   }
   // 挂起态：若历史尚未包含 AskCard，才使用 seat.pending 兼容旧数据。
   const pending = !busy ? seat.pending : undefined;
@@ -401,7 +410,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
       </div>
       {showJumpButton && (
         <button className="chat__jump-bottom" onClick={() => scrollToBottom('smooth')}
-          aria-label="回到底部" title="回到最新消息">↓</button>
+          aria-label={t('cyclone.seatChat.jumpBottom')} title={t('cyclone.seatChat.jumpLatest')}>↓</button>
       )}
       </div>
 
@@ -416,34 +425,34 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
             value={input}
             onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInput(); } }}
-            placeholder={busy ? '工位执行中…（可继续输入，发送将排队）' : (pending ? '也可在上方卡片回答，或在此自由输入…（Enter 发送，Shift+Enter 换行）' : '对工位说点什么…（Enter 发送，Shift+Enter 换行）')}
+            placeholder={busy ? t('cyclone.seatChat.busyPlaceholder') : (pending ? t('cyclone.seatChat.pendingPlaceholder') : t('cyclone.seatChat.placeholder'))}
             rows={1}
-            aria-label="对工位发送消息" />
+            aria-label={t('cyclone.seatChat.inputLabel')} />
           {busy ? (
             <>
               <button className="chat__send-btn" onClick={sendInput}
                 disabled={!input.trim() || queue.length >= MAX_QUEUE}
-                title={queue.length >= MAX_QUEUE ? '队列已满（最多 3 条）' : '加入队列'}>
+                title={queue.length >= MAX_QUEUE ? t('cyclone.composer.queueFull') : t('cyclone.composer.enqueue')}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
               </button>
               {localStreaming && (
-                <button className="chat__stop-btn" onClick={stop} title="停止生成">
+                <button className="chat__stop-btn" onClick={stop} title={t('cyclone.composer.stop')}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                 </button>
               )}
             </>
           ) : (
-            <button className="chat__send-btn" onClick={sendInput} disabled={!input.trim()} title={pending ? '回答' : '发送'}>
+            <button className="chat__send-btn" onClick={sendInput} disabled={!input.trim()} title={pending ? t('cyclone.seatChat.answer') : t('cyclone.composer.send')}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
             </button>
           )}
         </div>
         <div style={inputHintStyle}>
-          <span>快捷指令：</span>
+          <span>{t('cyclone.seatChat.commands')}</span>
           <code>/reset</code>
-          <span>清空</span>
+          <span>{t('cyclone.seatChat.clear')}</span>
           <code>/reset summary</code>
-          <span>归档并保留摘要</span>
+          <span>{t('cyclone.seatChat.summary')}</span>
         </div>
       </div>
       {/* 任务板挂在整列层：竖条/抽屉贯穿全高，输入栏 z-index 高于抽屉→展开也不挡发送按钮（与季风同构） */}
@@ -470,30 +479,31 @@ function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onS
   onCancelEdit: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useLocale();
   if (msg.kind === 'dispatch-receipt') {
     return <SeatDispatchReceipt content={msg.content} id={msg.id} />;
   }
   if (editing) {
     return (
       <div className={`chat__message chat__message--${msg.role === 'user' ? 'user' : 'assistant'}`}>
-        <div className="chat__avatar">{msg.role === 'user' ? '你' : msg.role === 'system' ? '档' : 'AI'}</div>
+        <div className="chat__avatar">{msg.role === 'user' ? t('chat.you') : msg.role === 'system' ? t('cyclone.roomFeed.archiveAvatar') : 'AI'}</div>
         <div className="chat__bubble chat__bubble--editing">
           <textarea className="chat__edit-textarea" value={editContent} onChange={e => onEditContent(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') onCancelEdit(); if (e.key === 'Enter' && e.ctrlKey) onSaveEdit(); }} rows={4} autoFocus />
-          <div className="chat__edit-actions"><button onClick={onSaveEdit}>保存</button><button onClick={onCancelEdit}>取消</button></div>
+          <div className="chat__edit-actions"><button onClick={onSaveEdit}>{t('common.save')}</button><button onClick={onCancelEdit}>{t('common.cancel')}</button></div>
         </div>
       </div>
     );
   }
   const actions = msg.sourceIndex === undefined ? null : (
     <div className="chat__bubble-actions">
-      <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={onStartEdit}>✏</button>
-      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={onDelete}>🗑</button>
+      <button className="chat__msg-action-btn" title={t('common.edit')} aria-label={t('chat.editMessage')} onClick={onStartEdit}>✏</button>
+      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title={t('common.delete')} aria-label={t('chat.deleteMessage')} onClick={onDelete}>🗑</button>
     </div>
   );
   if (msg.role === 'user') {
     return (
       <div className="chat__message chat__message--user">
-        <div className="chat__avatar">你</div>
+        <div className="chat__avatar">{t('chat.you')}</div>
         <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>{actions}</div>
       </div>
     );
@@ -501,7 +511,7 @@ function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onS
   if (msg.role === 'system') {
     return (
       <div className="chat__message chat__message--assistant chat__message--archive-summary">
-        <div className="chat__avatar">档</div>
+        <div className="chat__avatar">{t('cyclone.roomFeed.archiveAvatar')}</div>
         <div className="chat__bubble"><div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>{actions}</div>
       </div>
     );

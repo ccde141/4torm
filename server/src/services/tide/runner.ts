@@ -23,6 +23,7 @@ import { parseInterval } from './schedule-parser';
 import { resolveTarget, resolveTargetSessionId, saveTurn } from './session-resolver';
 import { SELF_LOOP_INSTRUCTION, extractNextPrompt } from './self-loop';
 import { withAgentActivity } from '../../engine/shared/agent-activity.js';
+import { normalizeSystemMessages } from '../../engine/shared/system-messages.js';
 
 /** 10 分钟硬超时 */
 const TIMEOUT_MS = 10 * 60 * 1000;
@@ -157,11 +158,11 @@ async function executeTideTask(dataDir: string, task: TideTask, isManual: boolea
     ? `## 最高目标（每轮必须围绕此目标行动）\n${task.originalPrompt}\n\n## 本轮具体任务\n${task.prompt}`
     : task.prompt;
 
-  const chatMessages: ContextMessage[] = [
+  const chatMessages = normalizeSystemMessages([
     { role: 'system', content: systemPrompt },
     ...resolved.history,
     { role: 'user', content: userMessage },
-  ];
+  ]);
 
   const runner = new SessionRunner(opts);
   const timer = setTimeout(() => runner.abort(), TIMEOUT_MS);

@@ -32,6 +32,12 @@ test('explicit Kimi profile normalizes compatible proxy probes', () => {
   assert.equal(requestBody.max_completion_tokens, 64);
 });
 
+test('llama.cpp probe disables template thinking so tool calls fit the probe budget', () => {
+  const body = buildNativeProbeBody('qwen3.5-9b-q6', 'http://127.0.0.1:8080/v1', 'llama-cpp');
+  assert.deepEqual(body.chat_template_kwargs, { enable_thinking: false });
+  assert.equal(body.max_tokens, 64);
+});
+
 test('native probe exposes the provider error without the generic connection hint', () => {
   const error = new LLMError('request failed', 400, {
     error: { message: 'invalid temperature: only 1 is allowed for this model' },

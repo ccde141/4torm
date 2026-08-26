@@ -43,6 +43,23 @@ export interface McpConfigPayload {
   headers?: Record<string, string>;
 }
 
+export type McpFormErrorCode =
+  | 'nameRequired' | 'commandRequired' | 'urlRequired' | 'objectRequired'
+  | 'stringRequired' | 'unsupportedTransport' | 'argsStringArray'
+  | 'singleNameRequired' | 'invalidJson';
+
+export class McpFormError extends Error {
+  code: McpFormErrorCode;
+  values?: Record<string, string>;
+
+  constructor(code: McpFormErrorCode, values?: Record<string, string>) {
+    super(code);
+    this.name = 'McpFormError';
+    this.code = code;
+    this.values = values;
+  }
+}
+
 export function emptyMcpForm(): McpFormState {
   return {
     name: '', enabled: true, transport: 'stdio', command: '', args: [], env: [], cwd: '',
@@ -75,10 +92,10 @@ export function formFromServer(server: McpServer): McpFormState {
 
 export function payloadFromForm(form: McpFormState): McpConfigPayload {
   const name = form.name.trim();
-  if (!name) throw new Error('名称不能为空');
+  if (!name) throw new McpFormError('nameRequired');
   if (form.transport === 'stdio') {
     const command = form.command.trim();
-    if (!command) throw new Error('启动命令不能为空');
+    if (!command) throw new McpFormError('commandRequired');
     return {
       name, enabled: form.enabled, transport: 'stdio', command,
       args: [...form.args], env: pairRecord(form.env),
@@ -87,23 +104,25 @@ export function payloadFromForm(form: McpFormState): McpConfigPayload {
     };
   }
   const url = form.url.trim();
-  if (!url) throw new Error('服务 URL 不能为空');
+  if (!url) throw new McpFormError('urlRequired');
   return {
     name, enabled: form.enabled, transport: form.transport,
     url, headers: pairRecord(form.headers),
   };
 }
 
-function objectValue(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} 必须是对象`);
+function objectValue(value: unknown, field: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new McpFormError('objectRequired', { field });
+  }
   return value as Record<string, unknown>;
 }
 
-function stringRecord(value: unknown, label: string): Record<string, string> {
+function stringRecord(value: unknown, field: string): Record<string, string> {
   if (value === undefined) return {};
-  const input = objectValue(value, label);
+  const input = objectValue(value, field);
   for (const [key, item] of Object.entries(input)) {
-    if (typeof item !== 'string') throw new Error(`${label}.${key} 必须是字符串`);
+    if (typeof item !== 'string') throw new McpFormError('stringRequired', { field: `${field}.${key}` });
   }
   return input as Record<string, string>;
 }
@@ -112,7 +131,7 @@ function transportValue(value: unknown, hasUrl: boolean): McpTransport {
   if (value === undefined) return hasUrl ? 'streamable-http' : 'stdio';
   if (value === 'http' || value === 'streamable-http' || value === 'streamableHttp') return 'streamable-http';
   if (value === 'sse' || value === 'stdio') return value;
-  throw new Error(`不支持的 MCP transport：${String(value)}`);
+  throw new McpFormError('unsupportedTransport', { transport: String(value) });
 }
 
 function importedConfig(name: string, value: unknown): McpConfigPayload {
@@ -125,7 +144,7 @@ function importedConfig(name: string, value: unknown): McpConfigPayload {
   if (transport === 'stdio') {
     form.command = typeof input.command === 'string' ? input.command : '';
     if (input.args !== undefined && (!Array.isArray(input.args) || input.args.some(item => typeof item !== 'string'))) {
-      throw new Error(`MCP ${name}.args 必须是字符串数组`);
+      throw new McpFormError('argsStringArray', { field: `MCP ${name}.args` });
     }
     form.args = input.args ? [...input.args] as string[] : [];
     form.env = pairs(stringRecord(input.env, `MCP ${name}.env`));
@@ -138,10 +157,13 @@ function importedConfig(name: string, value: unknown): McpConfigPayload {
 }
 
 export function parseMcpConfigJson(text: string): McpConfigPayload[] {
-  const root = objectValue(JSON.parse(text) as unknown, 'MCP JSON');
+  let parsed: unknown;
+  try { parsed = JSON.parse(text) as unknown; }
+  catch { throw new McpFormError('invalidJson'); }
+  const root = objectValue(parsed, 'MCP JSON');
   const wrapped = root.mcpServers === undefined ? null : objectValue(root.mcpServers, 'mcpServers');
   if (wrapped) return Object.entries(wrapped).map(([name, value]) => importedConfig(name, value));
   const name = typeof root.name === 'string' ? root.name : '';
-  if (!name) throw new Error('单项 MCP 配置必须包含 name');
+  if (!name) throw new McpFormError('singleNameRequired');
   return [importedConfig(name, root)];
 }

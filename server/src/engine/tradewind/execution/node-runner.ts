@@ -38,6 +38,7 @@ import { execMemoryTool, MEMORY_TOOL_NAMES, buildMemoryToolDefs } from '../../sh
 import { NodeEventEmitter } from '../streaming/node-event-emitter';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { normalizeSystemMessages } from '../../shared/system-messages.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -243,7 +244,12 @@ export class NodeRunner {
    * 与 push() 不同：不进队列、不触发 LLM 调用、立刻可见于下一次对话。
    */
   appendSystemMessage(content: string): void {
-    this.messages.push({ role: 'system', content });
+    const normalized = normalizeSystemMessages([
+      ...this.messages,
+      { role: 'system', content },
+    ]);
+    this.messages.length = 0;
+    this.messages.push(...normalized);
     void this.persist();
   }
 

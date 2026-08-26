@@ -2,6 +2,7 @@ import {
   PROVIDER_PROFILE_OPTIONS,
   type ProviderProfileSelection,
 } from '../../llm/provider-profiles';
+import { useLocale } from '../../i18n/LocaleContext';
 
 interface ModelProfileSelectProps {
   value: ProviderProfileSelection;
@@ -9,10 +10,20 @@ interface ModelProfileSelectProps {
 }
 
 export function ModelProfileSelect({ value, onChange }: ModelProfileSelectProps) {
+  const { t } = useLocale();
+  const labels: Partial<Record<ProviderProfileSelection, string>> = {
+    auto: t('model.profile.auto'),
+    'openai-compatible': t('model.profile.openai'),
+    'llama-cpp': t('model.profile.llamaCpp'),
+    'zhipu-glm': t('model.profile.zhipu'),
+    dashscope: t('model.profile.dashscope'),
+    'siliconflow-thinking': t('model.profile.siliconflow'),
+  };
   return (
     <select
-      aria-label="模型协议"
-      title="请求协议；自动识别不正确时再手动选择"
+      className="provider-model-profile-select"
+      aria-label={t('model.profile.label')}
+      title={t('model.profile.hint')}
       value={value}
       onChange={event => onChange(event.target.value as ProviderProfileSelection)}
       style={{
@@ -26,7 +37,7 @@ export function ModelProfileSelect({ value, onChange }: ModelProfileSelectProps)
       }}
     >
       {PROVIDER_PROFILE_OPTIONS.map(option => (
-        <option key={option.value} value={option.value}>{option.label}</option>
+        <option key={option.value} value={option.value}>{labels[option.value] ?? option.label}</option>
       ))}
     </select>
   );

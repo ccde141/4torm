@@ -72,8 +72,8 @@ test('气旋工位回合用一个气泡承载工作过程和最终回答', () =>
   assert.match(source, /turn\.finalContent/);
   assert.match(source, /turn\.actionMessage/);
   assert.match(source, /streaming \|\| blocks\.some/);
-  assert.match(source, /aria-label="编辑最终回复"/);
-  assert.match(source, /aria-label="删除最终回复"/);
+  assert.match(source, /aria-label=\{t\('chat\.editMessage'\)\}/);
+  assert.match(source, /aria-label=\{t\('chat\.deleteMessage'\)\}/);
   assert.doesNotMatch(source, /!msg\.content && actions/);
 });
 

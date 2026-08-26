@@ -21,8 +21,12 @@ import { deleteWorkflow, openWorkflowWorkspace } from '../workflow-client';
 import { validateGraph } from '../workflow-validation';
 import type { WorkflowMode } from '../../types';
 import type { ExecutionPhase } from '../hooks/execution-phase';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 export default function TradeWindPage() {
+  const { t } = useLocale();
+  const tRef = useRef(t);
+  tRef.current = t;
   const store = useWorkflowStore();
   const execution = useExecution();
   const [listVisible, setListVisible] = useState(false);
@@ -78,7 +82,7 @@ export default function TradeWindPage() {
       }
       // 没有可恢复的工作流，开一张空白画布（仅内存，不落盘；加了节点保存/运行时才创建目录）
       const newId = `wf-${Date.now().toString(36)}`;
-      store.loadGraph({ nodes: [], edges: [] }, newId, '未命名工作流');
+      store.loadGraph({ nodes: [], edges: [] }, newId, tRef.current('tradewind.untitled'));
     };
     init();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -137,7 +141,7 @@ export default function TradeWindPage() {
     }
   });
   const reportAutoSaveError = useEffectEvent((error: unknown) => {
-    setSaveError((error as Error).message || '自动保存失败');
+    setSaveError((error as Error).message || t('tradewind.autoSaveFailed'));
   });
 
   useEffect(() => {
@@ -147,23 +151,23 @@ export default function TradeWindPage() {
 
   const handleRun = useCallback(async (mode: WorkflowMode = 'manual', profileId?: string) => {
     const graph = store.getGraph();
-    const errors = validateGraph(graph, mode);
+    const errors = validateGraph(graph, mode, t);
     if (errors.length > 0) {
-      alert('工作流校验未通过：\n\n' + errors.join('\n'));
+      alert(`${t('tradewind.validationFailed')}\n\n${errors.join('\n')}`);
       return;
     }
     // 运行前先保存：确保后端工作流目录 / workspace 已创建（新建后未手动保存也能直接跑）
     try {
       if (!await store.save()) {
-        setSaveError('空工作流尚未创建工作区');
+        setSaveError(t('tradewind.emptyWorkspace'));
         return;
       }
       setSaveError(null);
       execution.start(graph, store.workflowId, undefined, mode, profileId);
     } catch (error) {
-      setSaveError((error as Error).message || '保存工作流失败');
+      setSaveError((error as Error).message || t('tradewind.saveFailed'));
     }
-  }, [store, execution]);
+  }, [store, execution, t]);
 
   const handleStop = useCallback(() => {
     execution.stop();
@@ -174,35 +178,35 @@ export default function TradeWindPage() {
       if (await store.save()) setSaveTime(Date.now());
       setSaveError(null);
     } catch (error) {
-      setSaveError((error as Error).message || '保存工作流失败');
+      setSaveError((error as Error).message || t('tradewind.saveFailed'));
     }
-  }, [store]);
+  }, [store, t]);
 
   const handleOpenWorkspace = useCallback(async () => {
     try {
       await store.save();
-      await openWorkflowWorkspace(store.workflowId);
+      await openWorkflowWorkspace(store.workflowId, t('tradewind.openWorkspaceFailed'));
       setSaveError(null);
     } catch (error) {
-      setSaveError((error as Error).message || '打开工作流工作区失败');
+      setSaveError((error as Error).message || t('tradewind.openWorkspaceFailed'));
     }
-  }, [store]);
+  }, [store, t]);
 
   const handleNew = useCallback(() => {
     clearPanels();
     setSessionEnded(false);
     const newId = `wf-${Date.now().toString(36)}`;
-    store.loadGraph({ nodes: [], edges: [] }, newId, '未命名工作流');
+    store.loadGraph({ nodes: [], edges: [] }, newId, t('tradewind.untitled'));
     // 不立即落盘：空工作流无内容，等加了节点保存/运行时才创建目录（避免 0 节点幽灵 + 列表噪声）
-  }, [store, clearPanels]);
+  }, [store, clearPanels, t]);
 
   const handleDelete = useCallback(async (id: string) => {
     if (execution.running && id === store.workflowId) {
-      throw new Error('当前工作流正在运行，请先停止后再删除');
+      throw new Error(t('tradewind.deleteRunning'));
     }
-    await deleteWorkflow(id);
+    await deleteWorkflow(id, t('tradewind.workflowList.deleteFailed'));
     if (id === store.workflowId) handleNew();
-  }, [execution.running, store.workflowId, handleNew]);
+  }, [execution.running, store.workflowId, handleNew, t]);
 
   const selectedNode = useMemo(
     () => store.nodes.find((n) => n.id === store.selectedNodeId) ?? null,

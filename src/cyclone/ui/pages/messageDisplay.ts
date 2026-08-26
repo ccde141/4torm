@@ -79,7 +79,7 @@ function displayText(content: string): string {
  * - assistant 的 toolCalls → 卡片块（delegate/contact/普通工具分流），结果从匹配 toolCallId 的 tool 消息取
  * - 普通文本作为气泡
  */
-export function contextToDisplay(stored: StoredMsg[]): DisplayMessage[] {
+export function contextToDisplay(stored: StoredMsg[], askFallback = '需要你的确认'): DisplayMessage[] {
   // 先建 toolCallId → result 索引
   const resultMap = new Map<string, string>();
   for (const m of stored) {
@@ -122,7 +122,7 @@ export function contextToDisplay(stored: StoredMsg[]): DisplayMessage[] {
             catch (e) { console.warn('[cyclone] ask options 解析失败', args.options, e); }
           }
           // result 即用户答案（resume 落库的 role:'tool' 配对）；undefined 表示仍挂起
-          return { kind: 'ask', question: String(args.question ?? '需要你的确认'), options, answered: result !== undefined, reply: result };
+          return { kind: 'ask', question: String(args.question ?? askFallback), options, answered: result !== undefined, reply: result };
         }
         return { kind: 'tool', tool: tc.name, args, result, status: statusOf(result) };
       });

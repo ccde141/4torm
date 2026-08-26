@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLocale } from '../../../i18n/LocaleContext';
 import { renderTextWithCode } from '../../../engine/markdown';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import type { FeedMsg } from './useRoomStreamRunners';
@@ -19,7 +20,10 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
   onDispatchAction: (id: string, action: DispatchAction) => Promise<void>;
   onOpenSeat: (seatId: string) => void;
 }) {
+  const { t } = useLocale();
   const [dispatchOpen, setDispatchOpen] = useState(false);
+  const speakerLabel = m.speaker === '系统' ? t('cyclone.roomFeed.system')
+    : m.speaker === '归档摘要' ? t('cyclone.roomFeed.archiveSpeaker') : m.speaker;
   if (m.kind === 'membership') {
     return (
       <div className={`cyclone-membership-event cyclone-membership-event--${m.membershipAction || 'joined'}`} role="status">
@@ -31,12 +35,12 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
   if (m.kind === 'dispatch-result') {
     return (
       <div className="chat__message chat__message--user cyclone-dispatch-result">
-        <div className="chat__avatar">异</div>
+        <div className="chat__avatar">{t('cyclone.roomFeed.dispatchAvatar')}</div>
         <div className="chat__bubble">
           <button type="button" className="cyclone-dispatch-result__trigger"
             aria-expanded={dispatchOpen} onClick={() => setDispatchOpen(value => !value)}>
             <span>{dispatchOpen ? '▼' : '▶'}</span>
-            <strong>已带入讨论</strong>
+            <strong>{t('cyclone.roomFeed.included')}</strong>
           </button>
           {dispatchOpen && (
             <div className="chat__content cyclone-dispatch-result__body">
@@ -50,25 +54,25 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
   if (editing) {
     return (
       <div className={`chat__message chat__message--${m.isHuman ? 'user' : 'assistant'}`}>
-        <div className="chat__avatar">{m.isHuman ? '你' : m.speaker.slice(0, 2)}</div>
+        <div className="chat__avatar">{m.isHuman ? t('chat.you') : speakerLabel.slice(0, 2)}</div>
         <div className="chat__bubble chat__bubble--editing">
           <textarea className="chat__edit-textarea" value={editContent} onChange={e => onEditContent(e.target.value)}
             onKeyDown={e => { if (e.key === 'Escape') onCancelEdit(); if (e.key === 'Enter' && e.ctrlKey) onSaveEdit(); }} rows={4} autoFocus />
-          <div className="chat__edit-actions"><button onClick={onSaveEdit}>保存</button><button onClick={onCancelEdit}>取消</button></div>
+          <div className="chat__edit-actions"><button onClick={onSaveEdit}>{t('common.save')}</button><button onClick={onCancelEdit}>{t('common.cancel')}</button></div>
         </div>
       </div>
     );
   }
   const actions = m.sourceIndex === undefined ? null : (
     <div className="chat__bubble-actions">
-      <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={onStartEdit}>✏</button>
-      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={onDelete}>🗑</button>
+      <button className="chat__msg-action-btn" title={t('common.edit')} aria-label={t('chat.editMessage')} onClick={onStartEdit}>✏</button>
+      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title={t('common.delete')} aria-label={t('chat.deleteMessage')} onClick={onDelete}>🗑</button>
     </div>
   );
   if (m.isHuman) {
     return (
       <div className="chat__message chat__message--user">
-        <div className="chat__avatar">你</div>
+        <div className="chat__avatar">{t('chat.you')}</div>
         <div className="chat__bubble"><div className="chat__content">{renderTextWithCode(m.content, `room-${prefix}u-${idx}`)}</div>{actions}</div>
       </div>
     );
@@ -77,9 +81,9 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
   const { workSegments, finalContent } = splitTurnSegments(m);
   return (
     <div className={`chat__message chat__message--assistant cyclone-room-turn${m.isArchiveSummary ? ' chat__message--archive-summary' : ''}`}>
-      <div className="chat__avatar">{m.isArchiveSummary ? '档' : m.speaker.slice(0, 2)}</div>
+      <div className="chat__avatar">{m.isArchiveSummary ? t('cyclone.roomFeed.archiveAvatar') : speakerLabel.slice(0, 2)}</div>
       <div className="chat__bubble cyclone-room-turn__bubble">
-        <div className="conv__speaker-label">{m.speaker}</div>
+        <div className="conv__speaker-label">{speakerLabel}</div>
         {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} defaultOpen={false} />}
         <CycloneTurnWorklog segments={workSegments} dispatches={dispatches}
           highlightedId={highlightedId} onDispatchAction={onDispatchAction} onOpenSeat={onOpenSeat}
@@ -102,17 +106,27 @@ function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAct
   onOpenSeat: (seatId: string) => void;
   idPrefix: string;
 }) {
-  if (!segments.length) return null;
+  const { t } = useLocale();
   const tools = segments.flatMap(segment => segment.kind === 'tools' ? segment.tools : []);
   const operationCount = tools.length + segments.filter(segment => segment.kind === 'dispatch').length;
   const failed = tools.filter(tool => tool.status === 'error').length;
   const running = tools.some(tool => tool.status === 'running');
-  const state = failed ? `${failed} 项失败` : running ? '正在执行' : '已完成';
+  const autoOpen = failed > 0 || running;
+  const [open, setOpen] = useState(autoOpen);
+  const wasAutoOpen = useRef(autoOpen);
+  useEffect(() => {
+    if (autoOpen && !wasAutoOpen.current) setOpen(true);
+    wasAutoOpen.current = autoOpen;
+  }, [autoOpen]);
+  if (!segments.length) return null;
+  const state = failed ? t('cyclone.activity.failed', { count: failed })
+    : running ? t('cyclone.activity.running') : t('cyclone.activity.completed');
   return (
-    <details className="cyclone-room-turn__worklog" open={failed > 0 || running}>
+    <details className="cyclone-room-turn__worklog" open={open}
+      onToggle={event => setOpen(event.currentTarget.open)}>
       <summary className="cyclone-room-turn__worklog-summary">
         <span className="cyclone-room-turn__worklog-arrow">▶</span>
-        <span>工作过程{operationCount ? ` · ${operationCount} 项操作` : ''}</span>
+        <span>{t('cyclone.activity.worklog')}{operationCount ? ` · ${t('cyclone.activity.operations', { count: operationCount })}` : ''}</span>
         <span className="cyclone-room-turn__worklog-state">{state}</span>
         {running && <span className="thinking-card__tool-spinner" />}
       </summary>
@@ -138,23 +152,24 @@ function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAct
 }
 
 function CycloneTurnToolItem({ tool }: { tool: FeedTool }) {
+  const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
   const running = tool.status === 'running';
   const resultLines = (tool.result || '').split('\n').filter(Boolean);
-  const summary = resultLines.length > 1 ? `${resultLines.length} 行输出` : resultLines[0]?.slice(0, 60);
+  const summary = resultLines.length > 1 ? t('chat.tool.lineCount', { count: resultLines.length }) : resultLines[0]?.slice(0, 60);
   return (
     <div className={`cyclone-room-turn__tool cyclone-room-turn__tool--${tool.status}`}>
       <button type="button" className="cyclone-room-turn__tool-trigger"
         aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
         <span className={`cyclone-room-turn__tool-arrow${expanded ? ' cyclone-room-turn__tool-arrow--open' : ''}`}>▶</span>
         <code>{tool.tool}</code>
-        <span className="cyclone-room-turn__tool-state">{running ? '执行中' : tool.status === 'error' ? '失败' : summary || '已完成'}</span>
+        <span className="cyclone-room-turn__tool-state">{running ? t('chat.tool.runningShort') : tool.status === 'error' ? t('cyclone.roomFeed.toolFailed') : summary || t('chat.tool.completed')}</span>
         {running && <span className="thinking-card__tool-spinner" />}
       </button>
       {expanded && (
         <div className="cyclone-room-turn__tool-body">
-          {Object.keys(tool.args).length > 0 && <ToolDetail label="参数" value={JSON.stringify(tool.args, null, 2)} />}
-          {tool.result && <ToolDetail label="结果" value={tool.result} />}
+          {Object.keys(tool.args).length > 0 && <ToolDetail label={t('chat.tool.params')} value={JSON.stringify(tool.args, null, 2)} />}
+          {tool.result && <ToolDetail label={t('chat.tool.result')} value={tool.result} />}
         </div>
       )}
     </div>

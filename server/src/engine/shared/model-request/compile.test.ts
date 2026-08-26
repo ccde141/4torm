@@ -117,3 +117,23 @@ test('encodes canonical native tool history when the target uses text tools', ()
     },
   ]);
 });
+
+test('folds every system message into one leading provider message', () => {
+  const messages = compileModelMessages([
+    { role: 'system', content: 'Agent role' },
+    { role: 'user', content: 'Earlier request' },
+    { role: 'assistant', content: 'Earlier answer' },
+    { role: 'system', content: '[历史上下文摘要]\nSummary' },
+    { role: 'user', content: 'Continue' },
+  ], {
+    identity: { baseUrl: 'https://api.example.test/v1', model: 'qwen' },
+    forwardToolNames: new Map(),
+  });
+
+  assert.deepEqual(messages, [
+    { role: 'system', content: 'Agent role\n\n[历史上下文摘要]\nSummary' },
+    { role: 'user', content: 'Earlier request' },
+    { role: 'assistant', content: 'Earlier answer' },
+    { role: 'user', content: 'Continue' },
+  ]);
+});

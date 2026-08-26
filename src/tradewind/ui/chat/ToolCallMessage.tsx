@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ChatMessage } from '../../../types';
 import FileDiffCard, { parseFileEdit } from './FileDiffCard';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 /**
  * ToolCallMessage — 信风工具调用卡片
@@ -11,6 +12,7 @@ import FileDiffCard, { parseFileEdit } from './FileDiffCard';
 export default function ToolCallMessage({ toolCall }: {
   toolCall: NonNullable<ChatMessage['toolCall']>;
 }) {
+  const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
   const fileEdit = parseFileEdit(toolCall);
 
@@ -20,8 +22,8 @@ export default function ToolCallMessage({ toolCall }: {
 
   const resultLines = (toolCall.result || '').split('\n');
   const summary = resultLines.length > 1
-    ? `${resultLines.length} 行`
-    : (resultLines[0]?.slice(0, 60) || '无输出');
+    ? t('tradewind.chat.tools.lines', { count: resultLines.length })
+    : (resultLines[0]?.slice(0, 60) || t('tradewind.chat.tools.noOutput'));
 
   return (
     <div className="tw-chat-row tw-chat-row--assistant">
@@ -43,7 +45,7 @@ export default function ToolCallMessage({ toolCall }: {
           <div className="tw-tool-card__body">
             {toolCall.params && Object.keys(toolCall.params).length > 0 && (
               <div>
-                <div className="tw-tool-card__section-label">参数</div>
+                <div className="tw-tool-card__section-label">{t('tradewind.chat.tools.params')}</div>
                 <pre className="tw-tool-card__pre">
                   {JSON.stringify(toolCall.params, null, 2)}
                 </pre>
@@ -52,7 +54,7 @@ export default function ToolCallMessage({ toolCall }: {
             {toolCall.result && (
               <div>
                 <div className="tw-tool-card__section-label">
-                  结果{toolCall.durationMs ? ` (${toolCall.durationMs}ms)` : ''} {toolCall.status === 'error' ? '✗' : '✓'}
+                  {t('tradewind.chat.tools.result')}{toolCall.durationMs ? ` (${toolCall.durationMs}ms)` : ''} {toolCall.status === 'error' ? '✗' : '✓'}
                 </div>
                 <pre className="tw-tool-card__pre">
                   {toolCall.result}

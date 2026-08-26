@@ -49,3 +49,20 @@ test('成员加入失败时真实抛出且不启动入会发言', async () => {
   );
   assert.equal(calls, 1);
 });
+
+test('邀请使用本地化 fallback 且保留部分成功语义', async () => {
+  let call = 0;
+  const result = await inviteSeatToRoom(async () => {
+    call += 1;
+    return call === 1
+      ? jsonResponse({ participantSeatIds: ['seat-a'] })
+      : sseResponse({ type: 'error' });
+  }, '/room-a', 'seat-a', 'intro', {
+    joinFailed: 'Failed to invite seat',
+    introFailed: 'Introduction failed',
+    missingStream: 'Missing SSE stream',
+    disconnected: 'SSE disconnected',
+  });
+
+  assert.deepEqual(result, { joined: true, introError: 'Introduction failed' });
+});

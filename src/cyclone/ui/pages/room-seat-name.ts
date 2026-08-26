@@ -9,6 +9,7 @@ export function roomSeatName(
   seatId: string,
   seats: SeatLite[],
   messages: RoomMsg[],
+  deletedSeatLabel = '已删除工位',
 ): string {
   const currentTitle = seats.find(seat => seat.id === seatId)?.title;
   if (currentTitle) return currentTitle;
@@ -23,5 +24,5 @@ export function roomSeatName(
       return message.speaker;
     }
   }
-  return '已删除工位';
+  return deletedSeatLabel;
 }

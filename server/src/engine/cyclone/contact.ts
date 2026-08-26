@@ -33,6 +33,7 @@ import { findSeatIdByTitle, listOtherSeats, tryRegisterWait, clearWait } from '.
 import { workshopWorkspace } from './paths';
 import type { SeatData } from './types';
 import { beginExternalSeatActivity } from './seat-activity.js';
+import { normalizeSystemMessages } from '../shared/system-messages.js';
 import { toSeatProgressEvent, type LoopProgressEvent } from './loop-event-forwarder.js';
 import path from 'node:path';
 
@@ -212,7 +213,7 @@ async function runContactedTurn(
       dataDir, workshopId, seat, agent, toolDefs, native, wsRelPath: wsDir, fromTitle, memorySection,
     }),
   };
-  const messages: ContextMessage[] = [system, ...seat.messages];
+  const messages = normalizeSystemMessages([system, ...seat.messages]);
   // 被联络方剥 ask（无人类在场），保留 delegate + 嵌套 contact
   const nativeToolDefs = [...toolDefs, ...buildSeatVirtualToolDefs({ allowAsk: false, allowDelegate: true, contactTargets })];
 

@@ -5,6 +5,7 @@ import {
   canTerminateExecution,
   type ExecutionSurfaceItem,
 } from './execution-surface';
+import { useLocale } from '../../i18n/LocaleContext';
 
 type Scope = 'conversation' | 'cyclone';
 
@@ -33,29 +34,32 @@ export default function ExecutionSurfaceOverlay({
   onTerminate: (id: string) => void;
   onClose: () => void;
 }) {
+  const { t } = useLocale();
   const tabs = selectOpenExecutionSurfaceItems(items, openIds);
   const selected = tabs.find(item => item.id === activeId);
   if (!selected) return null;
 
   return (
     <div className="execution-surface-backdrop" style={{ ...backdropStyle, right: reservedRight }}>
-      <section className="execution-surface-panel" role="dialog" aria-modal="true" aria-label="运行窗口" style={panelStyle}>
+      <section className="execution-surface-panel" role="dialog" aria-modal="true" aria-label={t('chat.execution.window')} style={panelStyle}>
         <header style={headerStyle}>
-          <div className="execution-surface-tabs" style={tabListStyle} aria-label="已打开的运行内容">
+          <div className="execution-surface-tabs" style={tabListStyle} aria-label={t('chat.execution.openTabs')}>
             {tabs.map(item => <div className="execution-surface-tab" key={item.id} style={tabItemStyle}>
               <button className="execution-surface-tab__select" type="button" onClick={() => onSelect(item.id)} title={item.command} style={{ ...tabStyle, ...(item.id === selected.id ? activeTabStyle : {}) }}>
                 <span style={{ ...dotStyle, ...(item.status === 'failed' ? failedDotStyle : {}) }} />
-                <span style={tabLabelStyle}>{tabLabel(item)}</span>
+                <span style={tabLabelStyle}>{tabLabel(item, fallbackLabel(item.viewer))}</span>
               </button>
-              <button className="execution-surface-tab__close" type="button" onClick={() => onCloseTab(item.id)} title="关闭标签" aria-label={`关闭标签：${tabLabel(item)}`} style={tabCloseStyle}>×</button>
+              <button className="execution-surface-tab__close" type="button" onClick={() => onCloseTab(item.id)} title={t('chat.execution.closeTab')} aria-label={t('chat.execution.closeTabNamed', { name: tabLabel(item, fallbackLabel(item.viewer)) })} style={tabCloseStyle}>×</button>
             </div>)}
           </div>
           {canTerminateExecution(selected) && (
             <button className="execution-surface-action execution-surface-action--danger" type="button" onClick={() => onTerminate(selected.id)} disabled={closingId === selected.id || selected.status === 'cancelling'} style={terminateStyle}>
-              {terminationLabel(selected, closingId === selected.id || selected.status === 'cancelling')}
+              {selected.viewer === 'browser'
+                ? t(closingId === selected.id || selected.status === 'cancelling' ? 'chat.execution.closingBrowser' : 'chat.execution.closeBrowser')
+                : t(closingId === selected.id || selected.status === 'cancelling' ? 'chat.execution.terminating' : 'chat.execution.terminate')}
             </button>
           )}
-          <button className="execution-surface-action execution-surface-action--icon" type="button" onClick={onClose} title="收起运行窗口" aria-label="收起运行窗口" style={closeStyle}>×</button>
+          <button className="execution-surface-action execution-surface-action--icon" type="button" onClick={onClose} title={t('chat.execution.collapse')} aria-label={t('chat.execution.collapse')} style={closeStyle}>×</button>
         </header>
         <div style={contentStyle}>
           <ExecutionSurfaceViewport scope={scope} ownerId={ownerId} item={selected} onBack={onClose} suspendNativeSurface={closingId === selected.id} />
@@ -63,16 +67,17 @@ export default function ExecutionSurfaceOverlay({
       </section>
     </div>
   );
+
+  function fallbackLabel(viewer?: string): string {
+    if (viewer === 'browser') return t('chat.execution.browser');
+    if (viewer === 'computer') return t('chat.execution.computer');
+    return t('chat.execution.terminal');
+  }
 }
 
-function tabLabel(item: ExecutionSurfaceItem): string {
+function tabLabel(item: ExecutionSurfaceItem, fallback: string): string {
   const capability = getExecutionSurfaceCapability(item.viewer);
-  return item.command.replace(capability.commandPrefix ?? /$^/, '') || capability.fallbackLabel;
-}
-
-function terminationLabel(item: ExecutionSurfaceItem, pending: boolean): string {
-  const lifecycle = getExecutionSurfaceCapability(item.viewer).lifecycle;
-  return pending ? lifecycle.pendingLabel : lifecycle.actionLabel;
+  return item.command.replace(capability.commandPrefix ?? /$^/, '') || fallback;
 }
 
 const backdropStyle: React.CSSProperties = {

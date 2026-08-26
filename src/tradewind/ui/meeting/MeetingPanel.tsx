@@ -9,16 +9,15 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { createPortal } from 'react-dom';
 import { subscribe, unsubscribe } from '../stream/unified-client';
 import {
   sendSpeak, sendChair, endMeeting, joinMeeting, leaveMeeting, reorderMeeting, getStatus,
   type MeetingChairMessage, type MeetingMessage, type MeetingStatus, type ToolStep, type MeetingBroadcastEvent,
 } from './meeting-client';
-import { MeetingMessageItem } from './MeetingMessageItem';
-import { renderTextWithCode } from '../../../engine/markdown';
 import { appendChairStreamChunk, appendReasoning, applyChairStreamSnapshot } from './meeting-reasoning';
 import { getMeetingPublicStateLabel } from './meeting-status';
+import MeetingPanelView, { type MeetingView } from './MeetingPanelView';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 interface MeetingPanelProps {
   nodeId: string;
@@ -27,8 +26,6 @@ interface MeetingPanelProps {
   /** 面板是否可见 */
   visible?: boolean;
 }
-
-type MeetingView = 'public' | 'chair';
 
 interface PublicStreamState {
   currentLabel: string;
@@ -43,6 +40,7 @@ interface ChairStreamState {
 }
 
 export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: MeetingPanelProps) {
+  const { t } = useLocale();
   const [activeView, setActiveView] = useState<MeetingView>('public');
   const [publicMsgs, setPublicMsgs] = useState<MeetingMessage[]>([]);
   const [chairMsgs, setChairMsgs] = useState<MeetingChairMessage[]>([]);
@@ -551,12 +549,12 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     }
     abortRef.current = null;
     if (!result.ok) {
-      setError(result.error || '发言发送失败');
+      setError(result.error || t('tradewind.meeting.sendPublicFailed'));
       setBusy(false);
       setWaitingSince(null);
     }
     // 成功时不设 busy=false——等 round-done 事件
-  }, [publicInput, busy, nodeId]);
+  }, [publicInput, busy, nodeId, t]);
 
   // 会议助理私聊（fire-and-forget，事件通过 /events 流返回）
   const handleChair = useCallback(async () => {
@@ -579,10 +577,10 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     }
     setChairBusy(false);
     if (!result.ok) {
-      setError(result.error || '私聊发送失败');
+      setError(result.error || t('tradewind.meeting.sendChairFailed'));
       setChairMsgs(prev => prev.filter(m => m.role !== 'assistant' || m.content));
     }
-  }, [chairBusy, chairInput, nodeId]);
+  }, [chairBusy, chairInput, nodeId, t]);
 
   // 结束会议（不关面板，切为 ended 状态）
   const handleEnd = useCallback(async () => {
@@ -607,6 +605,11 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); }
   };
 
+  const handleAbortRound = useCallback(() => {
+    abortRef.current?.abort();
+    fetch(`/api/tradewind/meeting/${nodeId}/abort-round`, { method: 'POST' }).catch(() => {});
+  }, [nodeId]);
+
   const isOpening = phase === 'opening';
   const isEnded = phase === 'ended';
   const publicStateLabel = getMeetingPublicStateLabel({
@@ -615,171 +618,48 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     endingRequested,
     waitingLabel,
     waitingElapsed,
-  });
-  const chairStateLabel = chairBusy ? '会议助理思考中' : isOpening ? '等待开场' : '等待交流';
+  }, t);
+  const chairStateLabel = chairBusy
+    ? t('tradewind.meeting.status.chairThinking')
+    : isOpening
+      ? t('tradewind.meeting.status.waitingOpening')
+      : t('tradewind.meeting.status.waitingConversation');
 
-  return createPortal(
-    <div className="tw-meeting-overlay" style={{ display: visible ? undefined : 'none' }}>
-      <div className="tw-meeting-panel" role="dialog" aria-modal="true" aria-label={`${nodeLabel}会议`}>
-        <div className="tw-meeting-panel__header">
-          <div className="tw-meeting-panel__identity">
-            <span className="tw-meeting-panel__eyebrow">MEETING NODE</span>
-            <span className="tw-meeting-panel__title">{nodeLabel}{isEnded && '（已结束）'}</span>
-          </div>
-          <span className={`tw-meeting-panel__header-state${busy ? ' tw-meeting-panel__header-state--active' : ''}`}>
-            {publicStateLabel}
-          </span>
-          <div className="tw-meeting-panel__actions">
-            {!isEnded && (
-              <button className="tw-meeting-panel__end-btn" onClick={handleEnd} disabled={busy || isOpening}>
-                结束会议
-              </button>
-            )}
-            <button className="tw-meeting-panel__close" onClick={onClose} aria-label="关闭会议浮窗">×</button>
-          </div>
-        </div>
-        {error && <div className="tw-meeting-panel__error">{error}</div>}
-        {isOpening && (
-          <div className="tw-meeting-panel__opening-banner">
-            成员入会发言中…（信封已注入，参与者正在生成入会摘要）
-          </div>
-        )}
-        {isEnded && (
-          <div className="tw-meeting-panel__opening-banner">
-            会议已结束，公共发言锁定。会议助理私聊仍可用，可继续提问。
-          </div>
-        )}
-        <div className="tw-meeting-panel__body">
-          <aside className="tw-meeting-panel__rail" aria-label="会议会话">
-            <span className="tw-meeting-panel__rail-label">会话</span>
-            <button
-              className={`tw-meeting-panel__nav-item${activeView === 'public' ? ' tw-meeting-panel__nav-item--active' : ''}`}
-              onClick={() => setActiveView('public')}
-              aria-pressed={activeView === 'public'}
-            >
-              <span className="tw-meeting-panel__nav-icon">#</span>
-              <span className="tw-meeting-panel__nav-copy"><strong>公共会议</strong><small>{publicStateLabel}</small></span>
-              {busy && <span className="tw-meeting-panel__nav-pulse" />}
-            </button>
-            <button
-              className={`tw-meeting-panel__nav-item${activeView === 'chair' ? ' tw-meeting-panel__nav-item--active' : ''}`}
-              onClick={() => setActiveView('chair')}
-              aria-pressed={activeView === 'chair'}
-            >
-              <span className="tw-meeting-panel__nav-icon">席</span>
-              <span className="tw-meeting-panel__nav-copy"><strong>会议助理 私聊</strong><small>{chairStateLabel}</small></span>
-              {chairBusy && <span className="tw-meeting-panel__nav-pulse" />}
-            </button>
-            <div className="tw-meeting-panel__rail-spacer" />
-            <span className="tw-meeting-panel__rail-foot">会议助理的回复将会来自其对当前会议快照的审阅</span>
-          </aside>
-          <div className="tw-meeting-panel__workspace">
-          <section
-            className="tw-meeting-panel__conversation tw-meeting-panel__conversation--public"
-            hidden={activeView !== 'public'}
-            aria-hidden={activeView !== 'public'}
-          >
-            <div className="tw-meeting-panel__conversation-head">
-              <div><span className="tw-meeting-panel__section-title">公共会议</span><small>所有参与者共享的会议时间线</small></div>
-            </div>
-            {status && (
-              <div className="tw-meeting-panel__participants">
-                <div className="tw-meeting-panel__participant-list">
-                  {status.participants.map((p, idx) => (
-                    <div key={p.nodeId} className="tw-meeting-panel__participant">
-                      <button className="tw-meeting-panel__participant-move" onClick={() => moveUp(idx)} disabled={idx === 0}>↑</button>
-                      <button className="tw-meeting-panel__participant-move" onClick={() => moveDown(idx)} disabled={idx === status.participants.length - 1}>↓</button>
-                      <span className="tw-meeting-panel__participant-name">{p.label}</span>
-                      <button className="tw-meeting-panel__participant-remove" onClick={() => handleLeave(p.nodeId)}>×</button>
-                    </div>
-                  ))}
-                </div>
-                <select className="tw-meeting-panel__participant-add" value=""
-                  onChange={(e) => { if (e.target.value) handleJoin(e.target.value); }}>
-                  <option value="">+ 加入</option>
-                  {(status.configuredParticipants || [])
-                    .filter(cp => !status.participants.some(p => p.nodeId === cp.nodeId))
-                    .map(cp => <option key={cp.nodeId} value={cp.nodeId}>{cp.label}</option>)}
-                </select>
-              </div>
-            )}
-            <div className="tw-meeting-panel__messages" ref={publicContainerRef}>
-              {publicMsgs.map((m, i) => (
-                <MeetingMessageItem key={i} msg={m} />
-              ))}
-              <div ref={publicEndRef} />
-            </div>
-            <div className={`tw-meeting-panel__status${busy ? ' tw-meeting-panel__status--active' : ''}`}>
-              <span className="tw-meeting-panel__status-pulse" />{publicStateLabel}
-            </div>
-            <div className="tw-meeting-panel__input-area"><div className="tw-meeting-panel__composer">
-              <textarea
-                className="tw-meeting-panel__input"
-                value={publicInput}
-                onChange={(e) => setPublicInput(e.target.value)}
-                onKeyDown={publicKeyDown}
-                placeholder={isEnded ? '会议已结束' : isOpening ? '入会摘要中，请稍候…' : '发言...'}
-                disabled={busy || isOpening || isEnded}
-                rows={1}
-              />
-              {busy ? (
-                <button className="tw-meeting-panel__stop" onClick={() => {
-                  abortRef.current?.abort();
-                  fetch(`/api/tradewind/meeting/${nodeId}/abort-round`, { method: 'POST' }).catch(() => {});
-                }} aria-label="停止当前会议轮次">
-                  ■
-                </button>
-              ) : (
-                <button className="tw-meeting-panel__send" onClick={handleSpeak} disabled={isOpening || isEnded || !publicInput.trim()}>
-                  发送
-                </button>
-              )}
-            </div></div>
-          </section>
-          <section
-            className="tw-meeting-panel__conversation tw-meeting-panel__conversation--chair"
-            hidden={activeView !== 'chair'}
-            aria-hidden={activeView !== 'chair'}
-          >
-            <div className="tw-meeting-panel__conversation-head">
-              <div><span className="tw-meeting-panel__section-title">会议助理 私聊</span><small>只属于你与会议助理的独立上下文</small></div>
-            </div>
-            <div className="tw-meeting-panel__messages" ref={chairContainerRef}>
-              {chairMsgs.filter(m => m.role !== 'system').map((m, i) => (
-                <div key={i} className={`tw-meeting-msg tw-meeting-msg--${m.role}`}>
-                  {m.reasoningContent && (
-                    <details className="tw-meeting-think" open={!m.content}>
-                      <summary className="tw-meeting-think__trigger">思考过程</summary>
-                      <div className="tw-meeting-think__body">{m.reasoningContent}</div>
-                    </details>
-                  )}
-                  <span className="tw-meeting-msg__content">{renderTextWithCode(m.content, `chair-${i}`)}</span>
-                </div>
-              ))}
-              <div ref={chairEndRef} />
-            </div>
-            <div className={`tw-meeting-panel__status${chairBusy ? ' tw-meeting-panel__status--active' : ''}`}>
-              <span className="tw-meeting-panel__status-pulse" />{chairStateLabel}
-            </div>
-            <div className="tw-meeting-panel__input-area"><div className="tw-meeting-panel__composer">
-              <textarea
-                className="tw-meeting-panel__input"
-                value={chairInput}
-                onChange={(e) => setChairInput(e.target.value)}
-                onKeyDown={chairKeyDown}
-                placeholder={isOpening ? '入会摘要中，请稍候…' : '私聊会议助理...'}
-                rows={1}
-                disabled={isOpening || chairBusy}
-              />
-              <button className="tw-meeting-panel__send" onClick={handleChair} disabled={isOpening || chairBusy || !chairInput.trim()}>
-                发送
-              </button>
-            </div></div>
-          </section>
-          </div>
-        </div>
-      </div>
-    </div>,
-    document.body,
+  return (
+    <MeetingPanelView
+      nodeLabel={nodeLabel}
+      visible={visible}
+      activeView={activeView}
+      setActiveView={setActiveView}
+      status={status}
+      publicMsgs={publicMsgs}
+      chairMsgs={chairMsgs}
+      publicInput={publicInput}
+      chairInput={chairInput}
+      setPublicInput={setPublicInput}
+      setChairInput={setChairInput}
+      busy={busy}
+      chairBusy={chairBusy}
+      error={error}
+      isOpening={isOpening}
+      isEnded={isEnded}
+      publicStateLabel={publicStateLabel}
+      chairStateLabel={chairStateLabel}
+      publicEndRef={publicEndRef}
+      chairEndRef={chairEndRef}
+      publicContainerRef={publicContainerRef}
+      chairContainerRef={chairContainerRef}
+      onClose={onClose}
+      onEndMeeting={handleEnd}
+      onJoin={handleJoin}
+      onLeave={handleLeave}
+      onMoveUp={moveUp}
+      onMoveDown={moveDown}
+      onSendPublic={handleSpeak}
+      onSendChair={handleChair}
+      onAbortRound={handleAbortRound}
+      onPublicKeyDown={publicKeyDown}
+      onChairKeyDown={chairKeyDown}
+    />
   );
 }

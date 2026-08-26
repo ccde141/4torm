@@ -25,3 +25,15 @@ test('Cyclone SSE 无终止事件关闭时报告断线', async () => {
     /连接意外中断/,
   );
 });
+
+test('Cyclone SSE 可本地化传输层错误而不改变终止事件', async () => {
+  await assert.rejects(
+    readCycloneSSE(
+      response(['data: {"type":"token","content":"a"}\n\n']),
+      () => {},
+      undefined,
+      { disconnected: 'The SSE connection closed before a done/error event.' },
+    ),
+    /closed before a done\/error event/,
+  );
+});

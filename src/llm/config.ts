@@ -16,6 +16,18 @@ export interface ProviderEntry {
   apiKey: string;
   models: string[];
   customHeaders?: Record<string, string>;
+  /** Stable provider identity. Missing values retain the legacy configuration path. */
+  providerType?: string;
+  /** Stable wire transport selected from the backend provider catalog. */
+  transport?: string;
+  /** Provider-owned runtime limits. Persisted in providers.json for manual editing. */
+  runtimePolicy?: Record<string, number | string | null>;
+  /** Provider-owned generation defaults. Persisted in providers.json for manual editing. */
+  generationDefaults?: Record<string, number | string | null>;
+  /** User-defined request body values. Runtime validates and merges these after adapter defaults. */
+  customRequestParameters?: Record<string, unknown>;
+  /** Local form metadata for custom request values; never sent to the model provider. */
+  customParameterDefinitions?: ProviderCustomParameterDefinition[];
   /** Provider request and response protocol. Missing values retain legacy OpenAI-compatible behavior. */
   protocol?: ProviderProtocol;
   /** 工具调用模式：auto=探测决定（默认）, native=强制原生, text=JSON 文本工具调用 */
@@ -28,6 +40,16 @@ export interface ProviderEntry {
   modelProfiles?: Record<string, ProviderProfileId>;
 }
 
+export type ProviderCustomParameterKind = 'string' | 'number' | 'boolean' | 'select' | 'json';
+
+export interface ProviderCustomParameterDefinition {
+  id: string;
+  path: string;
+  label: string;
+  kind: ProviderCustomParameterKind;
+  options?: string[];
+}
+
 export interface ModelOption {
   key: string;
   label: string;
@@ -36,22 +58,6 @@ export interface ModelOption {
 }
 
 const FILE = 'providers.json';
-
-export interface ProviderPreset {
-  label: string;
-  baseUrl: string;
-  protocol: Exclude<ProviderProtocol, 'auto'>;
-}
-
-export const PROVIDER_PRESETS: ProviderPreset[] = [
-  { label: 'LLM Studio', baseUrl: 'http://localhost:1234/v1', protocol: 'openai-chat-completions' },
-  { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', protocol: 'openai-chat-completions' },
-  { label: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', protocol: 'anthropic-messages' },
-  { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', protocol: 'openai-chat-completions' },
-  { label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', protocol: 'openai-chat-completions' },
-  { label: 'Ollama', baseUrl: 'http://localhost:11434/v1', protocol: 'openai-chat-completions' },
-  { label: 'vLLM', baseUrl: 'http://localhost:8000/v1', protocol: 'openai-chat-completions' },
-];
 
 let cache: { providers: ProviderEntry[]; activeModel: string } | null = null;
 
@@ -89,11 +95,13 @@ export async function addProvider(
   baseUrl: string,
   apiKey: string,
   protocol?: ProviderProtocol,
+  selection?: Pick<ProviderEntry, 'providerType' | 'transport' | 'runtimePolicy' | 'generationDefaults'>,
 ): Promise<ProviderEntry> {
   const data = await load();
   const entry: ProviderEntry = {
     id: nextId(), label, baseUrl, apiKey, models: [],
     ...(protocol ? { protocol } : {}),
+    ...selection,
   };
   data.providers.push(entry);
   await save(data.providers, data.activeModel);

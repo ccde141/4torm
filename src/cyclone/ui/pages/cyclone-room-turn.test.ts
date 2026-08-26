@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { splitTurnSegments } from './cyclone-room-turn.js';
+import fs from 'node:fs';
 
 test('气旋群聊将最终正文与按序工作过程归属到同一 Agent 回合', () => {
   const parts = splitTurnSegments({
@@ -41,4 +42,14 @@ test('末尾是派发时不把更早正文跨过派发重新排序', () => {
 
   assert.equal(parts.finalContent, '请目标工位继续核验');
   assert.deepEqual(parts.workSegments.map(segment => segment.kind), ['text', 'dispatch']);
+});
+
+test('群聊失败工作面板允许用户关闭并在重渲染后保持关闭', () => {
+  const roomFeed = fs.readFileSync('src/cyclone/ui/pages/RoomFeedRow.tsx', 'utf8');
+  const toolActivity = fs.readFileSync('src/cyclone/ui/pages/CycloneToolActivityList.tsx', 'utf8');
+
+  assert.doesNotMatch(roomFeed, /open=\{failed > 0 \|\| running\}/);
+  assert.doesNotMatch(toolActivity, /open=\{failed > 0\}/);
+  assert.match(roomFeed, /onToggle=/);
+  assert.match(toolActivity, /onToggle=/);
 });

@@ -11,6 +11,7 @@
 import type { Agent } from '../../../types';
 import SeatChat from './SeatChat';
 import type { SeatStreamRunners } from './useSeatStreamRunners';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 /** 会议助理流在注册表里的键（按会议/room 隔离，避免跨会议串台） */
 export function chairStreamKey(roomId: string): string {
@@ -39,20 +40,21 @@ export default function ChairDrawer({
   onSetChair: (agentId: string) => void;
   onReloaded?: () => void;
 }) {
+  const { t } = useLocale();
   return (
     <div style={wrapperStyle}>
       {/* 收起态竖条 tab：常驻细标签，展开时淡出并让出点击 */}
       <button
         onClick={onToggle}
-        title="展开会议助理私聊"
-        aria-label="展开会议助理私聊"
+        title={t('cyclone.chair.expand')}
+        aria-label={t('cyclone.chair.expand')}
         aria-hidden={open}
         tabIndex={open ? -1 : 0}
         style={{ ...tabStyle, opacity: open ? 0 : 1, pointerEvents: open ? 'none' : 'auto' }}
       >
         <span style={{ fontSize: '13px' }}>🗣️</span>
-        <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontWeight: 'var(--font-semibold)' }}>会议助理 · 参谋</span>
-        <span style={{ writingMode: 'vertical-rl', fontSize: '10px', color: 'var(--color-accent)', marginTop: 'auto' }}>展开‹</span>
+        <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontWeight: 'var(--font-semibold)' }}>{t('cyclone.chair.tab')}</span>
+        <span style={{ writingMode: 'vertical-rl', fontSize: '10px', color: 'var(--color-accent)', marginTop: 'auto' }}>{t('cyclone.chair.expandShort')}</span>
       </button>
 
       {/* 展开态面板：悬浮浮出（绝对定位向左盖在群聊上，不挤占布局），企宣级减速滑入 */}
@@ -68,21 +70,21 @@ export default function ChairDrawer({
         <div style={headerStyle}>
           <span
             style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-            title="会议助理 私聊"
+            title={t('cyclone.chair.chat')}
           >
-            会议助理 私聊
+            {t('cyclone.chair.chat')}
           </span>
           <div style={{ flex: 1 }} />
           <select
             value={chairAgentId ?? ''}
             onChange={e => onSetChair(e.target.value)}
             style={selectStyle}
-            title="设置 / 更换 / 清空会议助理"
+            title={t('cyclone.chair.configure')}
           >
-            <option value="">未设会议助理</option>
+            <option value="">{t('cyclone.chair.unset')}</option>
             {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
-          <button onClick={onToggle} style={collapseBtnStyle} title="收起" aria-label="收起会议助理私聊">×</button>
+          <button onClick={onToggle} style={collapseBtnStyle} title={t('cyclone.chair.collapse')} aria-label={t('cyclone.chair.collapse')}>×</button>
         </div>
 
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -97,8 +99,7 @@ export default function ChairDrawer({
             />
           ) : (
             <div style={{ margin: 'auto', padding: 'var(--space-5)', textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
-              从上方选择一个 agent 作为会议助理。<br />
-              会议助理不进群聊，<br />只在这里和你单独私聊，<br />俯瞰这场会议的快照给你出主意。
+              {t('cyclone.chair.empty')}
             </div>
           )}
         </div>

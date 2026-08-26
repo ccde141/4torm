@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { subscribeAll, unsubscribeAll } from '../stream/unified-client';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 interface NodeRef { id: string; label: string }
 interface Info { envelope?: string; answer?: string }
@@ -29,6 +30,7 @@ const RAIL_W = 42;
 const MIN_W = 280, MAX_W = 620, DEFAULT_W = 360;
 
 export function WorkflowInfoPanel({ nodes, outputSourceId, running, sessionEnded, lap }: Props) {
+  const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
   const [hovering, setHovering] = useState(false);
   const [width, setWidth] = useState(() => {
@@ -76,10 +78,10 @@ export function WorkflowInfoPanel({ nodes, outputSourceId, running, sessionEnded
 
   const badge = (id: string) => {
     const s = status[id];
-    if (s?.busy) return { text: '进行中', color: 'var(--color-accent)' };
-    if (s?.envelopePending) return { text: '待接收', color: 'var(--color-warning)' };
-    if (info[id]?.answer) return { text: '已完成', color: 'var(--color-success)' };
-    return { text: '空闲', color: 'var(--color-text-tertiary)' };
+    if (s?.busy) return { text: t('tradewind.info.running'), color: 'var(--color-accent)' };
+    if (s?.envelopePending) return { text: t('tradewind.info.pending'), color: 'var(--color-warning)' };
+    if (info[id]?.answer) return { text: t('tradewind.info.completed'), color: 'var(--color-success)' };
+    return { text: t('tradewind.info.idle'), color: 'var(--color-text-tertiary)' };
   };
   const curEnvelope = (id: string) => {
     const e = info[id]?.envelope;
@@ -92,15 +94,15 @@ export function WorkflowInfoPanel({ nodes, outputSourceId, running, sessionEnded
   if (!expanded) {
     return (
       <div className="mo-enter-fade" style={railWrapStyle} onMouseEnter={() => setHovering(true)} onMouseLeave={() => setHovering(false)}>
-        <button onClick={() => setExpanded(true)} title="工作流信息：节点进度 / 当前信封 / 最终产出"
+        <button onClick={() => setExpanded(true)} title={t('tradewind.info.title')}
           className={glow ? 'tw-info-rail--glow' : undefined} style={railBtnStyle}>
           {glow && <span style={dotStyle} />}
           <span style={{ fontSize: '16px', lineHeight: 1 }}>📊</span>
-          <span style={railLabelStyle}>工作流 · 进度</span>
+          <span style={railLabelStyle}>{t('tradewind.info.rail')}</span>
           {total > 0 && <span style={railCountStyle}>{doneCount}/{total}</span>}
         </button>
         {hovering && (
-          <div style={hintStyle}>工作流信息 · 节点进度 / 信封 / 产出{total > 0 ? ` · ${doneCount}/${total}` : ''}</div>
+          <div style={hintStyle}>{t('tradewind.info.hint')}{total > 0 ? ` · ${doneCount}/${total}` : ''}</div>
         )}
       </div>
     );
@@ -120,12 +122,12 @@ export function WorkflowInfoPanel({ nodes, outputSourceId, running, sessionEnded
 
   return (
     <div className="tw-info-drawer mo-slide-in-right" style={{ ...drawerStyle, width }}>
-      <div onMouseDown={onDragStart} style={dragHandleStyle} title="拖动调整宽度" />
+      <div onMouseDown={onDragStart} style={dragHandleStyle} title={t('tradewind.info.resize')} />
       <div style={headerStyle}>
         <span style={{ fontSize: '14px' }}>📊</span>
-        <span style={{ fontWeight: 'var(--font-semibold)', fontSize: 'var(--text-sm)' }}>工作流信息</span>
+        <span style={{ fontWeight: 'var(--font-semibold)', fontSize: 'var(--text-sm)' }}>{t('tradewind.info.panelTitle')}</span>
         <span style={{ fontSize: 'var(--text-xs)', color: running ? 'var(--color-success)' : sessionEnded ? 'var(--color-warning)' : 'var(--color-text-tertiary)' }}>
-          {running ? '● 执行中' : sessionEnded ? '已结束·只读' : '就绪'}
+          {running ? t('tradewind.info.statusRunning') : sessionEnded ? t('tradewind.info.statusEnded') : t('tradewind.info.statusReady')}
         </span>
         {lap !== null && (
           <span
@@ -134,15 +136,15 @@ export function WorkflowInfoPanel({ nodes, outputSourceId, running, sessionEnded
               color: 'var(--color-accent, #6366f1)', padding: '1px 6px',
               borderRadius: '4px', background: 'var(--color-accent-soft, rgba(99,102,241,0.12))',
             }}
-            title="循环运行：当前圈数"
-          >第 {lap} 圈</span>
+            title={t('tradewind.info.lapTitle')}
+          >{t('tradewind.info.lap', { count: lap })}</span>
         )}
-        <button onClick={() => setExpanded(false)} style={actionBtnStyle} title="收起">收起 ›</button>
+        <button onClick={() => setExpanded(false)} style={actionBtnStyle} title={t('tradewind.info.collapse')}>{t('tradewind.info.collapse')}</button>
       </div>
 
       <div style={bodyStyle}>
-        <div style={sectionTitleStyle}>节点进度</div>
-        {total === 0 && <div style={emptyStyle}>（无 Agent 节点）</div>}
+        <div style={sectionTitleStyle}>{t('tradewind.info.nodeProgress')}</div>
+        {total === 0 && <div style={emptyStyle}>{t('tradewind.info.noAgents')}</div>}
         <div className="mo-stagger" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
           {nodes.map(n => {
             const b = badge(n.id);
@@ -156,13 +158,13 @@ export function WorkflowInfoPanel({ nodes, outputSourceId, running, sessionEnded
                 </div>
                 {env && (
                   <details style={{ marginTop: 'var(--space-2)' }}>
-                    <summary style={summaryStyle}>当前信封</summary>
+                    <summary style={summaryStyle}>{t('tradewind.info.currentEnvelope')}</summary>
                     <pre style={preStyle}>{env}</pre>
                   </details>
                 )}
                 {ans && (
                   <details style={{ marginTop: 'var(--space-2)' }}>
-                    <summary style={summaryStyle}>交接产出</summary>
+                    <summary style={summaryStyle}>{t('tradewind.info.handoffOutput')}</summary>
                     <pre style={preStyle}>{ans}</pre>
                   </details>
                 )}
@@ -172,7 +174,7 @@ export function WorkflowInfoPanel({ nodes, outputSourceId, running, sessionEnded
         </div>
         {finalOutput && (
           <>
-            <div style={sectionTitleStyle}>最终产出</div>
+            <div style={sectionTitleStyle}>{t('tradewind.info.finalOutput')}</div>
             <pre style={preStyle}>{finalOutput}</pre>
           </>
         )}

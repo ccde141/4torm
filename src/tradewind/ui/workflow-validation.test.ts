@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { validateGraph } from './workflow-validation';
 import type { WorkflowGraph } from '../types';
+import { resolveMessage, type MessageKey, type MessageValues } from '../../i18n/locale';
+
+const t = (key: MessageKey, values?: MessageValues) => resolveMessage('zh-CN', key, values);
 
 const graph: WorkflowGraph = {
   nodes: [
@@ -13,6 +16,6 @@ const graph: WorkflowGraph = {
 };
 
 test('frontend validation keeps manual-only nodes out of automatic runs', () => {
-  assert.deepEqual(validateGraph(graph, 'manual'), []);
-  assert.match(validateGraph(graph, 'auto').join('\n'), /自动模式不支持会议室/);
+  assert.deepEqual(validateGraph(graph, 'manual', t), []);
+  assert.match(validateGraph(graph, 'auto', t).join('\n'), /自动模式不支持会议室/);
 });

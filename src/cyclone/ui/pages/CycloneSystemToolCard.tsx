@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useLocale } from '../../../i18n/LocaleContext';
 import type { DisplayBlock } from './messageDisplay';
 import type { CycloneDispatch } from './dispatch-timeline';
 import { describeCycloneSystemTool } from './cyclone-system-tool';
@@ -10,10 +11,11 @@ export default function CycloneSystemToolCard({ block, dispatches }: {
   block: ToolBlock;
   dispatches: CycloneDispatch[];
 }) {
+  const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
   const detail = describeCycloneSystemTool({
     tool: block.tool, args: block.args, result: block.result,
-    status: block.status, dispatches,
+    status: block.status, dispatches, t,
   });
   if (!detail) return null;
 
@@ -35,8 +37,8 @@ export default function CycloneSystemToolCard({ block, dispatches }: {
         {!expanded && detail.preview && <div className="cyclone-system-tool__preview">{detail.preview}</div>}
         {expanded && (
           <div className="cyclone-system-tool__body">
-            {Object.keys(block.args).length > 0 && <ToolDetail label="参数" value={JSON.stringify(block.args, null, 2)} />}
-            {block.result && <ToolDetail label={detail.status === 'error' ? '错误' : '结果'} value={block.result} />}
+            {Object.keys(block.args).length > 0 && <ToolDetail label={t('chat.tool.params')} value={JSON.stringify(block.args, null, 2)} />}
+            {block.result && <ToolDetail label={detail.status === 'error' ? t('cyclone.tool.error') : t('chat.tool.result')} value={block.result} />}
           </div>
         )}
       </div>

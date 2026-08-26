@@ -14,3 +14,11 @@ test('优先使用仍存在工位的当前名称', () => {
     speaker: '旧名称', content: '历史消息', seatId: 'seat-live', timestamp: 1,
   }]), '新名称');
 });
+
+test('已删除工位 fallback 可本地化且不影响中文历史解析', () => {
+  assert.equal(roomSeatName('seat-missing', [], [], 'Deleted seat'), 'Deleted seat');
+  assert.equal(roomSeatName('seat-old', [], [{
+    speaker: '系统', content: 'Research加入会议', kind: 'membership',
+    membershipAction: 'joined', seatId: 'seat-old', timestamp: 1,
+  }], 'Deleted seat'), 'Research');
+});

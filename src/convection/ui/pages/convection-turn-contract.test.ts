@@ -15,7 +15,7 @@ test('对流回合在生成与完成状态下保持同一发言结构', () => {
   const turn = fs.readFileSync('src/convection/ui/pages/ConvectionTurnCard.tsx', 'utf8');
   const styles = fs.readFileSync('src/convection/ui/pages/convection-turn-card.css', 'utf8');
 
-  assert.match(turn, /发言准备/);
+  assert.match(turn, /convection\.turn\.operationCount/);
   assert.match(turn, /aria-expanded=/);
   assert.match(turn, /message\.streaming/);
   assert.match(styles, /prefers-reduced-motion:\s*reduce/);

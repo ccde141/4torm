@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { ChatMessage } from '../../types';
 import { formatTimestamp } from '../../utils/time';
 import { computeDiffView, type DiffLine } from '../../utils/diff';
+import { useLocale } from '../../i18n/LocaleContext';
 
 /** 单次展示的最大 diff 行数，超出截断（write_file 写大文件时防止卡死）。 */
 const MAX_LINES = 400;
@@ -25,7 +26,7 @@ export function parseFileEdit(toolCall: ToolCall): { kind: 'edit' | 'write'; pat
   return null;
 }
 
-function DiffRows({ lines }: { lines: DiffLine[] }) {
+function DiffRows({ lines, hiddenLabel }: { lines: DiffLine[]; hiddenLabel: (count: number) => string }) {
   const shown = lines.slice(0, MAX_LINES);
   const hidden = lines.length - shown.length;
   return (
@@ -43,7 +44,7 @@ function DiffRows({ lines }: { lines: DiffLine[] }) {
       })}
       {hidden > 0 && (
         <div style={{ padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' }}>
-          … 还有 {hidden} 行未显示
+          {hiddenLabel(hidden)}
         </div>
       )}
     </div>
@@ -58,6 +59,7 @@ export default function FileDiffCard({ toolCall, edit, actions, timestamp }: {
 }) {
   // edit_file 默认展开（改动小、就是要看的）；write_file 默认折叠（可能很大）
   const [expanded, setExpanded] = useState(edit.kind === 'edit');
+  const { t } = useLocale();
   // 关键：diff 计算要 memo，且对大文件退回廉价摘要——否则 O(m×n) LCS 会在每次渲染冻死整页
   const view = useMemo(() => computeDiffView(edit.before, edit.after), [edit.before, edit.after]);
   const { add, del } = view;
@@ -84,16 +86,16 @@ export default function FileDiffCard({ toolCall, edit, actions, timestamp }: {
           </span>
           {add > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: '#2ea043' }}>+{add}</span>}
           {del > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: '#f85149' }}>−{del}</span>}
-          <span style={{ fontSize: 'var(--text-xs)' }}>{isRunning ? '执行中' : isError ? '❌' : toolCall.result ? '✅' : ''}</span>
+          <span style={{ fontSize: 'var(--text-xs)' }}>{isRunning ? t('chat.tool.runningShort') : isError ? '❌' : toolCall.result ? '✅' : ''}</span>
         </button>
         {expanded && (
           <div style={{ marginTop: 'var(--space-2)' }}>
             {view.tooLarge ? (
               <div style={{ padding: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--color-bg)' }}>
-                文件较大，已省略逐行 diff（约 {del} 行 → {add} 行整体替换）
+                {t('chat.diff.tooLarge', { before: del, after: add })}
               </div>
             ) : (
-              <DiffRows lines={view.lines} />
+              <DiffRows lines={view.lines} hiddenLabel={count => t('chat.diff.hiddenLines', { count })} />
             )}
             {toolCall.result && (
               <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--text-xs)', color: isError ? '#f85149' : 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' }}>

@@ -28,3 +28,11 @@ test('cleared usage is visibly pending instead of reusing a stale pre-compact va
     title: '实际用量：输入 12.0K + 输出 345 = 12.3K tokens',
   });
 });
+
+test('token usage tooltip supports English without changing values', () => {
+  assert.deepEqual(formatTokenUsage({ promptTokens: 12_000, completionTokens: 345, totalTokens: 12_345 }, 'en-US'), {
+    label: '12.3K',
+    title: 'Actual usage: 12.0K input + 345 output = 12.3K tokens',
+  });
+  assert.deepEqual(formatTokenUsage(undefined, 'en-US'), { label: '--', title: 'No actual model usage reported yet' });
+});

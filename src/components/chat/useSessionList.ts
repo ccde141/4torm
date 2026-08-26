@@ -13,6 +13,7 @@ import type { ChatSession } from '../../store/chat';
 import { streamUrl } from '../../lib/apiBase';
 import { createLatestRequestGuard } from '../../lib/latest-request';
 import { shouldApplySessionRefresh } from './session-list-state';
+import { useLocale } from '../../i18n/LocaleContext';
 
 /** 流注册表钩子（来自 useStreamRunners）：让切会话/删会话与后台流协同。 */
 interface StreamHooks {
@@ -31,6 +32,7 @@ export function useSessionList(
   setSelectedModel: (m: string) => void,
   streamHooks?: StreamHooks,
 ) {
+  const { t: translate } = useLocale();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -142,9 +144,9 @@ export function useSessionList(
         }
         return prev;
       });
-      alert(`新会话保存失败：${(e as Error).message}`);
+      alert(translate('chat.session.saveFailed', { detail: (e as Error).message }));
     });
-  }, [selectedAgent, activeSessionId, setMessages, setStreaming, streamHooks]);
+  }, [selectedAgent, activeSessionId, setMessages, setStreaming, streamHooks, translate]);
 
   const deleteSessionFn = useCallback((sessionId: string) => {
     // 流式中删会话：先掐流并标记弃用，阻止后台流 finalize 时重建文件（僵尸复活）
@@ -156,9 +158,9 @@ export function useSessionList(
     deleteSession(sessionId).catch((e) => {
       console.error('[chat] 会话删除失败', e);
       if (selectedAgent) refreshSessions(selectedAgent);
-      alert(`删除会话失败：${(e as Error).message}`);
+      alert(translate('chat.session.deleteFailed', { detail: (e as Error).message }));
     });
-  }, [activeSessionId, setMessages, streamHooks, selectedAgent, refreshSessions]);
+  }, [activeSessionId, setMessages, streamHooks, selectedAgent, refreshSessions, translate]);
 
   const compactSession = useCallback(async (session: ChatSession) => {
     if (!selectedAgent) return;
@@ -168,7 +170,7 @@ export function useSessionList(
     const tempMsg: ChatMessage = {
       id: tempId,
       role: 'system',
-      content: '正在压缩上下文...',
+      content: translate('chat.compact.start'),
       timestamp: new Date().toISOString(),
       agentId: session.agentId,
     };
@@ -193,7 +195,7 @@ export function useSessionList(
       });
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: '请求失败' }));
+        const data = await res.json().catch(() => ({ error: translate('chat.compact.requestFailed') }));
         notice(`⚠️ ${data.error || res.statusText}`);
         return;
       }
@@ -220,13 +222,13 @@ export function useSessionList(
             if (evt.type === 'start') {
               compressedCount = evt.compressedCount || 0;
               const updated = msgsWithTemp.map(m =>
-                m.id === tempId ? { ...m, content: `正在压缩 ${compressedCount} 条消息...` } : m,
+                m.id === tempId ? { ...m, content: translate('chat.compact.progress', { count: compressedCount }) } : m,
               );
               setMessages(updated);
             } else if (evt.type === 'token') {
               summary += evt.content;
               const updated = msgsWithTemp.map(m =>
-                m.id === tempId ? { ...m, content: `压缩摘要生成中...\n\n${summary}` } : m,
+                m.id === tempId ? { ...m, content: translate('chat.compact.generating', { summary }) } : m,
               );
               setMessages(updated);
             } else if (evt.type === 'done') {
@@ -241,7 +243,7 @@ export function useSessionList(
               }
             } else if (evt.type === 'error') {
               receivedDone = true;
-              notice(`⚠️ 压缩失败：${evt.error}`);
+              notice(translate('chat.compact.failed', { detail: evt.error }));
             }
           } catch { /* 非 JSON 行忽略 */ }
       };
@@ -271,9 +273,9 @@ export function useSessionList(
         }
       }
     } catch (e) {
-      notice(`⚠️ 压缩失败：${(e as Error).message}`);
+      notice(translate('chat.compact.failed', { detail: (e as Error).message }));
     }
-  }, [selectedAgent, selectedModel, setMessages]);
+  }, [selectedAgent, selectedModel, setMessages, translate]);
 
   return {
     sessions, setSessions, activeSessionId,

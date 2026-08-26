@@ -2,6 +2,7 @@
  * 潮汐面板共享样式常量
  */
 import type { CSSProperties } from 'react';
+import type { Locale } from '../../i18n/locale';
 
 export const emptyStyle: CSSProperties = {
   padding: 'var(--space-3)',
@@ -55,32 +56,32 @@ export const actionBtnStyle: CSSProperties = {
   cursor: 'pointer',
 };
 
-export const formatRelative = (iso?: string): string => {
+export const formatRelative = (iso?: string, locale: Locale = 'zh-CN'): string => {
   if (!iso) return '—';
   const diff = Date.now() - new Date(iso).getTime();
   if (diff < 0) {
     const s = Math.floor(-diff / 1000);
-    if (s < 60) return `${s}s 后`;
-    if (s < 3600) return `${Math.floor(s / 60)}m 后`;
-    return `${Math.floor(s / 3600)}h 后`;
+    if (s < 60) return locale === 'en-US' ? `in ${s}s` : `${s}s 后`;
+    if (s < 3600) return locale === 'en-US' ? `in ${Math.floor(s / 60)}m` : `${Math.floor(s / 60)}m 后`;
+    return locale === 'en-US' ? `in ${Math.floor(s / 3600)}h` : `${Math.floor(s / 3600)}h 后`;
   }
   const s = Math.floor(diff / 1000);
-  if (s < 60) return `${s}s 前`;
-  if (s < 3600) return `${Math.floor(s / 60)}m 前`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h 前`;
-  return new Date(iso).toLocaleDateString();
+  if (s < 60) return locale === 'en-US' ? `${s}s ago` : `${s}s 前`;
+  if (s < 3600) return locale === 'en-US' ? `${Math.floor(s / 60)}m ago` : `${Math.floor(s / 60)}m 前`;
+  if (s < 86400) return locale === 'en-US' ? `${Math.floor(s / 3600)}h ago` : `${Math.floor(s / 3600)}h 前`;
+  return new Date(iso).toLocaleDateString(locale);
 };
 
 /** "every 1h30m" → "1 小时 30 分钟"; "every 5m" → "5 分钟" */
-export function formatSchedule(schedule: string): string {
+export function formatSchedule(schedule: string, locale: Locale = 'zh-CN'): string {
   const m = schedule.match(/^every\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?$/i);
   if (!m) return schedule;
   const parts: string[] = [];
   const h = parseInt(m[1] || '0', 10);
   const min = parseInt(m[2] || '0', 10);
   const s = parseInt(m[3] || '0', 10);
-  if (h) parts.push(`${h} 小时`);
-  if (min) parts.push(`${min} 分钟`);
-  if (s) parts.push(`${s} 秒`);
+  if (h) parts.push(locale === 'en-US' ? `${h} hr` : `${h} 小时`);
+  if (min) parts.push(locale === 'en-US' ? `${min} min` : `${min} 分钟`);
+  if (s) parts.push(locale === 'en-US' ? `${s} sec` : `${s} 秒`);
   return parts.join(' ') || schedule;
 }

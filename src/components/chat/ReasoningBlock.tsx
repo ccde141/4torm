@@ -8,6 +8,7 @@
  */
 
 import { useState } from 'react';
+import { useLocale } from '../../i18n/LocaleContext';
 
 interface Props {
   reasoning: string;
@@ -22,6 +23,7 @@ interface Props {
 
 export default function ReasoningBlock({ reasoning, isStreaming, defaultOpen }: Props) {
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
+  const { t } = useLocale();
   if (!reasoning) return null;
 
   // 默认态：显式 defaultOpen 优先，否则流式展开/落定折叠。用户手动点过以手动为准。
@@ -36,7 +38,7 @@ export default function ReasoningBlock({ reasoning, isStreaming, defaultOpen }: 
       >
         <span className="reasoning-block__arrow">{open ? '▼' : '▶'}</span>
         <span className="reasoning-block__label">
-          {isStreaming ? '思考中' : '思考过程'}
+          {isStreaming ? t('chat.reasoning.active') : t('chat.reasoning.done')}
         </span>
         {isStreaming && <span className="reasoning-block__spinner" />}
       </button>

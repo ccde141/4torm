@@ -7,13 +7,15 @@
 
 import { useState } from 'react';
 import type { Agent } from '../../../types';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 export default function CreateWorkshopPanel({ agents, onCreate, onCancel }: {
   agents: Agent[];
   onCreate: (cfg: { title: string; chairAgentId?: string }) => Promise<void>;
   onCancel: () => void;
 }) {
-  const [title, setTitle] = useState('新工作室');
+  const { t } = useLocale();
+  const [title, setTitle] = useState(() => t('cyclone.workshop.defaultTitle'));
   const [chairAgentId, setChairAgentId] = useState('');
   const [creating, setCreating] = useState(false);
 
@@ -21,7 +23,7 @@ export default function CreateWorkshopPanel({ agents, onCreate, onCancel }: {
     if (creating) return;
     setCreating(true);
     try {
-      await onCreate({ title: title.trim() || '新工作室', chairAgentId: chairAgentId || undefined });
+      await onCreate({ title: title.trim() || t('cyclone.workshop.defaultTitle'), chairAgentId: chairAgentId || undefined });
     } finally {
       setCreating(false);
     }
@@ -29,26 +31,26 @@ export default function CreateWorkshopPanel({ agents, onCreate, onCancel }: {
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-6)', maxWidth: 560 }}>
-      <h2 style={{ margin: '0 0 var(--space-5)', fontSize: 'var(--text-lg)' }}>新建工作室</h2>
+      <h2 style={{ margin: '0 0 var(--space-5)', fontSize: 'var(--text-lg)' }}>{t('cyclone.workshop.createTitle')}</h2>
 
-      <label style={labelStyle}>工作室名称</label>
+      <label style={labelStyle}>{t('cyclone.workshop.name')}</label>
       <input autoFocus value={title} onChange={e => setTitle(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') submit(); }} style={inputStyle} />
 
-      <label style={labelStyle}>会议助理 agent（场外参谋，可不设）</label>
+      <label style={labelStyle}>{t('cyclone.workshop.chairLabel')}</label>
       <select value={chairAgentId} onChange={e => setChairAgentId(e.target.value)} style={inputStyle}>
-        <option value="">不设会议助理</option>
+        <option value="">{t('cyclone.workshop.noChair')}</option>
         {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
       </select>
       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-5)' }}>
-        会议助理不占工位，负责场外私聊参谋与整理，可之后再设。
+        {t('cyclone.workshop.chairHint')}
       </div>
 
       <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
         <button onClick={submit} disabled={creating} className="btn btn--primary">
-          {creating ? '创建中…' : '创建'}
+          {creating ? t('cyclone.workshop.creating') : t('cyclone.workshop.create')}
         </button>
-        <button onClick={onCancel} disabled={creating} className="btn">取消</button>
+        <button onClick={onCancel} disabled={creating} className="btn">{t('common.cancel')}</button>
       </div>
     </div>
   );

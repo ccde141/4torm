@@ -8,6 +8,7 @@ import AgentConfigModal from './AgentConfigModal';
 import MemoryPanel from './MemoryPanel';
 import { loadDashboardSnapshot } from './dashboard-data';
 import { createLatestRequestGuard } from '../../lib/latest-request';
+import { useLocale } from '../../i18n/LocaleContext';
 import '../../styles/components/dashboard.css';
 
 interface FilterOption {
@@ -18,6 +19,7 @@ interface FilterOption {
 }
 
 export default function DashboardPage({ active = true }: { active?: boolean }) {
+  const { t } = useLocale();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [filterOptions, setFilterOptions] = useState<FilterOption[]>([]);
@@ -116,12 +118,12 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
           <div className="dashboard__info-item">
             <span className="dashboard__info-dot dashboard__info-dot--online" />
             <span className="dashboard__info-value">{stats.onlineAgents}</span>
-            <span>空闲</span>
+            <span>{t('dashboard.idle')}</span>
           </div>
           <div className="dashboard__info-item">
             <span className="dashboard__info-dot dashboard__info-dot--session" />
             <span className="dashboard__info-value">{stats.totalSessions}</span>
-            <span>会话</span>
+            <span>{t('dashboard.sessions')}</span>
           </div>
         </div>
       )}
@@ -132,7 +134,7 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
             className={`dashboard__filter-btn${filter === 'all' ? ' dashboard__filter-btn--active' : ''}`}
             onClick={() => setFilter('all')}
           >
-            全部
+            {t('dashboard.all')}
           </button>
           {filterOptions.map(opt => (
             <button
@@ -147,7 +149,7 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
           ))}
         </div>
         <button className="dashboard__create-btn primary-cta-btn" onClick={() => setCreating(true)}>
-          + 创建 Agent
+          {t('dashboard.createAgent')}
         </button>
       </div>
 

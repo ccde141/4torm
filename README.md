@@ -1,5 +1,7 @@
 # 4torm
 
+<p align="right"><a href="./README.en.md">English</a></p>
+
 <p align="center">
   <img src="./public/4TORM.png" alt="4torm" width="160" />
 </p>

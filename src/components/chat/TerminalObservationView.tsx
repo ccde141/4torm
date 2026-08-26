@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { formatObservationElapsed } from './taskboard-observations';
 import { renderTerminalLines, type TerminalChunk } from './terminal-output';
+import { useLocale } from '../../i18n/LocaleContext';
 
 type Scope = 'conversation' | 'cyclone';
 type Status = 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'crashed';
@@ -21,6 +22,7 @@ export default function TerminalObservationView({ scope, ownerId, observationId,
   observationId: string;
   onBack: () => void;
 }) {
+  const { t } = useLocale();
   const [item, setItem] = useState<ObservationDetail | null>(null);
   const [error, setError] = useState('');
   const [following, setFollowing] = useState(true);
@@ -34,7 +36,7 @@ export default function TerminalObservationView({ scope, ownerId, observationId,
     const load = async () => {
       const query = new URLSearchParams({ scope, ownerId });
       const response = await fetch(`/api/tools/observations/${encodeURIComponent(observationId)}?${query}`);
-      if (!response.ok) throw new Error('无法读取运行详情');
+      if (!response.ok) throw new Error(t('chat.execution.readFailed'));
       const data = await response.json() as { item: ObservationDetail };
       if (!disposed) { setItem(data.item); setError(''); }
       return data.item.status;
@@ -49,7 +51,7 @@ export default function TerminalObservationView({ scope, ownerId, observationId,
     };
     void poll();
     return () => { disposed = true; };
-  }, [scope, ownerId, observationId]);
+  }, [scope, ownerId, observationId, t]);
 
   useLayoutEffect(() => {
     const element = outputRef.current;
@@ -76,14 +78,28 @@ export default function TerminalObservationView({ scope, ownerId, observationId,
     outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: 'smooth' });
   };
   const elapsed = item && formatObservationElapsed(item.startedAt, item.finishedAt ?? clock);
+  const statusText = (status?: Status) => {
+    if (status === 'cancelling') return t('chat.execution.stopping');
+    if (status === 'completed') return t('chat.execution.completed');
+    if (status === 'failed') return t('chat.execution.failed');
+    if (status === 'cancelled') return t('chat.execution.cancelled');
+    if (status === 'crashed') return t('chat.execution.crashed');
+    return t('chat.execution.details');
+  };
+  const resultText = (detail: ObservationDetail) => {
+    if (detail.status === 'cancelling') return t('chat.execution.terminatingChild');
+    if (detail.status === 'running') return t('chat.execution.liveOutput');
+    if (detail.error) return detail.error;
+    return detail.exitCode === undefined ? statusText(detail.status) : t('chat.execution.exitCode', { code: detail.exitCode });
+  };
 
   return (
     <div style={shellStyle}>
       <header style={headerStyle}>
-        <button className="execution-surface-action" onClick={onBack} style={backStyle} title="返回任务板">返回任务板</button>
+        <button className="execution-surface-action" onClick={onBack} style={backStyle} title={t('chat.execution.back')}>{t('chat.execution.back')}</button>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={titleStyle}>{item?.status === 'running' ? '正在执行' : observationStatus(item?.status)}</div>
-          <code style={commandStyle}>{item?.command ?? '正在读取运行详情...'}</code>
+          <div style={titleStyle}>{item?.status === 'running' ? t('chat.execution.running') : statusText(item?.status)}</div>
+          <code style={commandStyle}>{item?.command ?? t('chat.execution.reading')}</code>
         </div>
         {elapsed && <span style={elapsedStyle}>{elapsed}</span>}
       </header>
@@ -91,10 +107,10 @@ export default function TerminalObservationView({ scope, ownerId, observationId,
       {error ? <div style={errorStyle}>{error}</div> : (
         <div style={outputWrapStyle}>
           <div ref={outputRef} onScroll={onScroll} style={outputStyle}>
-            {item?.outputTruncated && <div style={truncatedStyle}>较早输出已折叠</div>}
-            {output.length ? output.map((line, index) => <div key={index} style={line.stream === 'stderr' ? stderrLineStyle : undefined}>{line.text || ' '}</div>) : '等待命令输出...'}
+            {item?.outputTruncated && <div style={truncatedStyle}>{t('chat.execution.truncated')}</div>}
+            {output.length ? output.map((line, index) => <div key={index} style={line.stream === 'stderr' ? stderrLineStyle : undefined}>{line.text || ' '}</div>) : t('chat.execution.waitingOutput')}
           </div>
-          {!following && <button onClick={backToBottom} style={bottomStyle}>最新输出</button>}
+          {!following && <button onClick={backToBottom} style={bottomStyle}>{t('chat.execution.latestOutput')}</button>}
         </div>
       )}
     </div>
@@ -103,22 +119,6 @@ export default function TerminalObservationView({ scope, ownerId, observationId,
 
 function isActive(status: Status): boolean {
   return status === 'running' || status === 'cancelling';
-}
-
-function observationStatus(status?: Status): string {
-  if (status === 'cancelling') return '正在停止';
-  if (status === 'completed') return '已完成';
-  if (status === 'failed') return '执行失败';
-  if (status === 'cancelled') return '已取消';
-  if (status === 'crashed') return '异常中断';
-  return '运行详情';
-}
-
-function resultText(item: ObservationDetail): string {
-  if (item.status === 'cancelling') return '正在终止子进程…';
-  if (item.status === 'running') return '输出实时更新中';
-  if (item.error) return item.error;
-  return item.exitCode === undefined ? observationStatus(item.status) : `退出码 ${item.exitCode}`;
 }
 
 const shellStyle: React.CSSProperties = { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' };

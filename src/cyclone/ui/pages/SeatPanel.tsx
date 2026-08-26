@@ -7,6 +7,7 @@
 
 import { useState } from 'react';
 import type { Agent } from '../../../types';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 export interface SeatDraft {
   agentId: string;
@@ -24,6 +25,7 @@ export default function SeatPanel({ mode, agents, workshopId, initial, onSubmit,
   onSubmit: (draft: SeatDraft) => Promise<void>;
   onCancel: () => void;
 }) {
+  const { t } = useLocale();
   const [agentId, setAgentId] = useState(initial?.agentId || agents[0]?.id || '');
   const [title, setTitle] = useState(initial?.title || '');
   const [rolePrompt, setRolePrompt] = useState(initial?.rolePrompt || '');
@@ -38,11 +40,11 @@ export default function SeatPanel({ mode, agents, workshopId, initial, onSubmit,
     try {
       const r = await fetch(`/api/cyclone/workshop/${workshopId}/gen-duty`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId, title: title.trim() || '工位', rolePrompt }),
+        body: JSON.stringify({ agentId, title: title.trim() || t('cyclone.seat.fallbackTitle'), rolePrompt }),
       });
       if (!r.ok) {
         const e = await r.json().catch(() => ({}));
-        alert(e?.error || `生成职责失败（HTTP ${r.status}）`);
+        alert(e?.error || t('cyclone.seat.generateFailed', { status: r.status }));
         return;
       }
       const d = await r.json();
@@ -65,48 +67,48 @@ export default function SeatPanel({ mode, agents, workshopId, initial, onSubmit,
   return (
     <div className="cyclone__seat-editor-scroll">
       <section className="cyclone__seat-editor mo-enter-fade-up" aria-labelledby="cyclone-seat-editor-title">
-      <h2 id="cyclone-seat-editor-title" className="cyclone__seat-editor-title">{mode === 'create' ? '添加工位' : `编辑工位 · ${initial?.title || ''}`}</h2>
+      <h2 id="cyclone-seat-editor-title" className="cyclone__seat-editor-title">{mode === 'create' ? t('cyclone.seat.createTitle') : t('cyclone.seat.editTitle', { title: initial?.title || '' })}</h2>
 
-      <label style={labelStyle}>绑定 agent</label>
+      <label style={labelStyle}>{t('cyclone.seat.agent')}</label>
       <select value={agentId} onChange={e => setAgentId(e.target.value)} style={inputStyle}>
         {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
       </select>
-      {mode === 'edit' && <div style={hintStyle}>更换后从下一轮开始生效，工位配置与现有会话记录保持不变。</div>}
+      {mode === 'edit' && <div style={hintStyle}>{t('cyclone.seat.agentChangedHint')}</div>}
 
-      <label style={labelStyle}>工位名称</label>
-      <input value={title} onChange={e => setTitle(e.target.value)} placeholder="如：后端、架构评审、测试" style={inputStyle} />
-      <div style={hintStyle}>工作室内唯一，同事靠它 contact 寻址。</div>
+      <label style={labelStyle}>{t('cyclone.seat.name')}</label>
+      <input value={title} onChange={e => setTitle(e.target.value)} placeholder={t('cyclone.seat.namePlaceholder')} style={inputStyle} />
+      <div style={hintStyle}>{t('cyclone.seat.nameHint')}</div>
 
-      <label style={labelStyle}>角色提示词（这个工位在本工作室干的活）</label>
+      <label style={labelStyle}>{t('cyclone.seat.rolePrompt')}</label>
       <textarea value={rolePrompt} onChange={e => setRolePrompt(e.target.value)} rows={5}
-        placeholder="描述这个工位在本工作室的职责，例如：负责后端 API 与数据库；关注性能和安全；与「前端」工位协作时主动 contact 对齐接口。（留空则只用 agent 自身角色）"
+        placeholder={t('cyclone.seat.rolePlaceholder')}
         style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.6 }} />
 
       <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer', marginTop: 'var(--space-2)', fontSize: 'var(--text-sm)' }}>
         <input type="checkbox" checked={override} onChange={e => setOverride(e.target.checked)} />
-        <span>覆盖 agent 基础角色</span>
+        <span>{t('cyclone.seat.override')}</span>
       </label>
       <div style={hintStyle}>
         {override
-          ? '开启：工位提示词将顶替 agent 自身人设。请确保上面的提示词完整描述了这个工位该是谁、能干什么。'
-          : '不覆盖：工位提示词叠加在 agent 人设之上。记得让工位职责与 agent 原角色的工作范围相容，别互相打架。'}
+          ? t('cyclone.seat.overrideOn')
+          : t('cyclone.seat.overrideOff')}
       </div>
 
-      <label style={labelStyle}>职责名片（一句话，供同事 contact 时识别）</label>
+      <label style={labelStyle}>{t('cyclone.seat.duty')}</label>
       <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'flex-start' }}>
-        <input value={duty} onChange={e => setDuty(e.target.value)} placeholder="留空则用默认「补位协作者」"
+        <input value={duty} onChange={e => setDuty(e.target.value)} placeholder={t('cyclone.seat.dutyPlaceholder')}
           style={{ ...inputStyle, flex: 1, marginBottom: 0 }} />
         <button onClick={genDuty} disabled={genning || !agentId} className="secondary-action-btn" style={{ whiteSpace: 'nowrap' }}>
-          {genning ? '生成中…' : 'AI 生成'}
+          {genning ? t('cyclone.seat.generating') : t('cyclone.seat.generate')}
         </button>
       </div>
-      <div style={hintStyle}>AI 生成基于上面的角色提示词 + agent 人设。</div>
+      <div style={hintStyle}>{t('cyclone.seat.generateHint')}</div>
 
       <div className="cyclone__seat-editor-actions">
         <button onClick={submit} disabled={busy || !agentId || !title.trim()} className="primary-cta-btn">
-          {busy ? '保存中…' : (mode === 'create' ? '+ 创建工位' : '保存工位')}
+          {busy ? t('cyclone.seat.saving') : t(mode === 'create' ? 'cyclone.seat.create' : 'cyclone.seat.save')}
         </button>
-        <button onClick={onCancel} disabled={busy} className="secondary-action-btn">取消</button>
+        <button onClick={onCancel} disabled={busy} className="secondary-action-btn">{t('common.cancel')}</button>
       </div>
       </section>
     </div>

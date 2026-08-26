@@ -28,6 +28,7 @@ import { fetchConvectionRead } from './convection-load-retry';
 import '../../../styles/components/convection.css';
 import type { Agent } from '../../../types';
 import AgentAvatar from '../../../components/agents/AgentAvatar';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 type ConvMsg = ConvectionTurnMessage;
 type ToolStep = ConvectionToolStep;
@@ -39,11 +40,12 @@ const ACTIVE_SESSION_KEY = 'convection_active_id';
 
 async function readErrorMessage(r: Response, fallback: string): Promise<string> {
   const e = await r.json().catch(() => ({}));
-  return e?.error || `${fallback}（HTTP ${r.status}）`;
+  return e?.error || `${fallback} (HTTP ${r.status})`;
 }
 
 export default memo(function ConvectionPage({ active = true, onNavigate }: { active?: boolean; onNavigate?: (page: string) => void }) {
   const confirm = useConfirm();
+  const { t: translate } = useLocale();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -109,8 +111,8 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   useEffect(() => { if (!active) return; refreshAgents(); const t = setInterval(refreshAgents, 5000); return () => clearInterval(t); }, [refreshAgents, active]);
 
   const refreshSessions = useCallback(async () => {
-    try { const r = await fetchConvectionRead('/api/convection/list'); if (r.ok) setSessions(await r.json()); else console.error(await readErrorMessage(r, '加载对流列表失败')); } catch (e) { console.error('[convection] 加载对流列表失败', e); }
-  }, []);
+    try { const r = await fetchConvectionRead('/api/convection/list'); if (r.ok) setSessions(await r.json()); else console.error(await readErrorMessage(r, translate('convection.page.loadListFailed'))); } catch (e) { console.error('[convection] load list failed', e); }
+  }, [translate]);
   useEffect(() => { refreshSessions(); }, [refreshSessions]);
 
   const activeSession = sessions.find(s => s.id === activeId);
@@ -139,7 +141,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
           setCMsgs([]);
           return;
         }
-        alert(await readErrorMessage(r, '加载对流会话失败'));
+        alert(await readErrorMessage(r, translate('convection.page.loadSessionFailed')));
         return;
       }
       const d = await r.json();
@@ -147,9 +149,9 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
       setMsgs((d.publicMessages || []).map(restoreConvectionMessage));
       setCMsgs(d.chairMessages || []);
       setActiveRound(normalizeConvectionRound(d.activeRound));
-    } catch (e) { if (request.isCurrent()) { console.error('[convection] 加载对流会话失败', e); alert(`加载对流会话失败：${(e as Error).message}`); } }
+    } catch (e) { if (request.isCurrent()) { console.error('[convection] load session failed', e); alert(`${translate('convection.page.loadSessionFailed')}: ${(e as Error).message}`); } }
     finally { if (loadingSessionRef.current === id) loadingSessionRef.current = null; }
-  }, [activeId]);
+  }, [activeId, translate]);
 
   // 刷新或跨窗口进入正在运行的会议时，没有本地 SSE 可接管；轮询权威状态直到落定。
   useEffect(() => {
@@ -185,13 +187,13 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
 
   // 创建会话
   const handleNew = async () => {
-    const createError = getConvectionCreateError(agents.length);
+    const createError = getConvectionCreateError(agents.length, translate('convection.page.needAgents'));
     if (createError) {
       const goToAgents = await confirm({
-        title: '无法创建会议室',
+        title: translate('convection.page.cannotCreate'),
         message: createError,
-        cancelText: '取消',
-        confirmText: '前往 Agent 管理',
+        cancelText: translate('common.cancel'),
+        confirmText: translate('convection.page.manageAgents'),
       });
       if (goToAgents) onNavigate?.('agent');
       return;
@@ -203,11 +205,11 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chairAgentId: chair.id, participantAgentIds: participants.map(a => a.id) }),
       });
-      if (!r.ok) { alert(await readErrorMessage(r, '创建对流失败')); return; }
+      if (!r.ok) { alert(await readErrorMessage(r, translate('convection.page.createFailed'))); return; }
       const d = await r.json();
       await refreshSessions();
       loadSession(d.id);
-    } catch (e) { console.error('[convection] 创建对流失败', e); alert(`创建对流失败：${(e as Error).message}`); }
+    } catch (e) { console.error('[convection] create failed', e); alert(`${translate('convection.page.createFailed')}: ${(e as Error).message}`); }
   };
 
   async function postSessionAction(id: string, action: string, body: Record<string, unknown> | null, fallback: string): Promise<boolean> {
@@ -224,12 +226,12 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   const handleRename = async (id: string, title: string) => {
     setEditingTitle(null);
     if (!title.trim()) return;
-    if (await postSessionAction(id, 'rename', { title }, '重命名对流失败')) refreshSessions();
+    if (await postSessionAction(id, 'rename', { title }, translate('convection.page.renameFailed'))) refreshSessions();
   };
 
   // 删除
   const handleDelete = async (id: string) => {
-    if (!(await postSessionAction(id, 'delete', null, '删除对流失败'))) return;
+    if (!(await postSessionAction(id, 'delete', null, translate('convection.page.deleteFailed')))) return;
     if (activeId === id) { setActiveId(null); setMsgs([]); setCMsgs([]); }
     refreshSessions();
   };
@@ -237,27 +239,27 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   // Agent 热配置
   const handleJoin = async (agentId: string) => {
     if (!activeId) return;
-    if (await postSessionAction(activeId, 'join', { agentId }, '加入 agent 失败')) refreshSessions();
+    if (await postSessionAction(activeId, 'join', { agentId }, translate('convection.page.joinFailed'))) refreshSessions();
   };
   const handleLeave = async (agentId: string) => {
     if (!activeId) return;
-    if (await postSessionAction(activeId, 'leave', { agentId }, '移除 agent 失败')) refreshSessions();
+    if (await postSessionAction(activeId, 'leave', { agentId }, translate('convection.page.leaveFailed'))) refreshSessions();
   };
   const handleSetChair = async (agentId: string) => {
     if (!activeId) return;
-    if (await postSessionAction(activeId, 'set-chair', { agentId }, '设置会议助理失败')) refreshSessions();
+    if (await postSessionAction(activeId, 'set-chair', { agentId }, translate('convection.page.setChairFailed'))) refreshSessions();
   };
   const handleReorder = async (fromIdx: number, toIdx: number) => {
     if (!activeSession) return;
     const arr = [...activeSession.participantAgentIds];
     const [item] = arr.splice(fromIdx, 1);
     arr.splice(toIdx, 0, item);
-    if (await postSessionAction(activeSession.id, 'reorder', { participantAgentIds: arr }, '调整发言顺序失败')) refreshSessions();
+    if (await postSessionAction(activeSession.id, 'reorder', { participantAgentIds: arr }, translate('convection.page.reorderFailed'))) refreshSessions();
   };
 
   const handleOpenWorkspace = async () => {
     if (!activeId) return;
-    if (await postSessionAction(activeId, 'open-workspace', null, '打开会议工作区失败')) return;
+    if (await postSessionAction(activeId, 'open-workspace', null, translate('convection.page.workspaceFailed'))) return;
   };
 
   // 消息编辑
@@ -276,7 +278,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
       setEditingMsgIdx(null);
       setEditMsgContent('');
     } else {
-      alert(await readErrorMessage(r, '编辑消息失败'));
+      alert(await readErrorMessage(r, translate('convection.page.editMessageFailed')));
     }
   };
   const handleCancelEdit = () => { setEditingMsgIdx(null); setEditMsgContent(''); };
@@ -291,7 +293,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
     if (r.ok) {
       setMsgs(p => p.filter((_, i) => i !== idx));
     } else {
-      alert(await readErrorMessage(r, '删除消息失败'));
+      alert(await readErrorMessage(r, translate('convection.page.deleteMessageFailed')));
     }
   };
 
@@ -329,10 +331,10 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ mode }),
         });
-        if (!resetResp.ok) { alert(await readErrorMessage(resetResp, '重置对流失败')); return; }
+        if (!resetResp.ok) { alert(await readErrorMessage(resetResp, translate('convection.page.resetFailed'))); return; }
         const resetData = await resetResp.json().catch(() => ({}));
         if (mode === 'summary' && resetData?.summaryFailed) {
-          alert('摘要生成失败，已按「归档清空」处理（历史已归档到 bak，可恢复）。');
+          alert(translate('convection.page.summaryFailed'));
         }
         refreshSessions();
         const r = await fetch(`/api/convection/session/${activeId}/status`);
@@ -340,11 +342,11 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
           const fresh = await r.json();
           setMsgs(fresh.publicMessages?.map(restoreConvectionMessage) || []);
         } else {
-          alert(await readErrorMessage(r, '重载对流会话失败'));
+          alert(await readErrorMessage(r, translate('convection.page.reloadFailed')));
         }
       } catch (e) {
-        console.error('[convection] 重置对流失败', e);
-        alert(`重置对流失败：${(e as Error).message}`);
+        console.error('[convection] reset failed', e);
+        alert(`${translate('convection.page.resetFailed')}: ${(e as Error).message}`);
       } finally {
         setActiveRound(null);
       }
@@ -411,17 +413,31 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
           streamContent = '';
           reasoningContent = '';
           pendingTools = [];
+        } else if (ev.type === 'agent-failed') {
+          cancelFlush();
+          const content = translate('convection.page.participantFailed', { agent: ev.label, detail: ev.message });
+          setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === ev.label
+            ? { ...m, content, reasoning: reasoningContent, toolCalls: pendingTools, streaming: false, waitingInfo: undefined }
+            : m));
+          currentLabel = '';
+          streamContent = '';
+          reasoningContent = '';
+          pendingTools = [];
         } else if (ev.type === 'compact-start') {
-          setMsgs(p => [...p, { speaker: '系统', content: '会议助理正在整理对话记录...', streaming: true, toolCalls: [], timestamp: new Date().toISOString() }]);
+          setMsgs(p => [...p, { speaker: '系统', content: translate('convection.page.archiving'), streaming: true, toolCalls: [], timestamp: new Date().toISOString() }]);
         } else if (ev.type === 'compact-done') {
           setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === '系统' && m.streaming
-            ? { ...m, content: `对话记录已压缩（归档 ${(ev as any).archivedCycles} 个周期，摘要 ${Math.round(((ev as any).summaryLength || 0) / 1000)}K 字符）`, streaming: false }
+            ? { ...m, content: translate('convection.page.archived', { cycles: (ev as any).archivedCycles, size: Math.round(((ev as any).summaryLength || 0) / 1000) }), streaming: false }
             : m));
         } else if (ev.type === 'notice') {
           // 系统提示（如强制 native 但探测不支持的警告）
           setMsgs(p => [...p, { speaker: '系统', content: ev.message, toolCalls: [], timestamp: new Date().toISOString() }]);
         }
-      }, ctrl.signal);
+      }, ctrl.signal, undefined, {
+        missingStream: translate('convection.sse.missingStream'),
+        executionFailed: translate('convection.sse.executionFailed'),
+        interrupted: translate('convection.sse.interrupted'),
+      });
     } catch (e: any) {
       if (e instanceof ConvectionHttpError && e.status === 409) {
         preserveServerRound = true;
@@ -440,7 +456,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
       if (e.name !== 'AbortError') {
         setMsgs(p => [...p, {
           speaker: '系统',
-          content: `对流连接中断：${e.message || '未知错误'}`,
+          content: translate('convection.page.connectionInterrupted', { detail: e.message || translate('convection.page.unknownError') }),
           toolCalls: [],
           timestamp: new Date().toISOString(),
         }]);
@@ -450,7 +466,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
       if (!preserveServerRound) setActiveRound(null);
       refreshSessions();
     }
-  }, [input, busy, cBusy, activeId, refreshSessions]);
+  }, [input, busy, cBusy, activeId, refreshSessions, translate]);
 
   // 始终持有最新 handleSpeak，供 busy 落定 effect 调用（避开闭包里过期的 busy）
   speakRef.current = handleSpeak;
@@ -504,7 +520,11 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         } else if (ev.type === 'chair-done') {
           setCMsgs(p => p.map((m, i) => i === p.length - 1 && m.role === 'assistant' ? { ...m, content: ev.content, streaming: false, waitingInfo: undefined } : m));
         }
-      }, ctrl.signal);
+      }, ctrl.signal, undefined, {
+        missingStream: translate('convection.sse.missingStream'),
+        executionFailed: translate('convection.sse.executionFailed'),
+        interrupted: translate('convection.sse.interrupted'),
+      });
     } catch (e: any) {
       if (e instanceof ConvectionHttpError && e.status === 409) {
         preserveServerRound = true;
@@ -520,7 +540,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
       setCMsgs(p => p.map((m, i) => i === p.length - 1 && (m as any).streaming
         ? {
             ...m,
-            content: e.name === 'AbortError' ? m.content : (m.content || `请求失败：${e.message || '未知错误'}`),
+            content: e.name === 'AbortError' ? m.content : (m.content || translate('convection.page.requestFailed', { detail: e.message || translate('convection.page.unknownError') })),
             streaming: false,
             waitingInfo: undefined,
           }
@@ -529,19 +549,19 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
       cAbortRef.current = null;
       if (!preserveServerRound) setActiveRound(null);
     }
-  }, [cInput, activeRound, activeId]);
+  }, [cInput, activeRound, activeId, translate]);
 
   return (
     <div className="conv" ref={convRef}>
       {/* Left: session list */}
       <div className="conv__sidebar">
         <div className="conv__sidebar-header">
-          <span className="conv__sidebar-title">会议室</span>
+          <span className="conv__sidebar-title">{translate('convection.page.rooms')}</span>
           <button
             onClick={handleNew}
             className="icon-add-btn"
-            title={agents.length < 2 ? '至少需要 2 个 Agent' : '创建会议室'}
-            aria-label="创建会议室"
+            title={agents.length < 2 ? translate('convection.page.needTwoAgents') : translate('convection.page.createRoom')}
+            aria-label={translate('convection.page.createRoom')}
           >+
           </button>
         </div>
@@ -559,9 +579,9 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                 </span>
               </button>
               {confirmingDeleteId === s.id ? (
-                <button onClick={() => { setConfirmingDeleteId(null); handleDelete(s.id); }} className="conv__session-card-del conv__session-card-del--confirm" title="对流工作区及对话气泡将被清空">确认?</button>
+                <button onClick={() => { setConfirmingDeleteId(null); handleDelete(s.id); }} className="conv__session-card-del conv__session-card-del--confirm" title={translate('convection.page.deleteHint')}>{translate('convection.page.deleteConfirm')}</button>
               ) : (
-                <button onClick={() => { setConfirmingDeleteId(s.id); setTimeout(() => setConfirmingDeleteId(prev => prev === s.id ? null : prev), 3000); }} className="conv__session-card-del" aria-label={`删除会议：${s.title}`}>×</button>
+                <button onClick={() => { setConfirmingDeleteId(s.id); setTimeout(() => setConfirmingDeleteId(prev => prev === s.id ? null : prev), 3000); }} className="conv__session-card-del" aria-label={translate('convection.page.deleteMeeting', { title: s.title })}>×</button>
               )}
             </div>
             );
@@ -578,18 +598,18 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
               {editingTitle === activeSession.id ? (
                 <input autoFocus value={editValue} onChange={e => setEditValue(e.target.value)} onBlur={() => handleRename(activeSession.id, editValue)} onKeyDown={e => { if (e.key === 'Enter') handleRename(activeSession.id, editValue); if (e.key === 'Escape') setEditingTitle(null); }} className="conv__header-input" />
               ) : (
-                <span onDoubleClick={() => { setEditingTitle(activeSession.id); setEditValue(activeSession.title); }} className="conv__header-title" title="双击重命名">{activeSession.title}</span>
+                <span onDoubleClick={() => { setEditingTitle(activeSession.id); setEditValue(activeSession.title); }} className="conv__header-title" title={translate('convection.page.rename')}>{activeSession.title}</span>
               )}
               <span className="conv__header-id">{activeSession.id}</span>
-              <button type="button" onClick={handleOpenWorkspace} className="conv__workspace-btn" title="打开当前会议的本地工作区">
+              <button type="button" onClick={handleOpenWorkspace} className="conv__workspace-btn" title={translate('convection.page.openWorkspace')}>
                 <span className="conv__workspace-btn-icon" aria-hidden="true">↗</span>
-                <span>工作区</span>
+                <span>{translate('convection.page.workspace')}</span>
               </button>
               <span className="conv__header-tokens">{(() => { const t = activeSession.tokenUsage ? activeSession.tokenUsage.totalTokens : activeSession.tokenEstimate; return t >= 1000 ? `${(t / 1000).toFixed(1)}K` : t; })()} tokens</span>
             </div>
             {/* Config bar */}
             <div className="conv__config">
-              <span className="conv__config-label">会议助理:</span>
+              <span className="conv__config-label">{translate('convection.page.chairLabel')}</span>
               <select value={activeSession.chairAgentId} onChange={e => handleSetChair(e.target.value)} className="conv__config-select">
                 {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
@@ -615,13 +635,13 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                   return (
                     <div key={i} className={`chat__message chat__message--${m.speaker === '人类' ? 'user' : 'assistant'}`}>
                       {m.speaker === '人类'
-                        ? <div className="chat__avatar">你</div>
+                        ? <div className="chat__avatar">{translate('convection.page.you')}</div>
                         : <AgentAvatar agent={resolveConvectionAgent(agents, m.speaker, m.agentId)} className="chat__avatar" fallback={m.speaker.slice(0, 2)} />}
                       <div className="chat__bubble chat__bubble--editing">
                         <textarea className="chat__edit-textarea" value={editMsgContent} onChange={e => setEditMsgContent(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') handleCancelEdit(); if (e.key === 'Enter' && e.ctrlKey) handleSaveEdit(); }} rows={4} autoFocus />
                         <div className="chat__edit-actions">
-                          <button onClick={handleSaveEdit}>保存</button>
-                          <button onClick={handleCancelEdit}>取消</button>
+                          <button onClick={handleSaveEdit}>{translate('common.save')}</button>
+                          <button onClick={handleCancelEdit}>{translate('common.cancel')}</button>
                         </div>
                         {m.timestamp && <div className="chat__timestamp" title={formatTimestamp(m.timestamp, true)}>{formatTimestamp(m.timestamp)}</div>}
                       </div>
@@ -631,13 +651,13 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                 if (m.speaker === '人类') {
                   return (
                     <div key={i} className="chat__message chat__message--user">
-                      <div className="chat__avatar">你</div>
+                      <div className="chat__avatar">{translate('convection.page.you')}</div>
                       <div className="chat__bubble">
                         <div className="chat__content">{renderTextWithCode(m.content, `conv-u-${i}`)}</div>
                         {m.timestamp && <div className="chat__timestamp" title={formatTimestamp(m.timestamp, true)}>{formatTimestamp(m.timestamp)}</div>}
                         <div className="chat__bubble-actions">
-                          <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={() => handleStartEdit(i, m.content)}>✏</button>
-                          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={() => handleDeleteMsg(i)}>🗑</button>
+                          <button className="chat__msg-action-btn" title={translate('common.edit')} aria-label={translate('chat.editMessage')} onClick={() => handleStartEdit(i, m.content)}>✏</button>
+                          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title={translate('common.delete')} aria-label={translate('chat.deleteMessage')} onClick={() => handleDeleteMsg(i)}>🗑</button>
                         </div>
                       </div>
                     </div>
@@ -652,21 +672,21 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
             <div className="chat__input-area">
               <QueuedChips items={queue} onRemove={i => { if (activeId) removeQueuedMsg(activeId, i); }} />
               <div className="chat__input-wrapper">
-                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder={publicComposerMode === 'blocked' ? '会议助理私聊进行中…' : busy ? '发言中…（可继续输入，发送将排队）' : '发言...（Shift+Enter 换行）'} rows={1} />
+                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder={publicComposerMode === 'blocked' ? translate('convection.page.privateRunning') : busy ? translate('convection.page.publicStreaming') : translate('convection.page.publicPlaceholder')} rows={1} />
                 {publicComposerMode === 'blocked' ? (
-                  <button className="chat__send-btn" disabled title="会议助理私聊进行中">
+                  <button className="chat__send-btn" disabled title={translate('convection.page.privateRunning')}>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
                   </button>
                 ) : busy ? (
                   <>
-                    <button className="chat__send-btn" onClick={() => handleSpeak()} disabled={!input.trim() || queue.length >= MAX_QUEUE} title={queue.length >= MAX_QUEUE ? '队列已满（最多 3 条）' : '加入队列'}>
+                    <button className="chat__send-btn" onClick={() => handleSpeak()} disabled={!input.trim() || queue.length >= MAX_QUEUE} title={queue.length >= MAX_QUEUE ? translate('convection.page.queueFull', { max: MAX_QUEUE }) : translate('convection.page.enqueue')}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
                     </button>
                     <button className="chat__stop-btn" onClick={() => {
                       stoppedRef.current = true;
                       abortRef.current?.abort();
                       if (activeId) fetch(`/api/convection/session/${activeId}/abort`, { method: 'POST' }).catch(() => {});
-                    }} title="停止生成">
+                    }} title={translate('convection.page.stop')}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                     </button>
                   </>
@@ -677,28 +697,28 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                 )}
               </div>
               <div className="chat__command-hints">
-                <span>/reset 归档清空</span>
-                <span>/reset summary 归档+摘要</span>
+                <span>{translate('convection.page.resetHint')}</span>
+                <span>{translate('convection.page.resetSummaryHint')}</span>
               </div>
             </div>
           </>
         ) : (
-          <div className="conv__empty">选择或创建一个会议室</div>
+          <div className="conv__empty">{translate('convection.page.empty')}</div>
         )}
       </div>
 
       {/* Right: chair private — 悬浮侧板（收起为细标签，展开浮出盖在群聊上，不挤占布局） */}
       <div style={chairWrapStyle}>
-        <button onClick={toggleChair} title="展开会议助理私聊" aria-label="展开会议助理私聊" aria-hidden={chairOpen} tabIndex={chairOpen ? -1 : 0} style={{ ...chairTabStyle, opacity: chairOpen ? 0 : 1, pointerEvents: chairOpen ? 'none' : 'auto' }}>
+        <button onClick={toggleChair} title={translate('convection.page.expandChair')} aria-label={translate('convection.page.expandChair')} aria-hidden={chairOpen} tabIndex={chairOpen ? -1 : 0} style={{ ...chairTabStyle, opacity: chairOpen ? 0 : 1, pointerEvents: chairOpen ? 'none' : 'auto' }}>
           <span style={{ fontSize: '13px' }}>🗣️</span>
-          <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontWeight: 'var(--font-semibold)' }}>会议助理</span>
-          <span style={{ writingMode: 'vertical-rl', fontSize: '10px', color: 'var(--color-accent)', marginTop: 'auto' }}>展开‹</span>
+          <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontWeight: 'var(--font-semibold)' }}>{translate('convection.page.chair')}</span>
+          <span style={{ writingMode: 'vertical-rl', fontSize: '10px', color: 'var(--color-accent)', marginTop: 'auto' }}>{translate('convection.page.expand')}</span>
         </button>
         <div aria-hidden={!chairOpen} className="conv__chair-panel" style={{ ...chairPanelStyle, opacity: chairOpen ? 1 : 0, transform: chairOpen ? 'translateX(0) scale(1)' : 'translateX(30px) scale(0.985)', pointerEvents: chairOpen ? 'auto' : 'none' }}>
         <div className="conv__chair-header">
-          <span className="conv__chair-name">会议助理 私聊</span>
+          <span className="conv__chair-name">{translate('convection.page.chairPrivate')}</span>
           <div style={{ flex: 1 }} />
-          <button onClick={toggleChair} title="收起" aria-label="收起会议助理私聊" style={chairCollapseBtnStyle}>×</button>
+          <button onClick={toggleChair} title={translate('convection.page.collapse')} aria-label={translate('convection.page.collapseChair')} style={chairCollapseBtnStyle}>×</button>
         </div>
         <div ref={cRef} className="conv__chair-messages">
           {cMsgs.map((m, i) => (
@@ -709,7 +729,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                 )}
                 {m.waitingInfo && (m as any).streaming && (
                   <div className="conv__waiting-hint">
-                    等待模型响应
+                    {translate('convection.turn.waitingModel')}
                     <span className="conv__waiting-elapsed">{Math.round(m.waitingInfo.elapsed / 1000)}s</span>
                     <span className="thinking-card__tool-spinner" />
                   </div>
@@ -722,16 +742,16 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         </div>
         <div className="chat__input-area">
           <div className="chat__input-wrapper">
-            <textarea ref={cInputRef} className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={!activeId ? '' : chairComposerMode === 'blocked' ? '公共讨论进行中…' : '私聊会议助理...（Shift+Enter 换行）'} disabled={!activeId} rows={1} />
+            <textarea ref={cInputRef} className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={!activeId ? '' : chairComposerMode === 'blocked' ? translate('convection.page.publicRunning') : translate('convection.page.chairPlaceholder')} disabled={!activeId} rows={1} />
             {cBusy ? (
               <button className="chat__stop-btn" onClick={() => {
                 cAbortRef.current?.abort();
                 if (activeId) fetch(`/api/convection/session/${activeId}/abort`, { method: 'POST' }).catch(() => {});
-              }} title="停止生成">
+              }} title={translate('convection.page.stop')}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
               </button>
             ) : chairComposerMode === 'blocked' ? (
-              <button className="chat__send-btn" disabled title="公共讨论进行中">
+              <button className="chat__send-btn" disabled title={translate('convection.page.publicRunning')}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
               </button>
             ) : (

@@ -25,6 +25,7 @@ import {
   withBackgroundExecutionGuidance,
 } from '../shared/background-execution-tools.js';
 import { withAgentActivity } from '../shared/agent-activity.js';
+import { normalizeSystemMessages } from '../shared/system-messages.js';
 import {
   runReActLoopNative,
   SuspendSignal,
@@ -397,7 +398,7 @@ export async function chatSeat(
           }),
         };
         seat.messages.push({ role: 'user', content: humanMessage });
-        const messages: SeatContextMessage[] = [system, ...seat.messages];
+        const messages = normalizeSystemMessages([system, ...seat.messages]) as SeatContextMessage[];
         return driveSeat({ dataDir, workshopId, seat, messages, native, toolDefs, agent, contactTargets, signal, onEvent });
     });
   } finally {
@@ -432,7 +433,7 @@ export async function resumeSeat(
             wsRelPath: wsRelPath(dataDir, workshopId), bulletinSeenAt: seat.bulletinSeenAt,
           }),
         };
-        const messages: SeatContextMessage[] = [system, ...seat.messages];
+        const messages = normalizeSystemMessages([system, ...seat.messages]) as SeatContextMessage[];
         return driveSeat({ dataDir, workshopId, seat, messages, native, toolDefs, agent, contactTargets, signal, onEvent });
     });
   } finally {

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 /**
  * ContactCard — 气旋工位间联络卡片
@@ -17,11 +18,13 @@ export interface ContactCardData {
 const BLUE = '#3b82f6';
 
 export default function ContactCard({ data }: { data: ContactCardData }) {
+  const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
   const { target, message, reply, status } = data;
 
   const icon = status === 'success' ? '\u2713' : status === 'error' ? '\u2717' : '\u25cc';
-  const subtitle = status === 'running' ? '联络中...' : status === 'error' ? '联络失败' : '已回复';
+  const subtitle = status === 'running' ? t('cyclone.contact.running')
+    : status === 'error' ? t('cyclone.contact.failed') : t('cyclone.contact.replied');
 
   return (
     <div className="chat__message chat__message--assistant" style={{ paddingLeft: '24px' }}>
@@ -50,7 +53,7 @@ export default function ContactCard({ data }: { data: ContactCardData }) {
             {status === 'running' ? <span style={{ animation: 'spin 1.5s linear infinite' }}>{icon}</span> : icon}
           </span>
           <span style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            联络 → {target}
+            {t('cyclone.contact.title', { target })}
           </span>
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginRight: 'var(--space-2)' }}>
             {subtitle}
@@ -69,12 +72,12 @@ export default function ContactCard({ data }: { data: ContactCardData }) {
         {expanded && (
           <div style={{ padding: '0 var(--space-4) var(--space-3)', borderTop: '1px solid var(--border-color)' }}>
             <div style={{ marginTop: 'var(--space-2)' }}>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>发出</div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>{t('cyclone.contact.sent')}</div>
               <pre style={preStyle}>{message}</pre>
             </div>
             {reply && (
               <div style={{ marginTop: 'var(--space-2)' }}>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>{target} 回复 {icon}</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>{t('cyclone.contact.reply', { target, icon })}</div>
                 <pre style={preStyle}>{reply}</pre>
               </div>
             )}

@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { getSession, saveSession, autoTitle } from '../../store/chat';
 import { useConfirm } from '../common/ConfirmDialog';
 import type { Agent, ChatMessage } from '../../types';
+import { useLocale } from '../../i18n/LocaleContext';
 
 export function useMessageEditor(
   activeSessionId: string | null,
@@ -12,17 +13,18 @@ export function useMessageEditor(
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   const confirm = useConfirm();
+  const { t: translate } = useLocale();
 
   const deleteMessage = useCallback(async (msgId: string) => {
     if (!activeSessionId || !selectedAgent) return;
-    if (!(await confirm({ title: '删除此消息？', message: '此操作不可撤销。', confirmText: '删除', danger: true }))) return;
+    if (!(await confirm({ title: translate('chat.page.deleteMessageTitle'), message: translate('chat.page.deleteMessageMessage'), confirmText: translate('common.delete'), danger: true }))) return;
     const session = await getSession(activeSessionId);
     if (!session) return;
     const filtered = session.messages.filter(m => m.id !== msgId);
     setMessages(filtered);
     await saveSession({ ...session, messages: filtered, title: autoTitle(filtered) });
     refreshSessions(selectedAgent);
-  }, [activeSessionId, selectedAgent, setMessages, refreshSessions, confirm]);
+  }, [activeSessionId, selectedAgent, setMessages, refreshSessions, confirm, translate]);
 
   const startEdit = useCallback((msg: ChatMessage) => {
     setEditingMsgId(msg.id);

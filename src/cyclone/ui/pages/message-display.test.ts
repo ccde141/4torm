@@ -81,3 +81,15 @@ test('普通结果提到未执行时不误判，delegate 与 contact 占位取�
     'success', 'error', 'error',
   ]);
 });
+
+test('缺少 Ask 问题时只本地化展示 fallback', () => {
+  const [message] = contextToDisplay([{
+    role: 'assistant', content: '', toolCalls: [
+      { id: 'ask-1', name: 'ask', arguments: '{}' },
+    ],
+  }], 'Your confirmation is required');
+
+  const ask = message.blocks?.[0];
+  assert.equal(ask?.kind, 'ask');
+  assert.equal(ask?.kind === 'ask' ? ask.question : undefined, 'Your confirmation is required');
+});

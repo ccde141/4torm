@@ -3,6 +3,7 @@ import { loadSkinConfig } from '../../store/skin';
 import { getAgents } from '../../store/agent';
 import { getAllSessions } from '../../store/chat';
 import SkinPanel from './SkinPanel';
+import { useLocale } from '../../i18n/LocaleContext';
 import '../../styles/components/header.css';
 
 interface HeaderProps {
@@ -33,6 +34,7 @@ const TYPE_BADGE: Record<SearchType, string> = {
 };
 
 const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps) {
+  const { locale, t } = useLocale();
   const [skinOpen, setSkinOpen] = useState(false);
   const skinBtnRef = useRef<HTMLButtonElement>(null);
   const [query, setQuery] = useState('');
@@ -152,8 +154,8 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
           <input
             className="header__search-input"
             type="text"
-            placeholder="搜索 Agent、季风、工作室、潮汐…"
-            aria-label="搜索"
+            placeholder={t('header.search')}
+            aria-label={t('header.searchLabel')}
             value={query}
             onChange={handleInputChange}
             onFocus={() => results.length > 0 && setShowResults(true)}
@@ -161,7 +163,7 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
           {showResults && (
             <div className="header__search-dropdown">
               {results.length === 0 ? (
-                <div className="header__search-empty">未找到结果</div>
+                <div className="header__search-empty">{t('header.noResults')}</div>
               ) : (
                 results.map(r => (
                   <button
@@ -195,11 +197,11 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
         </div>
         <a
           className="header__btn"
-          href="/docs/"
+          href={locale === 'en-US' ? '/docs/en/' : '/docs/'}
           target="_blank"
           rel="noopener noreferrer"
-          title="使用文档"
-          aria-label="使用文档"
+          title={t('header.docs')}
+          aria-label={t('header.docs')}
         >
           <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
@@ -211,8 +213,8 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
             ref={skinBtnRef}
             className={`header__btn${skinOpen ? ' header__btn--active' : ''}`}
             onClick={() => setSkinOpen(o => !o)}
-            title="打开皮肤设置"
-            aria-label="打开皮肤设置"
+            title={t('header.skin')}
+            aria-label={t('header.skin')}
             aria-expanded={skinOpen}
           >
             <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">

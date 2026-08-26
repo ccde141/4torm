@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from 'react';
 import { partitionToolActivity, type ToolActivityLike } from './tool-activity-group';
+import { useLocale } from '../../i18n/LocaleContext';
 
 export interface ToolActivityItem extends ToolActivityLike {
   status?: string;
@@ -19,16 +20,19 @@ function Group<T extends ToolActivityItem>({ items, renderItem }: {
   items: T[];
   renderItem: (item: T, index: number) => ReactNode;
 }) {
+  const { t } = useLocale();
   const failed = items.filter(item => item.status === 'error').length;
   const running = items.findLast(item => item.status === 'running' || item.status === 'pending');
   const current = running || items.at(-1)!;
   const target = targetOf(current);
-  const state = failed ? `${failed} 项失败` : running ? `正在执行 ${current.tool}` : '已完成';
+  const state = failed
+    ? t('chat.tool.failedCount', { count: failed })
+    : running ? t('chat.tool.running', { tool: current.tool }) : t('chat.tool.completed');
   return (
     <details className="tool-activity-group" open={failed > 0}>
       <summary className="tool-activity-group__summary">
         <span className="tool-activity-group__arrow">▶</span>
-        <span>{items.length} 项工具操作</span>
+        <span>{t('chat.tool.operationCount', { count: items.length })}</span>
         <span className="tool-activity-group__state">{state}</span>
         {target && <span className="tool-activity-group__target" title={target}>{target}</span>}
         {running && <span className="thinking-card__tool-spinner" />}

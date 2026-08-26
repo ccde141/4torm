@@ -2,6 +2,7 @@ export type ProviderProfileId =
   | 'openai-compatible'
   | 'kimi'
   | 'lmstudio'
+  | 'llama-cpp'
   | 'deepseek'
   | 'zhipu-glm'
   | 'dashscope'
@@ -19,6 +20,7 @@ export const PROVIDER_PROFILE_OPTIONS: ReadonlyArray<{
   { value: 'openai-compatible', label: '通用 OpenAI' },
   { value: 'kimi', label: 'Kimi' },
   { value: 'lmstudio', label: 'LM Studio' },
+  { value: 'llama-cpp', label: 'llama.cpp' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'zhipu-glm', label: '智谱 GLM 推理' },
   { value: 'dashscope', label: '通义 Qwen 推理' },

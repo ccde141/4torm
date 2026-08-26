@@ -1,16 +1,18 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { STATUS_ORDER, type Task, type TaskBoard, type TaskStatus } from '../../utils/taskboard';
 import { useConfirm } from '../common/ConfirmDialog';
-import { formatObservationElapsed, formatObservationStatus, selectRecentTaskboardObservations, selectTaskboardObservations, type TaskboardObservation } from './taskboard-observations';
+import { selectTaskboardObservations, type TaskboardObservation } from './taskboard-observations';
 import ExecutionSurfaceOverlay from './ExecutionSurfaceOverlay';
 import { createExecutionSurfaceState, executionSurfaceReducer, selectCurrentExecutionSurface } from './execution-surface';
 import { getExecutionSurfaceCapability } from './execution-surface-capability';
+import { useLocale } from '../../i18n/LocaleContext';
+import TaskboardExecutionDock from './TaskboardExecutionDock';
 
-const STATUS_META: Record<TaskStatus, { mark: string; color: string; label: string }> = {
-  todo:    { mark: '○', color: 'var(--color-text-tertiary)', label: '待办' },
-  doing:   { mark: '◐', color: 'var(--color-accent)',        label: '进行中' },
-  done:    { mark: '●', color: 'var(--color-success)',       label: '完成' },
-  blocked: { mark: '▲', color: 'var(--color-error)',         label: '受阻' },
+const STATUS_META: Record<TaskStatus, { mark: string; color: string }> = {
+  todo:    { mark: '○', color: 'var(--color-text-tertiary)' },
+  doing:   { mark: '◐', color: 'var(--color-accent)' },
+  done:    { mark: '●', color: 'var(--color-success)' },
+  blocked: { mark: '▲', color: 'var(--color-error)' },
 };
 
 function cycleStatus(s: TaskStatus): TaskStatus {
@@ -20,7 +22,6 @@ function cycleStatus(s: TaskStatus): TaskStatus {
 const MIN_W = 240, MAX_W = 560, DEFAULT_W = 320;
 /** 收起态竖条的横向占位宽度：父列据此为滚动条让出一条，使收起时滚动条落在竖条左侧、可点可拖（对齐会议助理抽屉 TAB_W 结构） */
 export const RAIL_W = 42;
-const HINT = 'AI 的多步任务计划与进度';
 
 /**
  * 会话任务板：右缘常驻的凸出标签（“通道”式入口），默认收起。
@@ -39,6 +40,7 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
   observationOwnerId?: string;
 }) {
   const confirm = useConfirm();
+  const { t: translate } = useLocale();
   const [width, setWidth] = useState(() => {
     const s = Number(localStorage.getItem('taskboard.width'));
     return s >= MIN_W && s <= MAX_W ? s : DEFAULT_W;
@@ -63,6 +65,10 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
   const done = tasks.filter(t => t.status === 'done').length;
   const total = tasks.length;
   const pct = total ? Math.round((done / total) * 100) : 0;
+  const statusLabels: Record<TaskStatus, string> = {
+    todo: translate('chat.taskboard.todo'), doing: translate('chat.taskboard.doing'),
+    done: translate('chat.taskboard.done'), blocked: translate('chat.taskboard.blocked'),
+  };
   const activeObservations = selectTaskboardObservations(observations);
   const currentExecution = selectCurrentExecutionSurface(observations);
   useEffect(() => {
@@ -77,8 +83,9 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
   const startEdit = (t: Task) => { setEditingId(t.id); setDraft(t.title); setDraftNote(t.note ?? ''); };
   const addTask = () => {
     const id = `u${Date.now().toString(36)}`;
-    patch([...tasks, { id, title: '新任务', status: 'todo' }]);
-    setEditingId(id); setDraft('新任务'); setDraftNote('');
+    const title = translate('chat.taskboard.newTask');
+    patch([...tasks, { id, title, status: 'todo' }]);
+    setEditingId(id); setDraft(title); setDraftNote('');
   };
   const openExecution = (id: string) => {
     dispatchExecutionSurface({ type: 'open', ownerKey: executionOwnerKey, id });
@@ -94,15 +101,19 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
     const observation = observations.find(item => item.id === id);
     if (!observation) return;
     const lifecycle = getExecutionSurfaceCapability(observation.viewer).lifecycle;
-    const message = observation.status === 'waiting' && lifecycle.waitingConfirmMessage
-      ? lifecycle.waitingConfirmMessage
-      : lifecycle.confirmMessage;
+    const browser = observation.viewer === 'browser';
+    const message = browser
+      ? translate(observation.status === 'waiting' ? 'chat.taskboard.closeWaitingBrowserMessage' : 'chat.taskboard.closeBrowserMessage')
+      : translate('chat.taskboard.terminateMessage');
+    const title = translate(browser ? 'chat.taskboard.closeBrowserTitle' : 'chat.taskboard.terminateTitle');
+    const confirmText = translate(browser ? 'chat.taskboard.closeBrowserConfirm' : 'chat.taskboard.terminateConfirm');
+    const failure = translate(browser ? 'chat.taskboard.closeBrowserFailed' : 'chat.taskboard.terminateFailed');
     setClosingObservation(id); setExecutionError('');
     try {
-      if (!await confirm({ title: lifecycle.confirmTitle, message, confirmText: lifecycle.confirmLabel, danger: true })) return;
+      if (!await confirm({ title, message, confirmText, danger: true })) return;
       const query = new URLSearchParams({ scope: observationScope, ownerId: observationOwnerId }).toString();
       const response = await fetch(`/api/tools/observations/${encodeURIComponent(id)}/${lifecycle.endpoint}?${query}`, { method: 'POST' });
-      if (!response.ok) throw new Error((await response.json() as { error?: string }).error || lifecycle.failureMessage || 'Unable to update execution');
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error || failure);
     } catch (error) { setExecutionError((error as Error).message); }
     finally { setClosingObservation(current => current === id ? null : current); }
   };
@@ -121,16 +132,16 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
     return (
       <>
       <div style={railWrapStyle} onMouseEnter={() => setHovering(true)} onMouseLeave={() => setHovering(false)}>
-        <button onClick={onToggle} title={activeObservations.length ? `${HINT} · ${activeObservations.length} 项正在执行` : HINT} className={`taskboard-rail${glow ? ' taskboard-rail--glow' : ''}`} style={railBtnStyle}>
+        <button onClick={onToggle} title={activeObservations.length ? `${translate('chat.taskboard.hint')} · ${translate('chat.taskboard.runningCount', { count: activeObservations.length })}` : translate('chat.taskboard.hint')} className={`taskboard-rail${glow ? ' taskboard-rail--glow' : ''}`} style={railBtnStyle}>
           {glow && <span style={dotStyle} />}
           {activeObservations.length > 0 && <span style={runningCountStyle}>{activeObservations.length}</span>}
           <span style={{ fontSize: '16px', lineHeight: 1 }}>📋</span>
           {/* 静态标题，对齐气旋/对流会议助理条「会议助理 · 参谋」 */}
-          <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', color: 'var(--color-text-secondary)', textShadow: 'var(--text-halo)' }}>任务板 · 当前目标</span>
+          <span style={{ writingMode: 'vertical-rl', letterSpacing: '0.2em', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', color: 'var(--color-text-secondary)', textShadow: 'var(--text-halo)' }}>{translate('chat.taskboard.railTitle')}</span>
           {total > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: 'auto' }}>{done}/{total}</span>}
         </button>
         {hovering && (
-          <div style={hintStyle}>{HINT}{total > 0 ? ` · ${done}/${total}` : '（暂无，点击可手动新增）'}</div>
+          <div style={hintStyle}>{translate('chat.taskboard.hint')}{total > 0 ? ` · ${done}/${total}` : translate('chat.taskboard.railEmpty')}</div>
         )}
       </div>
       {executionSurface.visible && observationScope && observationOwnerId && (
@@ -167,30 +178,30 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
   return (
     <>
     <div className="taskboard-drawer" style={{ ...drawerStyle, width }}>
-      <div onMouseDown={onDragStart} style={dragHandleStyle} title="拖动调整宽度" />
+      <div onMouseDown={onDragStart} style={dragHandleStyle} title={translate('chat.taskboard.resize')} />
       <div className="taskboard-header">
         <div className="taskboard-header__primary">
           <span style={{ fontSize: '14px' }}>📋</span>
-          <span style={{ fontWeight: 'var(--font-semibold)', fontSize: 'var(--text-sm)' }}>任务板</span>
+          <span style={{ fontWeight: 'var(--font-semibold)', fontSize: 'var(--text-sm)' }}>{translate('chat.taskboard.title')}</span>
           {total > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{done}/{total}</span>}
         </div>
         {/* 导航动作独占首行右侧，不与可增长的工具按钮争夺宽度。 */}
-        <button onClick={onToggle} className="taskboard-act taskboard-header__collapse" style={actionBtnStyle} title="收起任务板">收起 ›</button>
+        <button onClick={onToggle} className="taskboard-act taskboard-header__collapse" style={actionBtnStyle} title={translate('chat.taskboard.collapse')}>{translate('chat.taskboard.collapseAction')}</button>
         <div className="taskboard-header__toolbar">
           <button
             className="execution-surface-shortcut"
             onClick={showExecutionSurface}
             disabled={!currentExecution && !executionSurface.openIds.length}
             style={{ ...visualShortcutStyle, cursor: currentExecution || executionSurface.openIds.length ? 'pointer' : 'not-allowed', opacity: currentExecution || executionSurface.openIds.length ? 1 : 0.36 }}
-            title={currentExecution || executionSurface.openIds.length ? '查看终端、浏览器等运行内容' : '当前没有可查看的运行内容'}
-            aria-label="打开运行视图"
+            title={currentExecution || executionSurface.openIds.length ? translate('chat.taskboard.viewExecutions') : translate('chat.taskboard.noExecutions')}
+            aria-label={translate('chat.taskboard.openExecution')}
           >
             <span className="execution-surface-shortcut__icon" aria-hidden="true" />
-            <span>运行视图</span>
+            <span>{translate('chat.taskboard.executionView')}</span>
             <span className={`execution-surface-shortcut__status${activeObservations.length ? ' execution-surface-shortcut__status--active' : ''}`} aria-hidden="true" />
           </button>
-          <button onClick={addTask} className="taskboard-act" style={actionBtnStyle} title="新增一项任务">＋ 新增</button>
-          {total > 0 && <button onClick={async () => { if (await confirm({ title: '清空整个任务板？', message: '此操作不可撤销。', confirmText: '清空', danger: true })) onChange(null); }} className="taskboard-act taskboard-act--danger" style={dangerBtnStyle} title="清空整个任务板（不可撤销）">🗑 清空</button>}
+          <button onClick={addTask} className="taskboard-act" style={actionBtnStyle} title={translate('chat.taskboard.addTitle')}>{translate('chat.taskboard.add')}</button>
+          {total > 0 && <button onClick={async () => { if (await confirm({ title: translate('chat.taskboard.clearTitle'), message: translate('chat.taskboard.clearMessage'), confirmText: translate('chat.taskboard.clear'), danger: true })) onChange(null); }} className="taskboard-act taskboard-act--danger" style={dangerBtnStyle} title={translate('chat.taskboard.clearHint')}>🗑 {translate('chat.taskboard.clear')}</button>}
         </div>
       </div>
 
@@ -203,7 +214,7 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
       <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-2) var(--space-3) var(--space-3)' }}>
         {total === 0 ? (
           <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', lineHeight: 1.6, padding: 'var(--space-2) 0' }}>
-            暂无任务板。<br />AI 在处理多步任务时会自动列出计划与进度；你也可以点上方 ＋ 手动新增一项。
+            {translate('chat.taskboard.empty')}<br />{translate('chat.taskboard.emptyHint')}
           </div>
         ) : (
           <>
@@ -211,24 +222,25 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
               {tasks.map(t => {
                 const meta = STATUS_META[t.status];
+                const statusLabel = statusLabels[t.status];
                 return (
                   <div key={t.id} style={rowStyle}>
-                    <button onClick={() => setStatus(t.id, cycleStatus(t.status))} style={{ ...statusBtnStyle, color: meta.color }} title={`${meta.label}（点击切换）`}>{meta.mark}</button>
+                    <button onClick={() => setStatus(t.id, cycleStatus(t.status))} style={{ ...statusBtnStyle, color: meta.color }} title={translate('chat.taskboard.switchStatus', { status: statusLabel })}>{meta.mark}</button>
                     {editingId === t.id ? (
                       <div style={editWrapStyle} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) commitEdit(); }}>
-                        <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} placeholder="任务标题"
+                        <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} placeholder={translate('chat.taskboard.taskTitle')}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditingId(null); }} style={titleInputStyle} />
-                        <input value={draftNote} onChange={e => setDraftNote(e.target.value)} placeholder="备注 / 受阻原因（可选）"
+                        <input value={draftNote} onChange={e => setDraftNote(e.target.value)} placeholder={translate('chat.taskboard.note')}
                           onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditingId(null); }} style={noteInputStyle} />
                       </div>
                     ) : (
                       <span onDoubleClick={() => startEdit(t)}
-                        style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, cursor: 'text' }} title="双击编辑">
+                        style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, cursor: 'text' }} title={translate('chat.taskboard.doubleClick')}>
                         <span style={{ fontSize: 'var(--text-sm)', color: t.status === 'done' ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)', textDecoration: t.status === 'done' ? 'line-through' : 'none', wordBreak: 'break-word' }}>{t.title}</span>
                         {t.note && <span style={{ fontSize: '11px', lineHeight: 1.3, color: 'var(--color-text-tertiary)', opacity: 0.85, wordBreak: 'break-word' }}>{t.note}</span>}
                       </span>
                     )}
-                    <button onClick={() => removeTask(t.id)} style={delBtnStyle} title="删除任务">×</button>
+                    <button onClick={() => removeTask(t.id)} style={delBtnStyle} title={translate('chat.taskboard.deleteTask')}>×</button>
                   </div>
                 );
               })}
@@ -258,30 +270,6 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
   );
 }
 
-function TaskboardExecutionDock({ observations, onOpen }: { observations: TaskboardObservation[]; onOpen: (id: string) => void }) {
-  const active = selectTaskboardObservations(observations);
-  const recent = selectRecentTaskboardObservations(observations);
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (!active.length) return;
-    const timer = window.setInterval(() => setTick(tick => tick + 1), 1_000);
-    return () => window.clearInterval(timer);
-  }, [active.length]);
-  if (!active.length && !recent.length) return null;
-  return (
-    <div className="taskboard-execution-dock" style={executionDockStyle} aria-label="正在执行">
-      <div style={executionDockTitleStyle}>{active.length > 0 && <span style={executionDotStyle} />}{active.length > 0 ? '正在执行' : '近期执行'}</div>
-      {active.map(item => (
-        <button className="taskboard-execution-row" key={item.id} onClick={() => onOpen(item.id)} style={executionRowStyle} title={item.command}>
-          <span style={executionTextStyle}><code style={executionCommandStyle}>{item.command}</code>{item.progress && <span style={executionProgressStyle}>{item.progress}</span>}</span>
-          <span style={executionElapsedStyle}>{formatObservationElapsed(item.startedAt)}</span>
-        </button>
-      ))}
-      {recent.map(item => <button className="taskboard-execution-row" key={item.id} onClick={() => onOpen(item.id)} style={executionRowStyle} title={item.command}><code style={executionCommandStyle}>{item.command}</code><span style={executionElapsedStyle}>{formatObservationStatus(item.status)}</span></button>)}
-    </div>
-  );
-}
-
 const railWrapStyle: React.CSSProperties = { position: 'absolute', right: 0, top: 0, bottom: 0, width: RAIL_W, zIndex: 4, display: 'flex' };
 const railBtnStyle: React.CSSProperties = { position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', gap: 'var(--space-2)', padding: 'var(--space-3) 0', appearance: 'none', border: '1px solid var(--glass-border)', borderRight: 'none', borderTopLeftRadius: 'var(--radius-md)', borderBottomLeftRadius: 'var(--radius-md)', background: 'var(--glass-bg-strong)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))', cursor: 'pointer', boxShadow: '-4px 0 16px -10px rgba(0,0,0,0.35)' };
 const dotStyle: React.CSSProperties = { position: 'absolute', top: 6, right: 6, width: 7, height: 7, borderRadius: '50%', background: 'var(--color-accent)', boxShadow: '0 0 6px var(--color-accent-glow)' };
@@ -301,12 +289,4 @@ const titleInputStyle: React.CSSProperties = { width: '100%', boxSizing: 'border
 // 备注输入：明显更小更淡、边框更弱，与标题拉开层级
 const noteInputStyle: React.CSSProperties = { width: '100%', boxSizing: 'border-box', fontSize: '11px', fontFamily: 'inherit', color: 'var(--color-text-tertiary)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', padding: '1px var(--space-1)' };
 const delBtnStyle: React.CSSProperties = { width: 18, height: 18, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', appearance: 'none', border: 'none', background: 'none', color: 'var(--color-text-tertiary)', cursor: 'pointer', fontSize: '14px', opacity: 0.5 };
-const executionDockStyle: React.CSSProperties = { borderTop: '1px solid var(--glass-border)', padding: 'var(--space-2) var(--space-3) var(--space-3)', background: 'var(--glass-bg)' };
 const executionErrorStyle: React.CSSProperties = { padding: 'var(--space-2) var(--space-3)', borderTop: '1px solid var(--glass-border)', color: 'var(--color-error)', fontSize: 'var(--text-xs)' };
-const executionDockTitleStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 'var(--space-1)', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-1)' };
-const executionDotStyle: React.CSSProperties = { width: 6, height: 6, borderRadius: '50%', background: 'var(--color-accent)', boxShadow: '0 0 7px var(--color-accent-glow)' };
-const executionRowStyle: React.CSSProperties = { display: 'flex', gap: 'var(--space-2)', alignItems: 'center', minWidth: 0, width: '100%', padding: '3px 0', appearance: 'none', border: 'none', background: 'transparent', textAlign: 'left', cursor: 'pointer' };
-const executionCommandStyle: React.CSSProperties = { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '11px', color: 'var(--color-text-primary)' };
-const executionTextStyle: React.CSSProperties = { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 };
-const executionProgressStyle: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--color-text-tertiary)' };
-const executionElapsedStyle: React.CSSProperties = { flexShrink: 0, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--color-text-tertiary)' };

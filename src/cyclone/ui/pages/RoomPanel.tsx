@@ -22,6 +22,7 @@ import type { DispatchAction } from './useWorkshopDispatches';
 import { publicToFeed, readRoomError, type RoomData } from './room-messages';
 import '../../../styles/components/convection.css';
 import { useSmartChatScroll } from './useSmartChatScroll';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 interface SeatLite { id: string; title: string; }
 
@@ -32,6 +33,9 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
   onDispatchAction: (roomId: string, dispatchId: string, action: DispatchAction) => Promise<CycloneDispatch>;
   onChanged?: () => void; onOpenSeat: (seatId: string) => void; settingsLocked?: boolean; active?: boolean;
 }) {
+  const { t } = useLocale();
+  const tRef = useRef(t);
+  tRef.current = t;
   const confirm = useConfirm();
   const [room, setRoom] = useState<RoomData | null>(null);
   const [history, setHistory] = useState<FeedMsg[]>([]);
@@ -77,8 +81,8 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
   const reload = useCallback(async (notify = false) => {
     const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/status`);
     if (!r.ok) {
-      const msg = await readRoomError(r, '加载群聊失败');
-      console.error('[cyclone] 群聊加载失败', msg);
+      const msg = await readRoomError(r, tRef.current('cyclone.roomPanel.loadFailed'));
+      console.error(`[cyclone] ${tRef.current('cyclone.roomPanel.loadFailed')}`, msg);
       setLoadError(msg);
       return;
     }
@@ -160,22 +164,27 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
 
   async function saveEditMessage() {
     if (editingMessageIndex === null) return;
-    if (await postAction('edit-message', { index: editingMessageIndex, content: editMessageContent }, '编辑消息失败')) cancelEditMessage();
+    if (await postAction('edit-message', { index: editingMessageIndex, content: editMessageContent }, t('cyclone.roomPanel.editFailed'))) cancelEditMessage();
   }
 
   async function deleteMessage(message: FeedMsg) {
     if (message.sourceIndex === undefined) return;
-    if (!(await confirm({ title: '删除此消息？', message: '此操作不可撤销。', confirmText: '删除', danger: true }))) return;
-    if (await postAction('delete-message', { index: message.sourceIndex }, '删除消息失败')) {
+    if (!(await confirm({ title: t('cyclone.roomPanel.deleteTitle'), message: t('cyclone.roomPanel.deleteMessage'), confirmText: t('common.delete'), danger: true }))) return;
+    if (await postAction('delete-message', { index: message.sourceIndex }, t('cyclone.roomPanel.deleteFailed'))) {
       if (editingMessageIndex === message.sourceIndex) cancelEditMessage();
     }
   }
 
   async function resetRoomContext(mode: 'clear' | 'summary', scope: 'public' | 'both' = 'public') {
     if (streaming) return;
-    const label = scope === 'both' ? '群聊与会议助理私聊' : '群聊公共上下文';
-    if (!(await confirm({ title: `${mode === 'summary' ? '归档并摘要重置' : '归档并清空'}当前${label}？`, message: '共享工作区文件不会被删除。', confirmText: mode === 'summary' ? '归档重置' : '归档清空', danger: true }))) return;
-    await postAction('reset-context', { mode, scope }, '重置群聊上下文失败');
+    const label = t(scope === 'both' ? 'cyclone.roomPanel.scopeBoth' : 'cyclone.roomPanel.scopePublic');
+    const action = t(mode === 'summary' ? 'cyclone.roomPanel.resetSummary' : 'cyclone.roomPanel.resetClear');
+    if (!(await confirm({
+      title: t('cyclone.roomPanel.resetTitle', { action, scope: label }),
+      message: t('cyclone.roomPanel.resetMessage'),
+      confirmText: t(mode === 'summary' ? 'cyclone.roomPanel.confirmSummary' : 'cyclone.roomPanel.confirmClear'), danger: true,
+    }))) return;
+    await postAction('reset-context', { mode, scope }, t('cyclone.roomPanel.resetFailed'));
   }
 
   /** 实际派发一轮：slash 指令优先，否则发起群聊轮。出队续发与即时发送共用。 */
@@ -184,7 +193,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
     if (text === '/reset summary') { await resetRoomContext('summary', 'public'); return; }
     if (text === '/reset all' || text === '/reset all clear') { await resetRoomContext('clear', 'both'); return; }
     if (text === '/reset all summary') { await resetRoomContext('summary', 'both'); return; }
-    if (!room || room.participantSeatIds.length === 0) { alert('群里还没有工位，先从右上角添加'); return; }
+    if (!room || room.participantSeatIds.length === 0) { alert(t('cyclone.roomPanel.noSeats')); return; }
     // 流式运行态托管给注册表：切走房间不掐流、后台续跑、切回读 roundFeed 恢复
     runners.startRound(workshopId, roomId, text);
   }
@@ -228,7 +237,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
 
   if (!room) {
     if (loadError) return <div style={{ opacity: .65, margin: 'auto', padding: 'var(--space-4)', textAlign: 'center', color: 'var(--color-danger)' }}>{loadError}</div>;
-    return <div style={{ opacity: .5, margin: 'auto' }}>加载群聊…</div>;
+    return <div style={{ opacity: .5, margin: 'auto' }}>{t('cyclone.roomPanel.loading')}</div>;
   }
   return (
     <div className="cyclone-room" style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, position: 'relative' }}>
@@ -253,7 +262,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
         </div>
         {showJumpButton && (
           <button className="chat__jump-bottom" onClick={() => scrollToBottom('smooth')}
-            aria-label="回到底部" title="回到最新消息">↓</button>
+            aria-label={t('cyclone.roomPanel.jumpBottom')} title={t('cyclone.roomPanel.jumpLatest')}>↓</button>
         )}
       </div>
 
@@ -261,7 +270,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
         <button type="button" className="cyclone-dispatch-toast" role="status"
           onClick={() => { focusDispatch(dispatchNotice); setDispatchNotice(null); }}>
           <span className="cyclone-dispatch__dot" />
-          {dispatchNotice.targetSeatTitle}{dispatchNotice.status === 'completed' ? '已完成异步任务' : '异步任务失败'}
+          {t(dispatchNotice.status === 'completed' ? 'cyclone.roomPanel.dispatchCompleted' : 'cyclone.roomPanel.dispatchFailed', { seat: dispatchNotice.targetSeatTitle })}
         </button>
       )}
 

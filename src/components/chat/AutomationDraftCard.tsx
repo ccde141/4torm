@@ -1,4 +1,5 @@
 import type { ToolCall } from '../../types';
+import { useLocale } from '../../i18n/LocaleContext';
 
 type Pending = NonNullable<ToolCall['pendingAutomation']>;
 
@@ -8,32 +9,33 @@ type Pending = NonNullable<ToolCall['pendingAutomation']>;
  * 摘要字段全部来自服务端真实任务（非 AI 转述）；永续 / 自循环 / 可写文件强标提醒。
  */
 export default function AutomationDraftCard({ pending, timestamp }: { pending: Pending; timestamp?: string }) {
-  const verb = pending.mode === 'created' ? '已写好潮汐任务' : '已修改潮汐任务';
-  const repeatText = pending.perpetual ? '永续（不会自己停）' : `${pending.repeatCount} 次`;
+  const { t } = useLocale();
+  const verb = pending.mode === 'created' ? t('chat.automation.created') : t('chat.automation.updated');
+  const repeatText = pending.perpetual ? t('chat.automation.perpetual') : t('chat.automation.repeatCount', { count: pending.repeatCount });
 
   return (
     <div style={wrap}>
       <div style={header}>
         <span style={{ fontSize: '15px' }}>📅</span>
         <span style={{ fontWeight: 'var(--font-semibold)', fontSize: 'var(--text-sm)' }}>{verb}</span>
-        <span style={pill(pending.enabled)}>{pending.enabled ? '运行中' : '未启用'}</span>
+        <span style={pill(pending.enabled)}>{pending.enabled ? t('chat.automation.running') : t('chat.automation.disabled')}</span>
         {timestamp && <span style={{ marginLeft: 'auto', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' }}>{timestamp}</span>}
       </div>
 
       <div style={{ padding: 'var(--space-2) var(--space-3)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        <Row k="名称" v={pending.name} />
-        <Row k="间隔" v={pending.schedule} />
-        <Row k="次数" v={repeatText} warn={pending.perpetual} />
-        {pending.selfLoop && <Row k="自循环" v="每轮会自改下轮目标" warn />}
-        <Row k="执行" v={`${pending.agentName} · 统一权限策略`} />
-        <Row k="文件" v={pending.canWriteFiles ? '⚠️ 该 Agent 可写/改文件' : '只读（无写文件工具）'} warn={pending.canWriteFiles} />
+        <Row k={t('chat.automation.name')} v={pending.name} />
+        <Row k={t('chat.automation.interval')} v={pending.schedule} />
+        <Row k={t('chat.automation.repeats')} v={repeatText} warn={pending.perpetual} />
+        {pending.selfLoop && <Row k={t('chat.automation.selfLoop')} v={t('chat.automation.selfLoopValue')} warn />}
+        <Row k={t('chat.automation.execution')} v={t('chat.automation.permission', { agent: pending.agentName })} />
+        <Row k={t('chat.automation.files')} v={pending.canWriteFiles ? t('chat.automation.canWrite') : t('chat.automation.readOnly')} warn={pending.canWriteFiles} />
         <div style={promptBox}>{pending.promptPreview}</div>
       </div>
 
       <div style={footer}>
         {pending.enabled
-          ? '任务已在运行。可在潮汐页暂停或调整。'
-          : '此任务尚未启用 —— 请到潮汐页审阅后手动启用。'}
+          ? t('chat.automation.runningHint')
+          : t('chat.automation.disabledHint')}
       </div>
     </div>
   );

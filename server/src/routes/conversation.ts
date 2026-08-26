@@ -21,6 +21,7 @@ import { resolveNativeMode } from '../engine/shared/llm-bridge';
 import { withAgentActivity } from '../engine/shared/agent-activity.js';
 import type { ContextMessage } from '../engine/shared/types';
 import { resolveConversationImages, type ConversationImageRef } from '../services/conversation-attachments.js';
+import { prependSystemPrompt } from '../engine/conversation/context-messages.js';
 
 // ── 活跃 runner 注册表（内存级） ─────────────────────────────────
 
@@ -184,12 +185,9 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
       ...(m.reasoningContent ? { reasoningContent: m.reasoningContent } : {}),
     })));
-    const chatMessages: ContextMessage[] = [
-      { role: 'system', content: systemPrompt },
-      // 保留 toolCalls / toolCallId / role:'tool'——native 历史回灌，让 agent
-      // 跨轮次仍能看到自己上一轮的工具调用与工具返回原文（llm-bridge 已能序列化）。
-      ...historyMessages,
-    ];
+    // 合并压缩摘要等开头 system 记录，兼容仅允许首条 system 的模型模板。
+    // 其余历史（含 toolCalls / toolCallId / role:'tool'）保持原序。
+    const chatMessages = prependSystemPrompt(systemPrompt, historyMessages);
 
     if (!ensureRunnerLease(body.sessionId, runner)) {
       return reply.status(409).send({ error: '会话正在执行中' });

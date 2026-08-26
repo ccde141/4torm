@@ -7,8 +7,8 @@ const seatRunners = fs.readFileSync('src/cyclone/ui/pages/useSeatStreamRunners.t
 
 test('气旋群聊列表提供带确认的删除入口', () => {
   assert.match(page, /async function deleteRoom\(roomId: string, title: string\)/);
-  assert.match(page, /删除群聊「\$\{title\}」/);
-  assert.match(page, /title="删除群聊"/);
+  assert.match(page, /cyclone\.shell\.deleteRoomTitle/);
+  assert.match(page, /title=\{t\('cyclone\.shell\.deleteRoom'\)\}/);
 });
 
 test('服务端确认删除后才清理双会话运行态与当前视图', () => {

@@ -1,4 +1,5 @@
 import type { ContextMessage } from '../types.js';
+import { normalizeSystemMessages } from '../system-messages.js';
 import {
   mapProviderMessages,
 } from '../provider-messages.js';
@@ -86,11 +87,12 @@ export function compileModelMessages(
   messages: ContextMessage[],
   options: ModelRequestMessageOptions,
 ): Array<Record<string, unknown>> {
+  const providerSafeMessages = normalizeSystemMessages(messages);
   if (options.toolTransport === 'text') {
-    return compileTextMessages(messages, options);
+    return compileTextMessages(providerSafeMessages, options);
   }
   return mapProviderMessages(
-    restoreTextToolHistory(messages),
+    restoreTextToolHistory(providerSafeMessages),
     options.forwardToolNames,
     options.identity,
   );

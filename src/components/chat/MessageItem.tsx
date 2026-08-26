@@ -25,6 +25,7 @@ import ToolActivityList from './ToolActivityGroup';
 import { MessageImages } from './MessageImages';
 import AgentAvatar from '../agents/AgentAvatar';
 import type { Agent } from '../../types';
+import { useLocale } from '../../i18n/LocaleContext';
 
 /**
  * 渲染单个工具步骤：delegate 步 → DelegateCard（含子步骤/思考流/汇总），
@@ -90,19 +91,20 @@ function MessageItemInner({
   msg, agent, sessionId, isStreaming, isEditing, editContent, setEditContent,
   onSaveEdit, onCancelEdit, onStartEdit, onDeleteMessage, onAskReply,
 }: MessageItemProps) {
+  const { locale, t } = useLocale();
   if (isEditing) {
     return (
       <div className={`chat__message chat__message--${msg.role}`}>
         {msg.role === 'assistant'
           ? <AgentAvatar agent={agent} className="chat__avatar" fallback="AI" />
-          : <div className="chat__avatar">{msg.role === 'user' ? '你' : 'S'}</div>}
+          : <div className="chat__avatar">{msg.role === 'user' ? t('chat.you') : 'S'}</div>}
         <div className="chat__bubble chat__bubble--editing">
           <textarea className="chat__edit-textarea" value={editContent} onChange={e => setEditContent(e.target.value)}
             onKeyDown={e => { if (e.key === 'Escape') onCancelEdit(); if (e.key === 'Enter' && e.ctrlKey) onSaveEdit(); }}
             rows={3} autoFocus />
           <div className="chat__edit-actions">
-            <button onClick={onSaveEdit}>保存</button>
-            <button onClick={onCancelEdit}>取消</button>
+            <button onClick={onSaveEdit}>{t('common.save')}</button>
+            <button onClick={onCancelEdit}>{t('common.cancel')}</button>
           </div>
           {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
         </div>
@@ -121,7 +123,7 @@ function MessageItemInner({
             if (el) el.classList.toggle('chat__compact-detail--open');
           }}
         >
-          以上已压缩 · 点击查看摘要
+          {t('chat.compacted')}
         </button>
         <span className="chat__compact-marker-line" />
         <div id={`compact-detail-${msg.id}`} className="chat__compact-detail">
@@ -145,7 +147,7 @@ function MessageItemInner({
         content={msg.content}
         timestamp={msg.timestamp}
         actions={
-          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title={t('common.delete')} aria-label={t('chat.deleteMessage')} onClick={() => onDeleteMessage(msg.id)}>🗑</button>
         }
       />
     ) : (
@@ -153,7 +155,7 @@ function MessageItemInner({
         toolCall={msg.toolCall}
         timestamp={msg.timestamp}
         actions={
-          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title={t('common.delete')} aria-label={t('chat.deleteMessage')} onClick={() => onDeleteMessage(msg.id)}>🗑</button>
         }
       />
     );
@@ -183,8 +185,8 @@ function MessageItemInner({
       const lastRunningTool = steps?.findLast(s => s.status === 'running')?.tool;
 
       let phaseLabel = msg.streamingStatus || '';
-      if (!phaseLabel && phase) phaseLabel = formatStreamStatus(phase, elapsed, msg.streamingTool || lastRunningTool, msg.streamingArgumentChars);
-      else if (!phaseLabel && !display && !steps?.length) phaseLabel = formatStreamStatus('llm-waiting');
+      if (!phaseLabel && phase) phaseLabel = formatStreamStatus(phase, elapsed, msg.streamingTool || lastRunningTool, msg.streamingArgumentChars, locale);
+      else if (!phaseLabel && !display && !steps?.length) phaseLabel = formatStreamStatus('llm-waiting', 0, undefined, undefined, locale);
 
       return (
         <>
@@ -221,8 +223,8 @@ function MessageItemInner({
             timestamp={msg.timestamp}
             actions={
               <>
-                <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={() => onStartEdit(msg)}>✏</button>
-                <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+                <button className="chat__msg-action-btn" title={t('common.edit')} aria-label={t('chat.editMessage')} onClick={() => onStartEdit(msg)}>✏</button>
+                <button className="chat__msg-action-btn chat__msg-action-btn--danger" title={t('common.delete')} aria-label={t('chat.deleteMessage')} onClick={() => onDeleteMessage(msg.id)}>🗑</button>
               </>
             }
           />
@@ -239,8 +241,8 @@ function MessageItemInner({
             <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>
             {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
             <div className="chat__bubble-actions">
-              <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={() => onStartEdit(msg)}>✏</button>
-              <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+              <button className="chat__msg-action-btn" title={t('common.edit')} aria-label={t('chat.editMessage')} onClick={() => onStartEdit(msg)}>✏</button>
+              <button className="chat__msg-action-btn chat__msg-action-btn--danger" title={t('common.delete')} aria-label={t('chat.deleteMessage')} onClick={() => onDeleteMessage(msg.id)}>🗑</button>
             </div>
           </div>
         </div>
@@ -251,7 +253,7 @@ function MessageItemInner({
   // user / system 文本气泡
   return (
     <div className={`chat__message chat__message--${msg.role}`}>
-      <div className="chat__avatar">{msg.role === 'user' ? '你' : 'S'}</div>
+      <div className="chat__avatar">{msg.role === 'user' ? t('chat.you') : 'S'}</div>
       <div className="chat__bubble">
         {msg.role === 'user' && msg.images?.length && msg.agentId && (
           <MessageImages images={msg.images} agentId={msg.agentId} sessionId={sessionId} />
@@ -259,8 +261,8 @@ function MessageItemInner({
         {msg.content && <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>}
         {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
         <div className="chat__bubble-actions">
-          <button className="chat__msg-action-btn" title="编辑" aria-label="编辑消息" onClick={() => onStartEdit(msg)}>✏</button>
-          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除" aria-label="删除消息" onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+          <button className="chat__msg-action-btn" title={t('common.edit')} aria-label={t('chat.editMessage')} onClick={() => onStartEdit(msg)}>✏</button>
+          <button className="chat__msg-action-btn chat__msg-action-btn--danger" title={t('common.delete')} aria-label={t('chat.deleteMessage')} onClick={() => onDeleteMessage(msg.id)}>🗑</button>
         </div>
       </div>
     </div>

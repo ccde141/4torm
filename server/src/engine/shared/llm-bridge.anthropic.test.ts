@@ -14,6 +14,30 @@ async function withProvider(run: (dataDir: string) => Promise<void>) {
   try { await run(dataDir); } finally { await fs.rm(dataDir, { recursive: true, force: true }); }
 }
 
+test('Anthropic requests apply custom provider parameters without exposing system', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-anthropic-custom-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [{
+    id: 'pvd_claude', baseUrl: 'https://api.anthropic.com/v1', apiKey: 'secret',
+    protocol: 'anthropic-messages', models: ['claude-test'],
+    customRequestParameters: { top_k: 12 },
+  }] }));
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.top_k, 12);
+    assert.equal(body.system, 'trusted system');
+    return new Response(JSON.stringify({
+      content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn',
+    }), { status: 200 });
+  });
+
+  const result = await callLLM({
+    dataDir, fullModelKey: 'pvd_claude:claude-test',
+    messages: [{ role: 'system', content: 'trusted system' }, { role: 'user', content: 'hi' }],
+  });
+  assert.equal(result.content, 'ok');
+});
+
 test('callLLM uses Anthropic transport for an explicitly configured provider', async () => {
   await withProvider(async dataDir => {
     const originalFetch = globalThis.fetch;

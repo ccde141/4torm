@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef } from 'react';
 import type { TideTask, TideRunRecord } from '../../api/tide';
 import { itemStyle, actionBtnStyle, formatRelative, formatSchedule } from './tide-styles';
+import { useLocale } from '../../i18n/LocaleContext';
 
 interface TaskItemProps {
   task: TideTask;
@@ -19,6 +20,7 @@ interface TaskItemProps {
 }
 
 export default function TaskItem({ task, expanded, selected, running, runs, onToggle, onDelete, onRunNow, onExpand }: TaskItemProps) {
+  const { t, locale } = useLocale();
   const [hovered, setHovered] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -31,10 +33,10 @@ export default function TaskItem({ task, expanded, selected, running, runs, onTo
     }
   }, [confirmingDelete]);
   const statusLabel = running
-    ? '执行中'
+    ? t('tide.task.status.executing')
     : task.repeatCount === 0
-      ? '已完成'
-      : !task.enabled ? '已暂停' : '运行中';
+      ? t('tide.task.status.completed')
+      : !task.enabled ? t('tide.task.status.paused') : t('tide.task.status.running');
   const statusColor = running
     ? 'var(--color-accent)'
     : task.repeatCount === 0
@@ -64,27 +66,27 @@ export default function TaskItem({ task, expanded, selected, running, runs, onTo
       </div>
 
       <div style={{ color: 'var(--color-text-tertiary)', marginBottom: '4px' }}>
-        {formatSchedule(task.schedule)} · 重复 {task.repeatCount === -1 ? '永续' : task.repeatCount}
+        {t('tide.task.scheduleRepeat', { schedule: formatSchedule(task.schedule, locale), count: task.repeatCount === -1 ? t('tide.task.forever') : task.repeatCount })}
       </div>
 
       <div style={{ color: 'var(--color-text-tertiary)', marginBottom: '4px' }}>
-        上次: {formatRelative(task.lastRun)} · 下次: {formatRelative(task.nextRun)}
+        {t('tide.task.lastNext', { last: formatRelative(task.lastRun, locale), next: formatRelative(task.nextRun, locale) })}
       </div>
 
       <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }} onClick={e => e.stopPropagation()}>
         <button onClick={onToggle} style={actionBtnStyle}>
-          {task.enabled ? '暂停' : '启用'}
+          {task.enabled ? t('tide.task.pause') : t('tide.task.enable')}
         </button>
         <button onClick={onRunNow} disabled={running} style={actionBtnStyle}>
-          {running ? '运行中…' : '立即运行'}
+          {running ? t('tide.task.running') : t('tide.task.runNow')}
         </button>
         {confirmingDelete ? (
           <button onClick={() => { setConfirmingDelete(false); onDelete(); }} style={{ ...actionBtnStyle, color: '#fff', background: '#ef4444', borderColor: '#ef4444' }}>
-            确认删除？
+            {t('tide.task.confirmDelete')}
           </button>
         ) : (
           <button onClick={() => setConfirmingDelete(true)} style={{ ...actionBtnStyle, color: '#ef4444' }}>
-            删除
+            {t('tide.task.delete')}
           </button>
         )}
       </div>
@@ -96,7 +98,7 @@ export default function TaskItem({ task, expanded, selected, running, runs, onTo
               <span style={{ color: r.status === 'success' ? '#22c55e' : '#ef4444' }}>
                 {r.status === 'success' ? 'OK' : 'ERR'}
               </span>
-              {' '}{formatRelative(r.timestamp)} · {r.durationMs}ms · {r.turns} turns
+              {' '}{t('tide.task.runMeta', { time: formatRelative(r.timestamp, locale), duration: r.durationMs, turns: r.turns })}
               {r.error && <span style={{ color: '#ef4444' }}> {r.error.slice(0, 40)}</span>}
             </div>
           ))}

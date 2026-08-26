@@ -32,6 +32,7 @@ import { agentActivityRoutes } from './routes/agent-activity.js';
 import { agentAvatarRoutes } from './routes/agent-avatar.js';
 import { executionObserver } from './services/execution-observer.js';
 import { backgroundExecutions } from './services/background-execution.js';
+import { modelRuntimeRoutes } from './routes/model-runtime.js';
 
 applyDeveloperMode();
 
@@ -111,6 +112,7 @@ if (crashedObservations > 0) console.log(`[startup] 标记异常中断的终端�
 // 注册路由
 await app.register(storageRoutes, { prefix: '/api/storage' });
 await app.register(llmProxyRoutes, { prefix: '/api/llm' });
+await app.register(modelRuntimeRoutes, { prefix: '/api/model-runtime' });
 await app.register(skinRoutes, { prefix: '/skin' });
 await app.register(toolRoutes, { prefix: '/api/tools' });
 await app.register(skillsRoutes, { prefix: '/api/skills' });

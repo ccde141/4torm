@@ -22,3 +22,7 @@ test('automatic profile uses a compact model-row label', () => {
   const automatic = PROVIDER_PROFILE_OPTIONS.find(option => option.value === 'auto');
   assert.equal(automatic?.label, '自动');
 });
+
+test('llama.cpp is available as an explicit model profile', () => {
+  assert.equal(PROVIDER_PROFILE_OPTIONS.some(option => option.value === 'llama-cpp'), true);
+});

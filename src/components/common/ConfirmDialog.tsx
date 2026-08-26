@@ -10,6 +10,7 @@
  */
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useLocale } from '../../i18n/LocaleContext';
 import '../../styles/components/confirm-dialog.css';
 
 export interface ConfirmOptions {
@@ -86,6 +87,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
 }
 
 function ConfirmView({ state, onClose }: { state: DialogState; onClose: (ok: boolean) => void }) {
+  const { t } = useLocale();
   const { opts, closing } = state;
   return (
     <div
@@ -97,13 +99,13 @@ function ConfirmView({ state, onClose }: { state: DialogState; onClose: (ok: boo
         {opts.message && <p className="confirm-message">{opts.message}</p>}
         <div className="confirm-actions">
           <button className="confirm-btn confirm-btn--cancel" onClick={() => onClose(false)}>
-            {opts.cancelText || '取消'}
+            {opts.cancelText || t('common.cancel')}
           </button>
           <button
             className={`confirm-btn ${opts.danger ? 'confirm-btn--danger' : 'confirm-btn--confirm'}`}
             onClick={() => onClose(true)}
           >
-            {opts.confirmText || '确定'}
+            {opts.confirmText || t('common.confirm')}
           </button>
         </div>
       </div>

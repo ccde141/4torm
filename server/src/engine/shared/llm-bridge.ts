@@ -21,7 +21,14 @@ import type { ToolDef } from './tool-defs-loader';
 import { toProviderToolsWithMap, parseToolCalls, restoreToolName, makeToolCallAccumulator } from './tool-bridge';
 import { providersFile } from '../../services/data-paths.js';
 import { createToolProgressTracker, type ToolPreparationProgress } from './tool-progress.js';
-import { normalizeChatRequestBody } from './provider-normalization.js';
+import {
+  discoverProviderRuntimeCapabilities,
+  mergeCustomRequestParameters,
+  normalizeChatRequestBody,
+  resolveMaxOutputTokens,
+  resolveRequestTemperature,
+  resolveSafePromptTokens,
+} from './provider-normalization.js';
 import {
   extractReasoningContent,
   extractReasoningEnvelope,
@@ -38,6 +45,9 @@ import {
 } from './provider-transports/protocol.js';
 import { parseTextToolResponse } from './text-tool-protocol.js';
 import { TextToolStreamGate } from './text-tool-stream-gate.js';
+import { resolveProviderSelection } from '../../model-runtime/config/provider-selection.js';
+import { resolveLoggedProviderSelection } from '../../model-runtime/config/provider-selection-log.js';
+import type { TransportId } from '../../model-runtime/contracts/provider-config.js';
 
 interface Provider {
   id: string;
@@ -46,6 +56,8 @@ interface Provider {
   headers?: Record<string, string>;
   customHeaders?: Record<string, string>;
   protocol?: 'auto' | ProviderProtocol;
+  providerType?: unknown;
+  transport?: unknown;
   models?: string[];
   nativeMode?: 'auto' | 'native' | 'text';
   nativeProbe?: Record<string, { native: boolean; probedAt: string }>;
@@ -57,6 +69,10 @@ interface Provider {
   toolTransports?: Record<string, {
     status: 'native-confirmed' | 'text-required'; checkedAt: string; fingerprint: string;
   }>;
+  runtimePolicy?: unknown;
+  generationDefaults?: unknown;
+  customRequestParameters?: unknown;
+  customParameterDefinitions?: unknown;
 }
 
 interface ProvidersFile {
@@ -188,10 +204,22 @@ function normalizeTransportBaseUrl(baseUrl: string): string {
 }
 
 function toolTransportFingerprint(provider: Provider, model: string): string {
+  const selection = resolveProviderSelection(provider, model);
+  if (selection.source === 'legacy') {
+    return JSON.stringify([
+      provider.id,
+      normalizeTransportBaseUrl(provider.baseUrl),
+      resolveProviderProtocol(provider.baseUrl, provider.protocol),
+      model,
+      provider.modelProfiles?.[model] ?? 'auto',
+      TOOL_TRANSPORT_PROBE_VERSION,
+    ]);
+  }
   return JSON.stringify([
     provider.id,
     normalizeTransportBaseUrl(provider.baseUrl),
-    resolveProviderProtocol(provider.baseUrl, provider.protocol),
+    selection.transport,
+    selection.providerType,
     model,
     provider.modelProfiles?.[model] ?? 'auto',
     TOOL_TRANSPORT_PROBE_VERSION,
@@ -219,6 +247,31 @@ export interface LLMCallParams {
   tools?: ToolDef[];
 }
 
+export async function resolveModelPromptBudget(
+  dataDir: string,
+  fullModelKey: string,
+): Promise<number | undefined> {
+  const providers = await loadProviders(dataDir);
+  const provider = resolveProvider(providers, fullModelKey);
+  if (!provider) throw new Error(`找不到模型 ${fullModelKey} 的提供商`);
+  const model = extractModelId(fullModelKey);
+  const selection = resolveProviderSelection(provider, model);
+  const identity = {
+    baseUrl: provider.baseUrl,
+    model,
+    profile: provider.modelProfiles?.[model],
+    providerType: selection.providerType,
+    runtimePolicy: provider.runtimePolicy,
+    generationDefaults: provider.generationDefaults,
+  };
+  const runtime = await discoverProviderRuntimeCapabilities(identity);
+  if (!runtime) return undefined;
+  return resolveSafePromptTokens(
+    runtime.contextWindowTokens,
+    resolveMaxOutputTokens(identity),
+  );
+}
+
 /** 构造请求公共部分 */
 async function buildRequest(params: LLMCallParams, stream: boolean) {
   const { dataDir, fullModelKey, messages, options } = params;
@@ -228,21 +281,28 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
   const provider = resolveProvider(providers, fullModelKey);
   if (!provider) throw new Error(`找不到模型 ${fullModelKey} 的提供商`);
 
-  const protocol = resolveProviderProtocol(provider.baseUrl, provider.protocol);
   const model = options?.model ?? extractModelId(fullModelKey);
+  const selection = resolveLoggedProviderSelection(provider.id, provider, model);
+  const protocol = selection.source === 'explicit'
+    ? supportedProtocol(selection.transport)
+    : resolveProviderProtocol(provider.baseUrl, provider.protocol);
   if (protocol === 'anthropic-messages') {
+    const request = buildAnthropicRequest({
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      customHeaders: provider.customHeaders ?? provider.headers,
+      model,
+      messages,
+      tools: params.tools,
+      stream,
+      maxTokens: options?.maxTokens ?? 8192,
+      temperature: options?.temperature ?? 0.7,
+    });
+    const body = mergeCustomRequestParameters(request.body, provider.customRequestParameters);
+    logCustomParameterFields(provider.id, provider.customRequestParameters);
     return {
-      ...buildAnthropicRequest({
-        baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
-        customHeaders: provider.customHeaders ?? provider.headers,
-        model,
-        messages,
-        tools: params.tools,
-        stream,
-        maxTokens: options?.maxTokens ?? 8192,
-        temperature: options?.temperature ?? 0.7,
-      }),
+      ...request,
+      body,
       protocol,
     };
   }
@@ -271,7 +331,13 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
     baseUrl: provider.baseUrl,
     model,
     profile: provider.modelProfiles?.[model],
+    providerType: selection.providerType,
+    runtimePolicy: provider.runtimePolicy,
+    generationDefaults: provider.generationDefaults,
+    customRequestParameters: provider.customRequestParameters,
   };
+  const maxOutputTokens = resolveMaxOutputTokens(identity, options?.maxTokens);
+  const temperature = resolveRequestTemperature(identity, options?.temperature);
   const body: Record<string, unknown> = {
     model,
     messages: compileModelMessages(messages, {
@@ -279,10 +345,10 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
       forwardToolNames: forwardMap,
       toolTransport: params.tools?.length ? 'native' : 'text',
     }),
-    temperature: options?.temperature ?? 0.7,
-    // 默认 8192（原 4096 太低，长命令/长 write_file content 作为 tool_call 参数易被截断）。
-    // 仍是可被 options.maxTokens 覆盖的上限，按实际生成计费，抬高不等于增费。
-    max_tokens: options?.maxTokens ?? 8192,
+    ...(temperature === undefined ? {} : { temperature }),
+    // 通用默认 8192；显式 Provider 档案可声明更稳妥的默认值。
+    // options.maxTokens 始终优先，长工具参数调用方仍可按任务提高预算。
+    max_tokens: maxOutputTokens,
     stream,
   };
   if (toolsParam) {
@@ -297,7 +363,21 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
     identity,
     body,
   );
+  logCustomParameterFields(provider.id, provider.customRequestParameters);
   return { url, headers, body: normalizedBody, nameMap, protocol };
+}
+
+function logCustomParameterFields(providerId: string, parameters: unknown): void {
+  if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) return;
+  const fields = Object.keys(parameters);
+  if (fields.length > 0) {
+    console.info(`[provider-config] ${providerId} 发送自定义请求字段：${fields.join(', ')}`);
+  }
+}
+
+function supportedProtocol(transport: TransportId): ProviderProtocol {
+  if (transport === 'openai-chat-completions' || transport === 'anthropic-messages') return transport;
+  throw new Error(`当前版本尚未实现模型传输协议：${transport}`);
 }
 
 /** 可重试的 HTTP 状态码 */

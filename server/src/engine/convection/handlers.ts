@@ -11,9 +11,14 @@
 import type { ContextMessage } from '../shared/types';
 import type { ConvectionSessionData } from './session';
 import { saveSession, sessionWorkspace } from './session';
-import { callLLM, resolveNativeMode, type TokenUsage } from '../shared/llm-bridge';
+import {
+  callLLM,
+  resolveModelPromptBudget,
+  resolveNativeMode,
+  type TokenUsage,
+} from '../shared/llm-bridge';
 import { withAgentActivity } from '../shared/agent-activity.js';
-import { loadAgent, type LoadedAgent } from '../shared/agent-loader';
+import type { LoadedAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs, type ToolDef } from '../shared/tool-defs-loader';
 import { buildSystemPrompt } from '../shared/prompt';
 import { buildSandboxSection } from '../shared/sandbox-prompt';
@@ -36,6 +41,14 @@ import {
   buildConvectionMemoryPrompt,
   withConvectionMemoryTools,
 } from './convection-memory.js';
+import { runParticipantSequence } from './participant-sequence.js';
+import { resolveConvectionPromptThreshold } from './convection-context-budget.js';
+import {
+  loadRequiredAgent,
+  loadRoundAgents,
+  roundAgent,
+  type RoundAgentSnapshot,
+} from './round-agent-snapshot.js';
 
 const LLM_TIMEOUT_MS = 3_600_000;
 const HEARTBEAT_INTERVAL_MS = 5_000;
@@ -50,18 +63,6 @@ function updateSessionUsage(session: ConvectionSessionData, u: TokenUsage | unde
   };
 }
 
-/** Agent 实体缓存 */
-const agentCache = new Map<string, LoadedAgent>();
-
-async function getAgent(dataDir: string, agentId: string): Promise<LoadedAgent> {
-  const cached = agentCache.get(agentId);
-  if (cached) return cached;
-  const loaded = await loadAgent(dataDir, agentId);
-  if (!loaded) throw new Error(`Agent 实体不存在：${agentId}`);
-  agentCache.set(agentId, loaded);
-  return loaded;
-}
-
 /** SSE 事件类型 */
 export type ConvectionStreamEvent =
   | { type: 'agent-start'; agentId: string; label: string }
@@ -70,6 +71,7 @@ export type ConvectionStreamEvent =
   | { type: 'tool-call'; agentId: string; label: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; agentId: string; label: string; tool: string; result: string }
   | { type: 'agent-done'; agentId: string; label: string; content: string; rawContent: string; reasoning?: string; toolCalls: ToolCallRecord[] }
+  | { type: 'agent-failed'; agentId: string; label: string; message: string }
   | { type: 'heartbeat'; agentId: string; label: string; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-reasoning'; chunk: string }
@@ -81,6 +83,56 @@ export type ConvectionStreamEvent =
 
 export { ToolCallRecord };
 
+async function resolveSessionPromptThreshold(
+  dataDir: string,
+  session: ConvectionSessionData,
+  agents: RoundAgentSnapshot,
+): Promise<number | undefined> {
+  const agentIds = [...session.participantAgentIds, session.chairAgentId];
+  return resolveConvectionPromptThreshold(
+    agentIds.map(id => roundAgent(agents, id).model),
+    model => resolveModelPromptBudget(dataDir, model),
+  );
+}
+
+async function compactPublicHistoryIfNeeded(
+  dataDir: string,
+  session: ConvectionSessionData,
+  promptTokenThreshold: number | undefined,
+  agents: RoundAgentSnapshot,
+  onEvent?: (event: ConvectionStreamEvent) => void,
+): Promise<void> {
+  const promptTokens = session.tokenUsage?.promptTokens;
+  if (!promptTokens) return;
+  const state: ConvectionCompactState = session.compactState ?? { disabled: false, archiveSeq: 0 };
+  const chairAgent = roundAgent(agents, session.chairAgentId);
+  const participants = session.participantAgentIds.map(id => roundAgent(agents, id));
+  const compacted = await compactConvectionIfNeeded(session.publicMessages, promptTokens, state, {
+    dataDir,
+    chairModel: chairAgent.model,
+    archiveDir: path.join(sessionWorkspace(dataDir, session.id), 'bak'),
+    participants: participants.map(agent => agent.name),
+    promptTokenThreshold,
+    onEvent: event => forwardCompactEvent(event, onEvent),
+  });
+  session.compactState = state;
+  if (compacted) session.tokenUsage = undefined;
+  await saveSession(dataDir, session);
+}
+
+function forwardCompactEvent(
+  event: { type: string; archivedCycles?: number; summaryLength?: number; message?: string },
+  onEvent?: (event: ConvectionStreamEvent) => void,
+): void {
+  if (event.type === 'compact-start') onEvent?.({ type: 'compact-start' });
+  if (event.type === 'compact-done') onEvent?.({
+    type: 'compact-done',
+    archivedCycles: event.archivedCycles!,
+    summaryLength: event.summaryLength!,
+  });
+  if (event.type === 'compact-warn') onEvent?.({ type: 'error', message: event.message! });
+}
+
 /**
  * 构造参与 Agent 在对流中的 system prompt + 历史消息。
  * 组装顺序：元认知 → 空间+权限 → 角色 → 基线 → 协议 → 场景上下文
@@ -88,10 +140,9 @@ export { ToolCallRecord };
 async function buildAgentMessages(
   dataDir: string,
   session: ConvectionSessionData,
-  agentId: string,
+  agent: LoadedAgent,
   native?: boolean,
 ): Promise<{ messages: ContextMessage[]; agent: LoadedAgent; toolDefs: ToolDef[] }> {
-  const agent = await getAgent(dataDir, agentId);
   const toolDefs = withConvectionMemoryTools(
     await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode),
   );
@@ -163,11 +214,19 @@ export async function handleSpeak(
   signal?: AbortSignal,
 ): Promise<void> {
   session.publicMessages.push({ speaker: '人类', content: humanMessage, timestamp: Date.now() });
+  await saveSession(dataDir, session);
+  const agents = await loadRoundAgents(
+    dataDir,
+    [...session.participantAgentIds, session.chairAgentId],
+  );
+  const promptTokenThreshold = await resolveSessionPromptThreshold(dataDir, session, agents);
+  await compactPublicHistoryIfNeeded(dataDir, session, promptTokenThreshold, agents, onEvent);
 
-  for (const agentId of session.participantAgentIds) {
-    if (signal?.aborted) break;
-
-    const agent = await getAgent(dataDir, agentId);
+  await runParticipantSequence({
+    participantIds: session.participantAgentIds,
+    signal,
+    execute: async (agentId) => {
+    const agent = roundAgent(agents, agentId);
     onEvent?.({ type: 'agent-start', agentId, label: agent.name });
 
     // 每个 agent 各自决议原生模式（model 可能不同）
@@ -175,11 +234,12 @@ export async function handleSpeak(
     console.log(`[convection] ${agent.name} (${agent.model}) → tools=${nativeDecision.native ? 'structured' : 'text'}`);
 
     let reasoningContent = '';
+    let participantError = '';
 
     const result = await withAgentActivity(agentId, 'convection', async () => {
       if (nativeDecision.native) {
         // 原生模式：adapter 注入共享 runReActLoopNative
-        const { messages, agent: loadedAgent, toolDefs } = await buildAgentMessages(dataDir, session, agentId, true);
+        const { messages, agent: loadedAgent, toolDefs } = await buildAgentMessages(dataDir, session, agent, true);
         return await runConvectionReActNative({
           dataDir,
           model: loadedAgent.model,
@@ -197,13 +257,13 @@ export async function handleSpeak(
             else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', agentId, label: ev.label, tool: ev.tool!, args: ev.args! });
             else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', agentId, label: ev.label, tool: ev.tool!, result: ev.result! });
             else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', agentId, label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
-            else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
+            else if (ev.type === 'error') participantError = ev.message || participantError;
           },
           signal,
         });
       } else {
         // JSON 文本工具模式
-        const { messages, agent: loadedAgent, toolDefs } = await buildAgentMessages(dataDir, session, agentId, false);
+        const { messages, agent: loadedAgent, toolDefs } = await buildAgentMessages(dataDir, session, agent, false);
         return await runConvectionReAct({
           dataDir,
           model: loadedAgent.model,
@@ -221,7 +281,7 @@ export async function handleSpeak(
             else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', agentId, label: ev.label, tool: ev.tool!, args: ev.args! });
             else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', agentId, label: ev.label, tool: ev.tool!, result: ev.result! });
             else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', agentId, label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
-            else if (ev.type === 'error') onEvent({ type: 'error', message: ev.message! });
+            else if (ev.type === 'error') participantError = ev.message || participantError;
           },
           signal,
         });
@@ -229,7 +289,6 @@ export async function handleSpeak(
     });
 
     // abort 时保留已流式产出的有效内容
-    const aborted = signal?.aborted;
     const content = result.cleanContent;
     if (content && !content.startsWith('[中止]') && !content.startsWith('[错误]')) {
       session.publicMessages.push(buildConvectionMessage({
@@ -246,49 +305,24 @@ export async function handleSpeak(
         type: 'agent-done', agentId, label: agent.name,
         content, rawContent: result.rawContent, reasoning: reasoningContent || undefined, toolCalls: result.toolCalls,
       });
+    } else if (!signal?.aborted) {
+      throw new Error(participantError || `${agent.name} 未返回有效正文`);
     }
+    },
+    commit: async () => { await saveSession(dataDir, session); },
+    reportFailure: async (agentId, error) => {
+      const agent = agents.get(agentId);
+      onEvent?.({
+        type: 'agent-failed',
+        agentId,
+        label: agent?.name ?? agentId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      await saveSession(dataDir, session);
+    },
+  });
 
-    if (aborted) break;
-  }
-
-  // ── 压缩检测：会长负责整理 ──
-  const promptTokens = session.tokenUsage?.promptTokens;
-  if (promptTokens) {
-    const state: ConvectionCompactState = session.compactState ?? { disabled: false, archiveSeq: 0 };
-    const chairAgent = await getAgent(dataDir, session.chairAgentId);
-    const wsPath = sessionWorkspace(dataDir, session.id);
-    const archiveDir = path.join(wsPath, 'bak');
-
-    // 收集参与者名称
-    const participantNames: string[] = [];
-    for (const pid of session.participantAgentIds) {
-      const a = await getAgent(dataDir, pid);
-      participantNames.push(a.name);
-    }
-
-    const compacted = await compactConvectionIfNeeded(
-      session.publicMessages,
-      promptTokens,
-      state,
-      {
-        dataDir,
-        chairModel: chairAgent.model,
-        archiveDir,
-        participants: participantNames,
-        onEvent: (ev) => {
-          if (ev.type === 'compact-start') onEvent?.({ type: 'compact-start' });
-          if (ev.type === 'compact-done') onEvent?.({ type: 'compact-done', archivedCycles: ev.archivedCycles, summaryLength: ev.summaryLength });
-          if (ev.type === 'compact-warn') onEvent?.({ type: 'error', message: ev.message });
-        },
-      },
-    );
-
-    session.compactState = state;
-    if (compacted) {
-      // 压缩后重新计算 token（下轮 LLM 调用会自然更新，这里先留旧值）
-    }
-  }
-
+  await compactPublicHistoryIfNeeded(dataDir, session, promptTokenThreshold, agents, onEvent);
   await saveSession(dataDir, session);
 }
 
@@ -304,7 +338,7 @@ export async function handleChair(
 ): Promise<void> {
   session.chairMessages.push({ role: 'user', content: humanMessage });
 
-  const agent = await getAgent(dataDir, session.chairAgentId);
+  const agent = await loadRequiredAgent(dataDir, session.chairAgentId);
   const snapshot = formatPublicContext(session);
   const system: ContextMessage = {
     role: 'system',
@@ -328,7 +362,7 @@ export async function handleChair(
   const hbInterval = onEvent
     ? setInterval(() => {
         if (!tokenReceived) {
-          onEvent({ type: 'heartbeat', label: agent.name, phase: 'llm-waiting', elapsed: Date.now() - chairStart });
+          onEvent({ type: 'heartbeat', agentId: agent.id, label: agent.name, phase: 'llm-waiting', elapsed: Date.now() - chairStart });
         }
       }, HEARTBEAT_INTERVAL_MS)
     : null;

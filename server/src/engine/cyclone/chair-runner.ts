@@ -17,6 +17,7 @@ import type { SeatEvent } from './seat-runner';
 import { loadWorkshop } from './workshop-store';
 import { loadRoom, saveRoom, tryAcquireRoomLock } from './room-store';
 import { withAgentActivity } from '../shared/agent-activity.js';
+import { normalizeSystemMessages } from '../shared/system-messages.js';
 
 /**
  * 人类给某场会议的会长发消息 → 会长纯文本响应（流式）。
@@ -46,7 +47,7 @@ export async function chatChair(
     const { systemMessage } = await buildChairPrompt(dataDir, workshopId, room, w, agent);
 
     room.chairMessages.push({ role: 'user', content: humanMessage });
-    const messages: ContextMessage[] = [systemMessage, ...room.chairMessages];
+    const messages = normalizeSystemMessages([systemMessage, ...room.chairMessages]);
 
     // 纯文本流式：累积 buffer，abort 时仍可保住已产出的内容
     let buf = '';

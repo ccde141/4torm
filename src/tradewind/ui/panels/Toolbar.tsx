@@ -5,6 +5,14 @@
 import { useState, useEffect } from 'react';
 import type { WorkflowMode } from '../../types';
 import { phasePresentation, type ExecutionPhase } from '../hooks/execution-phase';
+import { useLocale } from '../../../i18n/LocaleContext';
+import type { MessageKey } from '../../../i18n/locale';
+
+const PHASE_KEY: Record<ExecutionPhase, MessageKey> = {
+  idle: 'tradewind.phase.idle', running: 'tradewind.phase.running',
+  completed: 'tradewind.phase.completed', stopped: 'tradewind.phase.stopped',
+  failed: 'tradewind.phase.failed', interrupted: 'tradewind.phase.interrupted',
+};
 
 interface ToolbarProps {
   workflowId: string;
@@ -24,6 +32,7 @@ interface ToolbarProps {
 export function Toolbar({
   workflowId, workflowName, running, phase, saveTime, onRun, onOpenProfiles, onStop, onSave, onOpenWorkspace, onSetWorkflowName, onLoadList,
 }: ToolbarProps) {
+  const { t } = useLocale();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(workflowName);
   const [showSaved, setShowSaved] = useState(false);
@@ -67,7 +76,7 @@ export function Toolbar({
           />
         ) : (
           <div className="tw-toolbar__name-group" onDoubleClick={startEdit}>
-            <span className="tw-toolbar__title">{workflowName || '未命名工作流'}</span>
+            <span className="tw-toolbar__title">{workflowName || t('tradewind.untitled')}</span>
             <span className="tw-toolbar__id">{workflowId}</span>
           </div>
         )}
@@ -77,43 +86,43 @@ export function Toolbar({
       </div>
       <div className="tw-toolbar__actions">
         <button className="tw-toolbar__btn tw-toolbar__btn--save" onClick={onSave}>
-          保存
+          {t('tradewind.toolbar.save')}
         </button>
-        <button className="tw-toolbar__workspace-btn" onClick={onOpenWorkspace} title="打开当前工作流的共享工作区">
+        <button className="tw-toolbar__workspace-btn" onClick={onOpenWorkspace} title={t('tradewind.toolbar.workspaceTitle')}>
           <span className="tw-toolbar__workspace-btn-icon" aria-hidden="true">↗</span>
-          <span>打开工作区</span>
+          <span>{t('tradewind.toolbar.openWorkspace')}</span>
         </button>
         {showSaved && saveTime && (
-          <span className="tw-toolbar__saved-hint">已保存 {formatTime(saveTime)}</span>
+          <span className="tw-toolbar__saved-hint">{t('tradewind.toolbar.savedAt', { time: formatTime(saveTime) })}</span>
         )}
         {running ? (
           <button className="tw-toolbar__btn tw-toolbar__btn--stop" onClick={onStop}>
             <span className="tw-toolbar__btn-icon">◼</span>
-            停止
+            {t('tradewind.toolbar.stop')}
           </button>
         ) : (
           <>
             <button
               className="tw-toolbar__btn tw-toolbar__btn--run"
               onClick={() => onRun('manual')}
-              title="手动模式：人类在场，可随时对话、介入、暂停；会议室 / 暂停点节点可用"
+              title={t('tradewind.toolbar.manualTitle')}
             >
               <span className="tw-toolbar__btn-icon">▶</span>
-              手动运行
+              {t('tradewind.toolbar.manualRun')}
             </button>
             <button
               className="tw-toolbar__btn tw-toolbar__btn--run tw-toolbar__btn--auto"
               onClick={onOpenProfiles}
-              title="自动模式：选择循环档案或单圈运行；无人值守全自动跑完，会议室 / 暂停点节点会被否决，Agent 模型须支持原生工具调用"
+              title={t('tradewind.toolbar.autoTitle')}
             >
               <span className="tw-toolbar__btn-icon">⚡</span>
-              自动运行
+              {t('tradewind.toolbar.autoRun')}
             </button>
           </>
         )}
         <div className={`tw-toolbar__status tw-toolbar__status--${status.tone}`}>
           <span className="tw-toolbar__dot" />
-          {status.label}
+          {t(PHASE_KEY[phase])}
         </div>
       </div>
     </div>

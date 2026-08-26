@@ -12,6 +12,7 @@ import AgentAvatarField from './AgentAvatarField';
 import { removeAgentAvatar, uploadAgentAvatar } from './agent-avatar-client';
 import { normalizeAgentPermission } from './agent-permission';
 import { useSkillSelection, useToolSelection } from './useAgentCapabilitySelection';
+import { useLocale } from '../../i18n/LocaleContext';
 import '../../styles/components/config-modal.css';
 
 interface McpToolItem { name: string; fullName: string; description: string; }
@@ -21,18 +22,17 @@ interface CreateMode { mode: 'create'; onClose: () => void; onSave: () => void; 
 interface EditMode { mode: 'edit'; agent: Agent; onClose: () => void; onSave: () => void; }
 type Props = CreateMode | EditMode;
 
-const EXAMPLE_ROLE = '你是一个认真思考、注重质量的编程专家。';
-
 export default function AgentConfigModal(props: Props) {
+  const { t } = useLocale();
   const { onClose } = props;
   const isCreate = props.mode === 'create';
   const agent = isCreate ? null : props.agent;
 
-  const [tab, setTab] = useState<AgentConfigTab>('基本');
+  const [tab, setTab] = useState<AgentConfigTab>('basic');
   const [name, setName] = useState(agent?.name ?? '');
   const [role, setRole] = useState(agent?.role ?? '');
   const [description, setDescription] = useState(agent?.description ?? '');
-  const [rolePrompt, setRolePrompt] = useState(agent?.config?.rolePrompt ?? (isCreate ? EXAMPLE_ROLE : ''));
+  const [rolePrompt, setRolePrompt] = useState(agent?.config?.rolePrompt ?? (isCreate ? t('config.exampleRole') : ''));
   const [temperature, setTemperature] = useState(agent?.config?.temperature ?? 0.7);
   const [workspace, setWorkspace] = useState(agent?.config?.workspace ?? (isCreate ? '' : `data/agents/${(agent as Agent).id}/.workspace/`));
   const [sandboxLevel, setSandboxLevel] = useState(() => normalizeAgentPermission(agent?.config?.sandboxLevel));
@@ -85,7 +85,7 @@ export default function AgentConfigModal(props: Props) {
     let avatarFailed = false;
     try {
       if (isCreate) {
-        savedAgent = await createAgent({ name: name || '新 Agent', role, description, model, config, label: label || undefined });
+        savedAgent = await createAgent({ name: name || t('config.defaultName'), role, description, model, config, label: label || undefined });
       } else {
         const a = agent as Agent;
         await updateAgentConfig(a.id, config, model, {
@@ -107,7 +107,7 @@ export default function AgentConfigModal(props: Props) {
       }
     } catch (error) {
       avatarFailed = true;
-      setAvatarError(`Agent 已保存，但头像处理失败：${(error as Error).message}`);
+      setAvatarError(t('config.avatarFailed', { error: (error as Error).message }));
     }
     setSaved(true);       // 成功：转「✓ 已保存」并在关闭前保持禁用
     props.onSave();
@@ -119,16 +119,16 @@ export default function AgentConfigModal(props: Props) {
       <div className="config-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh' }}>
         <div className="config-modal-header">
           <div>
-            <h3>{isCreate ? '创建 Agent' : `配置 ${agent?.name}`}</h3>
-            <p className="config-modal-subtitle">{isCreate ? '分步填写' : `${agent?.role} · ${agent?.id}`}</p>
+            <h3>{isCreate ? t('config.createTitle') : t('config.editTitle', { agent: agent?.name ?? '' })}</h3>
+            <p className="config-modal-subtitle">{isCreate ? t('config.stepByStep') : `${agent?.role} · ${agent?.id}`}</p>
           </div>
-          <button className="config-modal-close" onClick={close} aria-label="关闭 Agent 配置">✕</button>
+          <button className="config-modal-close" onClick={close} aria-label={t('config.close')}>✕</button>
         </div>
 
         <AgentConfigTabs active={tab} onChange={setTab} />
 
         <div className="config-modal-body" style={{ overflowY: 'auto' }}>
-          {tab === '基本' && (
+          {tab === 'basic' && (
             <>
               <AgentAvatarField agent={agent} name={name} draft={avatarDraft} removed={avatarRemoved}
                 onChange={(draft, removed) => { setAvatarDraft(draft); setAvatarRemoved(removed); setAvatarError(''); }}
@@ -136,49 +136,49 @@ export default function AgentConfigModal(props: Props) {
               {avatarError && <div className="agent-avatar-field__error" role="alert">{avatarError}</div>}
               <div style={{ display: 'flex', gap: 'var(--space-4)', marginBottom: 'var(--space-4)', marginTop: 'var(--space-4)' }}>
                 <div className="config-field" style={{ flex: 1 }}>
-                  <label className="config-label">名称</label>
+                  <label className="config-label">{t('config.name')}</label>
                   <input type="text" className="config-input config-input-full" value={name} onChange={e => setName(e.target.value)} placeholder="CoderAgent" />
                 </div>
                 <div className="config-field" style={{ flex: 1 }}>
-                  <label className="config-label">角色</label>
-                  <input type="text" className="config-input config-input-full" value={role} onChange={e => setRole(e.target.value)} placeholder="编程助手" />
+                  <label className="config-label">{t('config.role')}</label>
+                  <input type="text" className="config-input config-input-full" value={role} onChange={e => setRole(e.target.value)} placeholder={t('config.rolePlaceholder')} />
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
                 <div className="config-field" style={{ flex: 2 }}>
-                  <label className="config-label">描述</label>
-                  <input type="text" className="config-input config-input-full" value={description} onChange={e => setDescription(e.target.value)} placeholder="可配置的自定义智能体" />
+                  <label className="config-label">{t('config.description')}</label>
+                  <input type="text" className="config-input config-input-full" value={description} onChange={e => setDescription(e.target.value)} placeholder={t('config.descriptionPlaceholder')} />
                 </div>
                 <div className="config-field" style={{ flex: 1 }}>
-                  <label className="config-label">分类标签</label>
+                  <label className="config-label">{t('config.category')}</label>
                   <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
                     <select className="config-input config-input-full" value={label} onChange={e => setLabel(e.target.value)}>
-                      <option value="">无标签</option>
+                      <option value="">{t('config.noLabel')}</option>
                       {allLabels.map(l => (<option key={l.id} value={l.id}>{l.label}</option>))}
                     </select>
-                    <button onClick={() => setShowAddLabel(!showAddLabel)} title="新建标签" aria-label="新建标签" className="icon-add-btn icon-add-btn--sm">+</button>
+                    <button onClick={() => setShowAddLabel(!showAddLabel)} title={t('config.newLabel')} aria-label={t('config.newLabel')} className="icon-add-btn icon-add-btn--sm">+</button>
                   </div>
                   {showAddLabel && (
                     <div style={{ marginTop: 'var(--space-2)', padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-                      <input value={newLabelName} onChange={e => setNewLabelName(e.target.value)} placeholder="标签名" style={{ ...inputStyle, flex: 1, fontSize: 'var(--text-xs)' }} />
+                      <input value={newLabelName} onChange={e => setNewLabelName(e.target.value)} placeholder={t('config.labelName')} style={{ ...inputStyle, flex: 1, fontSize: 'var(--text-xs)' }} />
                       <div style={{ display: 'flex', gap: '2px' }}>{getPresetColors().slice(0, 5).map(c => (
-                        <button key={c} onClick={() => setNewLabelColor(c)} aria-label={`选择标签颜色 ${c}`} style={{ width: 16, height: 16, borderRadius: '50%', background: c, border: newLabelColor === c ? '2px solid #fff' : '1px solid transparent' }} />
+                        <button key={c} onClick={() => setNewLabelColor(c)} aria-label={t('config.labelColor', { color: c })} style={{ width: 16, height: 16, borderRadius: '50%', background: c, border: newLabelColor === c ? '2px solid #fff' : '1px solid transparent' }} />
                       ))}</div>
                       <input value={newLabelColor} onChange={e => setNewLabelColor(e.target.value)} style={{ ...inputStyle, width: '65px', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' }} />
-                      <button onClick={handleAddLabel} style={{ ...miniBtn, background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none' }}>添加</button>
+                      <button onClick={handleAddLabel} style={{ ...miniBtn, background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none' }}>{t('config.add')}</button>
                     </div>
                   )}
                 </div>
               </div>
               <div className="config-field" style={{ marginBottom: 'var(--space-4)' }}>
-                <label className="config-label">模型</label>
+                <label className="config-label">{t('config.model')}</label>
                 <select className="config-input config-input-full" value={model} onChange={e => setModel(e.target.value)}>
-                  <option value="">未选择</option>
+                  <option value="">{t('config.notSelected')}</option>
                   {allModels.map(m => (<option key={m.key} value={m.key}>{m.label}</option>))}
                 </select>
               </div>
               <div className="config-field" style={{ marginBottom: 'var(--space-4)' }}>
-                <label className="config-label">工作区<span className="config-hint">文件操作基础路径，多个 Agent 可共享同一工作区</span></label>
+                <label className="config-label">{t('config.workspace')}<span className="config-hint">{t('config.workspaceHint')}</span></label>
                 <input type="text" className="config-input config-input-full" value={workspace} onChange={e => setWorkspace(e.target.value)}
                   style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}
                   placeholder={`data/agents/${agent?.id || '{id}'}/.workspace/`} />
@@ -187,16 +187,16 @@ export default function AgentConfigModal(props: Props) {
               <div className="config-field">
                 <label className="config-label">Temperature<span className="config-value-display">{temperature}</span></label>
                 <input type="range" className="config-slider" min={0} max={2} step={0.1} value={temperature} onChange={e => setTemperature(Number(e.target.value))} />
-                <div className="config-slider-labels"><span>0（精准）</span><span>2（创意）</span></div>
+                <div className="config-slider-labels"><span>{t('config.precise')}</span><span>{t('config.creative')}</span></div>
               </div>
             </>
           )}
 
-          {tab === '技能' && (
+          {tab === 'skills' && (
             <div className="config-field" style={{ marginTop: 'var(--space-4)' }}>
-              <label className="config-label">已安装技能<span className="config-hint">创建 Agent 时默认全部启用，可按需取消。技能内容由 use_skill 按需加载，不会议助理期占用上下文</span></label>
+              <label className="config-label">{t('config.installedSkills')}<span className="config-hint">{t('config.skillsHint')}</span></label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: 'var(--space-3)' }}>
-                {allSkills.length === 0 && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>暂无技能 — 去「技能」页创建或安装</span>}
+                {allSkills.length === 0 && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{t('config.noSkills')}</span>}
                 {allSkills.map(s => {
                   const on = checkedSkills.has(s.id);
                   return (
@@ -210,12 +210,12 @@ export default function AgentConfigModal(props: Props) {
               </div>
               {checkedSkills.size > 0 && (
                 <div style={{ padding: 'var(--space-3)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-3)' }}>
-                  <div style={{ fontWeight: 'var(--font-semibold)', marginBottom: 'var(--space-2)', color: '#7c3aed' }}>已启用 {checkedSkills.size} 个技能</div>
+                  <div style={{ fontWeight: 'var(--font-semibold)', marginBottom: 'var(--space-2)', color: '#7c3aed' }}>{t('config.enabledSkills', { count: checkedSkills.size })}</div>
                   {allSkills.filter(s => checkedSkills.has(s.id)).map(s => (
                     <div key={s.id} style={{ marginBottom: 'var(--space-3)' }}>
                       <div style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-text)', fontWeight: 'var(--font-semibold)', marginBottom: 'var(--space-1)' }}>📋 {s.name} ({s.id})</div>
                       <pre style={{ margin: 0, padding: 'var(--space-2)', background: 'var(--color-surface)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '120px', overflow: 'auto', opacity: 0.85 }}>
-                        {skillPreviews[s.id] || '加载中...'}
+                        {skillPreviews[s.id] || t('config.skillLoading')}
                       </pre>
                     </div>
                   ))}
@@ -223,24 +223,24 @@ export default function AgentConfigModal(props: Props) {
               )}
               {allSkills.length > 0 && checkedSkills.size === 0 && (
                 <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-3)' }}>
-                  提示：勾选上方技能卡片即可启用
+                  {t('config.selectSkillHint')}
                 </div>
               )}
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginTop: 'var(--space-2)' }}>
-                     技能加载方式：Agent 调用 use_skill("技能名") → executor 返回 SKILL.md → 仅本条 tool result 占用上下文
+                     {t('config.skillMechanism')}
               </div>
             </div>
           )}
 
-          {tab === '提示词' && (
+          {tab === 'prompt' && (
             <>
 
               <div className="config-field" style={{ marginTop: 'var(--space-4)' }}>
-                <label className="config-label">工具<span className="config-hint">创建 Agent 时默认启用全部框架内置工具；清空后仅保留会话能力。MCP 与自定义工具需显式勾选</span></label>
+                <label className="config-label">{t('config.tools')}<span className="config-hint">{t('config.toolsHint')}</span></label>
 
                 {/* 本地工具 */}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: 'var(--space-3)' }}>
-                  {allTools.length === 0 && Object.keys(mcpGroups).length === 0 && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>暂无工具 — 去「工具」页注册或在 MCP 页连接外部服务</span>}
+                  {allTools.length === 0 && Object.keys(mcpGroups).length === 0 && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{t('config.noTools')}</span>}
                   {allTools.map(t => {
                     const on = checkedTools.has(t.name);
                     return (
@@ -264,10 +264,10 @@ export default function AgentConfigModal(props: Props) {
                         onClick={() => { const next = new Set(mcpExpanded); if (expanded) next.delete(serverName); else next.add(serverName); setMcpExpanded(next); }}>
                         <span style={{ fontSize: '11px', width: '14px' }}>{expanded ? '▼' : '▶'}</span>
                         <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600 }}>MCP: {serverName}</span>
-                        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>{tools.length} 工具</span>
+                        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>{t('config.toolCount', { count: tools.length })}</span>
                         <button onClick={(e) => { e.stopPropagation(); const next = new Set(checkedTools); if (allSelected) { tools.forEach(t => next.delete(t.fullName)); } else { tools.forEach(t => next.add(t.fullName)); } setCheckedTools(next); }}
                           style={{ ...toolTagStyle, background: allSelected ? 'var(--color-accent)' : 'var(--color-bg)', color: allSelected ? 'var(--color-on-accent)' : 'var(--color-text-tertiary)', border: `1px solid ${someSelected ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer', fontSize: '10px' }}>
-                          {allSelected ? '✓ 全选' : '全选'}
+                          {t(allSelected ? 'config.allSelected' : 'config.selectAll')}
                         </button>
                       </div>
                       {expanded && (
@@ -297,16 +297,16 @@ export default function AgentConfigModal(props: Props) {
               </div>
 
               <div className="config-field" style={{ marginBottom: 'var(--space-4)' }}>
-                <label className="config-label">角色提示词<span className="config-hint">模型角色定位，拼在系统提示词最前面。定义 Agent 的身份、语气和核心行为</span></label>
-                <textarea className="config-textarea" value={rolePrompt} onChange={e => setRolePrompt(e.target.value)} rows={5} placeholder={EXAMPLE_ROLE} />
+                <label className="config-label">{t('config.rolePrompt')}<span className="config-hint">{t('config.rolePromptHint')}</span></label>
+                <textarea className="config-textarea" value={rolePrompt} onChange={e => setRolePrompt(e.target.value)} rows={5} placeholder={t('config.exampleRole')} />
               </div>
             </>
           )}
         </div>
 
         <div className="config-modal-footer">
-          <button className="config-btn config-btn-cancel" onClick={close} disabled={saving}>取消</button>
-          <button className={`config-btn config-btn-save ${saved ? 'config-btn-done' : ''}`} onClick={handleSave} disabled={saving || saved}>{saved ? '✓ 已保存' : saving ? '保存中…' : isCreate ? '创建 Agent' : '保存配置'}</button>
+          <button className="config-btn config-btn-cancel" onClick={close} disabled={saving}>{t('common.cancel')}</button>
+          <button className={`config-btn config-btn-save ${saved ? 'config-btn-done' : ''}`} onClick={handleSave} disabled={saving || saved}>{saved ? t('config.saved') : saving ? t('config.saving') : isCreate ? t('config.createTitle') : t('config.save')}</button>
         </div>
       </div>
     </div>

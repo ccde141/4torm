@@ -44,24 +44,26 @@ import type { Agent, ChatMessage } from '../../types';
 import '../../styles/components/chat.css';
 import '../../styles/components/session-list.css';
 import '../../styles/components/loading.css';
+import { useLocale } from '../../i18n/LocaleContext';
 
 const STATUS_COLOR_MAP: Record<string, string> = {};
 for (const s of SYSTEM_STATUSES) STATUS_COLOR_MAP[s.id] = s.color;
 const IS_NOT_IMAGE = (file: DroppedFile) => !file.type.startsWith('image/');
 
 function AgentWorkspaceButton({ agent }: { agent: Agent | null }) {
+  const { t: translate } = useLocale();
   async function openWorkspace() {
     if (!agent) return;
     const r = await fetch(`/api/chat/agent/${agent.id}/open-workspace`, { method: 'POST' });
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
-      alert(e?.error || `打开工作区失败（HTTP ${r.status}）`);
+      alert(e?.error || translate('chat.page.workspaceOpenFailed', { status: r.status }));
     }
   }
   return (
-    <button type="button" onClick={openWorkspace} disabled={!agent} className="chat__workspace-btn" title={agent ? '打开当前 Agent 的本地工作区' : '请先选择 Agent'}>
+    <button type="button" onClick={openWorkspace} disabled={!agent} className="chat__workspace-btn" title={agent ? translate('chat.page.workspaceOpen') : translate('chat.page.selectAgentFirst')}>
       <span className="chat__workspace-btn-icon" aria-hidden="true">↗</span>
-      <span>工作区</span>
+      <span>{translate('chat.page.workspace')}</span>
     </button>
   );
 }
@@ -72,6 +74,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   onClearPreselect?: () => void;
 }) {
   const confirm = useConfirm();
+  const { t: translate, locale } = useLocale();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [offlineIds, setOfflineIds] = useState<Set<string>>(new Set());
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
@@ -381,7 +384,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       });
 
       if (!res.ok) {
-        const err = await res.text().catch(() => '未知错误');
+        const err = await res.text().catch(() => translate('chat.page.unknownError'));
         throw new Error(err);
       }
 
@@ -531,7 +534,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
           console.error('[chat] 会话保存失败', saveError);
           const saveErrMsg: ChatMessage = {
             id: generateMessageId(), role: 'assistant',
-            content: `⚠️ 本轮回复已显示，但保存失败：${(saveError as Error).message}`,
+            content: translate('chat.page.replySaveFailed', { detail: (saveError as Error).message }),
             timestamp: new Date().toISOString(), agentId: selectedAgent.id,
           };
           emit([...allMessages, saveErrMsg]);
@@ -541,7 +544,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
       // 主动中断（停止/淘汰，跨 origin 抛 Failed to fetch）不写错误气泡
       if (!abortController.signal.aborted) {
         const buf = streamRunners.runners.current.get(sid)?.messages ?? updatedMessages;
-        const errMsg: ChatMessage = { id: generateMessageId(), role: 'assistant', content: `错误: ${(e as Error).message}`, timestamp: new Date().toISOString(), agentId: selectedAgent.id };
+        const errMsg: ChatMessage = { id: generateMessageId(), role: 'assistant', content: translate('chat.page.error', { detail: (e as Error).message }), timestamp: new Date().toISOString(), agentId: selectedAgent.id };
         const withErr = [...buf, errMsg];
         emit(withErr);
         if (!(streamRunners.runners.current.get(sid)?.abandoned)) {
@@ -569,7 +572,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
     // 运行期交互发送 → 入队，不打断当前流（drain 调用 fromQueue=true 时跳过，直接发）
     if (!fromQueue && streaming) {
       if (drafts.length) {
-        setImageError('图片需等待当前回复结束后发送');
+        setImageError(translate('chat.page.imageAfterReply'));
         return;
       }
       if (activeSessionId && streamRunners.enqueue(activeSessionId, text)) { setInput(''); bumpQueue(t => t + 1); }
@@ -609,7 +612,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
           setActiveSessionId(sid);
         }
         session = await getSession(sid);
-        if (!session) throw new Error('会话不存在');
+        if (!session) throw new Error(translate('chat.page.sessionMissing'));
         attachedImages = await Promise.all(
           drafts.map(draft => uploadImageDraft(selectedAgent.id, sid!, draft)),
         );
@@ -720,7 +723,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {agents.map(agent => (
               <button key={agent.id} onClick={() => selectAgent(agent)} style={{ ...agentBtnStyle, background: selectedAgent?.id === agent.id ? 'var(--color-accent-subtle)' : 'transparent', color: selectedAgent?.id === agent.id ? 'var(--color-accent)' : 'var(--color-text-secondary)', fontWeight: selectedAgent?.id === agent.id ? 'var(--font-semibold)' : 'var(--font-normal)', border: selectedAgent?.id === agent.id ? '1px solid var(--color-accent)' : '1px solid var(--color-border)' }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: offlineIds.has(agent.id) ? '#ef4444' : agent.busy ? STATUS_COLOR_MAP.busy : (STATUS_COLOR_MAP[agent.status] ?? STATUS_COLOR_MAP.idle), flexShrink: 0 }} title={offlineIds.has(agent.id) ? '离线（模型不可用）' : agent.busy ? '工作中' : agent.status} />
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: offlineIds.has(agent.id) ? '#ef4444' : agent.busy ? STATUS_COLOR_MAP.busy : (STATUS_COLOR_MAP[agent.status] ?? STATUS_COLOR_MAP.idle), flexShrink: 0 }} title={offlineIds.has(agent.id) ? translate('chat.page.offline') : agent.busy ? translate('chat.page.busy') : agent.status === 'idle' ? translate('chat.page.idle') : agent.status} />
                 <span className="text-truncate">{agent.name}</span>
               </button>
             ))}
@@ -730,14 +733,14 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
         {selectedAgent && (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
-              <div style={sectionLabelStyle}>会话</div>
-              <button onClick={() => newSession()} className="icon-add-btn" title="新建会话" aria-label="新建会话">+</button>
+              <div style={sectionLabelStyle}>{translate('chat.page.sessions')}</div>
+              <button onClick={() => newSession()} className="icon-add-btn" title={translate('chat.page.newSession')} aria-label={translate('chat.page.newSession')}>+</button>
             </div>
             <div className="session-list" style={{ flex: 1, overflowY: 'auto' }}>
-              {sessions.length === 0 && <div style={{ padding: 'var(--space-4)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center', textShadow: 'var(--text-halo)' }}>暂无会话，点击 + 创建</div>}
+              {sessions.length === 0 && <div style={{ padding: 'var(--space-4)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center', textShadow: 'var(--text-halo)' }}>{translate('chat.page.noSessions')}</div>}
               {sessions.map(s => {
                 const unread = activeSessionId === s.id ? 0 : (s.unreadCount ?? 0);
-                const tokenInfo = formatTokenUsage(s.tokenUsage);
+                const tokenInfo = formatTokenUsage(s.tokenUsage, locale);
                 return (
                 <div key={s.id} style={{ position: 'relative' }}>
                   <div className={`session-item${activeSessionId === s.id ? ' session-item--active' : ''}`} role="button" tabIndex={0} aria-current={activeSessionId === s.id ? 'true' : undefined} onClick={() => selectSession(s.id)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectSession(s.id); } }}>
@@ -746,9 +749,9 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                   </div>
                   <button onClick={async e => {
                     e.stopPropagation();
-                    if (!(await confirm({ title: `删除会话「${s.title}」？`, message: '整个会话的对话历史将被删除，不可恢复。', confirmText: '删除', danger: true }))) return;
+                    if (!(await confirm({ title: translate('chat.page.deleteSessionTitle', { title: s.title }), message: translate('chat.page.deleteSessionMessage'), confirmText: translate('common.delete'), danger: true }))) return;
                     handleDeleteSession(s.id);
-                  }} style={deleteBtnStyle} title="删除会话">x</button>
+                  }} style={deleteBtnStyle} title={translate('chat.page.deleteSession')}>x</button>
                 </div>
                 );
               })}
@@ -756,14 +759,14 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
           </>
         )}
 
-        {!selectedAgent && <div style={{ padding: 'var(--space-4)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center', textShadow: 'var(--text-halo)' }}>选择一个 Agent 开始对话</div>}
+        {!selectedAgent && <div style={{ padding: 'var(--space-4)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textAlign: 'center', textShadow: 'var(--text-halo)' }}>{translate('chat.page.selectAgent')}</div>}
       </div>
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
         {!activeSessionId ? (
           <div style={emptyStyle}>
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.3"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /></svg>
-            <span style={{ fontSize: 'var(--text-sm)' }}>{selectedAgent ? '选择一个会话或创建新会话' : '先选择一个 Agent'}</span>
+            <span style={{ fontSize: 'var(--text-sm)' }}>{selectedAgent ? translate('chat.page.selectSession') : translate('chat.page.chooseAgent')}</span>
           </div>
         ) : (
           <>
@@ -772,14 +775,14 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                 {editingTitle ? (
                   <input ref={titleInputRef} className="chat__title-input" value={editTitleValue} onChange={e => setEditTitleValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') renameSession(); if (e.key === 'Escape') setEditingTitle(false); }} onBlur={renameSession} />
                 ) : (
-                  <span className="chat__title" onDoubleClick={startRename} title="双击重命名">{sessions.find(s => s.id === activeSessionId)?.title}</span>
+                  <span className="chat__title" onDoubleClick={startRename} title={translate('chat.page.rename')}>{sessions.find(s => s.id === activeSessionId)?.title}</span>
                 )}
                 <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', textShadow: 'var(--text-halo)' }}>{activeSessionId}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginRight: '30px' }}>
                 <AgentWorkspaceButton agent={selectedAgent} />
                 {models.length > 0 && (
-                  <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={modelSelectStyle} aria-label="选择模型">
+                  <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)} style={modelSelectStyle} aria-label={translate('chat.page.selectModel')}>
                     {models.map(m => (<option key={m.key} value={m.key}>{m.label}</option>))}
                   </select>
                 )}
@@ -813,8 +816,8 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
               <button
                 className="chat__jump-bottom"
                 onClick={() => scrollToBottom('smooth')}
-                aria-label="回到底部"
-                title="回到最新消息"
+                aria-label={translate('chat.page.jumpBottom')}
+                title={translate('chat.page.jumpLatest')}
               >↓</button>
             )}
             </div>
@@ -829,23 +832,23 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                   void addImageFiles(Array.from(event.target.files ?? []));
                   event.target.value = '';
                 }} />
-                <button type="button" className="chat__attach-btn" onClick={() => imageInputRef.current?.click()} disabled={compacting || streaming} title={streaming ? '等待当前回复结束后添加图片' : '添加图片'} aria-label="添加图片">
+                <button type="button" className="chat__attach-btn" onClick={() => imageInputRef.current?.click()} disabled={compacting || streaming} title={streaming ? translate('chat.page.attachAfterReply') : translate('chat.page.attach')} aria-label={translate('chat.page.attach')}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.4 11.6 12 21a6 6 0 0 1-8.5-8.5l10-10a4 4 0 0 1 5.7 5.7l-10 10a2 2 0 0 1-2.8-2.8l9.3-9.3" /></svg>
                 </button>
                 <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onPaste={event => {
                   const files = Array.from(event.clipboardData.files).filter(file => file.type.startsWith('image/'));
                   if (files.length) { event.preventDefault(); void addImageFiles(files); }
-                }} onKeyDown={handleKeyDown} disabled={compacting} placeholder={compacting ? '正在压缩上下文…请稍候' : streaming ? '回复中…（可继续输入，发送将排队）' : '输入消息...（Enter 发送，Shift+Enter 换行）'} rows={1} aria-label="输入消息" />
+                }} onKeyDown={handleKeyDown} disabled={compacting} placeholder={compacting ? translate('chat.page.inputCompacting') : streaming ? translate('chat.page.inputStreaming') : translate('chat.page.inputPlaceholder')} rows={1} aria-label={translate('chat.page.inputLabel')} />
                 {compacting ? (
-                  <button className="chat__send-btn" disabled title="压缩中…">
+                  <button className="chat__send-btn" disabled title={translate('chat.page.compacting')}>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
                   </button>
                 ) : streaming ? (
                   <>
-                    <button className="chat__send-btn" onClick={() => handleSend()} disabled={!input.trim() || queue.length >= MAX_QUEUE} title={queue.length >= MAX_QUEUE ? '队列已满（最多 3 条）' : '加入队列'}>
+                    <button className="chat__send-btn" onClick={() => handleSend()} disabled={!input.trim() || queue.length >= MAX_QUEUE} title={queue.length >= MAX_QUEUE ? translate('chat.page.queueFull', { max: MAX_QUEUE }) : translate('chat.page.enqueue')}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
                     </button>
-                    <button className="chat__stop-btn" onClick={() => { if (activeSessionId) { const r = streamRunners.runners.current.get(activeSessionId); if (r) r.userStopped = true; r?.abort(); } fetch(streamUrl('/api/conversation/abort'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); setStreaming(false); }} title="停止生成">
+                    <button className="chat__stop-btn" onClick={() => { if (activeSessionId) { const r = streamRunners.runners.current.get(activeSessionId); if (r) r.userStopped = true; r?.abort(); } fetch(streamUrl('/api/conversation/abort'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); setStreaming(false); }} title={translate('chat.page.stop')}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                     </button>
                   </>
@@ -856,7 +859,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                 )}
               </div>
               <div className="chat__command-hints">
-                <span>/compact 压缩上下文</span>
+                <span>{translate('chat.page.compactHint')}</span>
               </div>
             </div>
             {/* 任务板挂在整列层（非消息区内），竖条/抽屉贯穿全高：上过标题栏、下达输入栏，与气旋/对流会议助理同构 */}

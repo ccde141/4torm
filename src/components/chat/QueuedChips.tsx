@@ -5,6 +5,7 @@
  * 在输入框上方以 chips 展示，可点 × 撤掉。本轮流结束后由各面板逐条出队真正发出。
  */
 import type React from 'react';
+import { useLocale } from '../../i18n/LocaleContext';
 
 /** 队列上限：与各面板 enqueue 限制保持一致 */
 export const MAX_QUEUE = 3;
@@ -13,14 +14,15 @@ export default function QueuedChips({ items, onRemove }: {
   items: string[];
   onRemove: (index: number) => void;
 }) {
+  const { t: translate } = useLocale();
   if (items.length === 0) return null;
   return (
     <div style={wrapStyle}>
-      <span style={labelStyle}>排队 {items.length}/{MAX_QUEUE}</span>
-      {items.map((t, i) => (
-        <span key={i} style={chipStyle} title={t}>
-          <span style={textStyle}>{t}</span>
-          <button style={removeStyle} onClick={() => onRemove(i)} title="撤掉" aria-label="撤掉排队消息">×</button>
+      <span style={labelStyle}>{translate('chat.queue.count', { count: items.length, max: MAX_QUEUE })}</span>
+      {items.map((text, i) => (
+        <span key={i} style={chipStyle} title={text}>
+          <span style={textStyle}>{text}</span>
+          <button style={removeStyle} onClick={() => onRemove(i)} title={translate('common.delete')} aria-label={translate('chat.queue.remove')}>×</button>
         </span>
       ))}
     </div>

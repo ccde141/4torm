@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formFromServer, parseMcpConfigJson, payloadFromForm } from './mcp-form.js';
+import { McpFormError, formFromServer, parseMcpConfigJson, payloadFromForm } from './mcp-form.js';
 
 test('stdio 表单往返时保持含空格参数和 cwd', () => {
   const form = formFromServer({
@@ -43,5 +43,17 @@ test('JSON 导入兼容 mcpServers 包装和常见 http 别名', () => {
 });
 
 test('JSON 导入拒绝缺少启动信息的服务', () => {
-  assert.throws(() => parseMcpConfigJson('{"mcpServers":{"broken":{}}}'), /启动命令/);
+  assert.throws(
+    () => parseMcpConfigJson('{"mcpServers":{"broken":{}}}'),
+    (error: unknown) => error instanceof McpFormError && error.code === 'commandRequired',
+  );
+});
+
+test('校验错误使用稳定错误码并保留用户配置路径', () => {
+  assert.throws(
+    () => parseMcpConfigJson('{"mcpServers":{"用户服务":{"env":{"TOKEN":1}}}}'),
+    (error: unknown) => error instanceof McpFormError
+      && error.code === 'stringRequired'
+      && error.values?.field === 'MCP 用户服务.env.TOKEN',
+  );
 });

@@ -2,6 +2,7 @@ import { memo, useState } from 'react';
 import { renderTextWithCode } from '../../../engine/markdown';
 import { diffStat, lineDiff, type DiffLine } from '../../../utils/diff';
 import type { MeetingMessage, ToolStep } from './meeting-client';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 interface Props {
   msg: MeetingMessage;
@@ -25,6 +26,7 @@ function getFileEdit(step: ToolStep): { path: string; before: string; after: str
 }
 
 function DiffRows({ lines }: { lines: DiffLine[] }) {
+  const { t } = useLocale();
   return (
     <div style={{ overflow: 'auto', maxHeight: 320, border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--color-bg)' }}>
       {lines.slice(0, 400).map((line, index) => {
@@ -41,7 +43,7 @@ function DiffRows({ lines }: { lines: DiffLine[] }) {
       })}
       {lines.length > 400 && (
         <div style={{ padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>
-          ... {lines.length - 400} lines hidden
+          {t('tradewind.meeting.tools.hiddenLines', { count: lines.length - 400 })}
         </div>
       )}
     </div>
@@ -49,6 +51,7 @@ function DiffRows({ lines }: { lines: DiffLine[] }) {
 }
 
 const ToolBubble = memo(function ToolBubble({ step }: { step: ToolStep }) {
+  const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const status = step.status || 'done';
   const icon = status === 'running' ? '...' : status === 'error' ? 'X' : 'OK';
@@ -70,13 +73,13 @@ const ToolBubble = memo(function ToolBubble({ step }: { step: ToolStep }) {
       {open && (
         <div className="tw-meeting-tool__detail">
           <div className="tw-meeting-tool__section">
-            <span className="tw-meeting-tool__label">{edit ? 'Diff' : '参数'}</span>
+            <span className="tw-meeting-tool__label">{edit ? 'Diff' : t('tradewind.meeting.tools.params')}</span>
             {edit ? <DiffRows lines={lines} /> : <pre>{JSON.stringify(step.args, null, 2)}</pre>}
           </div>
           {step.result !== undefined && (
             <div className="tw-meeting-tool__section">
-              <span className="tw-meeting-tool__label">结果</span>
-              <pre>{step.result || '(无输出)'}</pre>
+              <span className="tw-meeting-tool__label">{t('tradewind.meeting.tools.result')}</span>
+              <pre>{step.result || t('tradewind.meeting.tools.noOutput')}</pre>
             </div>
           )}
         </div>
@@ -86,6 +89,7 @@ const ToolBubble = memo(function ToolBubble({ step }: { step: ToolStep }) {
 });
 
 export const MeetingMessageItem = memo(function MeetingMessageItem({ msg }: Props) {
+  const { t } = useLocale();
   if (msg.speaker === '人类') {
     return (
       <div className="tw-meeting-msg tw-meeting-msg--user">
@@ -99,7 +103,7 @@ export const MeetingMessageItem = memo(function MeetingMessageItem({ msg }: Prop
     return (
       <div className="tw-meeting-msg tw-meeting-msg--no-reply">
         <span className="tw-meeting-msg__speaker">{msg.speaker}</span>
-        <span className="tw-meeting-msg__no-reply">未回复</span>
+        <span className="tw-meeting-msg__no-reply">{t('tradewind.meeting.noReply')}</span>
       </div>
     );
   }
@@ -123,12 +127,13 @@ export const MeetingMessageItem = memo(function MeetingMessageItem({ msg }: Prop
 });
 
 const ThinkBlock = memo(function ThinkBlock({ content, streaming = false }: { content: string; streaming?: boolean }) {
+  const { t } = useLocale();
   const [open, setOpen] = useState(streaming);
   return (
     <div className="tw-meeting-think">
       <button className="tw-meeting-think__trigger" onClick={() => setOpen(value => !value)} aria-expanded={open}>
         <span className="tw-meeting-think__arrow">{open ? '▼' : '▶'}</span>
-        <span className="tw-meeting-think__label">思考过程{streaming && '...'}</span>
+        <span className="tw-meeting-think__label">{t('tradewind.meeting.reasoning')}{streaming && '...'}</span>
       </button>
       {open && <div className="tw-meeting-think__body">{content}{streaming && '...'}</div>}
     </div>

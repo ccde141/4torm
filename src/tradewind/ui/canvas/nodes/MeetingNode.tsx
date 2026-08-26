@@ -3,10 +3,12 @@
  */
 import { useEffect, useState } from 'react';
 import { Handle, Position, NodeResizer, useNodes, type NodeProps } from '@xyflow/react';
+import { useLocale } from '../../../../i18n/LocaleContext';
 
 export function MeetingNode({ id, data, selected }: NodeProps) {
+  const { t } = useLocale();
   const config = (data as any)?.config ?? {};
-  const label = (data as any)?.label ?? '会议室';
+  const label = (data as any)?.label ?? t('tradewind.canvas.node.meeting');
   const memo = (data as any)?.memo ?? '';
   const running = !!(window as any).__tw_running;
 
@@ -47,14 +49,14 @@ export function MeetingNode({ id, data, selected }: NodeProps) {
       <Handle type="target" position={Position.Left} className="tw-handle" />
       <div className="tw-node__icon">◎</div>
       <div className="tw-node__label">{label}</div>
-      {count > 0 && <div className="tw-node__sub">{count} 参与者</div>}
+      {count > 0 && <div className="tw-node__sub">{t('tradewind.canvas.meeting.participants', { count })}</div>}
       {memo && <div className="tw-node__memo">{memo}</div>}
       <button
         className={`tw-node__chat-btn ${running ? 'tw-node__chat-btn--active' : 'tw-node__chat-btn--idle'}`}
         onClick={openMeeting}
-        title={running ? '进入会议' : '需要先启动工作流'}
+        title={running ? t('tradewind.canvas.meeting.enter') : t('tradewind.canvas.agent.startFirst')}
       >
-        {running ? '🎙 会议' : '未运行'}
+        {running ? t('tradewind.canvas.meeting.open') : t('tradewind.canvas.node.notRunning')}
       </button>
       <Handle type="source" position={Position.Right} className="tw-handle" />
     </div>

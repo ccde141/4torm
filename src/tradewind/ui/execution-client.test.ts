@@ -20,3 +20,11 @@ test('stop treats an already finished execution as stopped', async (t) => {
 
   await assert.doesNotReject(requestStop());
 });
+
+test('stop request uses the caller locale fallback when the server has no detail', async (t) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 500 });
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await assert.rejects(requestStop('Failed to stop workflow'), /Failed to stop workflow \(HTTP 500\)/);
+});

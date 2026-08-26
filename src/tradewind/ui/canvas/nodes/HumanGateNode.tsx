@@ -6,9 +6,11 @@
  */
 import { useEffect, useState } from 'react';
 import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react';
+import { useLocale } from '../../../../i18n/LocaleContext';
 
 export function HumanGateNode({ id, data, selected }: NodeProps) {
-  const label = (data as any)?.label ?? '暂停点';
+  const { t } = useLocale();
+  const label = (data as any)?.label ?? t('tradewind.canvas.node.gate');
   const memo = (data as any)?.memo ?? '';
   const running = !!(window as any).__tw_running;
 
@@ -52,12 +54,12 @@ export function HumanGateNode({ id, data, selected }: NodeProps) {
       <div className="tw-node__label">{label}</div>
       <div className={`tw-node__state-line ${waiting ? 'tw-node__state-line--waiting' : ''}`}>
         <span className="tw-node__state-dot" />
-        <span>{waiting ? '等待人工确认' : running ? '等待信封' : '尚未运行'}</span>
+        <span>{waiting ? t('tradewind.canvas.gate.waitingReview') : running ? t('tradewind.canvas.gate.waitingEnvelope') : t('tradewind.canvas.gate.notStarted')}</span>
       </div>
       {memo && <div className="tw-node__memo">{memo}</div>}
       {waiting && (
-        <button className="tw-node__gate-action" onClick={openPanel} title="查看信封内容并决定是否修改">
-          审查并继续
+        <button className="tw-node__gate-action" onClick={openPanel} title={t('tradewind.canvas.gate.reviewHint')}>
+          {t('tradewind.canvas.gate.review')}
         </button>
       )}
       <Handle type="source" position={Position.Right} className="tw-handle" />

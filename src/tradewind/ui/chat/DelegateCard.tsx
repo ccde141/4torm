@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ChatMessage } from '../../../types';
 import { visibleDelegateProgress } from '../../../engine/chat/delegate-progress';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 type Step = {
   type: 'tool' | 'thought';
@@ -21,9 +22,10 @@ export default function DelegateCard({ toolCall, content }: {
   toolCall: NonNullable<ChatMessage['toolCall']> & { steps?: Step[] };
   content?: string;
 }) {
+  const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
 
-  const task = String(toolCall.params?.task ?? '子任务');
+  const task = String(toolCall.params?.task ?? t('tradewind.chat.delegate.fallback'));
   const status = toolCall.status || 'pending';
   const summary = toolCall.result || '';
   const steps: Step[] = (toolCall as any).steps || [];
@@ -40,8 +42,8 @@ export default function DelegateCard({ toolCall, content }: {
   const durationStr = durationMs > 0 ? `${(durationMs / 1000).toFixed(1)}s` : '';
 
   const subtitle = isPending
-    ? (toolSteps.length > 0 ? `${toolSteps.length} 步执行中...` : '思考中...')
-    : (durationStr ? `${toolSteps.length} 步 · ${durationStr}` : `${toolSteps.length} 步`);
+    ? (toolSteps.length > 0 ? t('tradewind.chat.delegate.runningSteps', { count: toolSteps.length }) : t('tradewind.chat.delegate.thinking'))
+    : (durationStr ? t('tradewind.chat.delegate.stepsDuration', { count: toolSteps.length, duration: durationStr }) : t('tradewind.chat.delegate.steps', { count: toolSteps.length }));
 
   return (
     <div className="tw-chat-row tw-chat-row--assistant" style={{ paddingLeft: '38px' }}>
@@ -76,14 +78,14 @@ export default function DelegateCard({ toolCall, content }: {
           <div className="tw-tool-card__body">
             {/* 任务描述 */}
             <div>
-              <div className="tw-tool-card__section-label">任务</div>
+              <div className="tw-tool-card__section-label">{t('tradewind.chat.delegate.task')}</div>
               <div className="tw-tool-card__text">{task}</div>
             </div>
 
             {/* 步骤列表 */}
             {toolSteps.length > 0 && (
               <div>
-                <div className="tw-tool-card__section-label">执行步骤</div>
+                <div className="tw-tool-card__section-label">{t('tradewind.chat.delegate.executionSteps')}</div>
                 <div className="tw-tool-card__steps tw-tool-card__steps--inline">
                   {toolSteps.map((s, i) => {
                     const stepDone = s.result != null;
@@ -109,7 +111,7 @@ export default function DelegateCard({ toolCall, content }: {
             {/* 思考过程 */}
             {thought && (
               <div>
-                <div className="tw-tool-card__section-label">思考过程</div>
+                <div className="tw-tool-card__section-label">{t('tradewind.chat.reasoning.title')}</div>
                 <pre className="tw-tool-card__pre" style={{ maxHeight: '200px' }}>
                   {thought}
                 </pre>
@@ -119,7 +121,7 @@ export default function DelegateCard({ toolCall, content }: {
             {/* 最终结果 */}
             {summary && (
               <div>
-                <div className="tw-tool-card__section-label">结果 {icon}</div>
+                <div className="tw-tool-card__section-label">{t('tradewind.chat.tools.result')} {icon}</div>
                 <pre className="tw-tool-card__pre" style={{ maxHeight: '300px' }}>
                   {summary}
                 </pre>

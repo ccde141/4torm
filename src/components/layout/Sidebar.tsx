@@ -9,25 +9,30 @@
 import { memo, useState, useEffect } from 'react';
 import type { NavItem } from '../../types';
 import { getSkinConfig, subscribeSkin, type SkinConfig } from '../../store/skin';
+import { useLocale } from '../../i18n/LocaleContext';
+import type { MessageKey } from '../../i18n/locale';
+import LanguageSwitch from './LanguageSwitch';
 import '../../styles/components/sidebar.css';
 
-const NAV_ITEMS: NavItem[] = [
-  { id: 'agent', label: '控制台', icon: 'agents' },
-  { id: 'chat', label: '季风 · 对话', icon: 'chat' },
-  { id: 'convection', label: '对流 · 会议室', icon: 'convection' },
-  { id: 'cyclone', label: '气旋 · 工作室', icon: 'cyclone' },
-  { id: 'tradewind', label: '信风 · 工作流', icon: 'tradewind' },
-  { id: 'tide', label: '潮汐 · 自动化', icon: 'tide' },
+type LocalizedNavItem = Omit<NavItem, 'label'> & { label: MessageKey };
+
+const NAV_ITEMS: LocalizedNavItem[] = [
+  { id: 'agent', label: 'nav.console', icon: 'agents' },
+  { id: 'chat', label: 'nav.monsoon', icon: 'chat' },
+  { id: 'convection', label: 'nav.convection', icon: 'convection' },
+  { id: 'cyclone', label: 'nav.cyclone', icon: 'cyclone' },
+  { id: 'tradewind', label: 'nav.tradewind', icon: 'tradewind' },
+  { id: 'tide', label: 'nav.tide', icon: 'tide' },
 ];
 
-const CAPABILITY_ITEMS: NavItem[] = [
-  { id: 'tools', label: '工具', icon: 'tools' },
-  { id: 'skills', label: '技能', icon: 'skills' },
+const CAPABILITY_ITEMS: LocalizedNavItem[] = [
+  { id: 'tools', label: 'nav.tools', icon: 'tools' },
+  { id: 'skills', label: 'nav.skills', icon: 'skills' },
 ];
 
-const MANAGE_ITEMS: NavItem[] = [
-  { id: 'model', label: '模型', icon: 'settings' },
-  { id: 'mcp', label: 'MCP', icon: 'mcp' },
+const MANAGE_ITEMS: LocalizedNavItem[] = [
+  { id: 'model', label: 'nav.models', icon: 'settings' },
+  { id: 'mcp', label: 'page.mcp.title', icon: 'mcp' },
 ];
 
 // SVG icon components (no external deps)
@@ -118,6 +123,7 @@ interface SidebarProps {
 }
 
 const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onToggle }: SidebarProps) {
+  const { t } = useLocale();
   const [skin, setSkin] = useState<SkinConfig>(getSkinConfig());
   useEffect(() => subscribeSkin(setSkin), []);
   const badge = skin.badge;
@@ -137,8 +143,8 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
           className="sidebar__toggle"
           type="button"
           onClick={onToggle}
-          title={collapsed ? '展开功能区' : '收起功能区'}
-          aria-label={collapsed ? '展开功能区' : '收起功能区'}
+          title={t(collapsed ? 'nav.expand' : 'nav.collapse')}
+          aria-label={t(collapsed ? 'nav.expand' : 'nav.collapse')}
           aria-controls="app-sidebar-navigation"
           aria-expanded={!collapsed}
         >
@@ -153,7 +159,7 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
       <div className="sidebar__body" inert={collapsed} aria-hidden={collapsed}>
       <nav id="app-sidebar-navigation" className="sidebar__nav">
         <div className="sidebar__nav-group">
-          <div className="sidebar__nav-label">工作台</div>
+          <div className="sidebar__nav-label">{t('nav.workspace')}</div>
           {NAV_ITEMS.map(item => {
             const Icon = ICONS[item.icon];
             return (
@@ -164,7 +170,7 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
                 aria-current={activePage === item.id ? 'page' : undefined}
               >
                 <Icon className="sidebar__nav-icon" />
-                <span>{item.label}</span>
+                <span>{t(item.label)}</span>
                 {item.badge !== undefined && (
                   <span className="sidebar__nav-badge">{item.badge}</span>
                 )}
@@ -174,7 +180,7 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
         </div>
 
         <div className="sidebar__nav-group">
-          <div className="sidebar__nav-label">能力</div>
+          <div className="sidebar__nav-label">{t('nav.capabilities')}</div>
           {CAPABILITY_ITEMS.map(item => {
             const Icon = ICONS[item.icon];
             return (
@@ -185,14 +191,14 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
                 aria-current={activePage === item.id ? 'page' : undefined}
               >
                 <Icon className="sidebar__nav-icon" />
-                <span>{item.label}</span>
+                <span>{t(item.label)}</span>
               </button>
             );
           })}
         </div>
 
         <div className="sidebar__nav-group">
-          <div className="sidebar__nav-label">配置</div>
+          <div className="sidebar__nav-label">{t('nav.configuration')}</div>
           {MANAGE_ITEMS.map(item => {
             const Icon = ICONS[item.icon];
             return (
@@ -202,7 +208,7 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
                 onClick={() => onNavigate(item.id)}
               >
                 <Icon className="sidebar__nav-icon" />
-                <span>{item.label}</span>
+                <span>{t(item.label)}</span>
               </button>
             );
           })}
@@ -211,25 +217,26 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
 
       {/* Footer / Links Placeholder */}
       <div className="sidebar__footer">
-        <div className="sidebar__links-label">链接</div>
+        <LanguageSwitch />
+        <div className="sidebar__links-label">{t('nav.links')}</div>
         <div className="sidebar__links">
-          <a className="sidebar__link" href="https://github.com/ccde141/4torm/issues" target="_blank" rel="noopener noreferrer" title="Bug 反馈">
+          <a className="sidebar__link" href="https://github.com/ccde141/4torm/issues" target="_blank" rel="noopener noreferrer" title={t('nav.bugReport')}>
             <svg className="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
             </svg>
-            <span>[Bug 反馈]</span>
+            <span>[{t('nav.bugReport')}]</span>
           </a>
-          <a className="sidebar__link" href="https://github.com/ccde141/4torm" target="_blank" rel="noopener noreferrer" title="项目地址">
+          <a className="sidebar__link" href="https://github.com/ccde141/4torm" target="_blank" rel="noopener noreferrer" title={t('nav.repository')}>
             <svg className="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
             </svg>
-            <span>[项目地址]</span>
+            <span>[{t('nav.repository')}]</span>
           </a>
-          <a className="sidebar__link" href="https://space.bilibili.com/406091025" target="_blank" rel="noopener noreferrer" title="个人博客">
+          <a className="sidebar__link" href="https://space.bilibili.com/406091025" target="_blank" rel="noopener noreferrer" title={t('nav.blog')}>
             <svg className="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
             </svg>
-            <span>[B站空间]</span>
+            <span>[{t('nav.blog')}]</span>
           </a>
         </div>
 

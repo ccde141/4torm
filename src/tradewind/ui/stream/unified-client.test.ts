@@ -33,3 +33,10 @@ test('Tradewind 连接故障转换为 error 后 done 的收尾序列', () => {
     { type: 'done' },
   ]);
 });
+
+test('Tradewind connection failure can be projected in English without changing event order', () => {
+  assert.deepEqual(connectionFailureEvents(new Error('offline'), 'en-US'), [
+    { type: 'error', message: 'Tradewind live connection was interrupted: offline' },
+    { type: 'done' },
+  ]);
+});

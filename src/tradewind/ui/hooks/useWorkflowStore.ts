@@ -11,6 +11,7 @@ import { applyNodeChanges, applyEdgeChanges, addEdge } from '@xyflow/react';
 import type { WorkflowGraph, WorkflowNode, WorkflowEdge, EdgeKind } from '../../types';
 import { saveWorkflow } from '../workflow-client';
 import { deserializeWorkflowNode, serializeWorkflowNode } from '../workflow-node-serialization';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -51,11 +52,12 @@ function nextId(prefix: string): string {
 // ── Hook ──────────────────────────────────────────────────────────
 
 export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
+  const { t } = useLocale();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [workflowId, setWorkflowId] = useState('untitled');
-  const [workflowName, setWorkflowName] = useState('未命名工作流');
+  const [workflowName, setWorkflowName] = useState(() => t('tradewind.untitled'));
 
   const onNodesChange: OnNodesChange = useCallback(
     (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
@@ -90,7 +92,7 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
   const addNode = useCallback(
     (type: string, position: { x: number; y: number }, config?: Record<string, unknown>) => {
       const id = nextId(type);
-      const label = getDefaultLabel(type);
+      const label = getDefaultLabel(type, t);
       const node: Node = {
         id,
         type,
@@ -99,7 +101,7 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
       };
       setNodes((nds) => [...nds, node]);
     },
-    [],
+    [t],
   );
 
   const removeSelected = useCallback(() => {
@@ -200,9 +202,9 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
     // 空工作流（0 节点）不落盘：新建/自动保存若把空图写盘，会在目录里堆出一堆 0 节点幽灵条目。
     // 空工作流无内容可丢，等真正加了节点（运行/保存时）才创建目录。
     if (graph.nodes.length === 0) return false;
-    await saveWorkflow({ workflowId, graph, name: name?.trim() || workflowName });
+    await saveWorkflow({ workflowId, graph, name: name?.trim() || workflowName }, t('tradewind.saveFailed'));
     return true;
-  }, [workflowId, workflowName, getGraph]);
+  }, [workflowId, workflowName, getGraph, t]);
 
   const load = useCallback(async (id: string) => {
     const res = await fetch(`/api/tradewind/workflow/load/${id}`);
@@ -222,12 +224,13 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
 
 // ── 默认值 ────────────────────────────────────────────────────────
 
-function getDefaultLabel(type: string): string {
-  const map: Record<string, string> = {
-    entry: '入口', output: '出口', agent: 'Agent',
-    meeting: '会议室', note: 'Note', 'human-gate': '暂停点',
+function getDefaultLabel(type: string, t: ReturnType<typeof useLocale>['t']): string {
+  const map: Record<string, Parameters<typeof t>[0]> = {
+    entry: 'tradewind.canvas.node.entry', output: 'tradewind.canvas.node.output',
+    agent: 'tradewind.canvas.node.agent', meeting: 'tradewind.canvas.node.meeting',
+    note: 'tradewind.canvas.node.note', 'human-gate': 'tradewind.canvas.node.gate',
   };
-  return map[type] ?? type;
+  return map[type] ? t(map[type]) : type;
 }
 
 function getDefaultConfig(type: string): Record<string, unknown> {

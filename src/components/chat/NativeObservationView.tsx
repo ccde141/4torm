@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { formatObservationElapsed } from './taskboard-observations';
 import { useVisualObservation } from './useVisualObservation';
 import { isActiveObservationStatus } from './visual-observation-client';
+import { useLocale } from '../../i18n/LocaleContext';
 
 type Scope = 'conversation' | 'cyclone';
 
 export default function NativeObservationView({ scope, ownerId, observationId, onBack, suspended = false }: { scope: Scope; ownerId: string; observationId: string; onBack: () => void; suspended?: boolean }) {
+  const { t } = useLocale();
   const [surfaceError, setSurfaceError] = useState('');
   const [surfaceReady, setSurfaceReady] = useState(false);
   const [surfaceAttempt, setSurfaceAttempt] = useState(0);
@@ -21,7 +23,7 @@ export default function NativeObservationView({ scope, ownerId, observationId, o
   // The detail poll can reach a terminal state before the parent observation
   // snapshot refreshes. Drop visibility here too so the effect cancels retries.
   const nativeSurface = Boolean(!suspended && window.desktop && currentItem && isActiveObservationStatus(currentItem.status) && presentation !== 'hidden' && presentation !== 'external-visible');
-  const terminalError = currentItem?.status === 'failed' || currentItem?.status === 'crashed' ? currentItem.error || '浏览器运行失败' : '';
+  const terminalError = currentItem?.status === 'failed' || currentItem?.status === 'crashed' ? currentItem.error || t('chat.execution.browserFailed') : '';
   const fatalError = surfaceError || terminalError || observationError;
   const surfacePhase: 'opening' | 'ready' | 'failed' = surfaceReady ? 'ready' : fatalError ? 'failed' : 'opening';
 
@@ -32,20 +34,20 @@ export default function NativeObservationView({ scope, ownerId, observationId, o
     const leaseId = createSurfaceLease();
     return syncNativeSurface(observationId, stageRef.current, nativeSurface, leaseId, () => {
       setSurfaceReady(true); setSurfaceError('');
-    }, cause => setSurfaceError(cause));
-  }, [observationId, nativeSurface, surfaceAttempt]);
+    }, cause => setSurfaceError(cause), t('chat.execution.displayFailed'));
+  }, [observationId, nativeSurface, surfaceAttempt, t]);
   useEffect(() => {
     if (!nativeSurface || !surfaceReady) return;
     void window.desktop!.executionSurface.setInputEnabled(observationId, humanControlled).catch(cause => {
       if (isTransientSurfaceError(cause)) { setSurfaceReady(false); setSurfaceAttempt(value => value + 1); return; }
-      setSurfaceError((cause as Error).message || '无法切换浏览器操作权');
+      setSurfaceError((cause as Error).message || t('chat.execution.controlFailed'));
     });
-  }, [observationId, nativeSurface, surfaceReady, humanControlled]);
+  }, [observationId, nativeSurface, surfaceReady, humanControlled, t]);
 
-  return <div style={shell}><header style={header}><button className="execution-surface-action" onClick={onBack} style={button}>返回任务板</button><div style={{ minWidth: 0, flex: 1 }}><strong style={{ fontSize: 'var(--text-xs)' }}>{surfacePhase === 'opening' ? '打开中' : humanControlled ? '人类操作中' : 'Agent 操作中'}</strong><div style={sub}>{currentItem?.viewerState?.summary || currentItem?.command || '正在准备浏览器'}</div></div><span style={sub}>{currentItem && formatObservationElapsed(currentItem.startedAt, currentItem.finishedAt ?? observedAt)}</span><button className="execution-surface-action" onClick={() => void control(humanControlled ? 'agent' : 'human')} style={button}>{humanControlled ? '交还 Agent 操作' : '交由人类操作'}</button></header><div ref={stageRef} style={stage}>{surfacePhase === 'opening' && <div className="execution-surface-loading" style={loadingStyle}>正在打开浏览器…{observationError ? ' 正在等待运行状态。' : ''}</div>}{surfacePhase === 'failed' && <div className="mo-enter-fade" style={errorStyle}>{fatalError}</div>}{window.desktop ? null : <img src={frame} style={image} onError={() => setSurfaceError('暂无可用的浏览器画面')} />}</div></div>;
+  return <div style={shell}><header style={header}><button className="execution-surface-action" onClick={onBack} style={button}>{t('chat.execution.back')}</button><div style={{ minWidth: 0, flex: 1 }}><strong style={{ fontSize: 'var(--text-xs)' }}>{surfacePhase === 'opening' ? t('chat.execution.opening') : humanControlled ? t('chat.execution.humanControl') : t('chat.execution.agentControl')}</strong><div style={sub}>{currentItem?.viewerState?.summary || currentItem?.command || t('chat.execution.preparingBrowser')}</div></div><span style={sub}>{currentItem && formatObservationElapsed(currentItem.startedAt, currentItem.finishedAt ?? observedAt)}</span><button className="execution-surface-action" onClick={() => void control(humanControlled ? 'agent' : 'human')} style={button}>{humanControlled ? t('chat.execution.giveAgentControl') : t('chat.execution.giveHumanControl')}</button></header><div ref={stageRef} style={stage}>{surfacePhase === 'opening' && <div className="execution-surface-loading" style={loadingStyle}>{t('chat.execution.openingBrowser')}{observationError ? t('chat.execution.waitingStatus') : ''}</div>}{surfacePhase === 'failed' && <div className="mo-enter-fade" style={errorStyle}>{fatalError}</div>}{window.desktop ? null : <img src={frame} style={image} onError={() => setSurfaceError(t('chat.execution.noBrowserFrame'))} />}</div></div>;
 }
 
-function syncNativeSurface(id: string, stage: HTMLDivElement | null, visible: boolean, leaseId: string, onReady: () => void, onError: (message: string) => void): void | (() => void) {
+function syncNativeSurface(id: string, stage: HTMLDivElement | null, visible: boolean, leaseId: string, onReady: () => void, onError: (message: string) => void, fallbackError: string): void | (() => void) {
   if (!visible || !stage || !window.desktop) return;
   let stopped = false;
   let retry: number | undefined;
@@ -58,7 +60,7 @@ function syncNativeSurface(id: string, stage: HTMLDivElement | null, visible: bo
     } catch (cause) {
       if (stopped) return;
       if (isTransientSurfaceError(cause)) { retry = window.setTimeout(update, 120); return; }
-      onError((cause as Error).message || '无法显示浏览器');
+      onError((cause as Error).message || fallbackError);
     }
   };
   const observer = new ResizeObserver(() => { void update(); });

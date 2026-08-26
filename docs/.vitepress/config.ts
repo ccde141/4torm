@@ -2,9 +2,90 @@ import { defineConfig } from 'vitepress'
 
 // 4torm 文档站配置
 export default defineConfig({
-  lang: 'zh-CN',
   title: '4torm',
   description: '多 Agent 协作框架 —— 让 AI 像公司员工一样长期存在，按需协作',
+  locales: {
+    root: { label: '简体中文', lang: 'zh-CN' },
+    en: {
+      label: 'English',
+      lang: 'en-US',
+      link: '/en/',
+      description: 'A multi-agent collaboration framework for persistent AI teams',
+      themeConfig: {
+        nav: [
+          { text: 'Start', link: '/en/guide/introduction' },
+          {
+            text: 'Workspaces',
+            items: [
+              { text: 'Monsoon · Chat', link: '/en/modes/chat' },
+              { text: 'Convection · Meeting Rooms', link: '/en/modes/convection' },
+              { text: 'Cyclone · Workshops', link: '/en/modes/cyclone' },
+              { text: 'Tradewind · Workflows', link: '/en/modes/tradewind' },
+              { text: 'Tide · Automation', link: '/en/modes/tide' },
+            ],
+          },
+          { text: 'Extensions', link: '/en/extend/tools' },
+          { text: 'Architecture', link: '/en/architecture/overview' },
+          { text: 'GitHub', link: 'https://github.com/ccde141/4torm' },
+        ],
+        sidebar: {
+          '/en/guide/': [
+            {
+              text: 'Start',
+              items: [
+                { text: 'Introduction', link: '/en/guide/introduction' },
+                { text: 'Quick Start', link: '/en/guide/getting-started' },
+                { text: 'Model Providers', link: '/en/guide/providers' },
+                { text: 'Troubleshooting', link: '/en/guide/troubleshooting' },
+                { text: 'Console and Agents', link: '/en/guide/agents' },
+                { text: 'Core Concepts', link: '/en/guide/concepts' },
+              ],
+            },
+          ],
+          '/en/modes/': [
+            {
+              text: 'Collaboration Workspaces',
+              items: [
+                { text: 'Monsoon · Chat', link: '/en/modes/chat' },
+                { text: 'Convection · Meeting Rooms', link: '/en/modes/convection' },
+                { text: 'Cyclone · Workshops', link: '/en/modes/cyclone' },
+                { text: 'Tradewind · Workflows', link: '/en/modes/tradewind' },
+                { text: 'Tide · Automation', link: '/en/modes/tide' },
+              ],
+            },
+          ],
+          '/en/extend/': [
+            {
+              text: 'Extensions',
+              items: [
+                { text: 'Creating Tools', link: '/en/extend/tools' },
+                { text: 'Creating Skills', link: '/en/extend/skills' },
+                { text: 'MCP Integration', link: '/en/extend/mcp' },
+              ],
+            },
+          ],
+          '/en/architecture/': [
+            {
+              text: 'Architecture',
+              items: [
+                { text: 'Overview', link: '/en/architecture/overview' },
+                { text: 'Data Layout', link: '/en/architecture/data-layout' },
+                { text: 'Security and Isolation', link: '/en/architecture/security' },
+                { text: 'Desktop · Electron', link: '/en/architecture/desktop' },
+              ],
+            },
+          ],
+        },
+        outline: { level: [2, 3], label: 'On this page' },
+        docFooter: { prev: 'Previous page', next: 'Next page' },
+        lastUpdatedText: 'Last updated',
+        footer: {
+          message: 'Released under the MIT License',
+          copyright: 'Copyright © 2026 Ccde141',
+        },
+      },
+    },
+  },
   // 由 Fastify 自托管在 /docs/ 路径下(应用内「文档」按钮 → /docs/)
   base: '/docs/',
   lastUpdated: true,

@@ -38,19 +38,21 @@ import ContourBackground from './components/layout/ContourBackground';
 import WindBackground from './components/layout/WindBackground';
 import { getSkinConfig, loadSkinConfig, subscribeSkin, type SkinConfig } from './store/skin';
 import { freezeBackground } from './components/layout/bgFreeze';
+import { useLocale } from './i18n/LocaleContext';
+import type { MessageKey } from './i18n/locale';
 import './styles/index.css';
 
-const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
-  agent:     { title: '控制台', subtitle: 'Agent实例管理' },
-  chat:      { title: '季风 · 对话', subtitle: '与 Agent 信息交互' },
-  tools:     { title: '工具', subtitle: '全局工具注册与管理' },
-  skills:    { title: '技能', subtitle: '管理与安装 Agent 能力包' },
-  convection: { title: '对流 · 会议室', subtitle: '多 Agent 持续协作会话' },
-  cyclone:   { title: '气旋 · 工作室', subtitle: '工位私聊与团队协作' },
-  tradewind: { title: '信风 · 工作流', subtitle: '多 Agent 协作工作流' },
-  tide:      { title: '潮汐 · 自动化', subtitle: '定时唤醒 Agent' },
-  model:     { title: '模型', subtitle: '模型提供商与 API 配置' },
-  mcp:       { title: 'MCP', subtitle: '外部工具服务管理' },
+const PAGE_TITLES: Record<string, { title: MessageKey; subtitle: MessageKey }> = {
+  agent:     { title: 'page.agent.title', subtitle: 'page.agent.subtitle' },
+  chat:      { title: 'page.chat.title', subtitle: 'page.chat.subtitle' },
+  tools:     { title: 'page.tools.title', subtitle: 'page.tools.subtitle' },
+  skills:    { title: 'page.skills.title', subtitle: 'page.skills.subtitle' },
+  convection: { title: 'page.convection.title', subtitle: 'page.convection.subtitle' },
+  cyclone:   { title: 'page.cyclone.title', subtitle: 'page.cyclone.subtitle' },
+  tradewind: { title: 'page.tradewind.title', subtitle: 'page.tradewind.subtitle' },
+  tide:      { title: 'page.tide.title', subtitle: 'page.tide.subtitle' },
+  model:     { title: 'page.model.title', subtitle: 'page.model.subtitle' },
+  mcp:       { title: 'page.mcp.title', subtitle: 'page.mcp.subtitle' },
 };
 
 function PageContent({ page, preselectSession, onClearPreselect, onNavigate }: { page: string; preselectSession?: string | null; onClearPreselect?: () => void; onNavigate: (page: string) => void }) {
@@ -93,6 +95,7 @@ function PageContent({ page, preselectSession, onClearPreselect, onNavigate }: {
 }
 
 export default function App() {
+  const { t } = useLocale();
   const [activePage, setActivePage] = useState('agent');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [preselectSession, setPreselectSession] = useState<string | null>(null);
@@ -131,7 +134,7 @@ export default function App() {
           onToggle={() => setSidebarCollapsed(value => !value)}
         />
         <div className="main-content" style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-          <Header title={pageInfo.title} subtitle={pageInfo.subtitle} onNavigate={handleNavigate} />
+          <Header title={t(pageInfo.title)} subtitle={t(pageInfo.subtitle)} onNavigate={handleNavigate} />
           <div style={{ flex: 1, overflow: 'hidden' }}>
             <PageContent page={activePage} preselectSession={preselectSession} onClearPreselect={() => setPreselectSession(null)} onNavigate={setActivePage} />
           </div>

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 interface ToolStep {
   tool: string;
@@ -24,6 +25,7 @@ interface Props {
  * 全部使用 tw-* 类系统，零内联样式。
  */
 export default function StructuredMessage({ think, tools, answer, note, actions }: Props) {
+  const { t } = useLocale();
   const [showThink, setShowThink] = useState(false);
   const [showTool, setShowTool] = useState<Record<number, boolean>>({});
 
@@ -44,7 +46,7 @@ export default function StructuredMessage({ think, tools, answer, note, actions 
               aria-expanded={showThink}
             >
               <span className="tw-meeting-think__arrow">{showThink ? '▼' : '▶'}</span>
-              <span className="tw-meeting-think__label">思考过程</span>
+              <span className="tw-meeting-think__label">{t('tradewind.chat.reasoning.title')}</span>
             </button>
             {showThink && (
               <div className="tw-meeting-think__body">{think}</div>
@@ -53,12 +55,12 @@ export default function StructuredMessage({ think, tools, answer, note, actions 
         )}
 
         {/* 工具调用 */}
-        {tools.map((t, i) => {
-          const statusMod = t.status === 'pending' || t.status === 'running' ? 'pending'
-            : t.status === 'error' ? 'error' : 'success';
-          const icon = t.status === 'running' ? null
-            : t.status === 'done' ? '✓'
-            : t.status === 'error' ? '✗' : '◌';
+        {tools.map((toolStep, i) => {
+          const statusMod = toolStep.status === 'pending' || toolStep.status === 'running' ? 'pending'
+            : toolStep.status === 'error' ? 'error' : 'success';
+          const icon = toolStep.status === 'running' ? null
+            : toolStep.status === 'done' ? '✓'
+            : toolStep.status === 'error' ? '✗' : '◌';
           const opened = showTool[i] ?? false;
           return (
             <div key={i} className={`tw-tool-card tw-tool-card--${statusMod}`}>
@@ -70,21 +72,21 @@ export default function StructuredMessage({ think, tools, answer, note, actions 
                 <span className={`tw-tool-card__arrow${opened ? ' tw-tool-card__arrow--open' : ''}`}>
                   ▶
                 </span>
-                <span className="tw-tool-card__name">{t.tool}</span>
-                {t.status === 'running' ? <span className="tw-tool-card__spinner" /> : (
+                <span className="tw-tool-card__name">{toolStep.tool}</span>
+                {toolStep.status === 'running' ? <span className="tw-tool-card__spinner" /> : (
                   <span className={`tw-tool-card__step-icon tw-tool-card__step-icon--${statusMod === 'success' ? 'done' : statusMod}`}>{icon}</span>
                 )}
               </button>
               {opened && (
                 <div className="tw-tool-card__body">
                   <div>
-                    <div className="tw-tool-card__section-label">参数</div>
-                    <pre className="tw-tool-card__pre">{JSON.stringify(t.args, null, 2)}</pre>
+                    <div className="tw-tool-card__section-label">{t('tradewind.chat.tools.params')}</div>
+                    <pre className="tw-tool-card__pre">{JSON.stringify(toolStep.args, null, 2)}</pre>
                   </div>
-                  {t.result && (
+                  {toolStep.result && (
                     <div>
-                      <div className="tw-tool-card__section-label">结果</div>
-                      <pre className="tw-tool-card__pre">{t.result}</pre>
+                      <div className="tw-tool-card__section-label">{t('tradewind.chat.tools.result')}</div>
+                      <pre className="tw-tool-card__pre">{toolStep.result}</pre>
                     </div>
                   )}
                 </div>
@@ -99,7 +101,7 @@ export default function StructuredMessage({ think, tools, answer, note, actions 
         {/* 提醒 */}
         {note && (
           <div className="tw-meeting-note">
-            <div className="tw-meeting-note__header">💡 提醒</div>
+            <div className="tw-meeting-note__header">{t('tradewind.chat.structured.note')}</div>
             <div className="tw-meeting-note__body">{note}</div>
           </div>
         )}

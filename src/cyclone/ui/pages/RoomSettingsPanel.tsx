@@ -4,13 +4,15 @@ import { inviteSeatToRoom, type JoinBehavior } from './room-invite';
 import { readRoomError, type RoomData } from './room-messages';
 import { roomSeatName } from './room-seat-name';
 import '../../../styles/components/cyclone-room-settings.css';
+import { useLocale } from '../../../i18n/LocaleContext';
+import type { MessageKey } from '../../../i18n/locale';
 
 interface SeatLite { id: string; title: string; }
 
-const BEHAVIOR_LABEL: Record<JoinBehavior, string> = {
-  summary: '工作摘要',
-  intro: '自我介绍',
-  none: '静默入会',
+const BEHAVIOR_KEY: Record<JoinBehavior, MessageKey> = {
+  summary: 'cyclone.room.behaviorSummary',
+  intro: 'cyclone.room.behaviorIntro',
+  none: 'cyclone.room.behaviorNone',
 };
 
 export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChanged }: {
@@ -20,6 +22,7 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
   locked: boolean;
   onChanged: () => Promise<void>;
 }) {
+  const { t } = useLocale();
   const confirm = useConfirm();
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState(room.title);
@@ -37,7 +40,7 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
 
   const participantSet = new Set(room.participantSeatIds);
   const candidates = seats.filter(seat => !participantSet.has(seat.id));
-  const seatName = (id: string) => roomSeatName(id, seats, room.publicMessages);
+  const seatName = (id: string) => roomSeatName(id, seats, room.publicMessages, t('cyclone.settings.deletedSeat'));
   const writeLocked = locked || busy;
 
   async function mutate(action: string, body: Record<string, unknown>, fallback: string): Promise<boolean> {
@@ -63,13 +66,13 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
   async function saveTitle() {
     const next = title.trim();
     if (!next || next === room.title) return;
-    if (await mutate('rename', { title: next }, '保存会议名称失败')) setNotice('会议名称已保存');
+    if (await mutate('rename', { title: next }, t('cyclone.settings.saveNameFailed'))) setNotice(t('cyclone.settings.nameSaved'));
   }
 
   async function saveTopic() {
     const next = topic.trim();
     if (!next || next === room.topic) return;
-    if (await mutate('set-topic', { topic: next }, '保存会议话题失败')) setNotice('会议话题已保存');
+    if (await mutate('set-topic', { topic: next }, t('cyclone.settings.saveTopicFailed'))) setNotice(t('cyclone.settings.topicSaved'));
   }
 
   async function moveSeat(index: number, direction: -1 | 1) {
@@ -77,18 +80,18 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
     if (target < 0 || target >= room.participantSeatIds.length) return;
     const seatIds = [...room.participantSeatIds];
     [seatIds[index], seatIds[target]] = [seatIds[target], seatIds[index]];
-    await mutate('reorder', { seatIds }, '调整发言顺序失败');
+    await mutate('reorder', { seatIds }, t('cyclone.settings.reorderFailed'));
   }
 
   async function leaveSeat(id: string) {
     const title = seatName(id);
     const approved = await confirm({
-      title: `请「${title}」离开会议？`,
-      message: '工位、私聊、历史发言与派发记录都会保留。',
-      confirmText: '请离会议', danger: true,
+      title: t('cyclone.settings.leaveTitle', { seat: title }),
+      message: t('cyclone.settings.leaveMessage'),
+      confirmText: t('cyclone.settings.leave'), danger: true,
     });
     if (!approved) return;
-    await mutate('leave', { seatId: id }, '请离会议失败');
+    await mutate('leave', { seatId: id }, t('cyclone.settings.leaveFailed'));
   }
 
   async function inviteSeat() {
@@ -97,11 +100,16 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
     setError(null);
     setNotice(null);
     try {
-      const result = await inviteSeatToRoom(fetch, roomUrl, seatId, behavior);
+      const result = await inviteSeatToRoom(fetch, roomUrl, seatId, behavior, {
+        joinFailed: t('cyclone.roomInvite.joinFailed'),
+        introFailed: t('cyclone.roomInvite.introFailed'),
+        missingStream: t('cyclone.roomInvite.missingStream'),
+        disconnected: t('cyclone.roomInvite.disconnected'),
+      });
       await onChanged();
       setSeatId('');
-      if (result.introError) setError(`成员已加入，但入会发言失败：${result.introError}`);
-      else setNotice('工位已加入会议');
+      if (result.introError) setError(t('cyclone.settings.introFailed', { error: result.introError }));
+      else setNotice(t('cyclone.settings.joined'));
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
@@ -114,60 +122,60 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
       <button type="button" className={`cyclone-settings-trigger${open ? ' is-open' : ''}`}
         onClick={() => setOpen(value => !value)} aria-expanded={open}>
         <span className="cyclone-settings-trigger__glyph" aria-hidden="true">⌁</span>
-        会议设置
-        {locked && <span className="cyclone-settings-trigger__lock">运行中</span>}
+        {t('cyclone.settings.title')}
+        {locked && <span className="cyclone-settings-trigger__lock">{t('cyclone.settings.running')}</span>}
       </button>
       {open && (
         <div className="cyclone-settings-layer" onMouseDown={event => {
           if (event.target === event.currentTarget) setOpen(false);
         }}>
-          <aside className="cyclone-settings-panel" aria-label="会议设置">
+          <aside className="cyclone-settings-panel" aria-label={t('cyclone.settings.title')}>
             <header className="cyclone-settings-panel__header">
               <div>
                 <span className="cyclone-settings-panel__eyebrow">CYCLONE ROOM</span>
-                <h2>会议设置</h2>
+                <h2>{t('cyclone.settings.title')}</h2>
               </div>
-              <button type="button" className="cyclone-settings-panel__close" onClick={() => setOpen(false)} aria-label="关闭">×</button>
+              <button type="button" className="cyclone-settings-panel__close" onClick={() => setOpen(false)} aria-label={t('cyclone.settings.close')}>×</button>
             </header>
 
-            {locked && <div className="cyclone-settings-lock">会议正在处理内容，设置暂时锁定</div>}
+            {locked && <div className="cyclone-settings-lock">{t('cyclone.settings.locked')}</div>}
             {error && <div className="cyclone-settings-feedback is-error" role="alert">{error}</div>}
             {notice && <div className="cyclone-settings-feedback" role="status">{notice}</div>}
 
             <section className="cyclone-settings-section">
-              <div className="cyclone-settings-section__title"><span>01</span>会议信息</div>
+              <div className="cyclone-settings-section__title"><span>01</span>{t('cyclone.settings.info')}</div>
               <label className="cyclone-settings-field">
-                <span>名称</span>
+                <span>{t('cyclone.settings.name')}</span>
                 <div><input value={title} onChange={event => setTitle(event.target.value)} disabled={locked || busy} />
-                  <button onClick={saveTitle} disabled={locked || busy || !title.trim() || title.trim() === room.title}>保存</button></div>
+                  <button onClick={saveTitle} disabled={locked || busy || !title.trim() || title.trim() === room.title}>{t('common.save')}</button></div>
               </label>
               <label className="cyclone-settings-field">
-                <span>话题</span>
+                <span>{t('cyclone.settings.topic')}</span>
                 <div><input value={topic} onChange={event => setTopic(event.target.value)} disabled={locked || busy} />
-                  <button onClick={saveTopic} disabled={locked || busy || !topic.trim() || topic.trim() === room.topic}>保存</button></div>
+                  <button onClick={saveTopic} disabled={locked || busy || !topic.trim() || topic.trim() === room.topic}>{t('common.save')}</button></div>
               </label>
-              <div className="cyclone-settings-mode" aria-label="会议模式">
+              <div className="cyclone-settings-mode" aria-label={t('cyclone.settings.mode')}>
                 {(['build', 'plan'] as const).map(mode => (
                   <button key={mode} className={room.mode === mode ? 'is-active' : ''} disabled={locked || busy}
-                    onClick={() => mutate('set-mode', { mode }, '切换会议模式失败')}>
-                    <strong>{mode}</strong><span>{mode === 'build' ? '可写工作区' : '只读规划'}</span>
+                    onClick={() => mutate('set-mode', { mode }, t('cyclone.settings.modeFailed'))}>
+                    <strong>{mode}</strong><span>{t(mode === 'build' ? 'cyclone.settings.build' : 'cyclone.settings.plan')}</span>
                   </button>
                 ))}
               </div>
             </section>
 
             <section className="cyclone-settings-section">
-              <div className="cyclone-settings-section__title"><span>02</span>参会工位与顺序</div>
+              <div className="cyclone-settings-section__title"><span>02</span>{t('cyclone.settings.roster')}</div>
               <div className="cyclone-settings-roster">
-                {room.participantSeatIds.length === 0 && <div className="cyclone-settings-empty">会议尚无参会工位</div>}
+                {room.participantSeatIds.length === 0 && <div className="cyclone-settings-empty">{t('cyclone.settings.emptyRoster')}</div>}
                 {room.participantSeatIds.map((id, index) => (
                   <div className="cyclone-settings-seat" key={id}>
                     <span className="cyclone-settings-seat__order">{String(index + 1).padStart(2, '0')}</span>
                     <strong>{seatName(id)}</strong>
                     <div className="cyclone-settings-seat__actions">
-                      <button disabled={locked || busy || index === 0} onClick={() => moveSeat(index, -1)} aria-label="上移">↑</button>
-                      <button disabled={locked || busy || index === room.participantSeatIds.length - 1} onClick={() => moveSeat(index, 1)} aria-label="下移">↓</button>
-                      <button className="is-danger" disabled={locked || busy} onClick={() => leaveSeat(id)}>请离会议</button>
+                      <button disabled={locked || busy || index === 0} onClick={() => moveSeat(index, -1)} aria-label={t('cyclone.settings.moveUp')}>↑</button>
+                      <button disabled={locked || busy || index === room.participantSeatIds.length - 1} onClick={() => moveSeat(index, 1)} aria-label={t('cyclone.settings.moveDown')}>↓</button>
+                      <button className="is-danger" disabled={locked || busy} onClick={() => leaveSeat(id)}>{t('cyclone.settings.leave')}</button>
                     </div>
                   </div>
                 ))}
@@ -175,24 +183,24 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
             </section>
 
             <section className="cyclone-settings-section">
-              <div className="cyclone-settings-section__title"><span>03</span>邀请工位</div>
+              <div className="cyclone-settings-section__title"><span>03</span>{t('cyclone.settings.invite')}</div>
               {candidates.length > 0 ? (
                 <div className="cyclone-settings-invite">
                   <select value={seatId} disabled={locked || busy} onChange={event => setSeatId(event.target.value)}>
-                    <option value="">选择尚未入会的工位</option>
+                    <option value="">{t('cyclone.settings.selectSeat')}</option>
                     {candidates.map(seat => <option key={seat.id} value={seat.id}>{seat.title}</option>)}
                   </select>
                   <div className="cyclone-settings-behaviors">
-                    {(Object.keys(BEHAVIOR_LABEL) as JoinBehavior[]).map(value => (
+                    {(Object.keys(BEHAVIOR_KEY) as JoinBehavior[]).map(value => (
                       <button key={value} className={behavior === value ? 'is-active' : ''} disabled={locked || busy}
-                        onClick={() => setBehavior(value)}>{BEHAVIOR_LABEL[value]}</button>
+                        onClick={() => setBehavior(value)}>{t(BEHAVIOR_KEY[value])}</button>
                     ))}
                   </div>
                   <button className="cyclone-settings-invite__submit" disabled={locked || busy || !seatId} onClick={inviteSeat}>
-                    {busy ? '处理中…' : '邀请进入会议'}
+                    {busy ? t('cyclone.settings.processing') : t('cyclone.settings.inviteSubmit')}
                   </button>
                 </div>
-              ) : <div className="cyclone-settings-empty">所有工位都已在会议中</div>}
+              ) : <div className="cyclone-settings-empty">{t('cyclone.settings.allPresent')}</div>}
             </section>
           </aside>
         </div>

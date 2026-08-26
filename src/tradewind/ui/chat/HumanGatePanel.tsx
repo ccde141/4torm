@@ -6,6 +6,7 @@
  */
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 interface HumanGatePanelProps {
   nodeId: string;
@@ -15,6 +16,7 @@ interface HumanGatePanelProps {
 }
 
 export function HumanGatePanel({ nodeId, nodeLabel, envelopeContent, onClose }: HumanGatePanelProps) {
+  const { t } = useLocale();
   const [content, setContent] = useState(envelopeContent);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,12 +55,12 @@ export function HumanGatePanel({ nodeId, nodeLabel, envelopeContent, onClose }: 
     <div className="tw-gate-overlay">
       <div className="tw-gate-panel">
         <div className="tw-gate-panel__header">
-          <span className="tw-gate-panel__title">暂停点 · {nodeLabel}</span>
-          <button className="tw-gate-panel__close" onClick={onClose}>×</button>
+          <span className="tw-gate-panel__title">{t('tradewind.chat.gate.title', { node: nodeLabel })}</span>
+          <button className="tw-gate-panel__close" onClick={onClose} aria-label={t('tradewind.chat.gate.close')}>×</button>
         </div>
         <div className="tw-gate-panel__body">
           <div className="tw-gate-panel__section-title">
-            信封内容 {isModified && <span style={{ color: '#f59e0b', fontSize: '0.8em' }}>（已修改）</span>}
+            {t('tradewind.chat.gate.envelope')} {isModified && <span style={{ color: '#f59e0b', fontSize: '0.8em' }}>{t('tradewind.chat.gate.modified')}</span>}
           </div>
           <textarea
             className="tw-gate-panel__editor"
@@ -75,7 +77,7 @@ export function HumanGatePanel({ nodeId, nodeLabel, envelopeContent, onClose }: 
             onClick={submit}
             disabled={busy}
           >
-            {isModified ? '提交修改并继续' : '继续'}
+            {isModified ? t('tradewind.chat.gate.submit') : t('tradewind.chat.gate.continue')}
           </button>
         </div>
       </div>

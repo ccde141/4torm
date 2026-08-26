@@ -6,15 +6,17 @@
  */
 
 import { useState } from 'react';
+import { useLocale } from '../../../i18n/LocaleContext';
+import type { MessageKey } from '../../../i18n/locale';
 
 type JoinBehavior = 'summary' | 'intro' | 'none';
 type RoomMode = 'build' | 'plan';
 interface SeatLite { id: string; title: string; }
 
-const BEHAVIOR_LABEL: Record<JoinBehavior, string> = {
-  summary: '工作摘要（读私聊近况）',
-  intro: '自我介绍',
-  none: '静默入会',
+const BEHAVIOR_KEY: Record<JoinBehavior, MessageKey> = {
+  summary: 'cyclone.room.behaviorSummaryLong',
+  intro: 'cyclone.room.behaviorIntro',
+  none: 'cyclone.room.behaviorNone',
 };
 
 export default function CreateRoomPanel({ seats, onCreate, onCancel }: {
@@ -27,8 +29,9 @@ export default function CreateRoomPanel({ seats, onCreate, onCancel }: {
   }) => Promise<void>;
   onCancel: () => void;
 }) {
-  const [title, setTitle] = useState('新群聊');
-  const [topic, setTopic] = useState('自由讨论');
+  const { t } = useLocale();
+  const [title, setTitle] = useState(() => t('cyclone.room.defaultTitle'));
+  const [topic, setTopic] = useState(() => t('cyclone.room.defaultTopic'));
   const [mode, setMode] = useState<RoomMode>('build');
   const [picked, setPicked] = useState<Record<string, JoinBehavior>>({});
   const [creating, setCreating] = useState(false);
@@ -49,8 +52,8 @@ export default function CreateRoomPanel({ seats, onCreate, onCancel }: {
     setCreating(true);
     try {
       await onCreate({
-        title: title.trim() || '新群聊',
-        topic: topic.trim() || '自由讨论',
+        title: title.trim() || t('cyclone.room.defaultTitle'),
+        topic: topic.trim() || t('cyclone.room.defaultTopic'),
         mode,
         participantSeatIds: pickedIds,
         intros: pickedIds.map(id => ({ seatId: id, behavior: picked[id] })),
@@ -62,26 +65,26 @@ export default function CreateRoomPanel({ seats, onCreate, onCancel }: {
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-6)', maxWidth: 640 }}>
-      <h2 style={{ margin: '0 0 var(--space-5)', fontSize: 'var(--text-lg)' }}>新建群聊</h2>
+      <h2 style={{ margin: '0 0 var(--space-5)', fontSize: 'var(--text-lg)' }}>{t('cyclone.room.createTitle')}</h2>
 
-      <label style={labelStyle}>群聊名称</label>
+      <label style={labelStyle}>{t('cyclone.room.name')}</label>
       <input value={title} onChange={e => setTitle(e.target.value)} style={inputStyle} />
 
-      <label style={labelStyle}>讨论话题</label>
+      <label style={labelStyle}>{t('cyclone.room.topic')}</label>
       <input value={topic} onChange={e => setTopic(e.target.value)} style={inputStyle} />
 
-      <label style={labelStyle}>模式</label>
+      <label style={labelStyle}>{t('cyclone.room.mode')}</label>
       <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
         {(['build', 'plan'] as RoomMode[]).map(m => (
           <button key={m} onClick={() => setMode(m)}
             style={{ ...modeBtnStyle, ...(mode === m ? modeBtnActiveStyle : null) }}>
-            {m === 'build' ? 'build · 可读写工作区' : 'plan · 只读+联络，不动文件'}
+            {t(m === 'build' ? 'cyclone.room.modeBuild' : 'cyclone.room.modePlan')}
           </button>
         ))}
       </div>
 
-      <label style={labelStyle}>初始入会工位</label>
-      {seats.length === 0 && <div style={{ opacity: .5, fontSize: 'var(--text-sm)', marginBottom: 'var(--space-4)' }}>工作室还没有工位，先去左侧添加</div>}
+      <label style={labelStyle}>{t('cyclone.room.initialSeats')}</label>
+      {seats.length === 0 && <div style={{ opacity: .5, fontSize: 'var(--text-sm)', marginBottom: 'var(--space-4)' }}>{t('cyclone.room.noSeats')}</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginBottom: 'var(--space-5)' }}>
         {seats.map(s => {
           const on = s.id in picked;
@@ -94,7 +97,7 @@ export default function CreateRoomPanel({ seats, onCreate, onCancel }: {
               {on && (
                 <select value={picked[s.id]} onChange={e => setPicked(p => ({ ...p, [s.id]: e.target.value as JoinBehavior }))}
                   style={{ padding: '2px 6px', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--color-text)', fontSize: 'var(--text-xs)' }}>
-                  {(Object.keys(BEHAVIOR_LABEL) as JoinBehavior[]).map(b => <option key={b} value={b}>{BEHAVIOR_LABEL[b]}</option>)}
+                  {(Object.keys(BEHAVIOR_KEY) as JoinBehavior[]).map(b => <option key={b} value={b}>{t(BEHAVIOR_KEY[b])}</option>)}
                 </select>
               )}
             </div>
@@ -104,9 +107,9 @@ export default function CreateRoomPanel({ seats, onCreate, onCancel }: {
 
       <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
         <button onClick={submit} disabled={creating} className="btn btn--primary">
-          {creating ? '创建中…（入会发言生成）' : '创建并进入'}
+          {creating ? t('cyclone.room.creating') : t('cyclone.room.createAndEnter')}
         </button>
-        <button onClick={onCancel} disabled={creating} className="btn">取消</button>
+        <button onClick={onCancel} disabled={creating} className="btn">{t('common.cancel')}</button>
       </div>
     </div>
   );

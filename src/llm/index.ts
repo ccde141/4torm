@@ -17,9 +17,15 @@ export {
   probeVisionAndStore,
   getModelCapability,
   getNativeProbe,
-  PROVIDER_PRESETS,
 } from './config';
-export type { ProviderEntry, ModelOption } from './config';
+export type {
+  ProviderCustomParameterDefinition,
+  ProviderCustomParameterKind,
+  ProviderEntry,
+  ModelOption,
+} from './config';
+export { fetchProviderCatalog, providerSelectionPatch } from './provider-catalog';
+export type { ProviderCatalog, ProviderDescriptor, ProviderPresetDescriptor } from './provider-catalog';
 export type {
   CapabilityProbe,
   CapabilityStatus,

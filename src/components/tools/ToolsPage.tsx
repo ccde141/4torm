@@ -1,8 +1,12 @@
 import { useState, useEffect } from 'react';
 import { getTools, saveTools, CATEGORY_LABELS, buildToolsPrompt } from '../../store/tools';
 import type { ToolDef } from '../../store/tools';
+import { useLocale } from '../../i18n/LocaleContext';
+import type { Locale } from '../../i18n/locale';
+import '../../styles/components/capability-management.css';
 
 export default function ToolsPage() {
+  const { t } = useLocale();
   const [tools, setTools] = useState<ToolDef[]>([]);
   const [adding, setAdding] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
@@ -14,17 +18,17 @@ export default function ToolsPage() {
   const refresh = () => getTools().then(setTools);
 
   return (
-    <div style={{ padding: 'var(--space-6)', maxWidth: '900px', margin: '0 auto', height: '100%', overflowY: 'auto', background: 'var(--glass-bg-soft)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-6)' }}>
-        <div style={{ textShadow: 'var(--text-halo)' }}>
-          <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-bold)', margin: '0 0 var(--space-1) 0' }}>工具目录</h2>
-          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', margin: 0 }}>
-            框架工具由系统维护；自定义工具注册后，可在 Agent 配置中按需开放。
+    <div className="capability-page" style={{ height: '100%', overflowY: 'auto' }}>
+      <div className="capability-header">
+        <div className="capability-heading">
+          <h2 className="capability-title">{t('tools.page.title')}</h2>
+          <p className="capability-subtitle">
+            {t('tools.page.subtitle')}
           </p>
         </div>
         {!adding && (
-          <button onClick={() => setAdding(true)} style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer', flexShrink: 0 }}>
-            + 注册工具
+          <button className="capability-button capability-button--primary" onClick={() => setAdding(true)}>
+            {t('tools.page.register')}
           </button>
         )}
       </div>
@@ -37,13 +41,13 @@ export default function ToolsPage() {
       )}
 
       {tools.length === 0 && !adding && (
-        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', textShadow: 'var(--text-halo)' }}>
-          <p style={{ fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>还没有注册任何工具</p>
-          <p style={{ fontSize: 'var(--text-xs)' }}>点击右上角「注册工具」添加自定义工具</p>
+        <div className="capability-empty">
+          <p style={{ fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>{t('tools.page.empty')}</p>
+          <p style={{ fontSize: 'var(--text-xs)' }}>{t('tools.page.emptyHint')}</p>
         </div>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', marginTop: adding ? 'var(--space-4)' : 0 }}>
+      <div className="capability-list" style={{ marginTop: adding ? 'var(--space-4)' : 0 }}>
         {tools.map(t => (
           // 编辑时在原位用表单替换卡片，避免表单跳到页面顶部、看起来「没反应」
           t.name === editingName && !t.readonly ? (
@@ -66,37 +70,29 @@ export default function ToolsPage() {
 }
 
 function ToolCard({ tool, onEdit, onDelete }: { tool: ToolDef; onEdit: () => void; onDelete: () => void }) {
+  const { t } = useLocale();
+  const category = t(`tools.category.${tool.category}` as 'tools.category.io');
   return (
-    <div style={{ padding: 'var(--space-4)', background: 'var(--color-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+    <div className="capability-panel capability-record">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-2)' }}>
         <div>
           <span style={{ fontSize: 'var(--text-base)', fontWeight: 'var(--font-semibold)', fontFamily: 'var(--font-mono)' }}>{tool.name}</span>
-          <span style={{ marginLeft: 'var(--space-2)', padding: '1px 6px', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{CATEGORY_LABELS[tool.category]}</span>
-          {tool.readonly && <span style={{ marginLeft: 'var(--space-1)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-xs)' }}>框架内置 · 只读</span>}
-          {tool.dangerous && <span style={{ marginLeft: 'var(--space-1)', color: '#fbbf24', fontSize: 'var(--text-xs)' }}>⚠ 需确认</span>}
+          <span className="capability-badge" style={{ marginLeft: 'var(--space-2)' }}>{category}</span>
+          {tool.readonly && <span className="capability-badge" style={{ marginLeft: 'var(--space-1)' }}>{t('tools.card.readonly')}</span>}
+          {tool.dangerous && <span className="capability-badge capability-badge--warning" style={{ marginLeft: 'var(--space-1)' }}>{t('tools.card.dangerous')}</span>}
           <span style={{ marginLeft: 'var(--space-1)', color: tool.executionMode === 'detachable' ? 'var(--color-accent)' : 'var(--color-text-tertiary)', fontSize: 'var(--text-xs)' }}>
-            {tool.executionMode === 'detachable' ? '可后台化' : '同步完成'}
+            {tool.executionMode === 'detachable' ? t('tools.card.detachable') : t('tools.card.sync')}
           </span>
         </div>
         {!tool.readonly && (
-          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-            <button onClick={onEdit} style={ghostBtnStyle}>编辑</button>
-            <button onClick={onDelete} style={{ ...ghostBtnStyle, color: '#f87171' }}>删除</button>
+          <div className="capability-actions">
+            <button className="capability-button capability-button--secondary capability-button--compact" onClick={onEdit}>{t('tools.card.edit')}</button>
+            <button className="capability-button capability-button--danger capability-button--compact" onClick={onDelete}>{t('tools.card.delete')}</button>
           </div>
         )}
       </div>
       <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-2)' }}>{tool.description}</div>
-      <pre style={{
-        padding: 'var(--space-2)',
-        background: 'var(--color-bg)',
-        border: '1px solid var(--border-color)',
-        borderRadius: 'var(--radius-sm)',
-        fontSize: 'var(--text-xs)',
-        fontFamily: 'var(--font-mono)',
-        color: 'var(--color-text-tertiary)',
-        margin: 0,
-        whiteSpace: 'pre-wrap',
-      }}>
+      <pre className="capability-code">
         {JSON.stringify(tool.parameters, null, 2)}
       </pre>
     </div>
@@ -108,6 +104,7 @@ function ToolForm({ initial, onSave, onCancel }: {
   onSave: (tool: ToolDef) => void;
   onCancel: () => void;
 }) {
+  const { locale, t } = useLocale();
   const [name, setName] = useState(initial?.name ?? '');
   const [description, setDescription] = useState(initial?.description ?? '');
   const [category, setCategory] = useState<ToolDef['category']>(initial?.category ?? 'custom');
@@ -119,97 +116,91 @@ function ToolForm({ initial, onSave, onCancel }: {
   const [paramsJson, setParamsJson] = useState(initial ? JSON.stringify(initial.parameters, null, 2) : '{\n  \n}');
   const [jsonError, setJsonError] = useState('');
 
-  const previewName = name || '工具名';
+  const previewName = name || t('tools.form.previewName');
+  const schemaTemplates = getSchemaTemplates(locale);
 
   const handleSave = () => {
     if (!name.trim()) return;
     let params: Record<string, unknown>;
     try { params = JSON.parse(paramsJson); setJsonError(''); } catch {
-      setJsonError('JSON 格式无效，请检查语法');
+      setJsonError(t('tools.form.invalidJson'));
       return;
     }
     onSave({ name: name.trim(), description, category, dangerous, executorType, executorFile: executorFile || undefined, executorTemplate: executorTemplate || undefined, executionMode, parameters: params });
   };
 
   return (
-    <div style={{ padding: 'var(--space-5)', background: 'var(--color-surface)', border: '1px solid var(--color-accent)', borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-4)' }}>
+    <div className="capability-panel capability-panel--active capability-form" style={{ padding: 'var(--space-5)', marginBottom: 'var(--space-4)' }}>
       <h3 style={{ fontSize: 'var(--text-base)', fontWeight: 'var(--font-semibold)', margin: '0 0 var(--space-4) 0' }}>
-        {initial ? `编辑 ${name}` : '注册新工具'}
+        {initial ? t('tools.form.editTitle', { name }) : t('tools.form.createTitle')}
       </h3>
 
       <div style={{ display: 'flex', gap: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
         <div style={{ flex: 1 }}>
-          <label style={labelStyle}>工具名称 <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 'var(--font-normal)' }}>— LLM 调用时使用的标识符</span></label>
-          <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="例如: web_search" style={{ ...inputStyle, fontFamily: 'var(--font-mono)' }} />
+          <label style={labelStyle}>{t('tools.form.name')} <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 'var(--font-normal)' }}>{t('tools.form.nameHint')}</span></label>
+          <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder={t('tools.form.namePlaceholder')} style={{ ...inputStyle, fontFamily: 'var(--font-mono)' }} />
         </div>
         <div style={{ width: '140px' }}>
-          <label style={labelStyle}>分类</label>
+          <label style={labelStyle}>{t('tools.form.category')}</label>
           <select value={category} onChange={e => setCategory(e.target.value as ToolDef['category'])} style={inputStyle}>
-            {Object.entries(CATEGORY_LABELS).map(([k, v]) => (<option key={k} value={k}>{v}</option>))}
+            {Object.keys(CATEGORY_LABELS).map(k => (<option key={k} value={k}>{t(`tools.category.${k}` as 'tools.category.io')}</option>))}
           </select>
         </div>
       </div>
 
       <div style={{ marginBottom: 'var(--space-4)' }}>
-        <label style={labelStyle}>功能描述 <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 'var(--font-normal)' }}>— 告诉 LLM 这个工具是干什么的</span></label>
-        <input type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder="例如: 使用搜索引擎查询最新信息" style={inputStyle} />
+        <label style={labelStyle}>{t('tools.form.description')} <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 'var(--font-normal)' }}>{t('tools.form.descriptionHint')}</span></label>
+        <input type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder={t('tools.form.descriptionPlaceholder')} style={inputStyle} />
       </div>
 
       <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 'var(--space-2)', cursor: 'pointer', marginBottom: 'var(--space-4)' }}>
         <input type="checkbox" checked={dangerous} onChange={e => setDangerous(e.target.checked)} />
-        危险操作 — 选中后，Agent 执行此工具前会弹窗请求人工确认
+        {t('tools.form.dangerous')}
       </label>
 
       <div style={{ marginBottom: 'var(--space-4)' }}>
-        <label style={labelStyle}>执行生命周期</label>
+        <label style={labelStyle}>{t('tools.form.executionLifecycle')}</label>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           {(['sync', 'detachable'] as const).map(mode => (
-            <button key={mode} type="button" onClick={() => setExecutionMode(mode)} style={{
-              ...tinyBtn,
-              padding: 'var(--space-2) var(--space-3)',
-              background: executionMode === mode ? 'var(--color-accent)' : 'var(--color-surface)',
-              color: executionMode === mode ? 'var(--color-on-accent)' : 'var(--color-text-secondary)',
-            }}>
-              {mode === 'sync' ? '同步完成' : '允许后台化'}
+            <button key={mode} type="button" onClick={() => setExecutionMode(mode)}
+              className={`capability-button capability-button--secondary${executionMode === mode ? ' is-active' : ''}`}>
+              {mode === 'sync' ? t('tools.form.sync') : t('tools.form.detachable')}
             </button>
           ))}
         </div>
         <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)', lineHeight: 1.5 }}>
-          默认同步完成。只有耗时、可安全中止并监听 ctx.signal 的执行器才能允许后台化。
+          {t('tools.form.lifecycleHint')}
         </div>
       </div>
 
       <div style={{ display: 'flex', gap: 'var(--space-6)' }}>
         <div style={{ flex: 1 }}>
           <label style={labelStyle}>
-            参数 Schema <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 'var(--font-normal)' }}>— JSON Schema 格式，定义参数名、类型、是否必填</span>
+            {t('tools.form.schema')} <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 'var(--font-normal)' }}>{t('tools.form.schemaHint')}</span>
       </label>
 
       <div style={{ marginBottom: 'var(--space-4)' }}>
-        <label style={labelStyle}>执行方式 <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 'var(--font-normal)' }}>— 内置无需代码，模板填命令即可，自定义需写 JS</span></label>
+        <label style={labelStyle}>{t('tools.form.executor')} <span style={{ color: 'var(--color-text-tertiary)', fontWeight: 'var(--font-normal)' }}>{t('tools.form.executorHint')}</span></label>
         <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
-          {(['template', 'custom'] as const).map(t => (
-            <button key={t} onClick={() => setExecutorType(t)} style={{
-              ...tinyBtn, padding: 'var(--space-1) var(--space-3)',
-              background: executorType === t ? 'var(--color-accent)' : 'var(--color-surface)',
-              color: executorType === t ? 'var(--color-on-accent)' : 'var(--color-text-secondary)',
-            }}>
-              {{ template: '命令模板', custom: '自定义 JS' }[t]}
+          {(['template', 'custom'] as const).map(executor => (
+            <button key={executor} onClick={() => setExecutorType(executor)}
+              className={`capability-button capability-button--secondary capability-button--compact${executorType === executor ? ' is-active' : ''}`}>
+              {executor === 'template' ? t('tools.form.template') : t('tools.form.customJs')}
             </button>
           ))}
         </div>
         {executorType === 'template' && (
           <input type="text" value={executorTemplate} onChange={e => setExecutorTemplate(e.target.value)}
-            placeholder='例如: curl -s https://api.example.com/{{query}}'
+            placeholder={t('tools.form.templatePlaceholder')}
             style={{ ...inputStyle, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }} />
         )}
         {executorType === 'custom' && (
           <div>
             <input type="text" value={executorFile} onChange={e => setExecutorFile(e.target.value)}
-              placeholder='文件名 (如 my_tool，对应 executors/my_tool.js)'
+              placeholder={t('tools.form.filePlaceholder')}
               style={{ ...inputStyle, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }} />
             <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>
-              在 data/tools/executors/ 下创建同名 .js 文件，方舟会自动加载
+              {t('tools.form.fileHint')}
             </div>
           </div>
         )}
@@ -223,9 +214,9 @@ function ToolForm({ initial, onSave, onCancel }: {
           />
           {jsonError && <div style={{ fontSize: 'var(--text-xs)', color: '#f87171', marginTop: '2px' }}>{jsonError}</div>}
           <div style={{ marginTop: 'var(--space-2)', display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>快速模板：</span>
-            {SCHEMA_TEMPLATES.map(tpl => (
-              <button key={tpl.label} onClick={() => { setParamsJson(tpl.value); setJsonError(''); }} style={{ ...tinyBtn, padding: '1px var(--space-2)' }}>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{t('tools.form.schemaTemplates')}</span>
+            {schemaTemplates.map(tpl => (
+              <button className="capability-button capability-button--secondary capability-button--compact" key={tpl.label} onClick={() => { setParamsJson(tpl.value); setJsonError(''); }}>
                 {tpl.label}
               </button>
             ))}
@@ -233,45 +224,35 @@ function ToolForm({ initial, onSave, onCancel }: {
         </div>
 
         <div style={{ flex: 1 }}>
-          <label style={labelStyle}>注入预览</label>
-          <pre style={{
-            padding: 'var(--space-3)',
-            background: 'var(--color-bg)',
-            border: '1px solid var(--border-color)',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: 'var(--text-xs)',
-            fontFamily: 'var(--font-mono)',
-            color: 'var(--color-text-secondary)',
-            whiteSpace: 'pre-wrap',
-            margin: 0,
-            minHeight: '100px',
-          }}>
-            {buildToolsPrompt([{ name: previewName, description: description || '（描述）', category, dangerous, executorType, executionMode, parameters: (() => { try { return JSON.parse(paramsJson); } catch { return {}; } })() }])}
+          <label style={labelStyle}>{t('tools.form.preview')}</label>
+          <pre className="capability-code" style={{ color: 'var(--color-text-secondary)', minHeight: '100px' }}>
+            {buildToolsPrompt([{ name: previewName, description: description || t('tools.form.previewDescription'), category, dangerous, executorType, executionMode, parameters: (() => { try { return JSON.parse(paramsJson); } catch { return {}; } })() }])}
           </pre>
         </div>
       </div>
 
       <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-4)', borderTop: '1px solid var(--border-color)', paddingTop: 'var(--space-4)' }}>
-        <button onClick={handleSave} style={{ padding: 'var(--space-2) var(--space-5)', background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer' }}>
-          {initial ? '保存修改' : '注册工具'}
+        <button className="capability-button capability-button--primary" onClick={handleSave}>
+          {initial ? t('tools.form.save') : t('tools.form.register')}
         </button>
-        <button onClick={onCancel} style={{ padding: 'var(--space-2) var(--space-5)', background: 'transparent', color: 'var(--color-text-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', cursor: 'pointer' }}>
-          取消
+        <button className="capability-button capability-button--secondary" onClick={onCancel}>
+          {t('tools.form.cancel')}
         </button>
       </div>
     </div>
   );
 }
 
-const SCHEMA_TEMPLATES = [
-  { label: '空模板', value: '{\n  \n}' },
-  { label: '字符串参数', value: '{\n  "type": "object",\n  "properties": {\n    "text": { "type": "string", "description": "文本内容" }\n  },\n  "required": ["text"]\n}' },
-  { label: '数值参数', value: '{\n  "type": "object",\n  "properties": {\n    "count": { "type": "number", "description": "数量" }\n  },\n  "required": ["count"]\n}' },
-  { label: '文件路径', value: '{\n  "type": "object",\n  "properties": {\n    "filePath": { "type": "string", "description": "文件路径" }\n  },\n  "required": ["filePath"]\n}' },
-  { label: '读写混合', value: '{\n  "type": "object",\n  "properties": {\n    "filePath": { "type": "string", "description": "文件路径" },\n    "content": { "type": "string", "description": "写入内容" }\n  },\n  "required": ["filePath"]\n}' },
-];
+function getSchemaTemplates(locale: Locale) {
+  const english = locale === 'en-US';
+  return [
+    { label: english ? 'Empty' : '空模板', value: '{\n  \n}' },
+    { label: english ? 'String parameter' : '字符串参数', value: `{\n  "type": "object",\n  "properties": {\n    "text": { "type": "string", "description": "${english ? 'Text content' : '文本内容'}" }\n  },\n  "required": ["text"]\n}` },
+    { label: english ? 'Number parameter' : '数值参数', value: `{\n  "type": "object",\n  "properties": {\n    "count": { "type": "number", "description": "${english ? 'Quantity' : '数量'}" }\n  },\n  "required": ["count"]\n}` },
+    { label: english ? 'File path' : '文件路径', value: `{\n  "type": "object",\n  "properties": {\n    "filePath": { "type": "string", "description": "${english ? 'File path' : '文件路径'}" }\n  },\n  "required": ["filePath"]\n}` },
+    { label: english ? 'Read and write' : '读写混合', value: `{\n  "type": "object",\n  "properties": {\n    "filePath": { "type": "string", "description": "${english ? 'File path' : '文件路径'}" },\n    "content": { "type": "string", "description": "${english ? 'Content to write' : '写入内容'}" }\n  },\n  "required": ["filePath"]\n}` },
+  ];
+}
 
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)', marginBottom: 'var(--space-1)' };
-const inputStyle: React.CSSProperties = { width: '100%', padding: 'var(--space-2) var(--space-3)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--color-text)', fontSize: 'var(--text-sm)', fontFamily: 'inherit', boxSizing: 'border-box' };
-const ghostBtnStyle: React.CSSProperties = { padding: '2px var(--space-2)', background: 'transparent', color: 'var(--color-text-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', cursor: 'pointer' };
-const tinyBtn: React.CSSProperties = { fontSize: 'var(--text-xs)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--color-bg)', color: 'var(--color-text-secondary)', cursor: 'pointer' };
+const inputStyle: React.CSSProperties = { width: '100%', color: 'var(--color-text)', fontSize: 'var(--text-sm)', fontFamily: 'inherit', boxSizing: 'border-box' };

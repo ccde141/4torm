@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useLocale } from '../../i18n/LocaleContext';
 
 /**
  * AskCard — Agent 反问卡片
@@ -18,6 +19,7 @@ export interface AskCardProps {
 
 export default function AskCard({ question, options, answered, reply, onReply }: AskCardProps) {
   const [customInput, setCustomInput] = useState('');
+  const { t } = useLocale();
 
   const handleOptionClick = (opt: string) => {
     if (answered) return;
@@ -98,7 +100,7 @@ export default function AskCard({ question, options, answered, reply, onReply }:
                 value={customInput}
                 onChange={e => setCustomInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="自由输入..."
+                placeholder={t('chat.ask.placeholder')}
                 style={{
                   flex: 1,
                   padding: '4px 8px',
@@ -123,7 +125,7 @@ export default function AskCard({ question, options, answered, reply, onReply }:
                   cursor: customInput.trim() ? 'pointer' : 'default',
                 }}
               >
-                回复
+                {t('chat.ask.reply')}
               </button>
             </div>
           </div>

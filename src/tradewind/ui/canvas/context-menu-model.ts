@@ -1,10 +1,10 @@
 export const CANVAS_NODE_ITEMS = [
-  { type: 'entry', label: '入口', icon: '▶', color: 'var(--color-accent)' },
-  { type: 'agent', label: 'Agent', icon: '⚡', color: 'var(--color-accent-secondary)' },
-  { type: 'meeting', label: '会议室', icon: '◎', color: '#a855f7' },
-  { type: 'human-gate', label: '暂停点', icon: '◇', color: '#eab308' },
-  { type: 'note', label: 'Note', icon: '📝', color: '#fbbf24' },
-  { type: 'output', label: '出口', icon: '◼', color: 'var(--color-success)' },
+  { type: 'entry', labelKey: 'tradewind.canvas.node.entry', icon: '▶', color: 'var(--color-accent)' },
+  { type: 'agent', labelKey: 'tradewind.canvas.node.agent', icon: '⚡', color: 'var(--color-accent-secondary)' },
+  { type: 'meeting', labelKey: 'tradewind.canvas.node.meeting', icon: '◎', color: '#a855f7' },
+  { type: 'human-gate', labelKey: 'tradewind.canvas.node.gate', icon: '◇', color: '#eab308' },
+  { type: 'note', labelKey: 'tradewind.canvas.node.note', icon: '📝', color: '#fbbf24' },
+  { type: 'output', labelKey: 'tradewind.canvas.node.output', icon: '◼', color: 'var(--color-success)' },
 ] as const;
 
 export function contextMenuKind(target: {

@@ -104,3 +104,24 @@ test('归档与摘要都成功后才替换历史消息', async () => {
   const archived = JSON.parse(await fs.readFile(path.join(dir, 'bak', '001.json'), 'utf8'));
   assert.equal(archived.length, 4);
 });
+
+test('运行时上下文预算可以收紧默认压缩阈值', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'convection-runtime-budget-'));
+  const publicMessages = messages();
+  const compacted = await compactConvectionIfNeeded(
+    publicMessages,
+    6_000,
+    { disabled: false, archiveSeq: 0 },
+    {
+      dataDir: dir,
+      chairModel: 'local:model',
+      archiveDir: path.join(dir, 'bak'),
+      participants: ['A'],
+      promptTokenThreshold: 5_734,
+      summarize: async () => '本地模型摘要',
+    },
+  );
+
+  assert.equal(compacted, true);
+  assert.match(publicMessages[0].content, /本地模型摘要/);
+});

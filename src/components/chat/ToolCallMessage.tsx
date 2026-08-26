@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ChatMessage } from '../../types';
 import { formatTimestamp } from '../../utils/time';
 import FileDiffCard, { parseFileEdit } from './FileDiffCard';
+import { useLocale } from '../../i18n/LocaleContext';
 
 export default function ToolCallMessage({ toolCall, actions, timestamp }: {
   toolCall: NonNullable<ChatMessage['toolCall']>;
@@ -9,6 +10,7 @@ export default function ToolCallMessage({ toolCall, actions, timestamp }: {
   timestamp?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const { t } = useLocale();
   const isRunning = toolCall.status === 'pending' || toolCall.status === 'running';
 
   // 文件改动类工具（edit_file / write_file）渲染成 diff 卡片，直观展示 AI 改了什么
@@ -18,7 +20,9 @@ export default function ToolCallMessage({ toolCall, actions, timestamp }: {
   }
 
   const resultLines = (toolCall.result || '').split('\n');
-  const summary = resultLines.length > 1 ? `${resultLines.length} 行` : (resultLines[0]?.slice(0, 60) || '无输出');
+  const summary = resultLines.length > 1
+    ? t('chat.tool.lineCount', { count: resultLines.length })
+    : (resultLines[0]?.slice(0, 60) || t('chat.tool.noOutput'));
 
   return (
     <div className="chat__message chat__message--assistant chat__message--tool">
@@ -34,14 +38,14 @@ export default function ToolCallMessage({ toolCall, actions, timestamp }: {
             {toolCall.toolName}
           </span>
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>
-            {isRunning ? '执行中' : (!expanded && toolCall.result ? summary : '')}
+            {isRunning ? t('chat.tool.runningShort') : (!expanded && toolCall.result ? summary : '')}
           </span>
         </button>
         {expanded && (
           <div style={{ marginTop: 'var(--space-2)', paddingTop: 'var(--space-2)', borderTop: '1px solid var(--border-color)' }}>
             {toolCall.params && Object.keys(toolCall.params).length > 0 && (
               <div style={{ marginBottom: 'var(--space-2)' }}>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>参数</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>{t('chat.tool.params')}</div>
                 <pre style={{ margin: 0, padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '100px', overflow: 'auto' }}>
                   {JSON.stringify(toolCall.params, null, 2)}
                 </pre>
@@ -50,10 +54,10 @@ export default function ToolCallMessage({ toolCall, actions, timestamp }: {
             {toolCall.result && (
               <div>
                 <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>
-                  结果 {toolCall.durationMs ? `(${toolCall.durationMs}ms)` : ''} {toolCall.status === 'error' ? '❌' : '✅'}
+                  {t('chat.tool.result')} {toolCall.durationMs ? `(${toolCall.durationMs}ms)` : ''} {toolCall.status === 'error' ? '❌' : '✅'}
                 </div>
                 <pre style={{ margin: 0, padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '200px', overflow: 'auto' }}>
-                  {toolCall.result || '(无输出)'}
+                  {toolCall.result || `(${t('chat.tool.noOutput')})`}
                 </pre>
               </div>
             )}

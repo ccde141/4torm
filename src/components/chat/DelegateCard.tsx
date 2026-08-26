@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ChatMessage } from '../../types';
 import { formatTimestamp } from '../../utils/time';
 import { visibleDelegateProgress } from '../../engine/chat/delegate-progress';
+import { useLocale } from '../../i18n/LocaleContext';
 
 type Step = { type: 'tool' | 'thought'; tool?: string; args?: Record<string, string>; result?: string; ok?: boolean; text?: string };
 
@@ -21,7 +22,8 @@ export default function DelegateCard({ toolCall, content, actions, timestamp }: 
   timestamp?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const task = String(toolCall.params?.task ?? '子任务');
+  const { t } = useLocale();
+  const task = String(toolCall.params?.task ?? t('chat.delegate.subtask'));
   const status = toolCall.status;
   const summary = toolCall.result || '';
   const steps: Step[] = (toolCall as any).steps || [];
@@ -29,9 +31,9 @@ export default function DelegateCard({ toolCall, content, actions, timestamp }: 
   const thought = visibleDelegateProgress(content);
 
   const statusConfig = {
-    success: { icon: '\u2713', color: '#22c55e', label: '完成' },
-    error: { icon: '\u2717', color: '#ef4444', label: '失败' },
-    running: { icon: '\u25cc', color: '#eab308', label: '执行中' },
+    success: { icon: '\u2713', color: '#22c55e', label: t('chat.delegate.complete') },
+    error: { icon: '\u2717', color: '#ef4444', label: t('chat.delegate.failed') },
+    running: { icon: '\u25cc', color: '#eab308', label: t('chat.delegate.running') },
   } as Record<string, { icon: string; color: string; label: string }>;
 
   const st = statusConfig[status || 'running'] || statusConfig.running;
@@ -41,8 +43,10 @@ export default function DelegateCard({ toolCall, content, actions, timestamp }: 
 
   // 折叠时的副标题
   const subtitle = status === 'running'
-    ? (toolSteps.length > 0 ? `${toolSteps.length} 步工具调用中...` : '思考中...')
-    : (durationStr ? `${toolSteps.length} 步 · ${durationStr}` : `${toolSteps.length} 步`);
+    ? (toolSteps.length > 0 ? t('chat.delegate.calling', { count: toolSteps.length }) : t('chat.delegate.thinking'))
+    : (durationStr
+      ? t('chat.delegate.stepsDuration', { count: toolSteps.length, duration: durationStr })
+      : t('chat.delegate.steps', { count: toolSteps.length }));
 
   return (
     <div className="chat__message chat__message--assistant chat__message--tool" style={{ paddingLeft: '24px' }}>
@@ -101,13 +105,13 @@ export default function DelegateCard({ toolCall, content, actions, timestamp }: 
           <div style={{ padding: '0 var(--space-4) var(--space-3)', borderTop: '1px solid var(--border-color)' }}>
             {/* 任务 */}
             <div style={{ marginTop: 'var(--space-2)' }}>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>任务</div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>{t('chat.delegate.task')}</div>
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', lineHeight: '1.5' }}>{task}</div>
             </div>
             {/* 步骤列表 */}
             {toolSteps.length > 0 && (
               <div style={{ marginTop: 'var(--space-2)' }}>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '4px' }}>执行步骤</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '4px' }}>{t('chat.delegate.executionSteps')}</div>
                 {toolSteps.map((s, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: '6px', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', padding: '2px 0', color: s.ok === false ? '#ef4444' : 'var(--color-text-secondary)' }}>
                     <span style={{ color: s.result != null ? (s.ok ? '#22c55e' : '#ef4444') : '#eab308', flexShrink: 0 }}>
@@ -124,14 +128,14 @@ export default function DelegateCard({ toolCall, content, actions, timestamp }: 
             {/* 思考过程 */}
             {thought && (
               <div style={{ marginTop: 'var(--space-2)' }}>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>思考过程</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>{t('chat.delegate.reasoning')}</div>
                 <pre style={{ margin: 0, padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '200px', overflow: 'auto' }}>{thought}</pre>
               </div>
             )}
             {/* 最终结果 */}
             {summary && (
               <div style={{ marginTop: 'var(--space-2)' }}>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>结果 {st.icon}</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>{t('chat.delegate.result')} {st.icon}</div>
                 <pre style={{ margin: 0, padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '300px', overflow: 'auto' }}>{summary}</pre>
               </div>
             )}

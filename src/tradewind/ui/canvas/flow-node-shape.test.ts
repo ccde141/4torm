@@ -11,9 +11,9 @@ const panelStyles = fs.readFileSync('src/styles/components/tradewind-panels.css'
 
 test('暂停点采用紧凑状态条并使用明确介入动作', () => {
   assert.match(gate, /tw-node__state-line/);
-  assert.match(gate, /等待人工确认/);
-  assert.match(gate, /等待信封/);
-  assert.match(gate, /审查并继续/);
+  assert.match(gate, /tradewind\.canvas\.gate\.waitingReview/);
+  assert.match(gate, /tradewind\.canvas\.gate\.waitingEnvelope/);
+  assert.match(gate, /tradewind\.canvas\.gate\.review/);
   assert.doesNotMatch(gate, /✏️ 编辑/);
 });
 
@@ -25,10 +25,10 @@ test('暂停点默认态与悬停态都使用琥珀玻璃材质', () => {
 test('output 节点消费工作流终态并等待信封全量交接', () => {
   assert.match(canvas, /executionPhase/);
   assert.match(output, /runtimePhase/);
-  assert.match(output, /等待信封全量交接/);
+  assert.match(output, /tradewind\.canvas\.output\.waiting/);
   assert.doesNotMatch(output, /等待工作流抵达/);
-  assert.match(output, /已到达出口/);
-  assert.match(output, /未到达出口/);
+  assert.match(output, /tradewind\.canvas\.output\.reached/);
+  assert.match(output, /tradewind\.canvas\.output\.missed/);
 });
 
 test('信风近期持续态接入集中 motion 节拍', () => {

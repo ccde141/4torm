@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ChatMessage } from '../../../types';
 import { computeDiffView, type DiffLine } from '../../../utils/diff';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 const MAX_LINES = 400;
 
@@ -29,6 +30,7 @@ export function parseFileEdit(toolCall: ToolCall): { kind: 'edit' | 'write'; pat
 }
 
 function DiffRows({ lines }: { lines: DiffLine[] }) {
+  const { t } = useLocale();
   const shown = lines.slice(0, MAX_LINES);
   const hidden = lines.length - shown.length;
 
@@ -48,7 +50,7 @@ function DiffRows({ lines }: { lines: DiffLine[] }) {
       })}
       {hidden > 0 && (
         <div style={{ padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' }}>
-          ... {hidden} lines hidden
+          {t('tradewind.chat.diff.hidden', { count: hidden })}
         </div>
       )}
     </div>
@@ -59,6 +61,7 @@ export default function FileDiffCard({ toolCall, edit }: {
   toolCall: ToolCall;
   edit: NonNullable<ReturnType<typeof parseFileEdit>>;
 }) {
+  const { t } = useLocale();
   const [expanded, setExpanded] = useState(edit.kind === 'edit');
   // memo + 大文件退回摘要：否则 O(m×n) LCS 每次渲染都跑，覆盖写入大文件会冻死画布
   const view = useMemo(() => computeDiffView(edit.before, edit.after), [edit.before, edit.after]);
@@ -86,7 +89,7 @@ export default function FileDiffCard({ toolCall, edit }: {
           <div className="tw-tool-card__body">
             {view.tooLarge ? (
               <div style={{ padding: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'var(--color-bg)' }}>
-                文件较大，已省略逐行 diff（约 {del} 行 → {add} 行整体替换）
+                {t('tradewind.chat.diff.tooLarge', { deleted: del, added: add })}
               </div>
             ) : (
               <DiffRows lines={view.lines} />

@@ -1,29 +1,32 @@
 import type { WorkflowGraph, WorkflowMode } from '../types';
+import type { MessageKey, MessageValues } from '../../i18n/locale';
 
-export function validateGraph(graph: WorkflowGraph, mode: WorkflowMode = 'manual'): string[] {
+type Translate = (key: MessageKey, values?: MessageValues) => string;
+
+export function validateGraph(graph: WorkflowGraph, mode: WorkflowMode, t: Translate): string[] {
   const errors: string[] = [];
   if (mode === 'auto') {
     for (const node of graph.nodes) {
-      if (node.type === 'meeting') errors.push(`自动模式不支持会议室节点「${node.label}」——会议需人类在场，请改用手动运行或移除`);
-      if (node.type === 'human-gate') errors.push(`自动模式不支持暂停点节点「${node.label}」——全自动无人恢复，请改用手动运行或移除`);
+      if (node.type === 'meeting') errors.push(t('tradewind.validation.autoMeeting', { name: node.label }));
+      if (node.type === 'human-gate') errors.push(t('tradewind.validation.autoGate', { name: node.label }));
     }
   }
 
   const outputs = graph.nodes.filter(node => node.type === 'output');
-  if (outputs.length === 0) errors.push('缺少出口节点');
-  if (outputs.length > 1) errors.push(`出口节点只能有一个，当前有 ${outputs.length} 个`);
+  if (outputs.length === 0) errors.push(t('tradewind.validation.missingOutput'));
+  if (outputs.length > 1) errors.push(t('tradewind.validation.multipleOutputs', { count: outputs.length }));
 
   for (const node of graph.nodes) {
     if (node.type === 'agent' && !(node.config as { agentId?: string }).agentId) {
-      errors.push(`Agent「${node.label}」未选择 Agent 实体`);
+      errors.push(t('tradewind.validation.agentMissingEntity', { name: node.label }));
     }
     if (node.type === 'meeting') {
       const config = node.config as { chairAgentId?: string; participantNodeIds?: string[] };
-      if (!config.chairAgentId) errors.push(`会议室「${node.label}」未选择会议助理`);
-      if (!config.participantNodeIds?.length) errors.push(`会议室「${node.label}」未选择参与者`);
+      if (!config.chairAgentId) errors.push(t('tradewind.validation.meetingMissingChair', { name: node.label }));
+      if (!config.participantNodeIds?.length) errors.push(t('tradewind.validation.meetingMissingParticipants', { name: node.label }));
     }
   }
 
-  if (!graph.nodes.some(node => node.type === 'entry')) errors.push('缺少入口节点');
+  if (!graph.nodes.some(node => node.type === 'entry')) errors.push(t('tradewind.validation.missingEntry'));
   return errors;
 }

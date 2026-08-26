@@ -3,6 +3,11 @@
  * 统一维护 /api/tradewind/stream，按 nodeId 分发事件。
  */
 
+import {
+  DEFAULT_LOCALE, readStoredLocale, resolveMessage,
+  type Locale, type MessageKey, type MessageValues,
+} from '../../../i18n/locale';
+
 type EventHandler = (event: any) => void;
 
 const listeners = new Map<string, Set<EventHandler>>();
@@ -83,10 +88,26 @@ function dispatchConnectionError(error: unknown): void {
   }
 }
 
-export function connectionFailureEvents(error: unknown): Array<{ type: string; message?: string }> {
+function currentLocale(): Locale {
+  if (typeof window === 'undefined') return DEFAULT_LOCALE;
+  try {
+    return readStoredLocale(window.localStorage);
+  } catch {
+    return DEFAULT_LOCALE;
+  }
+}
+
+function streamMessage(key: MessageKey, values?: MessageValues): string {
+  return resolveMessage(currentLocale(), key, values);
+}
+
+export function connectionFailureEvents(
+  error: unknown,
+  locale: Locale = currentLocale(),
+): Array<{ type: string; message?: string }> {
   const detail = error instanceof Error ? error.message : String(error);
   return [
-    { type: 'error', message: `信风实时连接已中断：${detail}` },
+    { type: 'error', message: resolveMessage(locale, 'tradewind.stream.disconnected', { detail }) },
     { type: 'done' },
   ];
 }
@@ -107,9 +128,9 @@ export async function readUnifiedSSE(
   onEvent: EventHandler,
   signal?: AbortSignal,
 ): Promise<void> {
-  if (!response.ok) throw new Error(`SSE 连接失败：HTTP ${response.status}`);
+  if (!response.ok) throw new Error(streamMessage('tradewind.stream.requestFailed', { status: response.status }));
   const reader = response.body?.getReader();
-  if (!reader) throw new Error('SSE 响应缺少数据流');
+  if (!reader) throw new Error(streamMessage('tradewind.stream.missingBody'));
   const decoder = new TextDecoder();
   let buffer = '';
 
@@ -128,5 +149,5 @@ export async function readUnifiedSSE(
 
   buffer += decoder.decode();
   if (buffer) for (const line of buffer.split('\n')) parseLine(line, onEvent);
-  throw new Error('SSE 连接意外中断');
+  throw new Error(streamMessage('tradewind.stream.unexpectedEnd'));
 }

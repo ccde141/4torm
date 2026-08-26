@@ -7,13 +7,8 @@
 
 import { useState, useEffect } from 'react';
 import type { Node } from '@xyflow/react';
-import { AGENTS_CHANGED_EVENT } from '../../../store/agent-events';
-
-interface AgentSummary {
-  id: string;
-  name: string;
-  model: string;
-}
+import { ConfigFields } from './ConfigFields';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 interface ConfigPanelProps {
   node: Node | null;
@@ -25,6 +20,7 @@ interface ConfigPanelProps {
 }
 
 export function ConfigPanel({ node, nodes, edges, onClose, onUpdate, onSyncReworkEdge }: ConfigPanelProps) {
+  const { t } = useLocale();
   if (!node) return null;
 
   const nodeType = node.type ?? 'unknown';
@@ -35,9 +31,9 @@ export function ConfigPanel({ node, nodes, edges, onClose, onUpdate, onSyncRewor
   return (
     <div className="tw-config mo-slide-in-right">
       <div className="tw-config__header">
-        <span className="tw-config__type">{getTypeLabel(nodeType)}</span>
+        <span className="tw-config__type">{getTypeLabel(nodeType, t)}</span>
         <span className="tw-config__title">{label}</span>
-        <button className="tw-config__close" onClick={onClose}>×</button>
+        <button className="tw-config__close" onClick={onClose} aria-label={t('tradewind.config.close')}>×</button>
       </div>
       <div className="tw-config__body">
         <LabelField nodeId={node.id} label={label} onUpdate={onUpdate} config={config} />
@@ -68,6 +64,7 @@ interface FieldProps {
 }
 
 function LabelField({ nodeId, label, onUpdate, config }: FieldProps) {
+  const { t } = useLocale();
   const [val, setVal] = useState(label);
   useEffect(() => setVal(label), [label]);
 
@@ -77,7 +74,7 @@ function LabelField({ nodeId, label, onUpdate, config }: FieldProps) {
 
   return (
     <div className="tw-config__field">
-      <label className="tw-config__label">显示名</label>
+      <label className="tw-config__label">{t('tradewind.config.displayName')}</label>
       <input
         className="tw-config__input"
         value={val}
@@ -90,6 +87,7 @@ function LabelField({ nodeId, label, onUpdate, config }: FieldProps) {
 }
 
 function MemoField({ nodeId, memo, onUpdate, config, label }: { nodeId: string; memo: string; onUpdate: (id: string, data: Record<string, unknown>) => void; config: Record<string, unknown>; label: string }) {
+  const { t } = useLocale();
   const [val, setVal] = useState(memo);
   useEffect(() => setVal(memo), [memo]);
   const commit = () => {
@@ -97,11 +95,11 @@ function MemoField({ nodeId, memo, onUpdate, config, label }: { nodeId: string; 
   };
   return (
     <div className="tw-config__field">
-      <label className="tw-config__label">备注</label>
+      <label className="tw-config__label">{t('tradewind.config.memo')}</label>
       <textarea
         className="tw-config__textarea"
         rows={2}
-        placeholder="仅人类可见的备注（不影响 Agent 行为）"
+        placeholder={t('tradewind.config.memoPlaceholder')}
         value={val}
         onChange={(e) => setVal(e.target.value)}
         onBlur={commit}
@@ -110,274 +108,12 @@ function MemoField({ nodeId, memo, onUpdate, config, label }: { nodeId: string; 
   );
 }
 
-interface ConfigFieldsProps extends FieldProps {
-  nodeType: string;
-  nodes: Node[];
-  edges: import('@xyflow/react').Edge[];
-  currentNodeId: string;
-  onSyncReworkEdge: (gateNodeId: string, targetNodeId: string | null) => void;
-}
-
-// TODO(返工边): edges / onSyncReworkEdge 已由 ConfigPanel 透传进来，但 gate 节点配置
-// 控件尚未接线调用 onSyncReworkEdge 同步返工边。功能待接，暂以下划线标记避免 lint 报未用。
-function ConfigFields({ nodeId, nodeType, config, label, onUpdate, nodes, edges: _edges, currentNodeId, onSyncReworkEdge: _onSyncReworkEdge }: ConfigFieldsProps) {
-  const update = (key: string, value: unknown) => {
-    onUpdate(nodeId, { label, config: { ...config, [key]: value } });
-  };
-
-  switch (nodeType) {
-    case 'agent':
-      return <AgentFields config={config} onChange={update} />;
-    case 'meeting':
-      return <MeetingFields config={config} onChange={update} nodes={nodes} currentNodeId={currentNodeId} />;
-    case 'note':
-      return <NoteFields config={config} onChange={update} />;
-    case 'human-gate':
-      return <HumanGateFields />;
-    case 'output':
-      return <OutputFields config={config} onChange={update} />;
-    case 'entry':
-      return <EntryFields config={config} onChange={update} />;
-    default:
-      return <div className="tw-config__hint">无可配置项</div>;
-  }
-}
-
-function useTradewindAgents(): AgentSummary[] {
-  const [agents, setAgents] = useState<AgentSummary[]>([]);
-
-  useEffect(() => {
-    let disposed = false;
-    const load = async () => {
-      try {
-        const response = await fetch('/api/tradewind/agents');
-        if (!response.ok) return;
-        const data = await response.json() as { agents?: AgentSummary[] };
-        if (!disposed) setAgents(Array.isArray(data.agents) ? data.agents : []);
-      } catch { /* 保留上一次列表，等待下一次刷新 */ }
-    };
-    const refresh = () => { void load(); };
-    void load();
-    window.addEventListener(AGENTS_CHANGED_EVENT, refresh);
-    window.addEventListener('focus', refresh);
-    return () => {
-      disposed = true;
-      window.removeEventListener(AGENTS_CHANGED_EVENT, refresh);
-      window.removeEventListener('focus', refresh);
-    };
-  }, []);
-
-  return agents;
-}
-
-// ── Agent 配置 ────────────────────────────────────────────────────
-
-function AgentFields({ config, onChange }: { config: Record<string, unknown>; onChange: (k: string, v: unknown) => void }) {
-  const agents = useTradewindAgents();
-  const agentId = (config.agentId as string) ?? '';
-  const role = (config.role as string) ?? '';
-
-  return (
-    <>
-      <div className="tw-config__field">
-        <label className="tw-config__label">Agent</label>
-        <select
-          className="tw-config__select"
-          value={agentId}
-          onChange={(e) => onChange('agentId', e.target.value)}
-        >
-          <option value="">-- 选择 Agent --</option>
-          {agents.map(a => (
-            <option key={a.id} value={a.id}>{a.name} ({a.id.slice(0, 12)})</option>
-          ))}
-        </select>
-      </div>
-      <div className="tw-config__field">
-        <label className="tw-config__label">职责</label>
-        <input
-          className="tw-config__input"
-          placeholder="补位协作者，可处理任意交办事务。专业事务请给予对应专业agent。"
-          value={role}
-          onChange={(e) => onChange('role', e.target.value)}
-        />
-        {!role && <span className="tw-config__hint">未填写则使用默认职责</span>}
-      </div>
-      <div className="tw-config__field">
-        <label className="tw-config__label">投递延迟（秒）</label>
-        <input
-          className="tw-config__input"
-          type="number"
-          min={0}
-          step={1}
-          placeholder="0"
-          value={(config.deliveryDelaySec as number) ?? ''}
-          onChange={(e) => {
-            const v = e.target.value.trim();
-            onChange('deliveryDelaySec', v === '' ? undefined : Math.max(0, Number(v)));
-          }}
-        />
-        <span className="tw-config__hint">产出生成后、投递下游前盲等。0 或留空=无延迟</span>
-      </div>
-    </>
-  );
-}
-
-// ── Meeting 配置 ──────────────────────────────────────────────────
-
-interface MeetingFieldsProps {
-  config: Record<string, unknown>;
-  onChange: (k: string, v: unknown) => void;
-  nodes: Node[];
-  currentNodeId: string;
-}
-
-function MeetingFields({ config, onChange, nodes, currentNodeId }: MeetingFieldsProps) {
-  const agents = useTradewindAgents();
-  const chairAgentId = (config.chairAgentId as string) ?? '';
-  const participantNodeIds = (config.participantNodeIds as string[]) ?? [];
-
-  // 画布上的 Agent 节点（排除自身）
-  const agentNodes = nodes.filter(
-    n => n.type === 'agent' && n.id !== currentNodeId
-  );
-
-  const toggleParticipant = (nodeId: string) => {
-    const next = participantNodeIds.includes(nodeId)
-      ? participantNodeIds.filter(id => id !== nodeId)
-      : [...participantNodeIds, nodeId];
-    onChange('participantNodeIds', next);
-  };
-
-  return (
-    <>
-      <div className="tw-config__field">
-        <label className="tw-config__label">会议助理</label>
-        <select
-          className="tw-config__select"
-          value={chairAgentId}
-          onChange={(e) => onChange('chairAgentId', e.target.value)}
-        >
-          <option value="">-- 选择会议助理 --</option>
-          {agents.map(a => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </select>
-      </div>
-      <div className="tw-config__field">
-        <label className="tw-config__label">参与者（画布 Agent 节点）</label>
-        {agentNodes.length === 0 ? (
-          <div className="tw-config__hint">画布上无 Agent 节点</div>
-        ) : (
-          <div className="tw-config__checklist">
-            {agentNodes.map(n => {
-              const nd = (n.data ?? {}) as Record<string, unknown>;
-              const nodeLabel = (nd.label as string) || n.id;
-              const checked = participantNodeIds.includes(n.id);
-              return (
-                <label key={n.id} className="tw-config__check-item">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggleParticipant(n.id)}
-                  />
-                  <span>{nodeLabel}</span>
-                </label>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </>
-  );
-}
-
-// ── Note 配置 ─────────────────────────────────────────────────────
-
-function NoteFields({ config, onChange }: { config: Record<string, unknown>; onChange: (k: string, v: unknown) => void }) {
-  const [content, setContent] = useState((config.content as string) ?? '');
-  useEffect(() => setContent((config.content as string) ?? ''), [config.content]);
-
-  return (
-    <div className="tw-config__field">
-      <label className="tw-config__label">约束内容</label>
-      <textarea
-        className="tw-config__textarea"
-        rows={5}
-        placeholder="输入行为约束文本..."
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        onBlur={() => onChange('content', content)}
-      />
-    </div>
-  );
-}
-
-// ── Human Gate 配置（暂停点无需额外配置） ─────────────────────────
-
-function HumanGateFields() {
-  return (
-    <div className="tw-config__field">
-      <div className="tw-config__hint">
-        暂停点无需配置。信封到达后流程暂停，人类可编辑内容后继续。
-      </div>
-    </div>
-  );
-}
-
-// ── Entry 配置 ────────────────────────────────────────────────────
-
-function EntryFields({ config, onChange }: { config: Record<string, unknown>; onChange: (k: string, v: unknown) => void }) {
-  const [envelope, setEnvelope] = useState((config.initialEnvelope as string) ?? '');
-  useEffect(() => setEnvelope((config.initialEnvelope as string) ?? ''), [config.initialEnvelope]);
-
-  return (
-    <div className="tw-config__field">
-      <label className="tw-config__label">初始信封</label>
-      <textarea
-        className="tw-config__textarea"
-        rows={5}
-        placeholder="启动工作流时自动注入的内容（留空则启动时手动输入）"
-        value={envelope}
-        onChange={(e) => setEnvelope(e.target.value)}
-        onBlur={() => onChange('initialEnvelope', envelope)}
-      />
-      <div className="tw-config__hint">
-        工作流启动时，此内容作为初始信封自动传递给下游节点
-      </div>
-    </div>
-  );
-}
-
-// ── Output 配置 ───────────────────────────────────────────────────
-
-function OutputFields({ config, onChange }: { config: Record<string, unknown>; onChange: (k: string, v: unknown) => void }) {
-  const [name, setName] = useState((config.archiveName as string) ?? '');
-  useEffect(() => setName((config.archiveName as string) ?? ''), [config.archiveName]);
-
-  return (
-    <div className="tw-config__field">
-      <label className="tw-config__label">归档名称</label>
-      <input
-        className="tw-config__input"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onBlur={() => onChange('archiveName', name)}
-        onKeyDown={(e) => { if (e.key === 'Enter') onChange('archiveName', name); }}
-        placeholder="留空则使用时间戳"
-      />
-      <div className="tw-config__hint">
-        工作流完成时，自动归档全部节点对话历史到 workspace/transcripts/ 目录
-      </div>
-    </div>
-  );
-}
-
 // ── 辅助 ──────────────────────────────────────────────────────────
 
-function getTypeLabel(type: string): string {
+function getTypeLabel(type: string, t: ReturnType<typeof useLocale>['t']): string {
   const map: Record<string, string> = {
-    entry: '入口', output: '出口', agent: 'Agent',
-    meeting: '会议室', note: 'Note', 'human-gate': '暂停点',
+    entry: t('tradewind.config.type.entry'), output: t('tradewind.config.type.output'), agent: 'Agent',
+    meeting: t('tradewind.config.type.meeting'), note: 'Note', 'human-gate': t('tradewind.config.type.humanGate'),
   };
   return map[type] ?? type;
 }

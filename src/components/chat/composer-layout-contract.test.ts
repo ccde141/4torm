@@ -35,11 +35,11 @@ test('execution observations open in a responsive overlay while the taskboard st
   assert.match(drawer, /terminateObservation/);
   assert.match(drawer, /closingObservation/);
   assert.match(drawer, /getExecutionSurfaceCapability/);
-  assert.doesNotMatch(drawer, /const browser =/);
+  assert.doesNotMatch(drawer, /useState[^\n]*browser/i);
   assert.match(drawer, /reservedRight={RAIL_W}/);
   assert.match(overlay, /ExecutionSurfaceViewport/);
   assert.match(overlay, /getExecutionSurfaceCapability/);
-  assert.doesNotMatch(overlay, /selected\.viewer === 'browser'/);
+  assert.doesNotMatch(overlay, /fetch\([^\n]*browser/i);
   assert.match(overlay, /onTerminate/);
   assert.match(overlay, /onCloseTab/);
   assert.match(overlay, /onClick=\{\(\) => onCloseTab\(item\.id\)\}/);
@@ -65,18 +65,20 @@ test('execution surfaces reuse the centralized motion vocabulary', () => {
   const overlay = read('src/components/chat/ExecutionSurfaceOverlay.tsx');
   const native = read('src/components/chat/NativeObservationView.tsx');
   const drawer = read('src/components/chat/TaskBoardDrawer.tsx');
+  const dock = read('src/components/chat/TaskboardExecutionDock.tsx');
   const styles = read('src/styles/components/chat.css');
 
   assert.match(overlay, /execution-surface-backdrop/);
   assert.match(overlay, /execution-surface-panel/);
   assert.match(native, /execution-surface-loading/);
-  assert.match(drawer, /taskboard-execution-row/);
+  assert.match(drawer, /TaskboardExecutionDock/);
+  assert.match(dock, /taskboard-execution-row/);
   assert.match(styles, /\.execution-surface-panel[\s\S]*var\(--motion-modal-duration\)[\s\S]*var\(--motion-modal-ease\)/);
   assert.match(styles, /\.execution-surface-loading[\s\S]*var\(--motion-loop-duration\)[\s\S]*var\(--motion-loop-ease\)/);
   assert.match(read('src/styles/index.css'), /prefers-reduced-motion: reduce/);
 });
 
-test('execution surface controls use clear Chinese labels and shared button styling', () => {
+test('execution surface controls use locale labels and shared button styling', () => {
   const overlay = read('src/components/chat/ExecutionSurfaceOverlay.tsx');
   const native = read('src/components/chat/NativeObservationView.tsx');
   const visual = read('src/components/chat/VisualObservationView.tsx');
@@ -84,17 +86,17 @@ test('execution surface controls use clear Chinese labels and shared button styl
   const drawer = read('src/components/chat/TaskBoardDrawer.tsx');
   const capability = read('src/components/chat/execution-surface-capability.ts');
 
-  for (const source of [overlay, native, visual, terminal, drawer, capability]) {
-    assert.doesNotMatch(source, /执行现场|Close tab|Take control|Return to Agent|Human control|Agent control/);
-  }
-  assert.match(overlay, /aria-label="运行窗口"/);
+  for (const source of [overlay, native, visual, terminal, drawer]) assert.match(source, /useLocale/);
+  assert.match(overlay, /chat\.execution\.window/);
   assert.match(overlay, /className="execution-surface-action/);
-  assert.match(native, /Agent 操作中|人类操作中/);
-  assert.match(native, /交由人类操作|交还 Agent 操作/);
+  assert.match(native, /chat\.execution\.agentControl/);
+  assert.match(native, /chat\.execution\.giveHumanControl/);
   assert.match(visual, /className="execution-surface-action"/);
-  assert.match(drawer, /运行视图/);
+  assert.match(drawer, /chat\.taskboard\.executionView/);
   assert.match(drawer, /execution-surface-shortcut__icon/);
   assert.match(drawer, /execution-surface-shortcut__status/);
+  assert.match(capability, /endpoint: 'terminate'/);
+  assert.match(capability, /endpoint: 'close'/);
 });
 
 test('visual execution views share owner-safe polling and control semantics', () => {

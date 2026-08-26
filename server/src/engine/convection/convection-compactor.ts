@@ -47,6 +47,8 @@ export interface ConvectionCompactOpts {
   archiveDir: string;
   /** 参与者 label 列表 */
   participants: string[];
+  /** Provider 运行时容量推导出的安全 prompt 上限；未提供时保持云模型旧阈值。 */
+  promptTokenThreshold?: number;
   /** 事件回调 */
   onEvent?: (ev: ConvectionCompactEvent) => void;
   summarize?: (messages: ContextMessage[]) => Promise<string>;
@@ -72,7 +74,8 @@ export async function compactConvectionIfNeeded(
   opts: ConvectionCompactOpts,
 ): Promise<boolean> {
   if (state.disabled) return false;
-  if (!lastPromptTokens || lastPromptTokens < CONVECTION_COMPACT_THRESHOLD) return false;
+  const threshold = opts.promptTokenThreshold ?? CONVECTION_COMPACT_THRESHOLD;
+  if (!lastPromptTokens || lastPromptTokens < threshold) return false;
 
   // 按 speak 周期分割
   const cycles = splitIntoCycles(publicMessages);

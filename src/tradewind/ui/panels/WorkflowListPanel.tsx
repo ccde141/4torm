@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 interface WorkflowItem {
   workflowId: string;
@@ -25,6 +26,7 @@ interface WorkflowListPanelProps {
 export function WorkflowListPanel({
   visible, currentId, onClose, onLoad, onNew, onDelete,
 }: WorkflowListPanelProps) {
+  const { t, locale } = useLocale();
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
@@ -52,7 +54,7 @@ export function WorkflowListPanel({
       await onDelete(workflowId);
       await refresh();
     } catch (cause) {
-      setError((cause as Error).message || '删除工作流失败');
+      setError((cause as Error).message || t('tradewind.workflowList.deleteFailed'));
     }
   };
 
@@ -65,17 +67,17 @@ export function WorkflowListPanel({
   return (
     <div className="tw-wflist mo-slide-in-left">
       <div className="tw-wflist__header">
-        <span className="tw-wflist__title">工作流</span>
-        <button className="tw-wflist__close" onClick={onClose}>×</button>
+        <span className="tw-wflist__title">{t('tradewind.workflowList.title')}</span>
+        <button className="tw-wflist__close" onClick={onClose} aria-label={t('tradewind.workflowList.close')}>×</button>
       </div>
       <div className="tw-wflist__body">
         <button className="tw-wflist__new" onClick={() => { onNew(); onClose(); }}>
-          + 新建工作流
+          {t('tradewind.workflowList.new')}
         </button>
         {error && <div className="tw-wflist__hint">{error}</div>}
-        {loading && <div className="tw-wflist__hint">加载中...</div>}
+        {loading && <div className="tw-wflist__hint">{t('tradewind.workflowList.loading')}</div>}
         {!loading && workflows.length === 0 && (
-          <div className="tw-wflist__hint">暂无已保存的工作流</div>
+          <div className="tw-wflist__hint">{t('tradewind.workflowList.empty')}</div>
         )}
         {workflows.map((wf) => (
           <div
@@ -89,7 +91,7 @@ export function WorkflowListPanel({
               <span className="tw-wflist__item-name">{wf.name}</span>
               <span className="tw-wflist__item-id">{wf.workflowId}</span>
               <span className="tw-wflist__item-meta">
-                {wf.nodeCount} 节点 · {formatTime(wf.updatedAt)}
+                {t('tradewind.workflowList.nodeCount', { count: wf.nodeCount, time: formatTime(wf.updatedAt, locale, t) })}
               </span>
             </div>
             {confirmingDeleteId === wf.workflowId ? (
@@ -97,13 +99,13 @@ export function WorkflowListPanel({
                 className="tw-wflist__item-del"
                 style={{ color: '#fff', background: '#ef4444', borderRadius: '4px', fontSize: '11px', padding: '1px 6px' }}
                 onClick={(e) => { e.stopPropagation(); void deleteItem(wf.workflowId); }}
-                title="工作流及运行数据将被清空"
-              >确认?</button>
+                title={t('tradewind.workflowList.deleteWarning')}
+              >{t('tradewind.workflowList.confirm')}</button>
             ) : (
               <button
                 className="tw-wflist__item-del"
                 onClick={(e) => { e.stopPropagation(); setConfirmingDeleteId(wf.workflowId); setTimeout(() => setConfirmingDeleteId(prev => prev === wf.workflowId ? null : prev), 3000); }}
-                title="删除"
+                title={t('tradewind.workflowList.delete')}
               >✕</button>
             )}
           </div>
@@ -113,13 +115,13 @@ export function WorkflowListPanel({
   );
 }
 
-function formatTime(iso: string): string {
+function formatTime(iso: string, locale: 'zh-CN' | 'en-US', t: ReturnType<typeof useLocale>['t']): string {
   if (!iso) return '';
   const d = new Date(iso);
   const now = new Date();
   const diff = now.getTime() - d.getTime();
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+  if (diff < 60_000) return t('tradewind.workflowList.justNow');
+  if (diff < 3_600_000) return t('tradewind.workflowList.minutesAgo', { count: Math.floor(diff / 60_000) });
+  if (diff < 86_400_000) return t('tradewind.workflowList.hoursAgo', { count: Math.floor(diff / 3_600_000) });
+  return d.toLocaleDateString(locale, { month: 'short', day: 'numeric' });
 }

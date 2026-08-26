@@ -1,46 +1,12 @@
 .skills-page {
-  padding: var(--space-6);
+  width: min(100%, 1200px);
   height: 100%;
   overflow-y: auto;
-  /* 卡片网格用较宽上限并居中：保留多列优势，又不在宽屏上贴边发散 */
   max-width: 1200px;
-  margin: 0 auto;
-  /* 轻量灰底托起灰色解释文字，背景图仍透出 */
-  background: var(--glass-bg-soft);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-}
-
-.skills-page h2 {
-  font-size: var(--text-xl);
-  font-weight: var(--font-bold);
-  margin: 0 0 var(--space-1) 0;
-  /* 浮在背景图上，加描边光晕 */
-  text-shadow: var(--text-halo);
-}
-
-.skills-subtitle {
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-  margin: 0 0 var(--space-6) 0;
-  text-shadow: var(--text-halo);
-}
-
-.skills-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: var(--space-6);
 }
 
 .skills-error {
   margin: calc(var(--space-4) * -1) 0 var(--space-4);
-  padding: var(--space-2) var(--space-3);
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
 }
 
 .skills-grid {
@@ -50,9 +16,6 @@
 }
 
 .skill-card {
-  background: var(--color-surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
   padding: var(--space-5);
 }
 
@@ -70,11 +33,6 @@
 }
 
 .skill-card__badge {
-  font-size: var(--text-xs);
-  padding: 1px var(--space-2);
-  border-radius: var(--radius-full);
-  background: var(--color-bg);
-  color: var(--color-text-tertiary);
   white-space: nowrap;
 }
 
@@ -93,36 +51,8 @@
   margin-bottom: var(--space-4);
 }
 
-.skill-card__actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
 .skill-card__actions button {
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  cursor: pointer;
-  border: 1px solid var(--border-color);
-}
-
-.skill-btn-preview {
-  background: transparent;
-  color: var(--color-text-secondary);
-}
-
-.skill-btn-preview:hover {
-  background: var(--color-bg);
-}
-
-.skill-btn-delete {
-  background: transparent;
-  color: #ef4444;
-  border-color: #ef4444;
-}
-
-.skill-btn-delete:hover {
-  background: rgba(239, 68, 68, 0.1);
+  min-height: 32px;
 }
 
 .skill-preview-overlay {
@@ -136,9 +66,6 @@
 }
 
 .skill-preview-modal {
-  background: var(--color-surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
   padding: var(--space-6);
   max-width: 640px;
   width: 90%;
@@ -174,21 +101,11 @@
 
 .skill-preview-close {
   margin-top: var(--space-4);
-  padding: var(--space-2) var(--space-4);
-  background: var(--color-accent);
-  color: var(--color-on-accent);
-  border: none;
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  cursor: pointer;
 }
 
 .skill-create-section {
   margin-top: var(--space-8);
   padding: var(--space-5);
-  background: var(--color-surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
 }
 
 .skill-create-section h3 {
@@ -211,41 +128,12 @@
   flex: 1;
 }
 
-.skill-create-form input,
-.skill-create-form textarea,
-.skill-create-form select {
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-bg);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  color: var(--color-text);
-  font-size: var(--text-sm);
-  font-family: inherit;
-}
-
 .skill-create-form textarea {
   font-family: var(--font-mono);
   resize: vertical;
   min-height: 120px;
 }
 
-.skill-create-form label {
-  font-size: var(--text-xs);
-  color: var(--color-text-tertiary);
-}
-
 .skill-create-submit {
-  padding: var(--space-2) var(--space-5);
-  background: var(--color-accent);
-  color: var(--color-on-accent);
-  border: none;
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  font-weight: var(--font-semibold);
-  cursor: pointer;
   align-self: flex-start;
-}
-
-.skill-create-submit:hover {
-  opacity: 0.9;
 }

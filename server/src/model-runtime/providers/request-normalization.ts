@@ -1,0 +1,117 @@
+import { resolveProviderAdapter } from './registry.js';
+import type {
+  ProviderModelCapabilities,
+  ProviderModelIdentity,
+  ProviderRuntimeCapabilities,
+  ProviderRuntimeFetch,
+} from '../contracts/provider-adapter.js';
+import { normalizeLlamaCppConfig } from '../config/llama-cpp-config.js';
+import { normalizeOllamaConfig } from '../config/ollama-config.js';
+import { normalizeDeepSeekConfig } from '../config/deepseek-config.js';
+import { normalizeVllmConfig } from '../config/vllm-config.js';
+import { mergeCustomRequestParameters } from './custom-request-parameters.js';
+
+export type { ProviderModelCapabilities, ProviderModelIdentity } from '../contracts/provider-adapter.js';
+
+export async function discoverProviderRuntimeCapabilities(
+  identity: ProviderModelIdentity,
+  fetchImpl: ProviderRuntimeFetch = fetch,
+): Promise<ProviderRuntimeCapabilities | undefined> {
+  return resolveProviderAdapter(identity).discoverRuntimeCapabilities?.(identity, fetchImpl);
+}
+
+export function resolveProviderModelCapabilities(
+  identity: ProviderModelIdentity,
+): ProviderModelCapabilities {
+  return resolveProviderAdapter(identity).capabilities;
+}
+
+export function resolveMaxOutputTokens(
+  identity: ProviderModelIdentity,
+  requested?: number,
+): number {
+  if (requested !== undefined) return requested;
+  const adapter = resolveProviderAdapter(identity);
+  if (adapter.id === 'llama-cpp') {
+    return llamaConfig(identity).generationDefaults.maxOutputTokens;
+  }
+  if (adapter.id === 'ollama') {
+    return ollamaConfig(identity).generationDefaults.maxOutputTokens;
+  }
+  if (adapter.id === 'deepseek') {
+    return deepSeekConfig(identity).generationDefaults.maxOutputTokens;
+  }
+  if (adapter.id === 'vllm') {
+    return vllmConfig(identity).generationDefaults.maxOutputTokens;
+  }
+  return adapter.capabilities.defaultMaxOutputTokens ?? 8192;
+}
+
+export function resolveRequestTemperature(
+  identity: ProviderModelIdentity,
+  requested?: number,
+): number | undefined {
+  if (requested !== undefined) return requested;
+  if (resolveProviderAdapter(identity).id === 'llama-cpp') {
+    return llamaConfig(identity).generationDefaults.temperature ?? undefined;
+  }
+  if (resolveProviderAdapter(identity).id === 'ollama') {
+    return ollamaConfig(identity).generationDefaults.temperature ?? undefined;
+  }
+  if (resolveProviderAdapter(identity).id === 'deepseek') {
+    return deepSeekConfig(identity).generationDefaults.temperature ?? undefined;
+  }
+  if (resolveProviderAdapter(identity).id === 'vllm') {
+    return vllmConfig(identity).generationDefaults.temperature ?? undefined;
+  }
+  return 0.7;
+}
+
+function llamaConfig(identity: ProviderModelIdentity) {
+  return normalizeLlamaCppConfig({
+    runtimePolicy: identity.runtimePolicy,
+    generationDefaults: identity.generationDefaults,
+  });
+}
+
+function ollamaConfig(identity: ProviderModelIdentity) {
+  return normalizeOllamaConfig({ generationDefaults: identity.generationDefaults });
+}
+
+function deepSeekConfig(identity: ProviderModelIdentity) {
+  return normalizeDeepSeekConfig({ generationDefaults: identity.generationDefaults });
+}
+
+function vllmConfig(identity: ProviderModelIdentity) {
+  return normalizeVllmConfig({ generationDefaults: identity.generationDefaults });
+}
+
+export function resolveSafePromptTokens(
+  contextWindowTokens: number,
+  maxOutputTokens: number,
+): number {
+  const safetyMargin = Math.ceil(contextWindowTokens * 0.05);
+  const available = contextWindowTokens - maxOutputTokens - safetyMargin;
+  if (available <= 0) throw new Error('模型上下文容量不足以容纳输出预算');
+  return available;
+}
+
+export function normalizeChatRequestBody(
+  identity: ProviderModelIdentity,
+  source: Record<string, unknown>,
+): Record<string, unknown> {
+  const body = { ...source };
+  const adapter = resolveProviderAdapter(identity);
+  const capabilities = adapter.capabilities;
+  if (capabilities.temperature === 'omit') delete body.temperature;
+  if (capabilities.maxTokensField === 'omit') {
+    delete body.max_tokens;
+    delete body.max_completion_tokens;
+  }
+  if (capabilities.maxTokensField === 'max_completion_tokens' && body.max_tokens !== undefined) {
+    body.max_completion_tokens = body.max_tokens;
+    delete body.max_tokens;
+  }
+  adapter.normalizeRequest?.(body, identity);
+  return mergeCustomRequestParameters(body, identity.customRequestParameters);
+}

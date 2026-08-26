@@ -1,389 +1,93 @@
-import { useState, useEffect, useRef } from 'react';
-import {
-  getProviders,
-  addProvider,
-  updateProvider,
-  removeProvider,
-  getAllModels,
-  listModels,
-  probeAndStore,
-  probeVisionAndStore,
-  PROVIDER_PRESETS,
-} from '../../llm';
-import type { ProviderEntry } from '../../llm';
-import type { ProviderPreset } from '../../llm/config';
-import {
-  retainProviderCapabilities,
-  type ModelCapability,
-} from '../../llm/model-capabilities';
-import type { ProviderProtocol } from '../../llm/provider-protocol';
-import { ModelCapabilityPanel } from './ModelCapabilityPanel';
-import {
-  retainModelProfiles,
-  setModelProfile,
-  type ProviderProfileSelection,
-} from '../../llm/provider-profiles';
+import { useEffect, useState } from 'react';
+import { addProvider, fetchProviderCatalog, getAllModels, getProviders, providerSelectionPatch, removeProvider, updateProvider } from '../../llm';
+import type { ProviderCatalog, ProviderEntry, ProviderPresetDescriptor } from '../../llm';
+import { useLocale } from '../../i18n/LocaleContext';
+import { ProviderCard } from './ProviderCard';
+import { ProviderNavigator } from './ProviderNavigator';
+import { selectionAfterProviderRemoval } from './provider-workspace-state';
+import '../../styles/components/capability-management.css';
+import './ProviderWorkspace.css';
+import './ProviderControls.css';
 
 export default function SettingsPage() {
+  const { t } = useLocale();
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [allModels, setAllModels] = useState<{ key: string; label: string }[]>([]);
   const [showPresets, setShowPresets] = useState(false);
-  // 新增提供商后高亮其卡片（accent 描边 + 上浮进场），对齐工具页「指出编辑态」
   const [highlightId, setHighlightId] = useState<string | null>(null);
-
+  const [catalog, setCatalog] = useState<ProviderCatalog | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const refresh = () => { getProviders().then(setProviders); getAllModels().then(setAllModels); };
   useEffect(() => {
-    getProviders().then(setProviders);
-    getAllModels().then(setAllModels);
+    refresh();
+    fetchProviderCatalog().then(setCatalog).catch(() => { /* existing settings remain usable */ });
   }, []);
 
-  const refresh = () => {
-    getProviders().then(setProviders);
-    getAllModels().then(setAllModels);
-  };
-
-  // 高亮新卡：设 id 触发 accent 描边 + 上浮进场，2.4s 后自动褪去
   const flagNew = (id: string) => {
     setHighlightId(id);
-    window.setTimeout(() => setHighlightId(cur => (cur === id ? null : cur)), 2400);
+    window.setTimeout(() => setHighlightId(current => current === id ? null : current), 2400);
   };
-
-  const handleQuickAdd = async (preset: ProviderPreset) => {
-    const entry = await addProvider(preset.label, preset.baseUrl, '', preset.protocol);
-    setShowPresets(false);
-    refresh();
-    flagNew(entry.id);
+  const addPreset = async (preset: ProviderPresetDescriptor) => {
+    const selection = preset.providerType && catalog
+      ? providerSelectionPatch(catalog, preset.providerType) : undefined;
+    const entry = await addProvider(preset.label, preset.baseUrl, '', preset.protocol, selection);
+    setShowPresets(false); setSelectedId(entry.id); refresh(); flagNew(entry.id);
   };
-
-  const handleAdd = async () => {
-    const entry = await addProvider('新提供商', '', '');
-    refresh();
-    flagNew(entry.id);
-  };
-
-  const handleRemove = async (id: string) => {
+  const remove = async (id: string) => {
     await removeProvider(id);
+    setSelectedId(current => selectionAfterProviderRemoval(providers, current, id));
     refresh();
+  };
+  const change = async (id: string, field: keyof ProviderEntry, value: string) => {
+    await updateProvider(id, { [field]: value }); refresh();
   };
 
-  const handleChange = async (id: string, field: keyof ProviderEntry, value: string) => {
-    await updateProvider(id, { [field]: value });
-    refresh();
-  };
+  const selectedProvider = providers.find(provider => provider.id === selectedId) ?? providers[0];
 
   return (
-    <div style={{ padding: 'var(--space-6)', maxWidth: '720px', margin: '0 auto', background: 'var(--glass-bg-soft)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)' }}>
-        <div style={{ textShadow: 'var(--text-halo)' }}>
-          <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-bold)', margin: '0 0 var(--space-1) 0' }}>LLM 提供商设置</h2>
-          <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', margin: 0 }}>添加多个提供商，模型自动同步到对话页面的选择清单</p>
-          <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', margin: 'var(--space-1) 0 0 0' }}>
-            支持 OpenAI Compatible 与 Anthropic Messages 接口，其他服务可通过兼容网关接入
-          </p>
+    <div className="capability-page" style={pageStyle}>
+      <div className="capability-header" style={headerStyle}>
+        <div className="capability-heading">
+          <h2 className="capability-title" style={titleStyle}>{t('model.settings.title')}</h2>
+          <p className="capability-subtitle" style={subtitleStyle}>{t('model.settings.subtitle')}</p>
+          <p style={hintStyle}>{t('model.settings.protocolHint')}</p>
         </div>
         <div style={{ position: 'relative' }}>
-          <button onClick={() => setShowPresets(!showPresets)} style={{ padding: 'var(--space-2) var(--space-4)', background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', cursor: 'pointer' }}>
-            + 添加提供商 {showPresets ? '▲' : '▼'}
-          </button>
-          {showPresets && (
-            <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '4px', background: 'var(--color-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: 'var(--space-1)', zIndex: 10, minWidth: '200px', boxShadow: 'var(--shadow-md)' }}>
-              {PROVIDER_PRESETS.map(p => (
-                <button key={p.label} onClick={() => handleQuickAdd(p)} style={{ display: 'block', width: '100%', padding: 'var(--space-2) var(--space-3)', background: 'transparent', border: 'none', color: 'var(--color-text)', fontSize: 'var(--text-sm)', cursor: 'pointer', textAlign: 'left', borderRadius: 'var(--radius-sm)' }}
-                  onMouseEnter={e => (e.target as HTMLElement).style.background = 'var(--color-bg-hover)'}
-                  onMouseLeave={e => (e.target as HTMLElement).style.background = 'transparent'}
-                >{p.label}</button>
-              ))}
-              <div style={{ borderTop: '1px solid var(--border-color)', margin: 'var(--space-1) 0' }} />
-              <button onClick={handleAdd} style={{ display: 'block', width: '100%', padding: 'var(--space-2) var(--space-3)', background: 'transparent', border: 'none', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', cursor: 'pointer', textAlign: 'left', borderRadius: 'var(--radius-sm)' }}
-                onMouseEnter={e => (e.target as HTMLElement).style.background = 'var(--color-bg-hover)'}
-                onMouseLeave={e => (e.target as HTMLElement).style.background = 'transparent'}
-              >自定义（空白）</button>
-            </div>
-          )}
+          <button className="capability-button capability-button--primary" onClick={() => setShowPresets(value => !value)}>{t('model.settings.addProvider', { arrow: showPresets ? '▲' : '▼' })}</button>
+          {showPresets && <PresetMenu presets={catalog?.presets ?? []} onPreset={addPreset} />}
         </div>
       </div>
-
-      {providers.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textShadow: 'var(--text-halo)' }}>还没有配置提供商，点击「添加提供商」开始</div>
-      )}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-        {providers.map(p => (
-          <ProviderCard key={p.id} provider={p} highlight={p.id === highlightId} onChange={handleChange} onRemove={handleRemove} onRefresh={refresh} />
-        ))}
-      </div>
-
+      {providers.length === 0 && <div style={emptyStyle}>{t('model.settings.empty')}</div>}
+      {selectedProvider && <div className="model-provider-workspace">
+        <ProviderNavigator providers={providers} catalog={catalog} selectedId={selectedProvider.id} onSelect={setSelectedId} />
+        <main className="model-provider-detail">
+          <ProviderCard key={selectedProvider.id} provider={selectedProvider} catalog={catalog}
+            highlight={selectedProvider.id === highlightId} onChange={change} onRemove={remove} onRefresh={refresh} />
+        </main>
+      </div>}
       {allModels.length > 0 && (
-        <div style={{ marginTop: 'var(--space-6)', padding: 'var(--space-4)', background: 'var(--color-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
-          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', marginBottom: 'var(--space-2)' }}>已注册模型清单（{allModels.length}）</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-1)' }}>
-            {allModels.map(m => (<span key={m.key} style={tagStyle}>{m.label}</span>))}
-          </div>
+        <div style={modelsStyle}>
+          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', marginBottom: 'var(--space-2)' }}>{t('model.settings.registered', { count: allModels.length })}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-1)' }}>{allModels.map(model => <span key={model.key} style={tagStyle}>{model.label}</span>)}</div>
         </div>
       )}
     </div>
   );
 }
 
-function ProviderCard({ provider: p, highlight, onChange, onRemove, onRefresh }: {
-  provider: ProviderEntry;
-  highlight?: boolean;
-  onChange: (id: string, field: keyof ProviderEntry, value: string) => void;
-  onRemove: (id: string) => void;
-  onRefresh: () => void;
-}) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  // 新增高亮时滚动到视口，避免新卡追加在列表末尾却在屏幕外
-  useEffect(() => {
-    if (highlight) rootRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }, [highlight]);
-  const [testing, setTesting] = useState(false);
-  const [modelListError, setModelListError] = useState('');
-  const [fetchedModels, setFetchedModels] = useState<string[]>([]);
-  const [checked, setChecked] = useState<Set<string>>(new Set());
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [headersJson, setHeadersJson] = useState(p.customHeaders ? JSON.stringify(p.customHeaders, null, 2) : '');
-  const [manualModel, setManualModel] = useState('');
-  const [label, setLabel] = useState(p.label);
-  // 外部刷新（如添加新 provider）时同步 label
-  useEffect(() => { setLabel(p.label); }, [p.label]);
-  const [probing, setProbing] = useState<Set<string>>(new Set());
-  const [probeMessages, setProbeMessages] = useState<Record<string, string>>({});
-
-  const probeCapability = async (model: string, capability: ModelCapability) => {
-    const key = `${capability}:${model}`;
-    setProbing(prev => new Set(prev).add(key));
-    try {
-      if (capability === 'tools') {
-        const result = await probeAndStore(p.id, model);
-        const message = result.status === 'native-confirmed' ? '工具调用已确认'
-          : result.status === 'text-required' ? (result.error || '接口未接受工具字段')
-            : (result.error || '未得到明确结论，原有结论保持不变');
-        setProbeMessages(current => ({ ...current, [key]: message }));
-      } else {
-        const result = await probeVisionAndStore(p.id, model);
-        const message = result.status === 'supported' ? '已确认接受图片输入'
-          : result.status === 'unsupported' ? result.error
-            : (result.error || '未得到明确结论，原有结论保持不变');
-        setProbeMessages(current => ({ ...current, [key]: message }));
-      }
-    } catch (error) {
-      setProbeMessages(current => ({
-        ...current,
-        [key]: error instanceof Error ? error.message : '能力分析失败',
-      }));
-    } finally {
-      setProbing(prev => { const next = new Set(prev); next.delete(key); return next; });
-      onRefresh();
-    }
-  };
-
-  const handleAddModel = async () => {
-    const name = manualModel.trim();
-    if (!name) return;
-    if (p.models.includes(name)) { setManualModel(''); return; }
-    await updateProvider(p.id, { models: [...p.models, name] });
-    setManualModel('');
-    onRefresh();
-  };
-
-  const handleRemoveModel = async (modelName: string) => {
-    const models = p.models.filter(m => m !== modelName);
-    await updateProvider(p.id, {
-      models,
-      modelProfiles: retainModelProfiles(p.modelProfiles, models),
-      ...retainProviderCapabilities(p, models),
-    });
-    onRefresh();
-  };
-
-  const handleProfileChange = async (model: string, profile: ProviderProfileSelection) => {
-    await updateProvider(p.id, {
-      modelProfiles: setModelProfile(p.modelProfiles, model, profile),
-    });
-    onRefresh();
-  };
-
-  const handleTest = async () => {
-    if (!p.baseUrl) return;
-    setTesting(true);
-    setModelListError('');
-    try {
-      const res = await listModels({
-        baseUrl: p.baseUrl,
-        apiKey: p.apiKey,
-        headers: p.customHeaders,
-        protocol: p.protocol,
-      });
-      const ids = res.data.map(m => m.id);
-      setFetchedModels(ids);
-      setChecked(new Set(ids));
-    } catch (error) {
-      setFetchedModels([]);
-      setChecked(new Set());
-      setModelListError(error instanceof Error ? error.message : '获取模型列表失败');
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const handleConfirmModels = async () => {
-    const newModels = [...checked];
-    await updateProvider(p.id, {
-      models: newModels,
-      modelProfiles: retainModelProfiles(p.modelProfiles, newModels),
-      ...retainProviderCapabilities(p, newModels),
-    });
-    setFetchedModels([]);
-    onRefresh();
-  };
-
-  const handleToggleModel = (modelId: string) => {
-    const next = new Set(checked);
-    if (next.has(modelId)) next.delete(modelId);
-    else next.add(modelId);
-    setChecked(next);
-  };
-
-  const hasChange = fetchedModels.length > 0 && (p.models.length !== checked.size || !p.models.every(m => checked.has(m)));
-
-  return (
-    <div
-      ref={rootRef}
-      className={highlight ? 'mo-spring-in' : undefined}
-      style={highlight
-        ? { ...cardStyle, border: '1px solid var(--color-accent)', boxShadow: '0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent)', transition: 'border-color 0.4s ease, box-shadow 0.4s ease' }
-        : { ...cardStyle, transition: 'border-color 0.4s ease, box-shadow 0.4s ease' }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
-        <div style={{ position: 'relative', flex: 1 }}>
-          <input
-            type="text"
-            value={label}
-            onChange={e => setLabel(e.target.value)}
-            onBlur={e => {
-              e.target.style.border = '1px solid transparent';
-              e.target.style.background = 'transparent';
-              if (label !== p.label) onChange(p.id, 'label', label);
-            }}
-            placeholder="未命名提供商"
-            style={{ ...inputStyle, fontSize: 'var(--text-base)', fontWeight: 'var(--font-semibold)', border: '1px solid transparent', background: 'transparent', padding: '2px var(--space-1)', width: 'auto', minWidth: '120px' }}
-            onFocus={e => { e.target.style.border = '1px solid var(--border-color)'; e.target.style.background = 'var(--color-bg)'; }}
-          />
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginLeft: 'var(--space-1)' }}>点击名称可编辑</span>
-        </div>
-        <button onClick={() => onRemove(p.id)} style={removeBtnStyle}>删除</button>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-        <div>
-          <label style={fieldLabel}>API 地址</label>
-          <input type="text" value={p.baseUrl} onChange={e => onChange(p.id, 'baseUrl', e.target.value)} style={inputStyle} placeholder="http://localhost:1234/v1" />
-        </div>
-        <div>
-          <label style={fieldLabel}>API Key</label>
-          <input type="password" value={p.apiKey} onChange={e => onChange(p.id, 'apiKey', e.target.value)} style={inputStyle} placeholder="无需 key 则留空" />
-        </div>
-      </div>
-
-      <div style={{ marginTop: 'var(--space-2)' }}>
-        <button
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          style={{ background: 'none', border: 'none', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: 0 }}
-        >
-          {showAdvanced ? '▲' : '▶'} 高级选项
-        </button>
-      </div>
-      {showAdvanced && (
-        <div style={{ marginTop: 'var(--space-2)' }}>
-          <label style={fieldLabel}>接口协议</label>
-          <select
-            value={p.protocol ?? 'auto'}
-            onChange={e => { updateProvider(p.id, { protocol: e.target.value as ProviderProtocol }); onRefresh(); }}
-            style={{ ...inputStyle, cursor: 'pointer', marginBottom: 'var(--space-2)' }}
-          >
-            <option value="auto">自动识别</option>
-            <option value="openai-chat-completions">OpenAI Compatible</option>
-            <option value="anthropic-messages">Anthropic Messages</option>
-          </select>
-          <label style={fieldLabel}>自定义请求头 <span style={{ fontWeight: 'var(--font-normal)', color: 'var(--color-text-tertiary)' }}>— JSON 格式，非标 API 需要</span></label>
-          <textarea
-            value={headersJson}
-            onChange={e => { setHeadersJson(e.target.value); try { const h = JSON.parse(e.target.value); updateProvider(p.id, { customHeaders: h }); } catch { /* invalid JSON, don't save */ } }}
-            rows={3}
-            style={{ ...inputStyle, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', resize: 'vertical' }}
-            placeholder='{"x-api-key": "sk-xxx"}'
-          />
-        </div>
-      )}
-
-      {fetchedModels.length > 0 ? (
-        <div style={{ marginTop: 'var(--space-3)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
-            <span style={{ ...fieldLabel, marginBottom: 0 }}>选择要启用的模型（{checked.size}/{fetchedModels.length}）</span>
-            <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-              <button onClick={() => setChecked(new Set(fetchedModels))} style={tinyBtnStyle}>全选</button>
-              <button onClick={() => setChecked(new Set())} style={tinyBtnStyle}>清空</button>
-              <button onClick={handleConfirmModels} style={{ ...tinyBtnStyle, background: hasChange ? 'var(--color-accent)' : 'var(--color-surface)', color: hasChange ? 'var(--color-on-accent)' : 'var(--color-text-tertiary)', border: `1px solid ${hasChange ? 'var(--color-accent)' : 'var(--border-color)'}` }}>确认选择</button>
-            </div>
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-            {fetchedModels.map(m => {
-              const sel = checked.has(m);
-              return (
-                <button key={m} onClick={() => handleToggleModel(m)} style={{ ...modelTagStyle, background: sel ? 'var(--color-accent)' : 'var(--color-bg)', color: sel ? 'var(--color-on-accent)' : 'var(--color-text)', border: `1px solid ${sel ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
-                  {sel ? '✓ ' : ''}{m}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-
-      {p.models.length > 0 && (
-        <ModelCapabilityPanel
-          provider={p}
-          probing={probing}
-          messages={probeMessages}
-          onProbe={probeCapability}
-          onProfileChange={handleProfileChange}
-          onRemove={handleRemoveModel}
-        />
-      )}
-
-      <div style={{ marginTop: 'var(--space-3)' }}>
-        <div style={{ ...fieldLabel, marginBottom: 'var(--space-1)' }}>手动添加模型</div>
-        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-          <input
-            type="text"
-            value={manualModel}
-            onChange={e => setManualModel(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') handleAddModel(); }}
-            placeholder="输入模型名称，如 nvidia/llama-3.1-nemotron-70b-instruct"
-            style={{ ...inputStyle, flex: 1 }}
-          />
-          <button onClick={handleAddModel} style={{ ...smallBtnStyle, background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none', whiteSpace: 'nowrap' }}>添加</button>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
-        <button onClick={handleTest} disabled={testing} style={{ ...smallBtnStyle, background: 'var(--color-surface)', border: '1px solid var(--border-color)', color: testing ? 'var(--color-text-tertiary)' : 'var(--color-text-secondary)' }}>
-          {testing ? '获取中...' : fetchedModels.length > 0 ? '重新获取模型列表' : '获取模型列表'}
-        </button>
-      </div>
-      {modelListError && (
-        <div style={{ marginTop: 'var(--space-2)', color: '#f87171', fontSize: 'var(--text-xs)', overflowWrap: 'anywhere' }}>
-          {modelListError}。如果该服务不提供模型列表，可在上方手动添加模型
-        </div>
-      )}
-    </div>
-  );
+function PresetMenu({ presets, onPreset }: { presets: ProviderPresetDescriptor[]; onPreset: (preset: ProviderPresetDescriptor) => void }) {
+  return <div style={menuStyle}>
+    {presets.map(preset => <button key={preset.id} onClick={() => onPreset(preset)} style={menuButtonStyle}>{preset.label}</button>)}
+  </div>;
 }
 
-const cardStyle: React.CSSProperties = { padding: 'var(--space-4)', background: 'var(--color-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' };
-const fieldLabel: React.CSSProperties = { display: 'block', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-medium)', color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-1)' };
-const inputStyle: React.CSSProperties = { width: '100%', padding: 'var(--space-1) var(--space-2)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--color-text)', fontSize: 'var(--text-sm)', fontFamily: 'inherit', boxSizing: 'border-box' };
-const removeBtnStyle: React.CSSProperties = { padding: 'var(--space-1) var(--space-2)', background: 'transparent', color: '#f87171', border: '1px solid rgba(248,113,113,0.3)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', cursor: 'pointer', flexShrink: 0 };
-const smallBtnStyle: React.CSSProperties = { padding: 'var(--space-1) var(--space-3)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-medium)', cursor: 'pointer' };
-const tinyBtnStyle: React.CSSProperties = { padding: '0 var(--space-2)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', border: '1px solid var(--border-color)', background: 'var(--color-bg)', color: 'var(--color-text-secondary)', cursor: 'pointer', lineHeight: '22px' };
+const pageStyle: React.CSSProperties = { padding: 'var(--space-6)', maxWidth: '1120px', margin: '0 auto', background: 'var(--glass-bg-soft)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))' };
+const headerStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)' };
+const titleStyle: React.CSSProperties = { fontSize: 'var(--text-lg)', fontWeight: 'var(--font-bold)', margin: '0 0 var(--space-1) 0' };
+const subtitleStyle: React.CSSProperties = { fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', margin: 0 };
+const hintStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', margin: 'var(--space-1) 0 0 0' };
+const menuStyle: React.CSSProperties = { position: 'absolute', top: '100%', right: 0, marginTop: '4px', background: 'var(--color-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: 'var(--space-1)', zIndex: 10, minWidth: '200px', boxShadow: 'var(--shadow-md)' };
+const menuButtonStyle: React.CSSProperties = { display: 'block', width: '100%', padding: 'var(--space-2) var(--space-3)', background: 'transparent', border: 'none', color: 'var(--color-text)', fontSize: 'var(--text-sm)', cursor: 'pointer', textAlign: 'left', borderRadius: 'var(--radius-sm)' };
+const emptyStyle: React.CSSProperties = { textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)', textShadow: 'var(--text-halo)' };
+const modelsStyle: React.CSSProperties = { marginTop: 'var(--space-6)', padding: 'var(--space-4)', background: 'var(--color-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' };
 const tagStyle: React.CSSProperties = { padding: 'var(--space-1) var(--space-2)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' };
-const modelTagStyle: React.CSSProperties = { padding: '1px 6px', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--color-text)', fontFamily: 'var(--font-mono)' };

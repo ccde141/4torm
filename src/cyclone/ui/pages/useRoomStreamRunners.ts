@@ -15,6 +15,7 @@ import { streamUrl } from '../../../lib/apiBase';
 import { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { readCycloneSSE } from './cyclone-sse';
 import { formatStreamStatus } from '../../../components/chat/stream-status';
+import type { Locale } from '../../../i18n/locale';
 import { appendRoomDispatch, appendRoomText, appendRoomTool, completeRoomTool,
   reconcileRoomAnswer, type FeedTool, type RoomReplySegment } from './room-reply-segments';
 
@@ -54,16 +55,16 @@ interface RoomRunner {
 }
 
 /** 把一个 RoomEvent 应用到 roundFeed（流式累积逻辑，从 RoomPanel.speak 内联处理抽出）。 */
-function applyEvent(ev: any, r: RoomRunner): void {
+function applyEvent(ev: any, r: RoomRunner, locale: Locale = 'zh-CN'): void {
   const feed = r.roundFeed;
   switch (ev.type) {
     case 'seat-start':
       r.activeSpeaker = ev.speaker;
-      feed.push({ key: ev.turnId || `intro-${ev.speaker}-${feed.length}`, turnId: ev.turnId, speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: formatStreamStatus('llm-waiting'), tools: [], segments: [] });
+      feed.push({ key: ev.turnId || `intro-${ev.speaker}-${feed.length}`, turnId: ev.turnId, speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: formatStreamStatus('llm-waiting', 0, undefined, undefined, locale), tools: [], segments: [] });
       break;
     case 'seat-waiting': {
       const m = feed[feed.length - 1];
-      if (m && m.speaker === ev.speaker) m.phase = '等待同一 Agent 的当前任务结束';
+      if (m && m.speaker === ev.speaker) m.phase = locale === 'en-US' ? "Waiting for this Agent's current task" : '等待同一 Agent 的当前任务结束';
       break;
     }
     case 'token': {
@@ -71,19 +72,19 @@ function applyEvent(ev: any, r: RoomRunner): void {
       if (m && m.speaker === r.activeSpeaker) {
         m.content += ev.content;
         appendRoomText(m.segments!, ev.content);
-        m.phase = formatStreamStatus('model-output');
+        m.phase = formatStreamStatus('model-output', 0, undefined, undefined, locale);
       }
       break;
     }
     case 'reasoning': {
       const m = feed[feed.length - 1];
-      if (m && m.speaker === r.activeSpeaker) { m.reasoning = (m.reasoning || '') + ev.content; m.phase = formatStreamStatus('model-output'); }
+      if (m && m.speaker === r.activeSpeaker) { m.reasoning = (m.reasoning || '') + ev.content; m.phase = formatStreamStatus('model-output', 0, undefined, undefined, locale); }
       break;
     }
     case 'tool-progress': {
       const m = feed[feed.length - 1];
       if (m && m.speaker === ev.speaker) {
-        m.phase = formatStreamStatus('tool-preparing', Math.round((ev.elapsed || 0) / 1000), ev.tool, ev.argumentChars);
+        m.phase = formatStreamStatus('tool-preparing', Math.round((ev.elapsed || 0) / 1000), ev.tool, ev.argumentChars, locale);
       }
       break;
     }
@@ -92,7 +93,7 @@ function applyEvent(ev: any, r: RoomRunner): void {
       if (m && m.speaker === r.activeSpeaker) {
         m.tools.push({ tool: ev.tool, args: ev.args, status: 'running' });
         appendRoomTool(m.segments!, ev.tool, ev.args);
-        m.phase = formatStreamStatus('tool-exec', 0, ev.tool);
+        m.phase = formatStreamStatus('tool-exec', 0, ev.tool, undefined, locale);
       }
       break;
     }
@@ -104,6 +105,8 @@ function applyEvent(ev: any, r: RoomRunner): void {
           ev.phase === 'tool-exec' ? 'tool-exec' : 'llm-waiting',
           Math.round((ev.elapsed || 0) / 1000),
           tool,
+          undefined,
+          locale,
         );
       }
       break;
@@ -115,7 +118,7 @@ function applyEvent(ev: any, r: RoomRunner): void {
           if (m.tools[k].status === 'running') { m.tools[k] = { ...m.tools[k], result: ev.result, status: ev.ok ? 'success' : 'error' }; break; }
         }
         completeRoomTool(m.segments!, ev.result, ev.ok);
-        m.phase = formatStreamStatus('llm-waiting');
+        m.phase = formatStreamStatus('llm-waiting', 0, undefined, undefined, locale);
       }
       break;
     }
@@ -141,10 +144,13 @@ function applyEvent(ev: any, r: RoomRunner): void {
   }
 }
 
-async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal: AbortSignal): Promise<void> {
+async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal: AbortSignal, locale: Locale): Promise<void> {
   const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
   if (!res.ok) throw new Error(await res.text());
-  await readCycloneSSE(res, onEvent, signal);
+  await readCycloneSSE(res, onEvent, signal, locale === 'en-US' ? {
+    missingBody: 'The SSE response does not contain a data stream.',
+    disconnected: 'The SSE connection closed before a done/error event.',
+  } : {});
 }
 
 /**
@@ -154,7 +160,10 @@ async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (
 export function useRoomStreamRunners(
   onRoomFinished: (roomId: string) => void,
   onDispatchCreated: (roomId: string) => void,
+  locale: Locale = 'zh-CN',
 ) {
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
   const runners = useRef(new Map<string, RoomRunner>());
   const listeners = useRef(new Map<string, Set<() => void>>());
   /** roomId → 待发消息队列 / 输入框草稿。独立于 runner，clearIfDone 后仍存活，跨重挂保留。 */
@@ -279,15 +288,16 @@ export function useRoomStreamRunners(
           path,
           body,
           (ev) => {
-            applyEvent(ev, runner);
+            applyEvent(ev, runner, localeRef.current);
             if (ev.type === 'dispatch-created') onDispatchCreated(roomId);
             if (HIGH_FREQ.has(ev.type)) scheduleNotify(); else flushNotify();
           },
           ctrl.signal,
+          localeRef.current,
         );
       } catch (e) {
         if (!ctrl.signal.aborted) {
-          runner.roundFeed.push({ key: `error-${runner.roundFeed.length}`, speaker: '系统', content: `[请求失败] ${(e as Error).message}`, isHuman: false, tools: [] });
+          runner.roundFeed.push({ key: `error-${runner.roundFeed.length}`, speaker: '系统', content: `[${localeRef.current === 'en-US' ? 'Request failed' : '请求失败'}] ${(e as Error).message}`, isHuman: false, tools: [] });
         }
       } finally {
         if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }

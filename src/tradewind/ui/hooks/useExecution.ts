@@ -18,6 +18,7 @@ import { requestStop } from '../execution-client';
 import { type ExecutionOutcome, type ExecutionPhase } from './execution-phase';
 import { mergeExecutionStatus, type ExecutionIdentityState, type ExecutionStatusUpdate } from './execution-sync';
 import { subscribeAll, unsubscribeAll } from '../stream/unified-client';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 export interface NodeStatus {
   busy: boolean;
@@ -40,6 +41,7 @@ export interface ExecutionActions {
 }
 
 export function useExecution(): ExecutionState & ExecutionActions {
+  const { t } = useLocale();
   const [running, setRunning] = useState(false);
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [workflowId, setWorkflowId] = useState<string | null>(null);
@@ -157,13 +159,13 @@ export function useExecution(): ExecutionState & ExecutionActions {
 
   const stop = useCallback(async () => {
     try {
-      await requestStop();
+      await requestStop(t('tradewind.stopFailed'));
       applyStatus({ running: false, executionId: stateRef.current.executionId ?? undefined, outcome: 'stopped' });
       abortRef.current?.abort();
     } catch (cause) {
-      setError((cause as Error).message || '停止工作流失败');
+      setError((cause as Error).message || t('tradewind.stopFailed'));
     }
-  }, [applyStatus]);
+  }, [applyStatus, t]);
 
   return { running, executionId, workflowId, phase, error, lap, start, stop };
 }

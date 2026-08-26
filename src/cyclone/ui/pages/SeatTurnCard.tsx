@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import { renderTextWithCode } from '../../../engine/markdown';
+import { useLocale } from '../../../i18n/LocaleContext';
 import { BlockRows } from './CycloneBlockRows';
 import type { CycloneDispatch } from './dispatch-timeline';
 import type { DisplayMessage } from './messageDisplay';
@@ -23,13 +24,14 @@ interface Props {
 }
 
 export default function SeatTurnCard(props: Props) {
+  const { t } = useLocale();
   const { turn, streaming = false, phase, dispatches, onAskReply } = props;
   if (props.editing && turn.actionMessage) return <TurnEditor {...props} />;
   const actions = !streaming && turn.actionMessage ? (
     <div className="chat__bubble-actions">
-      <button className="chat__msg-action-btn" title="编辑最终回复" aria-label="编辑最终回复"
+      <button className="chat__msg-action-btn" title={t('chat.editMessage')} aria-label={t('chat.editMessage')}
         onClick={() => props.onStartEdit?.(turn.actionMessage!)}>✏</button>
-      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title="删除最终回复" aria-label="删除最终回复"
+      <button className="chat__msg-action-btn chat__msg-action-btn--danger" title={t('chat.deleteMessage')} aria-label={t('chat.deleteMessage')}
         onClick={() => props.onDelete?.(turn.actionMessage!)}>🗑</button>
     </div>
   ) : null;
@@ -55,16 +57,18 @@ function SeatTurnWorklog({ turn, dispatches, onAskReply, streaming }: {
   onAskReply: (answer: string) => void;
   streaming: boolean;
 }) {
+  const { t } = useLocale();
   if (!turn.workSegments.length) return null;
   const blocks = turn.workSegments.flatMap(segment => segment.blocks);
   const failed = blocks.filter(block => 'status' in block && block.status === 'error').length;
   const running = streaming || blocks.some(block => 'status' in block && block.status === 'running');
-  const state = failed ? `${failed} 项失败` : running ? '正在执行' : '已完成';
+  const state = failed ? t('cyclone.activity.failed', { count: failed })
+    : running ? t('cyclone.activity.running') : t('cyclone.activity.completed');
   return (
     <details className="cyclone-seat-turn__worklog" open={failed > 0 || running}>
       <summary className="cyclone-seat-turn__worklog-summary">
         <span className="cyclone-seat-turn__worklog-arrow">▶</span>
-        <span>工作过程{blocks.length ? ` · ${blocks.length} 项操作` : ''}</span>
+        <span>{t('cyclone.activity.worklog')}{blocks.length ? ` · ${t('cyclone.activity.operations', { count: blocks.length })}` : ''}</span>
         <span className="cyclone-seat-turn__worklog-state">{state}</span>
         {running && <span className="thinking-card__tool-spinner" />}
       </summary>
@@ -93,6 +97,7 @@ function SeatTurnSegment({ id, content, blocks, dispatches, onAskReply }: {
 }
 
 function TurnEditor(props: Props): ReactNode {
+  const { t } = useLocale();
   return (
     <div className="chat__message chat__message--assistant cyclone-seat-turn">
       <div className="chat__avatar">AI</div>
@@ -103,7 +108,7 @@ function TurnEditor(props: Props): ReactNode {
             if (event.key === 'Escape') props.onCancelEdit?.();
             if (event.key === 'Enter' && event.ctrlKey) props.onSaveEdit?.();
           }} rows={4} autoFocus />
-        <div className="chat__edit-actions"><button onClick={props.onSaveEdit}>保存</button><button onClick={props.onCancelEdit}>取消</button></div>
+        <div className="chat__edit-actions"><button onClick={props.onSaveEdit}>{t('common.save')}</button><button onClick={props.onCancelEdit}>{t('common.cancel')}</button></div>
       </div>
     </div>
   );

@@ -13,16 +13,11 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { createPortal } from 'react-dom';
 import { subscribe, unsubscribe } from '../stream/unified-client';
-import ToolCallMessage from './ToolCallMessage';
-import TwToolActivityGroup from './TwToolActivityGroup';
-import TwReasoningBlock from './TwReasoningBlock';
-import DelegateCard from './DelegateCard';
 import { normalizeDelegateProgressAtToolBoundary } from '../../../engine/chat/delegate-progress';
-import ContactCard from './ContactCard';
 import type { ChatMessage } from '../../../types';
 import { appendToolStep, finishLatestToolStep } from '../../../engine/chat/tool-step-events';
+import AgentChatView, { type AgentChatActivity } from './AgentChatView';
 
 interface AgentChatWindowProps {
   nodeId: string;
@@ -68,7 +63,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
   const [roundSource, setRoundSource] = useState<'human' | 'envelope' | 'contact' | null>(null);
   // 已暂停（扣住信封、待续跑）
   const [paused, setPaused] = useState(false);
-  const [activity, setActivity] = useState<'idle' | 'waiting' | 'reasoning' | 'responding' | 'tool' | 'delegate' | 'contact' | 'failed'>('idle');
+  const [activity, setActivity] = useState<AgentChatActivity>('idle');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const msgIdRef = useRef(0);
@@ -545,163 +540,9 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
   };
 
   const isEnvelopeRound = roundSource === 'envelope' || roundSource === 'contact';
-  const activityLabels = {
-    idle: '节点会话就绪', waiting: '等待模型响应', reasoning: '模型正在思考',
-    responding: '正在生成回复', tool: '正在执行工具', delegate: 'SubAgent 正在处理',
-    contact: '正在联络其他节点', failed: '本轮执行失败',
-  };
-  const activityBadges = {
-    idle: '空闲', waiting: '等待', reasoning: '思考', responding: '回复',
-    tool: '工具', delegate: '委派', contact: '联络', failed: '失败',
-  };
-  const statusText = sealed
-    ? '本轮已封存'
-    : paused
-      ? '信封已暂停，等待续跑'
-      : activityLabels[activity];
-
-  // Portal 渲染到 body
-  return createPortal(
-    <div className="tw-chat-overlay" style={{ display: visible ? undefined : 'none' }}>
-      <div className="tw-chat-window">
-        <div className="tw-chat-window__header">
-          <div className="tw-chat-window__identity">
-            <span className="tw-chat-window__eyebrow">AGENT NODE</span>
-            <span className="tw-chat-window__title">{nodeLabel}</span>
-          </div>
-          <span className={`tw-chat-window__state tw-chat-window__state--${activity}${streaming ? ' tw-chat-window__state--active' : ''}`}>
-            {sealed ? '已封存' : paused ? '已暂停' : activityBadges[activity]}
-          </span>
-          <button className="tw-chat-window__close" onClick={onClose}>×</button>
-        </div>
-        <div className="tw-chat-window__messages" ref={messagesContainerRef}>
-          {messages.map((msg) => {
-            if (msg.toolCall) {
-              if (msg.toolCall.toolName === 'delegate') {
-                return <DelegateCard key={msg.id} toolCall={msg.toolCall as any} content={msg.content} />;
-              }
-              if (msg.toolCall.toolName === 'contact') {
-                return <ContactCard key={msg.id} toolCall={msg.toolCall} />;
-              }
-              return <ToolCallMessage key={msg.id} toolCall={msg.toolCall} />;
-            }
-            if (msg.role === 'system') {
-              return (
-                <div key={msg.id} className="tw-chat-msg tw-chat-msg--system">
-                  {msg.content}
-                </div>
-              );
-            }
-            if (msg.role === 'user') {
-              return (
-                <div key={msg.id} className="tw-chat-row tw-chat-row--user">
-                  <div className="tw-chat-avatar tw-chat-avatar--user">你</div>
-                  <div className="tw-chat-bubble">{msg.content}</div>
-                </div>
-              );
-            }
-            const isStreamingMsg = streaming && msg === messages[messages.length - 1];
-            const toolSteps = msg.toolSteps || [];
-            if (toolSteps.length) {
-              return (
-                <div key={msg.id} className="tw-chat-row tw-chat-row--assistant">
-                  <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div>
-                  <div className="tw-chat-bubble">
-                    {msg.reasoningContent && <TwReasoningBlock content={msg.reasoningContent} streaming={isStreamingMsg} />}
-                    <TwToolActivityGroup items={toolSteps} renderItem={(step, index) => (
-                      <ToolCallMessage key={index} toolCall={{
-                        toolName: step.tool, params: step.args, result: step.result,
-                        status: step.status === 'running' ? 'pending' : step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending',
-                        diff: step.diff,
-                      }} />
-                    )} />
-                    {msg.content && <div className="tw-chat-content">{msg.content}</div>}
-                  </div>
-                </div>
-              );
-            }
-            if (isStreamingMsg) {
-              const display = msg.content.trim();
-              return (
-                <div key={msg.id} className="tw-chat-row tw-chat-row--assistant">
-                  <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div>
-                  <div className="tw-chat-bubble">
-                    {msg.reasoningContent && <TwReasoningBlock content={msg.reasoningContent} streaming />}
-                    {display ? (
-                      <>
-                        {display}
-                        <span className="tw-chat-cursor" />
-                      </>
-                    ) : (
-                      <>
-                        <span className="tw-chat-streaming-dot" />
-                        等待模型响应...
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            }
-            return (
-              <div key={msg.id} className="tw-chat-row tw-chat-row--assistant">
-                <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div>
-                <div className="tw-chat-bubble">
-                  {msg.reasoningContent && <TwReasoningBlock content={msg.reasoningContent} streaming={false} />}
-                  {msg.content}
-                </div>
-              </div>
-            );
-          })}
-          {error && <div className="tw-chat-msg tw-chat-msg--error">{error}</div>}
-          <div ref={messagesEndRef} />
-        </div>
-        <div className={`tw-chat-status tw-chat-status--${activity}${streaming ? ' tw-chat-status--active' : ''}${paused ? ' tw-chat-status--paused' : ''}`}>
-          <span className="tw-chat-status__pulse" />
-          <span>{statusText}</span>
-        </div>
-        <div className="tw-chat-window__input-area">
-          {sealed ? (
-            <div className="tw-chat-window__sealed">本次工作流已结束 · 内容只读保留。开始新一轮或重开工作流后可继续对话。</div>
-          ) : (
-            <div className="tw-chat-window__composer">
-              <textarea
-                className="tw-chat-window__input"
-                value={input}
-                onChange={(e) => {
-                  setInput(e.target.value);
-                  e.target.style.height = 'auto';
-                  e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
-                }}
-                onKeyDown={handleKeyDown}
-                placeholder="输入消息..."
-                disabled={streaming || paused}
-                rows={1}
-              />
-              {paused ? (
-                // 已暂停：续跑（重跑本轮）或停整个工作流。信封轮无"取消这一轮"出口。
-                <>
-                  <button className="tw-chat-window__resume" onClick={resumeRound}>续跑</button>
-                  <button className="tw-chat-window__stop tw-chat-window__stop--wide" onClick={stopWorkflow}>停止工作流</button>
-                </>
-              ) : streaming ? (
-                isEnvelopeRound ? (
-                  // 信封轮进行中：可暂停（扣住信封）或停整个工作流；不给"停止输出"（会投垃圾下游）
-                  <>
-                    <button className="tw-chat-window__pause" onClick={pauseRound}>暂停</button>
-                    <button className="tw-chat-window__stop tw-chat-window__stop--wide" onClick={stopWorkflow}>停止工作流</button>
-                  </>
-                ) : (
-                  // human 轮：无下发承诺，可自由停止
-                  <button className="tw-chat-window__stop" onClick={stop} aria-label="停止生成">■</button>
-                )
-              ) : (
-                <button className="tw-chat-window__send" onClick={send} disabled={!input.trim()} aria-label="发送消息">➤</button>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
+  return <AgentChatView visible={visible} sealed={sealed} paused={paused} streaming={streaming}
+    isEnvelopeRound={isEnvelopeRound} activity={activity} nodeLabel={nodeLabel} messages={messages}
+    error={error} input={input} messagesContainerRef={messagesContainerRef} messagesEndRef={messagesEndRef}
+    onClose={onClose} onInput={setInput} onKeyDown={handleKeyDown} onSend={send} onStop={stop}
+    onPauseRound={pauseRound} onResumeRound={resumeRound} onStopWorkflow={stopWorkflow} />;
 }

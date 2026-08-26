@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ChatMessage } from '../../../types';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 /**
  * ContactCard — 横向联络卡片
@@ -9,9 +10,10 @@ import type { ChatMessage } from '../../../types';
 export default function ContactCard({ toolCall }: {
   toolCall: NonNullable<ChatMessage['toolCall']>;
 }) {
+  const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
 
-  const target = String(toolCall.params?.target ?? '未知');
+  const target = String(toolCall.params?.target ?? t('tradewind.chat.contact.unknown'));
   const status = toolCall.status || 'pending';
   const result = toolCall.result || '';
 
@@ -19,7 +21,8 @@ export default function ContactCard({ toolCall }: {
   const isError = status === 'error';
   const color = isPending ? 'var(--color-info)' : isError ? 'var(--color-error)' : 'var(--color-success)';
   const icon = isPending ? '◌' : isError ? '✗' : '✓';
-  const label = isPending ? '等待回复...' : isError ? '联络失败' : '已回复';
+  const label = isPending ? t('tradewind.chat.contact.waiting')
+    : isError ? t('tradewind.chat.contact.failed') : t('tradewind.chat.contact.replied');
 
   return (
     <div className="tw-chat-row tw-chat-row--assistant" style={{ paddingLeft: '38px' }}>
@@ -30,7 +33,7 @@ export default function ContactCard({ toolCall }: {
           aria-expanded={expanded}
         >
           <span className="tw-tool-card__status-dot" style={{ color }}>{icon}</span>
-          <span className="tw-tool-card__label">联络</span>
+          <span className="tw-tool-card__label">{t('tradewind.chat.contact.label')}</span>
           <span className="tw-tool-card__name">{target}</span>
           {isPending && <span className="tw-tool-card__spinner" />}
           <span className="tw-tool-card__status">{label}</span>

@@ -77,6 +77,7 @@ export function buildNativeProbeBody(
     body.max_completion_tokens = body.max_tokens;
     delete body.max_tokens;
   }
+  if (profile === 'llama-cpp') body.chat_template_kwargs = { enable_thinking: false };
   return body;
 }
 

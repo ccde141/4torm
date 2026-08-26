@@ -4,6 +4,7 @@
 
 import { useEffect, useRef } from 'react';
 import { CANVAS_NODE_ITEMS, contextMenuKind } from './context-menu-model';
+import { useLocale } from '../../../i18n/LocaleContext';
 
 export interface ContextMenuState {
   visible: boolean;
@@ -71,12 +72,13 @@ function EdgeMenu({ edgeId, onDelete, onClose }: {
   onDelete: (id: string) => void;
   onClose: () => void;
 }) {
+  const { t } = useLocale();
   return (
     <button
       className="tw-ctxmenu__item tw-ctxmenu__item--danger"
       onClick={() => { onDelete(edgeId); onClose(); }}
     >
-      <span className="tw-ctxmenu__icon">✕</span> 删除连线
+      <span className="tw-ctxmenu__icon">✕</span> {t('tradewind.canvas.menu.deleteEdge')}
     </button>
   );
 }
@@ -90,17 +92,18 @@ function NodeMenu({ nodeId, onDelete, onClone, onEdit, onClose }: {
   onEdit: (id: string) => void;
   onClose: () => void;
 }) {
+  const { t } = useLocale();
   return (
     <>
       <button className="tw-ctxmenu__item" onClick={() => { onEdit(nodeId); onClose(); }}>
-        <span className="tw-ctxmenu__icon">⚙</span> 编辑配置
+        <span className="tw-ctxmenu__icon">⚙</span> {t('tradewind.canvas.menu.editNode')}
       </button>
       <button className="tw-ctxmenu__item" onClick={() => { onClone(nodeId); onClose(); }}>
-        <span className="tw-ctxmenu__icon">⧉</span> 克隆节点
+        <span className="tw-ctxmenu__icon">⧉</span> {t('tradewind.canvas.menu.cloneNode')}
       </button>
       <div className="tw-ctxmenu__divider" />
       <button className="tw-ctxmenu__item tw-ctxmenu__item--danger" onClick={() => { onDelete(nodeId); onClose(); }}>
-        <span className="tw-ctxmenu__icon">✕</span> 删除节点
+        <span className="tw-ctxmenu__icon">✕</span> {t('tradewind.canvas.menu.deleteNode')}
       </button>
     </>
   );
@@ -113,16 +116,17 @@ function PaneMenu({ position, onAddNode, onClose }: {
   onAddNode: (type: string, pos: { x: number; y: number }) => void;
   onClose: () => void;
 }) {
+  const { t } = useLocale();
   return (
     <>
-      <div className="tw-ctxmenu__title">添加节点</div>
+      <div className="tw-ctxmenu__title">{t('tradewind.canvas.menu.addNode')}</div>
       {CANVAS_NODE_ITEMS.map((item) => (
         <button
           key={item.type}
           className="tw-ctxmenu__item"
           onClick={() => { onAddNode(item.type, position); onClose(); }}
         >
-          <span className="tw-ctxmenu__icon">{item.icon}</span> {item.label}
+          <span className="tw-ctxmenu__icon">{item.icon}</span> {t(item.labelKey)}
         </button>
       ))}
     </>

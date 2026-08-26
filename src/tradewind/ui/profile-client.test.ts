@@ -23,3 +23,11 @@ test('profile delete reports failure instead of updating the local list', async 
 
   await assert.rejects(deleteProfile('wf-1', 'p-1'), /档案不存在/);
 });
+
+test('profile requests use the caller locale fallback when no server detail exists', async (t) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 500 });
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await assert.rejects(saveProfiles('wf-1', [], 'Failed to save loop profiles'), /Failed to save loop profiles \(HTTP 500\)/);
+});

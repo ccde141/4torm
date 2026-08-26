@@ -2,6 +2,7 @@ import type { ProviderEntry } from '../../llm';
 import { readModelCapability, type ModelCapability } from '../../llm/model-capabilities';
 import { ModelProfileSelect } from './ModelProfileSelect';
 import type { ProviderProfileSelection } from '../../llm/provider-profiles';
+import { useLocale } from '../../i18n/LocaleContext';
 
 interface Props {
   provider: ProviderEntry;
@@ -11,11 +12,6 @@ interface Props {
   onProfileChange: (model: string, profile: ProviderProfileSelection) => void;
   onRemove: (model: string) => void;
 }
-
-const capabilityLabels: Record<ModelCapability, string> = {
-  tools: '工具调用',
-  vision: '图片理解',
-};
 
 function probeKey(model: string, capability: ModelCapability) {
   return `${capability}:${model}`;
@@ -29,29 +25,31 @@ function CapabilityCell({ provider, model, capability, probing, message, onProbe
   message?: string;
   onProbe: () => void;
 }) {
+  const { t } = useLocale();
   const result = readModelCapability(provider, model, capability);
-  const status = probing ? '分析中' : result?.status === 'supported'
-    ? '支持' : result?.status === 'unsupported' ? '不支持' : '未分析';
+  const status = probing ? t('model.capability.analyzing') : result?.status === 'supported'
+    ? t('model.capability.supported') : result?.status === 'unsupported' ? t('model.capability.unsupported') : t('model.capability.unknown');
   const color = probing || !result ? 'var(--color-text-tertiary)'
     : result.status === 'supported' ? '#34d399' : '#f87171';
 
   return (
     <div style={{ minWidth: '112px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minHeight: '24px' }}>
-        <span aria-hidden="true" style={{ width: '6px', height: '6px', borderRadius: '50%', background: color, flexShrink: 0 }} />
+        <span className="provider-probe-dot" data-active={probing} aria-hidden="true" style={{ width: '6px', height: '6px', borderRadius: '50%', background: color, flexShrink: 0 }} />
         <span style={{ color, fontSize: 'var(--text-xs)', minWidth: '36px' }}>{status}</span>
         <button
           type="button"
           disabled={probing}
           onClick={onProbe}
-          title={`检测${capabilityLabels[capability]}能力`}
+          className="capability-button capability-button--secondary capability-button--compact provider-probe-action"
+          title={t('model.capability.probeTitle', { capability: capability === 'vision' ? t('model.capability.vision') : t('model.capability.tools') })}
           style={probeButtonStyle}
         >
-          {probing ? '检测中' : '检测'}
+          {probing ? t('model.capability.probing') : t('model.capability.probe')}
         </button>
       </div>
       {message && (
-        <div title={message} style={{ marginTop: '2px', maxWidth: '180px', color: 'var(--color-text-tertiary)', fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div className="provider-capability-message" title={message} style={{ marginTop: '2px', maxWidth: '180px', color: 'var(--color-text-tertiary)', fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {message}
         </div>
       )}
@@ -60,19 +58,21 @@ function CapabilityCell({ provider, model, capability, probing, message, onProbe
 }
 
 export function ModelCapabilityPanel({ provider, probing, messages, onProbe, onProfileChange, onRemove }: Props) {
+  const { t } = useLocale();
   return (
-    <section style={{ marginTop: 'var(--space-3)' }}>
+    <section className="provider-capability-panel" style={{ marginTop: 'var(--space-3)' }}>
       <div style={{ marginBottom: 'var(--space-1)', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-medium)' }}>
-        模型能力（{provider.models.length}）
+        {t('model.capability.title', { count: provider.models.length })}
       </div>
       <div style={{ borderTop: '1px solid var(--border-color)' }}>
         <div aria-hidden="true" style={{ display: 'grid', gridTemplateColumns: 'minmax(150px, 1fr) minmax(112px, auto)', gap: 'var(--space-2)', padding: '6px 0 2px', color: 'var(--color-text-tertiary)', fontSize: '10px' }}>
-          <span>模型配置</span>
-          <span>图片理解</span>
+          <span>{t('model.capability.configuration')}</span>
+          <span>{t('model.capability.vision')}</span>
         </div>
         {provider.models.map(model => (
           <div
             key={model}
+            className="provider-capability-row"
             style={{ display: 'grid', gridTemplateColumns: 'minmax(150px, 1fr) minmax(112px, auto)', gap: 'var(--space-2)', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border-color)' }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
@@ -83,7 +83,7 @@ export function ModelCapabilityPanel({ provider, probing, messages, onProbe, onP
                 value={provider.modelProfiles?.[model] ?? 'auto'}
                 onChange={profile => onProfileChange(model, profile)}
               />
-              <button type="button" onClick={() => onRemove(model)} title="移除模型" style={removeButtonStyle}>×</button>
+              <button className="capability-icon-button capability-button--danger provider-remove-model" type="button" onClick={() => onRemove(model)} title={t('model.capability.remove')} aria-label={t('model.capability.remove')} style={removeButtonStyle}>×</button>
             </div>
             <CapabilityCell
               provider={provider}
@@ -102,22 +102,13 @@ export function ModelCapabilityPanel({ provider, probing, messages, onProbe, onP
 
 const probeButtonStyle: React.CSSProperties = {
   padding: '2px 6px',
-  background: 'transparent',
-  border: '1px solid var(--border-color)',
-  borderRadius: 'var(--radius-sm)',
-  color: 'var(--color-text-secondary)',
   fontSize: '10px',
   lineHeight: '16px',
-  cursor: 'pointer',
 };
 
 const removeButtonStyle: React.CSSProperties = {
-  padding: '0 2px',
-  background: 'transparent',
-  border: 'none',
-  color: 'var(--color-text-tertiary)',
+  padding: 0,
   fontSize: '14px',
   lineHeight: 1,
-  cursor: 'pointer',
   flexShrink: 0,
 };

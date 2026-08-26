@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
+import { useLocale } from '../../../i18n/LocaleContext';
 import '../../../styles/components/config-modal.css';
 
 export interface BulletinEntry {
@@ -69,12 +70,14 @@ function diffOps(base: BulletinEntry[], rows: Row[]): BulletinOp[] {
 const clip = (s: string, n = 40) => s.length > n ? s.slice(0, n) + '…' : s;
 
 /** 把一条改动描述成一句话 */
-function describeChange(c: BulletinChange): string {
-  const arrow = c.revertOf != null ? '↩ 撤回：' : '';
-  if (c.before == null && c.after != null) return `${arrow}新增「${clip(c.after.text)}」`;
-  if (c.before != null && c.after == null) return `${arrow}删除「${clip(c.before.text)}」`;
-  if (c.before != null && c.after != null) return `${arrow}改「${clip(c.before.text, 24)}」→「${clip(c.after.text, 24)}」`;
-  return arrow || '（无变化）';
+function describeChange(c: BulletinChange, t: ReturnType<typeof useLocale>['t']): string {
+  const prefix = c.revertOf != null ? t('cyclone.bulletin.changeReverted') : '';
+  if (c.before == null && c.after != null) return t('cyclone.bulletin.changeAdd', { prefix, text: clip(c.after.text) });
+  if (c.before != null && c.after == null) return t('cyclone.bulletin.changeRemove', { prefix, text: clip(c.before.text) });
+  if (c.before != null && c.after != null) return t('cyclone.bulletin.changeUpdate', {
+    prefix, before: clip(c.before.text, 24), after: clip(c.after.text, 24),
+  });
+  return prefix || t('cyclone.bulletin.changeNone');
 }
 
 function fmtTime(ts: number): string {
@@ -92,6 +95,7 @@ export default function BulletinBoard({
   onSaved?: (entries: BulletinEntry[]) => void;
   onRenamed?: () => void;
 }) {
+  const { t } = useLocale();
   const [rows, setRows] = useState<Row[]>(toRows(entries));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -167,30 +171,30 @@ export default function BulletinBoard({
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ops }),
       });
-      if (!r.ok) { alert(await readErrorMessage(r, '保存公告板失败')); return; }
+      if (!r.ok) { alert(await readErrorMessage(r, t('cyclone.bulletin.saveFailed'))); return; }
       applyResult(await r.json());
       setSaved(true);
       setTimeout(() => setSaved(false), 1400);
     } catch (e) {
-      alert(`保存公告板失败：${(e as Error).message}`);
+      alert(t('cyclone.bulletin.errorDetail', { prefix: t('cyclone.bulletin.saveFailed'), error: (e as Error).message }));
     } finally {
       setSaving(false);
     }
   }
 
   async function commitRename() {
-    const t = titleDraft.trim();
+    const nextTitle = titleDraft.trim();
     setEditingTitle(false);
-    if (!t || t === title) return;
+    if (!nextTitle || nextTitle === title) return;
     try {
       const r = await fetch(`/api/cyclone/workshop/${workshopId}/rename`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: t }),
+        body: JSON.stringify({ title: nextTitle }),
       });
-      if (!r.ok) { alert(await readErrorMessage(r, '重命名工作室失败')); return; }
+      if (!r.ok) { alert(await readErrorMessage(r, t('cyclone.bulletin.renameFailed'))); return; }
       onRenamed?.();
     } catch (e) {
-      alert(`重命名工作室失败：${(e as Error).message}`);
+      alert(t('cyclone.bulletin.errorDetail', { prefix: t('cyclone.bulletin.renameFailed'), error: (e as Error).message }));
     }
   }
 
@@ -202,10 +206,10 @@ export default function BulletinBoard({
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ seq }),
       });
-      if (!r.ok) { alert(await readErrorMessage(r, '撤回失败')); return; }
+      if (!r.ok) { alert(await readErrorMessage(r, t('cyclone.bulletin.revertFailed'))); return; }
       applyResult(await r.json());
     } catch (e) {
-      alert(`撤回失败：${(e as Error).message}`);
+      alert(t('cyclone.bulletin.errorDetail', { prefix: t('cyclone.bulletin.revertFailed'), error: (e as Error).message }));
     } finally {
       setReverting(null);
     }
@@ -227,35 +231,35 @@ export default function BulletinBoard({
             />
           ) : (
             <h3
-              title="双击重命名工作室"
+              title={t('cyclone.bulletin.renameTitle')}
               style={{ cursor: 'text' }}
               onDoubleClick={() => { setTitleDraft(title || ''); setEditingTitle(true); }}
-            >📌 工作室公告板{title ? ` · ${title}` : ''}</h3>
+            >📌 {t('cyclone.bulletin.title')}{title ? ` · ${title}` : ''}</h3>
           )}
-          <p className="config-modal-subtitle">全体工位可见 · 人与工位皆可写；每次改动进「更改记录」，可随时撤回 · 双击标题改名</p>
+          <p className="config-modal-subtitle">{t('cyclone.bulletin.subtitle')}</p>
         </div>
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 'var(--space-2)', alignSelf: 'center' }}>
-          <button onClick={doRefresh} style={ghostBtnStyle} title="从磁盘拉取最新（回到本窗口也会自动刷新）">
-            ↻ 刷新
+          <button onClick={doRefresh} style={ghostBtnStyle} title={t('cyclone.bulletin.refreshTitle')}>
+            {t('cyclone.bulletin.refresh')}
           </button>
-          <button onClick={toggleHistory} style={{ ...ghostBtnStyle, ...(showHistory ? ghostBtnActiveStyle : null) }} title="查看/撤回改动记录">
-            🕓 更改记录
+          <button onClick={toggleHistory} style={{ ...ghostBtnStyle, ...(showHistory ? ghostBtnActiveStyle : null) }} title={t('cyclone.bulletin.historyTitle')}>
+            {t('cyclone.bulletin.history')}
           </button>
         </div>
       </div>
 
       {showHistory ? (
         <div style={bodyStyle}>
-          {changes.length === 0 && <div style={emptyStyle}>还没有任何改动记录。</div>}
+          {changes.length === 0 && <div style={emptyStyle}>{t('cyclone.bulletin.noHistory')}</div>}
           {[...changes].reverse().map(c => (
             <div key={c.seq} style={histRowStyle}>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={histDescStyle}>{describeChange(c)}</div>
-                <div style={histMetaStyle}>{fmtTime(c.ts)} · {c.actor}{c.revertOf != null ? ` · 撤回 #${c.revertOf}` : ''}</div>
+                <div style={histDescStyle}>{describeChange(c, t)}</div>
+                <div style={histMetaStyle}>{fmtTime(c.ts)} · {c.actor === '人类' ? t('cyclone.bulletin.authorHuman') : c.actor}{c.revertOf != null ? ` · ${t('cyclone.bulletin.revertedMeta', { seq: c.revertOf })}` : ''}</div>
               </div>
-              <button onClick={() => revert(c.seq)} disabled={reverting != null} style={revertBtnStyle} title="撤回这次改动">
-                {reverting === c.seq ? '…' : '撤回'}
+              <button onClick={() => revert(c.seq)} disabled={reverting != null} style={revertBtnStyle} title={t('cyclone.bulletin.revertTitle')}>
+                {reverting === c.seq ? '…' : t('cyclone.bulletin.revert')}
               </button>
             </div>
           ))}
@@ -264,7 +268,7 @@ export default function BulletinBoard({
         <>
           <div style={bodyStyle}>
             {rows.length === 0 && (
-              <div style={emptyStyle}>还没有公告条目。写下全工作室共享的目标 / 约束 / 通知，让全体对齐同一份背景。</div>
+              <div style={emptyStyle}>{t('cyclone.bulletin.empty')}</div>
             )}
             {rows.map((row, i) => (
               <div key={row.id || `new-${i}`} style={entryStyle}>
@@ -273,25 +277,25 @@ export default function BulletinBoard({
                   style={entryTextareaStyle}
                   value={row.text}
                   onChange={e => updateRow(i, e.target.value)}
-                  placeholder="一条公告：结论、目标或事项…"
+                  placeholder={t('cyclone.bulletin.placeholder')}
                 />
                 <div style={entrySideStyle}>
-                  {row.id && <span style={authorStyle} title={`最后写入：${row.author}`}>{row.author}</span>}
-                  <button onClick={() => removeRow(i)} style={rowDelStyle} title="删除此条">×</button>
+                  {row.id && <span style={authorStyle} title={t('cyclone.bulletin.lastAuthor', { author: row.author })}>{row.author === '人类' ? t('cyclone.bulletin.authorHuman') : row.author}</span>}
+                  <button onClick={() => removeRow(i)} style={rowDelStyle} title={t('cyclone.bulletin.deleteEntry')}>×</button>
                 </div>
               </div>
             ))}
-            <button onClick={addRow} style={addBtnStyle}>＋ 添加条目</button>
+            <button onClick={addRow} style={addBtnStyle}>{t('cyclone.bulletin.addEntry')}</button>
           </div>
 
           <div className="config-modal-footer">
-            {dirty && <span style={dirtyStyle}>● {ops.length} 处未保存改动</span>}
+            {dirty && <span style={dirtyStyle}>{t('cyclone.bulletin.unsaved', { count: ops.length })}</span>}
             <button
               className={`config-btn config-btn-save ${saved ? 'config-btn-done' : ''}`}
               onClick={save}
               disabled={saving || !dirty}
             >
-              {saved ? '✓ 已保存' : saving ? '保存中…' : '保存公告板'}
+              {saved ? t('cyclone.bulletin.saved') : saving ? t('cyclone.bulletin.saving') : t('cyclone.bulletin.save')}
             </button>
           </div>
         </>

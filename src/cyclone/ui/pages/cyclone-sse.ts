@@ -1,12 +1,24 @@
 type CycloneEvent = { type: string; [key: string]: unknown };
 
+export interface CycloneSSEErrors {
+  missingBody: string;
+  disconnected: string;
+}
+
+const defaultErrors: CycloneSSEErrors = {
+  missingBody: 'SSE 响应缺少数据流',
+  disconnected: 'SSE 连接意外中断（未收到 done/error）',
+};
+
 export async function readCycloneSSE(
   response: Response,
   onEvent: (event: CycloneEvent) => void,
   signal?: AbortSignal,
+  errorMessages: Partial<CycloneSSEErrors> = {},
 ): Promise<void> {
+  const errors = { ...defaultErrors, ...errorMessages };
   const reader = response.body?.getReader();
-  if (!reader) throw new Error('SSE 响应缺少数据流');
+  if (!reader) throw new Error(errors.missingBody);
   const decoder = new TextDecoder();
   let buffer = '';
 
@@ -35,5 +47,5 @@ export async function readCycloneSSE(
   }
   buffer += decoder.decode();
   for (const line of buffer.split('\n')) if (processLine(line)) return;
-  throw new Error('SSE 连接意外中断（未收到 done/error）');
+  throw new Error(errors.disconnected);
 }

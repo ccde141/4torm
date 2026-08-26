@@ -1,5 +1,9 @@
 type ConvectionEvent = { type?: string; message?: string; [key: string]: unknown };
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+interface ConvectionSseErrors { missingStream: string; executionFailed: string; interrupted: string }
+const DEFAULT_ERRORS: ConvectionSseErrors = {
+  missingStream: 'SSE 响应缺少数据流', executionFailed: '对流执行失败', interrupted: 'SSE 连接意外中断（未收到 done）',
+};
 
 export class ConvectionHttpError extends Error {
   readonly status: number;
@@ -27,6 +31,7 @@ export async function streamConvectionSSE(
   onEvent: (event: ConvectionEvent) => void,
   signal?: AbortSignal,
   fetcher: Fetcher = fetch,
+  errors: ConvectionSseErrors = DEFAULT_ERRORS,
 ): Promise<void> {
   const response = await fetcher(url, {
     method: 'POST',
@@ -36,7 +41,7 @@ export async function streamConvectionSSE(
   });
   if (!response.ok) throw new ConvectionHttpError(await readHttpError(response), response.status);
   const reader = response.body?.getReader();
-  if (!reader) throw new Error('SSE 响应缺少数据流');
+  if (!reader) throw new Error(errors.missingStream);
 
   const decoder = new TextDecoder();
   let buffer = '';
@@ -57,9 +62,9 @@ export async function streamConvectionSSE(
       if (!payload || payload === '[DONE]') continue;
       const event = JSON.parse(payload) as ConvectionEvent;
       if (event.type === 'done') return;
-      if (event.type === 'error') throw new Error(event.message || '对流执行失败');
+      if (event.type === 'error') throw new Error(event.message || errors.executionFailed);
       onEvent(event);
     }
   }
-  throw new Error('SSE 连接意外中断（未收到 done）');
+  throw new Error(errors.interrupted);
 }

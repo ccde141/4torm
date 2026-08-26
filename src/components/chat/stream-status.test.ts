@@ -10,6 +10,12 @@ test('stream status uses the same labels for model and long tool waits', () => {
   assert.equal(formatStreamStatus('queued', 0), '等待 Agent 空闲...');
 });
 
+test('stream status supports English without translating tool identifiers', () => {
+  assert.equal(formatStreamStatus('llm-waiting', 12, undefined, undefined, 'en-US'), 'Waiting for model response 12s...');
+  assert.equal(formatStreamStatus('tool-exec', 65, 'write_file', undefined, 'en-US'), 'Running write_file 1m 5s...');
+  assert.equal(formatStreamStatus('tool-preparing', 32, 'write_file', 18_432, 'en-US'), 'Preparing write_file arguments 32s · 18.0K chars...');
+});
+
 test('tool target selects common file and command arguments', () => {
   assert.equal(getToolTarget({ filePath: 'src/app.ts', content: 'large payload' }), 'src/app.ts');
   assert.equal(getToolTarget({ command: 'npm test' }), 'npm test');
