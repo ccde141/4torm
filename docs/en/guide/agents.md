@@ -19,6 +19,8 @@ Select **Create Agent** in the upper-right corner. You do not need to configure 
 - **Description** explains the agent's responsibility and helps distinguish similar agents.
 - **Category labels** are only Console filters. They are not included in prompts and do not change execution.
 
+The avatar accepts any image file up to 20 MB. Before saving, 4torm centers and crops it into a 256px WebP; removing it restores the name-initial fallback. Avatars appear in the Console, Monsoon, and Convection. Cyclone, Tradewind, and Tide keep their own initials or workspace markers instead of using agent avatars.
+
 The default model is used unless a workspace overrides it. Choose one explicitly; if left empty, 4torm uses the first registered model.
 
 The **role prompt** controls how the agent understands its identity and work. The role shown on its card is only display metadata.

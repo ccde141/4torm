@@ -38,9 +38,13 @@ npm run build && npm run electron:prod
 - In **development**, `concurrently` starts Fastify and Vite. Frontend requests reach `/api/*` through `localhost`, with HMR enabled.
 - In **production**, Fastify serves the built frontend through `@fastify/static`, so the app runs as a single process. See [Desktop · Electron](../architecture/desktop) for native path support.
 
+## Interface Language
+
+Use the control at the bottom-left of the sidebar to switch between Chinese and English. Both the browser and desktop apps update immediately and remember your selection on the current device. The documentation link in the header opens the matching language version.
+
 ## Initial Setup
 
-1. **Add a model provider** — Open **Provider Management** in the Console, enter an API URL and key, and enable the models you need. 4torm supports OpenAI Compatible and Anthropic Messages APIs. See [Model Providers](./providers).
+1. **Add a model provider** — Open **Provider Management**, choose the provider type that matches the service, confirm its API URL and key, then fetch or manually add models. Provider parameters should normally keep their defaults; see [Model Providers](./providers) for full details.
 2. **Create an agent** — Go to Console → New Agent, select a model, enter a role prompt, and review the tools and skills enabled by default. See [Console and Agent Management](./agents).
 3. **Start a conversation** — Select **Monsoon** in the sidebar, choose an agent, and send a message.
 

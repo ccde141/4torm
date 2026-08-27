@@ -1,58 +1,25 @@
 # Model Providers
 
-Model providers determine where 4torm calls its models. Open **Provider Management** in the Console to add an OpenAI Compatible or Anthropic Messages endpoint and enable multiple models from the same provider.
+A model provider determines which service 4torm calls and how it prepares context, generation parameters, reasoning content, and tool messages. When creating a configuration, choose the **provider type** that matches the actual service. This explicit identity selects the correct behavior without relying on guesses from the API URL or model name.
 
 ## Add a Provider
 
-Select **Add Provider**, then choose a preset or start with a blank configuration.
+Open **Provider Management** in the Console, select **Add Provider**, and choose a preset. Common types covered by the current presets include:
 
-Each provider requires:
+- **Generic compatible endpoint**: OpenAI Compatible, for other services compatible with OpenAI Chat Completions
+- **Cloud providers**: services such as DeepSeek, Kimi, Alibaba Cloud Model Studio, Zhipu AI, and MiniMax
+- **Local inference runtimes**: runtimes such as LM Studio, llama.cpp, Ollama, and vLLM
 
-- **Provider name**: identifies the provider in model lists.
-- **API URL**: the endpoint supplied by the service.
-- **API Key**: the credential used for requests; leave it empty when none is required.
+After creation, edit the name, API URL, and API Key. Leave the key empty for a local service that does not require one.
 
-After saving the URL and key, select **Fetch Model List** to read the models exposed by the service. Select the models you need and confirm to add them to agent model selectors.
+**Fetch Model List** reads the models exposed by the service. Some services omit this endpoint or return only part of their catalog; enter the exact server-side model ID manually in that case.
 
-Some services expose no model-list endpoint or return only part of their catalog. In that case, enter the official model name and add it manually.
+## Per-model Configuration and Capability Tests
 
-## API Protocols
+The configuration selector on each model row remains available for legacy compatibility and exceptional model-level behavior. With a new explicit provider preset, normally leave it on **Auto** so the provider identity selects the adapter.
 
-4torm supports two protocols:
-
-- **OpenAI Compatible** for OpenAI, most Chinese model services, aggregators, and local inference services.
-- **Anthropic Messages** for Anthropic's official API and compatible services.
-
-The protocol defaults to automatic detection. If a proxy or gateway rewrites the URL, or detection does not match the actual endpoint, select the protocol manually under advanced options.
-
-For nonstandard authentication, enter custom headers as JSON:
-
-```json
-{
-  "x-api-key": "sk-xxx"
-}
-```
-
-Custom headers accompany model requests and may contain secrets. Never commit them to a public repository.
-
-## Model Profiles
-
-Models from the same provider may use different parameter conventions. **Auto** is normally sufficient: 4torm normalizes request parameters based on the endpoint and model name.
-
-If detection is wrong, choose a profile for the individual model. Available profiles include generic OpenAI, Kimi, DeepSeek, Zhipu GLM reasoning, Qwen reasoning, OpenRouter, MiniMax, and SiliconFlow reasoning.
-
-This setting changes requests for that model only, not other models under the provider.
-
-## Image Understanding
-
-The image-understanding check verifies whether the current endpoint accepts image input. After it passes, that model can receive images in Monsoon conversations.
-
-A successful check only confirms that one request. Stable image understanding, supported formats, and size limits still depend on the model and provider.
-
-A failed check does not necessarily mean the model has no vision capability. Proxies, access restrictions, and temporary provider errors may affect the result; compare it with provider documentation and an actual conversation.
+The **Image understanding** test confirms only that the endpoint accepted one test image. A passing result allows image input in Monsoon, but stable understanding, supported formats, and size limits still belong to the model and provider. Authentication, proxy, and temporary service failures can also make the test inconclusive.
 
 ## Storage
 
-Provider configuration is stored in `data/providers.json`, including API URLs, API keys, enabled models, and model profiles.
-
-The file is excluded from Git by default, but still contains secrets and must be handled as private configuration.
+Provider configuration is stored in `data/providers.json`, including API URLs, API keys, enabled models, provider parameters, custom fields, and capability results.

@@ -30,6 +30,8 @@ data/
 │       ├── memory/
 │       │   ├── index.md
 │       │   └── {memorySlug}.md
+│       ├── profile/
+│       │   └── avatar.webp       # agent avatar
 │       ├── sessions/
 │       │   ├── _index.json
 │       │   ├── {sessionId}.json
@@ -88,44 +90,6 @@ data/
 └── skin-textures/
 ```
 
-New agents may still receive `.workspace/MEMORY.md`, but current long-term memory uses the index and entries under `memory/`; `MEMORY.md` is no longer read as memory.
-
-## Process-Only State
-
-The server primarily keeps these in memory:
-
-- current agent activity and workspace location;
-- unpersisted live tokens, reasoning, and temporary tool progress;
-- SSE connections and pending write queues;
-- active MCP connections; and
-- Tide scheduler timers.
-
-These are rebuilt after restart. Persisted conversations, tasks, and run records remain independently readable.
-
-Visible background-command observations are stored in `data/runtime/execution-observations.json` so taskboards can reappear after refresh. Actual execution handles remain process-only. After restart, unfinished observations are marked interrupted; commands are not resumed.
-
-## Git Tracking Boundary
-
-The following are excluded by default:
-
-| Path | Content |
-|------|---------|
-| `data/providers.json` | Provider endpoints and API keys |
-| `data/agents/` | Agent settings, memory, conversations, workspaces |
-| `data/labels.json` | Custom labels |
-| `data/skin-config.json`, `data/skin-textures/` | UI settings and imported images |
-| `data/mcp/servers.json` | MCP settings and possible secrets |
-| `data/runtime/` | Local execution observations |
-| `data/convection/sessions/` | Convection meetings |
-| `data/cyclone/` | Cyclone workshops |
-| `data/tradewind/workflows/`, `data/tradewind/runs/` | Workflow definitions, files, and runs |
-| `data/tide/tasks.json`, `data/tide/runs/` | Tide tasks and history |
-| user directories under `data/skills/` | Installed or created skills |
-
-Provider and Tide templates, framework tool catalogs and executors, and built-in skills remain tracked. `data/tools/registry.json` and user executors are local and ignored.
-
-Git exclusion controls commits; it does not create backups.
-
 ## Backup and Migration
 
 For a complete backup preserve:
@@ -135,9 +99,3 @@ For a complete backup preserve:
 3. data managed independently by MCP Servers.
 
 For one workspace, copy its directory—for example `data/cyclone/` or `data/tradewind/`. Shut down 4torm normally before copying so files do not change mid-transfer. Restore the original directory hierarchy before startup.
-
-## Writes and Recovery
-
-Framework-managed JSON and text state is generally written to a unique temporary file and then atomically replaces the target. Startup removes leftover framework temporary files from control directories.
-
-Atomic replacement prevents partially written target files; it does not replace backups. Unsaved model output, tool progress, and process-only state may still be lost on forced exit.

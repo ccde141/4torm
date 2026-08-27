@@ -61,6 +61,10 @@ Removal requires confirmation. If an agent still references the skill, deletion 
 
 ## Skill Tools
 
+Skills may bundle dedicated tools through `tools.json` and an `executors/` directory.
+
+### tools.json Format
+
 `tools.json` uses the same `ToolDef` structure as the global registry:
 
 ```json
@@ -81,7 +85,7 @@ Removal requires confirmation. If an agent still references the skill, deletion 
 ]
 ```
 
-### Definition and Executor Lookup
+### Executor Lookup and Skill Tool Shadowing
 
 Definitions are resolved in this order:
 
@@ -97,6 +101,8 @@ Framework and global custom tools therefore cannot be overridden by a skill. Whe
 1. data/skills/{skillId}/executors/{fileName}.js
 2. data/tools/executors/{fileName}.js
 ```
+
+### Differences from Global Tools
 
 | Property | Global tool | Skill tool |
 |----------|-------------|------------|
@@ -134,14 +140,48 @@ The frontend store exposes `listSkills()`, `getSkillMeta(id)`, `readSkillFile(id
 
 ## Quick Example
 
-To create a Git skill with a dedicated executor:
+### Example: Git Skill with Tools
+
+Directory structure:
 
 ```text
 data/skills/git-ops/
 ├── config.json
 ├── SKILL.md
-├── tools.json
-└── executors/git_status.js
+├── tools.json          # defines git_status and git_diff
+└── executors/
+    ├── git_status.js
+    └── git_diff.js
 ```
 
-Write metadata and instructions, define `git_status` in `tools.json`, and default-export `async function (args, ctx)` from its executor. The directory is discovered automatically; enable `git-ops` for an agent in the Console. The agent can then load its workflow with `use_skill` and call the bundled tool when needed.
+`executors/git_status.js`:
+
+```javascript
+import { execSync } from 'child_process'
+
+export default async function (args, ctx) {
+  const output = execSync('git status --short', {
+    encoding: 'utf-8',
+    cwd: ctx.workspaceDir,
+    timeout: 10000,
+  })
+  return output || '(working tree clean)'
+}
+```
+
+`SKILL.md`:
+
+```markdown
+# Git Ops
+
+You are a Git operations specialist. Use git_status and git_diff to inspect the repository.
+
+## Workflow
+1. Run git_status to inspect the overall state
+2. Read file diffs as needed
+3. Summarize the changes
+```
+
+After assignment, the agent receives its selected global tools plus `git_status` and `git_diff`, deduplicated automatically. At execution time, a tool definition originating from this skill uses the skill-local executor first and the global executor directory as a fallback.
+
+See [Tools](./tools) for every tool-definition field.

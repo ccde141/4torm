@@ -395,7 +395,7 @@ test('扩展文档区分内置文件守卫、自定义执行器与 MCP', async (
   assert.match(mcp, /本地工具的工作区边界不会自动作用于 MCP Server/);
 });
 
-test('README 与公开架构文档不再保留旧三档权限说明', async () => {
+test('README 保持精简，权限边界只在架构文档中展开', async () => {
   const files = [
     '../README.md',
     '../README.zh-CN.md',
@@ -410,8 +410,8 @@ test('README 与公开架构文档不再保留旧三档权限说明', async () =
   for (const { file, text } of docs) {
     assert.doesNotMatch(text, /`strict`|`relaxed`|三级权限|三档/, file);
   }
-  assert.match(docs[0].text, /\*\*Project\*\*.*\*\*Unrestricted\*\*/s);
-  assert.match(docs[1].text, /项目级.*无限制/s);
+  assert.doesNotMatch(docs[0].text, /## Data and Permissions|\*\*Project\*\*.*\*\*Unrestricted\*\*/s);
+  assert.doesNotMatch(docs[1].text, /## 数据与权限|项目级.*无限制/s);
   assert.match(docs[2].text, /执行权限配置/);
   assert.match(docs[3].text, /项目级.*无限制/s);
 });
@@ -460,34 +460,54 @@ test('source comments no longer cite missing planning documents or completed pha
   }
 });
 
-test('模型提供商文档覆盖协议、模型配置与图片检测边界', async () => {
-  const [providers, gettingStarted, config] = await Promise.all([
+test('中英文模型提供商文档只说明用户可操作的配置与能力检测', async () => {
+  const [providers, providersEn, gettingStarted, gettingStartedEn, config] = await Promise.all([
     fs.readFile(new URL('../docs/guide/providers.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/en/guide/providers.md', import.meta.url), 'utf8'),
     fs.readFile(new URL('../docs/guide/getting-started.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/en/guide/getting-started.md', import.meta.url), 'utf8'),
     fs.readFile(new URL('../docs/.vitepress/config.ts', import.meta.url), 'utf8'),
   ]);
 
-  assert.match(providers, /OpenAI Compatible/);
-  assert.match(providers, /Anthropic Messages/);
+  for (const document of [providers, providersEn]) {
+    for (const provider of ['OpenAI Compatible', 'DeepSeek', 'Kimi', 'Alibaba Cloud Model Studio', 'Zhipu AI', 'MiniMax', 'LM Studio', 'llama.cpp', 'Ollama', 'vLLM']) {
+      assert.ok(document.includes(provider), provider);
+    }
+    assert.doesNotMatch(document, /## 自定义请求头|## Custom Headers|x-api-key/i);
+    assert.doesNotMatch(document, /native-confirmed|text-required|JSON 工具信封/);
+    assert.doesNotMatch(document, /自动化契约|付费验收|automated contracts|paid live API/i);
+    assert.doesNotMatch(document, /默认地址|Default URL|https?:\/\/(?:api|localhost|127\.0\.0\.1)/i);
+  }
+  assert.match(providers, /选择与实际服务一致的.*提供商类型/s);
+  assert.match(providers, /云端提供商.*MiniMax 等/s);
+  assert.match(providers, /本地推理框架.*vLLM 等/s);
+  assert.match(providersEn, /provider type.*matches the actual service/is);
+  assert.match(providersEn, /cloud providers.*such as/is);
   assert.match(providers, /图片理解.*检测/s);
-  assert.match(providers, /检测失败也不一定表示模型完全没有视觉能力/);
-  assert.doesNotMatch(providers, /native-confirmed|text-required|JSON 工具信封/);
+  assert.match(providersEn, /image understanding.*test/is);
   assert.match(gettingStarted, /\[模型提供商\]\(\.\/providers\)/);
+  assert.match(gettingStarted, /选择与实际服务一致的提供商类型/);
+  assert.match(gettingStartedEn, /choose the provider type that matches the service/i);
   assert.doesNotMatch(gettingStarted, /one-api|LiteLLM/);
   assert.match(config, /模型提供商.*\/guide\/providers/);
 });
 
-test('故障检修页覆盖 LM Studio、图片和文档构建问题', async () => {
-  const [troubleshooting, config] = await Promise.all([
+test('中英文故障排查按真实 HTTP 状态码说明原因', async () => {
+  const [troubleshooting, troubleshootingEn, config] = await Promise.all([
     fs.readFile(new URL('../docs/guide/troubleshooting.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/en/guide/troubleshooting.md', import.meta.url), 'utf8'),
     fs.readFile(new URL('../docs/.vitepress/config.ts', import.meta.url), 'utf8'),
   ]);
 
-  assert.match(troubleshooting, /LM Studio 报 assistant 消息为空/);
-  assert.match(troubleshooting, /配置切换为「LM Studio」/);
-  assert.match(troubleshooting, /图片发送失败/);
-  assert.match(troubleshooting, /npm run docs:build/);
-  assert.match(config, /故障检修.*\/guide\/troubleshooting/);
+  for (const code of ['400', '401', '403', '404', '409', '413', '415', '429', '500', '502', '503', '504']) {
+    assert.ok(troubleshooting.includes(`| \`${code}\``), code);
+    assert.ok(troubleshootingEn.includes(`| \`${code}\``), code);
+  }
+  assert.match(troubleshooting, /429.*502.*503.*最多重试 3 次/s);
+  assert.match(troubleshootingEn, /429.*502.*503.*up to three retries/is);
+  assert.doesNotMatch(troubleshooting, /LM Studio 报|请求超过上下文上限|图片发送失败|npm run docs:build/);
+  assert.doesNotMatch(troubleshootingEn, /LM Studio Reports|Request Exceeds the Context Window|Image Sending Fails|npm run docs:build/);
+  assert.match(config, /故障排查.*\/guide\/troubleshooting/);
 });
 
 test('Agent 管理区分控制台工具与功能区系统能力', async () => {

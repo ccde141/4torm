@@ -93,12 +93,12 @@ Open `http://localhost:3001`.
 
 ### First Use
 
-1. Add a model endpoint in Provider Management.
+1. Add a model provider, choose its actual provider type, and enable one or more models.
 2. Create an agent from the Console.
 3. Configure its model, role prompt, tools, and skills.
 4. Start a conversation in Monsoon, or organize collaboration in another workspace.
 
-4torm uses the OpenAI Chat Completions-compatible format. Other APIs can be connected through a compatible gateway.
+Built-in presets cover generic OpenAI-compatible endpoints, dedicated cloud-provider configurations, and local runtimes such as llama.cpp, LM Studio, Ollama, and vLLM. Provider-specific parameters remain collapsed unless you need to tune them.
 
 ## Documentation
 
@@ -120,19 +120,6 @@ npm run docs:dev
 ```
 
 Open `http://localhost:5174`.
-
-## Data and Permissions
-
-Runtime data is stored under `data/`. Agents, sessions, workshops, workflows, and automated tasks each maintain their own data boundaries.
-
-API keys, MCP configuration, and workspace runtime data are excluded from Git according to their purpose. Git exclusion is not a backup: before moving the project, separately back up any `data/` content you need to keep.
-
-An agent's built-in file tools provide two permission levels:
-
-- **Project**: access the 4torm project and the current workspace.
-- **Unrestricted**: allow access to other paths outside the project.
-
-Framework state is still managed through dedicated entry points, preventing agents from bypassing feature tools to rewrite tasks, workflows, or other control data directly.
 
 ## Technology Stack
 

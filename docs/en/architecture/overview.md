@@ -89,6 +89,12 @@ Agent activity locations are process-local and return to idle. Tide tasks do not
 
 Start UI issues in the relevant feature UI/store; status-code issues in routes; conversation behavior in the relevant engine; tool/background issues in services and tool routes; persistence issues in stores, `data-paths`, `atomic-io`, and startup recovery; MCP issues in its page, routes, and manager; restart issues in `startup-recovery` and `graceful-shutdown`.
 
+## Related Documents
+
+- [Data Layout](./data-layout)
+- [Security and Isolation](./security)
+- [Desktop · Electron](./desktop)
+
 ## Code Layout
 
 ```text

@@ -156,9 +156,11 @@ const file = resolvePath(args.filePath, ctx, { write: true })
 
 `{ write: true }` also protects framework control data. Executors that bypass `resolvePath` own their path and write boundaries.
 
-## Skill and MCP Tools
+## Skill Tools
 
 Skills may bundle `tools.json` and `executors/`. Their executors load from the skill first, then fall back to the global executor directory. Avoid duplicate names across global tools and skills. See [Skills](./skills).
+
+## MCP Tools
 
 MCP tools come from external services and use neither the local registry nor JavaScript executors. Select them explicitly for agents. Names use `mcp:service:tool` to avoid collisions. See [MCP](./mcp).
 
