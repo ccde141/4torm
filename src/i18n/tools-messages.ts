@@ -1,6 +1,7 @@
 export const toolsZh = {
   'tools.page.title': '工具目录',
   'tools.page.subtitle': '框架工具由系统维护；自定义工具注册后，可在 Agent 配置中按需开放。',
+  'tools.page.refresh': '刷新',
   'tools.page.register': '+ 注册工具',
   'tools.page.empty': '还没有注册任何工具',
   'tools.page.emptyHint': '点击右上角「注册工具」添加自定义工具',
@@ -54,6 +55,7 @@ export const toolsZh = {
 export const toolsEn: Record<keyof typeof toolsZh, string> = {
   'tools.page.title': 'Tool catalog',
   'tools.page.subtitle': 'Framework tools are maintained by the system. Register custom tools to grant them to Agents as needed.',
+  'tools.page.refresh': 'Refresh',
   'tools.page.register': '+ Register tool',
   'tools.page.empty': 'No tools registered yet',
   'tools.page.emptyHint': 'Use “Register tool” above to add a custom tool',

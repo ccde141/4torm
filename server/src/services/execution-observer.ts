@@ -12,6 +12,7 @@ import type {
   ObservationViewer,
   VisualObservationState,
 } from './execution-observation-contract.js';
+import type { FrameworkErrorKind } from '../engine/shared/framework-error.js';
 
 export type {
   ObservationKind,
@@ -39,6 +40,8 @@ export interface ExecutionObservation {
   status: ObservationStatus;
   exitCode?: number;
   error?: string;
+  errorCode?: string;
+  errorKind?: FrameworkErrorKind;
   progress?: string;
   outputTruncated?: boolean;
   /** 已明确脱离调用方的终端任务立即进入任务板，不再等待时间门槛。 */
@@ -60,6 +63,8 @@ export interface ObservationFinish {
   status: ObservationTerminalStatus;
   exitCode?: number;
   error?: string;
+  errorCode?: string;
+  errorKind?: FrameworkErrorKind;
 }
 
 export class ExecutionObserver {
@@ -119,6 +124,8 @@ export class ExecutionObserver {
     entry.finishedAt = this.now();
     if (input.exitCode !== undefined) entry.exitCode = input.exitCode;
     if (input.error) entry.error = input.error;
+    if (input.errorCode) entry.errorCode = input.errorCode;
+    if (input.errorKind) entry.errorKind = input.errorKind;
     this.schedulePersist(true);
   }
 
@@ -167,6 +174,8 @@ export class ExecutionObserver {
         entry.status = 'crashed';
         entry.finishedAt = now;
         entry.error = '应用重启，执行状态未知';
+        entry.errorCode = 'EXECUTION_INTERRUPTED_BY_RESTART';
+        entry.errorKind = 'internal';
         crashed++;
       }
       this.entries.set(entry.id, entry);
@@ -226,6 +235,8 @@ function isObservation(value: unknown): value is ExecutionObservation {
     && ['running', 'waiting', 'cancelling', 'completed', 'failed', 'cancelled', 'crashed'].includes(entry.status ?? '') && Array.isArray(entry.output)
     && (entry.kind === undefined || ['terminal', 'browser', 'computer'].includes(entry.kind))
     && (entry.viewer === undefined || ['terminal', 'browser', 'computer'].includes(entry.viewer))
+    && (entry.errorCode === undefined || typeof entry.errorCode === 'string')
+    && (entry.errorKind === undefined || ['validation', 'not_found', 'conflict', 'permission', 'cancelled', 'provider', 'protocol', 'timeout', 'tool', 'io', 'internal'].includes(entry.errorKind))
     && (entry.progress === undefined || typeof entry.progress === 'string')
     && (entry.outputTruncated === undefined || typeof entry.outputTruncated === 'boolean')
     && (entry.promoted === undefined || typeof entry.promoted === 'boolean');

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { formatObservationElapsed } from './taskboard-observations';
 import { renderTerminalLines, type TerminalChunk } from './terminal-output';
 import { useLocale } from '../../i18n/LocaleContext';
+import type { FrameworkErrorKind } from '../../api/error-contract';
 
 type Scope = 'conversation' | 'cyclone';
 type Status = 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'crashed';
@@ -12,6 +13,8 @@ interface ObservationDetail {
   status: Status;
   exitCode?: number;
   error?: string;
+  errorCode?: string;
+  errorKind?: FrameworkErrorKind;
   outputTruncated?: boolean;
   output: TerminalChunk[];
 }

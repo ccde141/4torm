@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
 import { listSkills, readSkillFile, readSkillToolDefs, createSkill, deleteSkill } from '../../store/skills';
 import type { SkillMeta } from '../../types';
+import { useActiveCapabilityList } from '../capabilities/useActiveCapabilityList';
 import '../../styles/components/capability-management.css';
 import '../../styles/components/skills.css';
 import { useLocale } from '../../i18n/LocaleContext';
 
-export default function SkillsPage() {
+export default function SkillsPage({ active }: { active: boolean }) {
   const { t } = useLocale();
-  const [skills, setSkills] = useState<SkillMeta[]>([]);
+  const { items: skills, loadError, refresh } = useActiveCapabilityList(active, listSkills);
   const [preview, setPreview] = useState<{ meta: SkillMeta; content: string; tools: Array<{ name: string; description: string }> | null } | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
@@ -18,10 +19,6 @@ export default function SkillsPage() {
   const [newContent, setNewContent] = useState(() => t('skills.create.template'));
   const [error, setError] = useState('');
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
-
-  useEffect(() => {
-    listSkills().then(setSkills);
-  }, []);
 
   useEffect(() => {
     if (!preview) return;
@@ -45,7 +42,7 @@ export default function SkillsPage() {
     }
     try {
       await deleteSkill(skillId);
-      setSkills(await listSkills());
+      await refresh();
       setConfirmingDelete(null);
       setError('');
     } catch (e) {
@@ -72,7 +69,7 @@ export default function SkillsPage() {
       await createSkill(meta.id, meta, newContent);
       setNewId(''); setNewName(''); setNewDesc(''); setNewContent(t('skills.create.template'));
       setShowCreate(false);
-      setSkills(await listSkills());
+      await refresh();
       setError('');
     } catch (e) {
       setError((e as Error).message);
@@ -87,13 +84,16 @@ export default function SkillsPage() {
           <p className="capability-subtitle">{t('skills.page.subtitle')}</p>
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <button className="capability-button capability-button--secondary" onClick={() => void refresh().catch(() => undefined)}>
+            {t('skills.page.refresh')}
+          </button>
           <button className={`capability-button ${showCreate ? 'capability-button--secondary' : 'capability-button--primary'}`} onClick={() => setShowCreate(!showCreate)}>
             {showCreate ? t('skills.page.close') : t('skills.page.create')}
           </button>
         </div>
       </div>
 
-      {error && <div className="capability-alert skills-error" role="alert">{error}</div>}
+      {(error || loadError) && <div className="capability-alert skills-error" role="alert">{error || loadError?.message}</div>}
 
       {showCreate && (
         <div className="capability-panel capability-panel--active skill-create-section">

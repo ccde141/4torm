@@ -123,6 +123,10 @@ export async function execContact(
           clearTimeout(timeout);
           resolve(output);
         },
+        onFailure: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
       });
 
       opts.signal.addEventListener('abort', () => {

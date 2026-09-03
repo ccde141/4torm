@@ -12,7 +12,7 @@
  */
 
 import type { ContextMessage } from '../shared/types';
-import { resolveNativeMode } from '../shared/llm-bridge';
+import { resolveNativeMode, type TokenUsage } from '../shared/llm-bridge';
 import { loadAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execToolUnified } from '../shared/exec-tool';
@@ -43,6 +43,9 @@ import {
   isCycloneMemoryTool,
   withCycloneMemoryTools,
 } from './cyclone-memory.js';
+import { compactRoomBeforeRound } from './room-auto-compaction.js';
+import { recordRoomTokenUsage } from './room-token-usage.js';
+import type { ReActTermination } from '../shared/react/outcome.js';
 
 /** 群聊执行事件 */
 export type RoomEvent =
@@ -64,6 +67,31 @@ function formatPublicContext(room: RoomData): string {
   return '以下是群聊记录：\n\n' + room.publicMessages
     .map(m => `[${m.speaker}] ${m.content}`)
     .join('\n\n');
+}
+
+async function loadRoomModelKeys(
+  dataDir: string,
+  workshopId: string,
+  seatIds: readonly string[],
+): Promise<string[]> {
+  const models: string[] = [];
+  for (const seatId of seatIds) {
+    const seat = await loadSeat(dataDir, workshopId, seatId);
+    if (!seat) continue;
+    const agent = await loadAgent(dataDir, seat.agentId);
+    if (agent?.model) models.push(agent.model);
+  }
+  return models;
+}
+
+interface RoomSeatResult {
+  content: string;
+  rawContent: string;
+  reasoning?: string;
+  segments: RoomMessageSegment[];
+  toolCalls: Array<{ tool: string; args: Record<string, string>; result: string }>;
+  usage?: TokenUsage;
+  termination: ReActTermination;
 }
 
 /** 群聊里工位的工具调用器（无 ask/delegate；保留真实工具 + contact） */
@@ -145,7 +173,7 @@ async function runSeatInRoom(
   dataDir: string, workshopId: string, room: RoomData, seat: SeatData,
   signal: AbortSignal | undefined, onEvent: (ev: RoomEvent) => void,
   turnId: string, roundSeq: number, dispatchStarts: DispatchStartBuffer,
-): Promise<{ content: string; rawContent: string; reasoning?: string; segments: RoomMessageSegment[]; toolCalls: Array<{ tool: string; args: Record<string, string>; result: string }> } | null> {
+): Promise<RoomSeatResult | null> {
   const agent = await loadAgent(dataDir, seat.agentId);
   if (!agent) {
     onEvent({ type: 'error', message: `工位「${seat.title}」绑定的 agent 已删除，跳过` });
@@ -233,6 +261,8 @@ async function runSeatInRoom(
     reasoning: reasoningAcc || undefined,
     segments: segmentCollector.segments,
     toolCalls: result.toolCalls.filter(call => call.tool !== 'dispatch'),
+    usage: result.usage,
+    termination: result.termination,
   };
 }
 
@@ -244,6 +274,15 @@ export async function speakInRoom(
   dataDir: string, workshopId: string, room: RoomData,
   humanMessage: string, onEvent: (ev: RoomEvent) => void, signal?: AbortSignal,
 ): Promise<void> {
+  const modelKeys = await loadRoomModelKeys(dataDir, workshopId, room.participantSeatIds);
+  if (modelKeys.length > 0) {
+    const compacted = await compactRoomBeforeRound({
+      dataDir, workshopId, room, modelKeys, summaryModel: modelKeys[0], signal,
+    });
+    if (compacted.compacted) {
+      console.info(`[cyclone] 群聊 ${room.id} 自动压缩 ${compacted.archivedCount} 条早期消息`);
+    }
+  }
   const roundSeq = (room.completedRoundSeq ?? 0) + 1;
   const dispatchStarts = createDispatchStartBuffer(seatId => (
     kickDispatchQueue(dataDir, workshopId, seatId)
@@ -273,8 +312,9 @@ export async function speakInRoom(
         },
       });
       if (!r) continue;
+      recordRoomTokenUsage(room, r.usage);
       const content = r.content;
-      if (content && !content.startsWith('[中止]') && !content.startsWith('[错误]')) {
+      if (r.termination.status === 'succeeded' && content) {
         room.publicMessages.push({
           id: genId('msg'), turnId, roundSeq,
           speaker: currentSeat.title, content, timestamp: Date.now(),

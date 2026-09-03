@@ -14,6 +14,7 @@ import { streamUrl } from '../../../lib/apiBase';
 import type { DisplayMessage } from './messageDisplay';
 import type { TaskBoard } from '../../../utils/taskboard';
 import { readCycloneSSE } from './cyclone-sse';
+import { errorFromResponse } from '../../../api/error-contract';
 import { normalizeDelegateProgressAtToolBoundary } from '../../../engine/chat/delegate-progress';
 import { formatStreamStatus, getToolTarget } from '../../../components/chat/stream-status';
 import type { Locale } from '../../../i18n/locale';
@@ -139,7 +140,7 @@ export function applyEvent(ev: any, ls: Live, locale: Locale = 'zh-CN'): void {
 
 async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal: AbortSignal, locale: Locale): Promise<void> {
   const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await errorFromResponse(res);
   await readCycloneSSE(res, onEvent, signal, locale === 'en-US' ? {
     missingBody: 'The SSE response does not contain a data stream.',
     disconnected: 'The SSE connection closed before a done/error event.',

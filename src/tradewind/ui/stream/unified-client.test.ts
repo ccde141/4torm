@@ -29,14 +29,14 @@ test('Tradewind unified SSE 主动 abort 时正常退出', async () => {
 
 test('Tradewind 连接故障转换为 error 后 done 的收尾序列', () => {
   assert.deepEqual(connectionFailureEvents(new Error('断线')), [
-    { type: 'error', message: '信风实时连接已中断：断线' },
+    { type: 'error', message: '信风实时连接已中断：断线', code: 'STREAM_DISCONNECTED', kind: 'protocol' },
     { type: 'done' },
   ]);
 });
 
 test('Tradewind connection failure can be projected in English without changing event order', () => {
   assert.deepEqual(connectionFailureEvents(new Error('offline'), 'en-US'), [
-    { type: 'error', message: 'Tradewind live connection was interrupted: offline' },
+    { type: 'error', message: 'Tradewind live connection was interrupted: offline', code: 'STREAM_DISCONNECTED', kind: 'protocol' },
     { type: 'done' },
   ]);
 });

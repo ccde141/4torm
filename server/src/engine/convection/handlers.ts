@@ -43,6 +43,9 @@ import {
 } from './convection-memory.js';
 import { runParticipantSequence } from './participant-sequence.js';
 import { resolveConvectionPromptThreshold } from './convection-context-budget.js';
+import { resolveConvectionContent } from './convection-outcome.js';
+import { FrameworkError, type FrameworkErrorKind } from '../shared/framework-error.js';
+import { frameworkTransportErrorFromUnknown } from '../shared/framework-error-transport.js';
 import {
   loadRequiredAgent,
   loadRoundAgents,
@@ -71,7 +74,7 @@ export type ConvectionStreamEvent =
   | { type: 'tool-call'; agentId: string; label: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; agentId: string; label: string; tool: string; result: string }
   | { type: 'agent-done'; agentId: string; label: string; content: string; rawContent: string; reasoning?: string; toolCalls: ToolCallRecord[] }
-  | { type: 'agent-failed'; agentId: string; label: string; message: string }
+  | { type: 'agent-failed'; agentId: string; label: string; message: string; code?: string; kind?: FrameworkErrorKind }
   | { type: 'heartbeat'; agentId: string; label: string; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | { type: 'chair-token'; chunk: string }
   | { type: 'chair-reasoning'; chunk: string }
@@ -79,7 +82,7 @@ export type ConvectionStreamEvent =
   | { type: 'compact-start' }
   | { type: 'compact-done'; archivedCycles: number; summaryLength: number }
   | { type: 'notice'; message: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind };
 
 export { ToolCallRecord };
 
@@ -234,8 +237,6 @@ export async function handleSpeak(
     console.log(`[convection] ${agent.name} (${agent.model}) → tools=${nativeDecision.native ? 'structured' : 'text'}`);
 
     let reasoningContent = '';
-    let participantError = '';
-
     const result = await withAgentActivity(agentId, 'convection', async () => {
       if (nativeDecision.native) {
         // 原生模式：adapter 注入共享 runReActLoopNative
@@ -257,7 +258,6 @@ export async function handleSpeak(
             else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', agentId, label: ev.label, tool: ev.tool!, args: ev.args! });
             else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', agentId, label: ev.label, tool: ev.tool!, result: ev.result! });
             else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', agentId, label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
-            else if (ev.type === 'error') participantError = ev.message || participantError;
           },
           signal,
         });
@@ -281,7 +281,6 @@ export async function handleSpeak(
             else if (ev.type === 'tool-call') onEvent({ type: 'tool-call', agentId, label: ev.label, tool: ev.tool!, args: ev.args! });
             else if (ev.type === 'tool-result') onEvent({ type: 'tool-result', agentId, label: ev.label, tool: ev.tool!, result: ev.result! });
             else if (ev.type === 'heartbeat') onEvent({ type: 'heartbeat', agentId, label: ev.label, phase: ev.phase!, elapsed: ev.elapsed! });
-            else if (ev.type === 'error') participantError = ev.message || participantError;
           },
           signal,
         });
@@ -289,8 +288,8 @@ export async function handleSpeak(
     });
 
     // abort 时保留已流式产出的有效内容
-    const content = result.cleanContent;
-    if (content && !content.startsWith('[中止]') && !content.startsWith('[错误]')) {
+    const content = resolveConvectionContent(result.cleanContent, result.termination);
+    if (content) {
       session.publicMessages.push(buildConvectionMessage({
         agentId,
         speaker: agent.name,
@@ -305,18 +304,19 @@ export async function handleSpeak(
         type: 'agent-done', agentId, label: agent.name,
         content, rawContent: result.rawContent, reasoning: reasoningContent || undefined, toolCalls: result.toolCalls,
       });
-    } else if (!signal?.aborted) {
-      throw new Error(participantError || `${agent.name} 未返回有效正文`);
     }
     },
     commit: async () => { await saveSession(dataDir, session); },
     reportFailure: async (agentId, error) => {
       const agent = agents.get(agentId);
+      const failure = frameworkTransportErrorFromUnknown(error, 'convection.participant');
       onEvent?.({
         type: 'agent-failed',
         agentId,
         label: agent?.name ?? agentId,
-        message: error instanceof Error ? error.message : String(error),
+        message: failure.message,
+        code: failure.code,
+        kind: failure.kind,
       });
       await saveSession(dataDir, session);
     },
@@ -353,7 +353,11 @@ export async function handleChair(
 
   const chairStart = Date.now();
   const abortCtrl = new AbortController();
-  const chairTimer = setTimeout(() => abortCtrl.abort(), LLM_TIMEOUT_MS);
+  let timedOut = false;
+  const chairTimer = setTimeout(() => {
+    timedOut = true;
+    abortCtrl.abort();
+  }, LLM_TIMEOUT_MS);
   // 外部 signal 级联到内部 abortCtrl
   const onAbort = () => abortCtrl.abort();
   signal?.addEventListener('abort', onAbort, { once: true });
@@ -379,17 +383,29 @@ export async function handleChair(
     const r = await withAgentActivity(session.chairAgentId, 'convection', () => (
       callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal: abortCtrl.signal, onReasoning })
     ));
-    reply = r.content;
+    reply = r.content.trim();
+    if (!reply) {
+      throw new FrameworkError({
+        code: 'MODEL_EMPTY_RESPONSE', kind: 'protocol', message: '模型返回空响应',
+        source: 'convection.chair', retryable: false,
+      });
+    }
     updateSessionUsage(session, r.usage);
   } catch (e) {
-    if (hbInterval) clearInterval(hbInterval);
-    clearTimeout(chairTimer);
-    signal?.removeEventListener('abort', onAbort);
-    const msg = abortCtrl.signal.aborted
-      ? `会议助理 LLM 响应超时（${LLM_TIMEOUT_MS / 1000}s），已中止`
-      : (e as Error).message;
-    onEvent?.({ type: 'error', message: msg });
-    return;
+    if (signal?.aborted) return;
+    const typed = timedOut
+      ? new FrameworkError({
+          code: 'MODEL_TIMEOUT', kind: 'timeout',
+          message: `会议助理响应超时（${LLM_TIMEOUT_MS / 1000}s）`,
+          source: 'convection.chair', retryable: false,
+        }, { cause: e })
+      : e instanceof FrameworkError
+        ? e
+        : new FrameworkError({
+            code: 'MODEL_REQUEST_FAILED', kind: 'provider', message: '模型请求失败',
+            source: 'convection.chair', retryable: false,
+          }, { cause: e });
+    throw typed;
   } finally {
     if (hbInterval) clearInterval(hbInterval);
     clearTimeout(chairTimer);

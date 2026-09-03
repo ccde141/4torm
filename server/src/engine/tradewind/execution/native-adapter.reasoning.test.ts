@@ -8,3 +8,7 @@ test('Tradewind native adapter 保留 reasoning 事件', () => {
     { type: 'reasoning', content: '原生思考' },
   );
 });
+
+test('Tradewind native adapter 不在终态消费前重复推送错误', () => {
+  assert.equal(translateNativeLoopEvent({ type: 'error', message: 'failed' }), undefined);
+});

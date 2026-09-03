@@ -4,6 +4,8 @@
  * 与后端 /api/tide/* 端点对应。
  */
 
+import { errorFromResponse } from './error-contract';
+
 const BASE = '/api/tide';
 
 export type TidePushMode = 'accumulate' | 'designated';
@@ -43,8 +45,7 @@ export interface TideRunRecord {
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `${res.status} ${res.statusText}`);
+    throw await errorFromResponse(res, `${res.status} ${res.statusText}`);
   }
   return res.json();
 }

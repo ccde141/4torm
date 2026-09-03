@@ -48,6 +48,7 @@ import { TextToolStreamGate } from './text-tool-stream-gate.js';
 import { resolveProviderSelection } from '../../model-runtime/config/provider-selection.js';
 import { resolveLoggedProviderSelection } from '../../model-runtime/config/provider-selection-log.js';
 import type { TransportId } from '../../model-runtime/contracts/provider-config.js';
+import { providerScheduler } from '../../model-runtime/scheduling/provider-scheduler.js';
 
 interface Provider {
   id: string;
@@ -304,6 +305,8 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
       ...request,
       body,
       protocol,
+      providerId: provider.id,
+      concurrencyLimit: resolveProviderConcurrency(provider),
     };
   }
 
@@ -367,7 +370,24 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
   return {
     url, headers, body: normalizedBody, nameMap, protocol,
     cumulativeStream: selection.providerType === 'minimax',
+    providerId: provider.id,
+    concurrencyLimit: resolveProviderConcurrency(provider),
   };
+}
+
+const DEFAULT_PROVIDER_CONCURRENCY = 3;
+
+function resolveProviderConcurrency(provider: Provider): number {
+  const policy = provider.runtimePolicy;
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+    return DEFAULT_PROVIDER_CONCURRENCY;
+  }
+  const configured = (policy as Record<string, unknown>).maxConcurrency;
+  if (configured === undefined || configured === null) return DEFAULT_PROVIDER_CONCURRENCY;
+  if (!Number.isInteger(configured) || (configured as number) < 1) {
+    throw new Error(`Provider ${provider.id} 的 runtimePolicy.maxConcurrency 必须是正整数`);
+  }
+  return configured as number;
 }
 
 function logCustomParameterFields(providerId: string, parameters: unknown): void {
@@ -383,41 +403,6 @@ function supportedProtocol(transport: TransportId): ProviderProtocol {
   throw new Error(`当前版本尚未实现模型传输协议：${transport}`);
 }
 
-/** 可重试的 HTTP 状态码 */
-const RETRYABLE_STATUS = new Set([429, 502, 503]);
-const MAX_RETRIES = 3;
-const BASE_DELAY_MS = 1000;
-
-// ── 全局并发信号量 ─────────────────────────────────────────────────
-// 限制同时进行的 LLM 请求数量，防止 rate limit / 内存压力
-const MAX_CONCURRENT_LLM = 3;
-let activeCalls = 0;
-const waitQueue: Array<() => void> = [];
-
-function acquireSlot(): Promise<void> {
-  if (activeCalls < MAX_CONCURRENT_LLM) {
-    activeCalls++;
-    return Promise.resolve();
-  }
-  return new Promise<void>(resolve => waitQueue.push(resolve));
-}
-
-function releaseSlot(): void {
-  const next = waitQueue.shift();
-  if (next) {
-    next(); // 不减 activeCalls，直接移交给下一个
-  } else {
-    activeCalls--;
-  }
-}
-
-/** 指数退避 sleep，带 ±20% 抖动 */
-function retrySleep(attempt: number): Promise<void> {
-  const base = BASE_DELAY_MS * 2 ** attempt;
-  const jitter = base * (0.8 + Math.random() * 0.4);
-  return new Promise(r => setTimeout(r, jitter));
-}
-
 /**
  * 调一次 LLM（自动选择流式/非流式）。
  *
@@ -427,20 +412,25 @@ function retrySleep(attempt: number): Promise<void> {
  * 返回 LLMResult：{ content, finishReason }。
  * finishReason = 'length' 表示输出被 max_tokens 截断，调用方应决定是否续写。
  *
- * 重试策略：429/502/503 指数退避最多 3 次；其余错误直接抛出。
+ * 每次调用只发送一次请求。失败由上层明确呈现，不在桥接层隐式重试。
  */
 export async function callLLM(params: LLMCallParams): Promise<LLMResult> {
-  await acquireSlot();
-  try {
-    return await callLLMInner(params);
-  } finally {
-    releaseSlot();
-  }
+  const useStream = typeof params.onChunk === 'function';
+  const request = await buildRequest(params, useStream);
+  return providerScheduler.run(
+    request.providerId,
+    request.concurrencyLimit,
+    () => callLLMInner(params, request, useStream),
+    params.signal,
+  );
 }
 
-async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
-  const useStream = typeof params.onChunk === 'function';
-  const { url, headers, body, nameMap, protocol, cumulativeStream = false } = await buildRequest(params, useStream);
+async function callLLMInner(
+  params: LLMCallParams,
+  request: Awaited<ReturnType<typeof buildRequest>>,
+  useStream: boolean,
+): Promise<LLMResult> {
+  const { url, headers, body, nameMap, protocol, cumulativeStream = false } = request;
   const bodyStr = JSON.stringify(body);
 
   // 诊断埋点：每次请求打 prompt 规模，看上下文是否随轮次膨胀（框架侧信号）。
@@ -450,44 +440,31 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
     console.log(`[llm-request] 发送 prompt：消息数=${msgCount} body=${(bodyStr.length / 1024).toFixed(1)}KB max_tokens=${maxTokens}${body.tools ? ' +tools' : ''}`);
   }
 
-  let lastError: Error | null = null;
+  if (params.signal?.aborted) throw new Error('LLM 请求已被中止');
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) await retrySleep(attempt - 1);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: bodyStr,
+      signal: params.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    const cause = error instanceof Error ? error.cause : undefined;
+    const detail = readNetworkCause(cause);
+    const base = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      detail ? `${base}（${detail} — 无法连接 ${url}，请确认该地址/服务可达）` : base,
+      { cause: error },
+    );
+  }
 
-    // 如果已被外部 abort，不再重试
-    if (params.signal?.aborted) {
-      throw new Error('LLM 请求已被中止');
-    }
-
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: bodyStr,
-        signal: params.signal,
-      });
-    } catch (err: any) {
-      // 网络错误（DNS/连接失败）也重试。
-      // undici 把真实原因（ECONNREFUSED/ENOTFOUND/证书错误）塞在 err.cause，
-      // 只读 err.message 会得到无信息的 "fetch failed"，这里展开 cause 便于定位。
-      if (err?.name === 'AbortError') throw err;
-      const cause = err?.cause;
-      const detail = cause?.code || cause?.message || '';
-      const base = err instanceof Error ? err.message : String(err);
-      lastError = new Error(
-        detail ? `${base}（${detail} — 无法连接 ${url}，请确认该地址/服务可达）` : base
-      );
-      continue;
-    }
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      lastError = new Error(`LLM HTTP ${res.status}: ${text.slice(0, 200)}`);
-      if (RETRYABLE_STATUS.has(res.status)) continue;
-      throw lastError;
-    }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 200)}`);
+  }
 
     // 成功响应
     if (!useStream) {
@@ -541,9 +518,13 @@ async function callLLMInner(params: LLMCallParams): Promise<LLMResult> {
     const normalized = applyTextToolFallback(result, params.tools, nameMap);
     gate?.finish(Boolean(normalized.content));
     return normalized;
-  }
+}
 
-  throw lastError ?? new Error('LLM 调用失败（重试耗尽）');
+function readNetworkCause(cause: unknown): string {
+  if (!cause || typeof cause !== 'object') return '';
+  const value = cause as { code?: unknown; message?: unknown };
+  if (typeof value.code === 'string') return value.code;
+  return typeof value.message === 'string' ? value.message : '';
 }
 
 /** 标准化 finish_reason：不同 provider 可能返回不同值 */

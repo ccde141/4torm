@@ -69,6 +69,15 @@ test('真实 token 不足压缩门槛时保持原上下文', () => {
   assert.equal(result.estimatedTokens, 7999);
 });
 
+test('自动入口可以使用模型已探测的动态安全预算', () => {
+  const messages = [
+    user('一'), assistant('答一'), user('二'), assistant('答二'),
+    user('三'), assistant('答三'), user('四'), assistant('答四'),
+  ];
+  assert.equal(planSeatCompaction(messages, 5_999, 6_000).ok, false);
+  assert.equal(planSeatCompaction(messages, 6_000, 6_000).ok, true);
+});
+
 test('没有真实 token 时估算包含工具参数与工具结果', () => {
   const large = 'x'.repeat(30_000);
   const messages: SeatContextMessage[] = [

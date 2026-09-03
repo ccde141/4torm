@@ -1,6 +1,7 @@
 export const skillsZh = {
   'skills.page.title': '技能',
   'skills.page.subtitle': 'Skill = 提示词注入 + 专属工具（可选）— 为 Agent 赋予领域专长',
+  'skills.page.refresh': '刷新',
   'skills.page.close': '关闭',
   'skills.page.create': '+ 新建技能',
   'skills.create.title': '开发者模式 — 创建新技能',
@@ -35,6 +36,7 @@ export const skillsZh = {
 export const skillsEn: Record<keyof typeof skillsZh, string> = {
   'skills.page.title': 'Skills',
   'skills.page.subtitle': 'Skills combine prompt instructions with optional dedicated tools to give Agents domain expertise.',
+  'skills.page.refresh': 'Refresh',
   'skills.page.close': 'Close',
   'skills.page.create': '+ New skill',
   'skills.create.title': 'Developer mode — Create a skill',

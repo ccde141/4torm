@@ -10,6 +10,12 @@ import { roomFile, roomsDir, readJsonSafe, ensureDir, atomicWrite, removeStrict,
 import { loadWorkshop, saveWorkshop } from './workshop-store';
 import { loadSeat } from './seat-store';
 import { listRoomDispatches } from './dispatch-store';
+import {
+  cleanupRoomReasoning, deleteRoomReasoning, externalizeRoomReasoning, hydrateRoomReasoning,
+} from './room-reasoning-store.js';
+import { tryAcquireRoomLock } from './room-lock.js';
+
+export { tryAcquireRoomLock } from './room-lock.js';
 
 export class RoomDeleteConflictError extends Error {}
 export class RoomSettingsConflictError extends Error {}
@@ -86,7 +92,8 @@ export async function createRoom(
 export async function loadRoom(
   dataDir: string, workshopId: string, roomId: string,
 ): Promise<RoomData | null> {
-  return readJsonSafe<RoomData>(roomFile(dataDir, workshopId, roomId));
+  const room = await readJsonSafe<RoomData>(roomFile(dataDir, workshopId, roomId));
+  return room ? hydrateRoomReasoning(dataDir, workshopId, room) : null;
 }
 
 /** 保存群聊（刷新 updatedAt） */
@@ -94,7 +101,9 @@ export async function saveRoom(
   dataDir: string, workshopId: string, room: RoomData,
 ): Promise<void> {
   room.updatedAt = new Date().toISOString();
-  await atomicWrite(roomFile(dataDir, workshopId, room.id), JSON.stringify(room, null, 2));
+  const externalized = await externalizeRoomReasoning(dataDir, workshopId, room);
+  await atomicWrite(roomFile(dataDir, workshopId, room.id), JSON.stringify(externalized.persisted, null, 2));
+  await cleanupRoomReasoning(dataDir, workshopId, room.id, externalized.activeFiles);
 }
 
 function archiveName(scope: string, id: string, seq: number): string {
@@ -175,6 +184,7 @@ export async function deleteRoom(
     await saveWorkshop(dataDir, w);
   }
   await removeStrict(roomFile(dataDir, workshopId, roomId));
+  await deleteRoomReasoning(dataDir, workshopId, roomId);
   await Promise.all(dispatches.map(item => removeStrict(dispatchFile(dataDir, workshopId, item.id))));
   return true;
 }
@@ -284,19 +294,4 @@ export async function setRoomMode(
     await saveRoom(dataDir, workshopId, room);
     return room;
   });
-}
-
-// ── per-room 并发锁（按 roomId 互斥，非阻塞） ──────────────────
-
-const roomLocks = new Set<string>();
-
-/**
- * 尝试获取群聊锁。返回 release 函数表示成功；返回 null 表示已被占用。
- * 锁键 = workshopId/roomId。
- */
-export function tryAcquireRoomLock(workshopId: string, roomId: string): (() => void) | null {
-  const key = `${workshopId}/${roomId}`;
-  if (roomLocks.has(key)) return null;
-  roomLocks.add(key);
-  return () => { roomLocks.delete(key); };
 }

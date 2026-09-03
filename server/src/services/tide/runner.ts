@@ -24,6 +24,7 @@ import { resolveTarget, resolveTargetSessionId, saveTurn } from './session-resol
 import { SELF_LOOP_INSTRUCTION, extractNextPrompt } from './self-loop';
 import { withAgentActivity } from '../../engine/shared/agent-activity.js';
 import { normalizeSystemMessages } from '../../engine/shared/system-messages.js';
+import { assertTideRunNotTimedOut } from './run-outcome.js';
 
 /** 10 分钟硬超时 */
 const TIMEOUT_MS = 10 * 60 * 1000;
@@ -165,7 +166,11 @@ async function executeTideTask(dataDir: string, task: TideTask, isManual: boolea
   ]);
 
   const runner = new SessionRunner(opts);
-  const timer = setTimeout(() => runner.abort(), TIMEOUT_MS);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    runner.abort();
+  }, TIMEOUT_MS);
 
   let answer: string; let rawContent: string;
   // 收集完整中间消息链（tool-call / tool-result），对齐季风体验
@@ -198,6 +203,7 @@ async function executeTideTask(dataDir: string, task: TideTask, isManual: boolea
       }
     };
     const result = await runner.chat(systemPrompt, chatMessages, onEvent);
+    assertTideRunNotTimedOut(timedOut, TIMEOUT_MS);
     answer = result.content; rawContent = result.rawContent;
   } catch (e) {
     clearTimeout(timer);

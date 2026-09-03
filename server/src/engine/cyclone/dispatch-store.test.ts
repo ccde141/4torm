@@ -7,6 +7,7 @@ import {
   createDispatch,
   expireDispatchDecisions,
   listRoomDispatches,
+  listWorkshopDispatches,
   updateDispatch,
 } from './dispatch-store.js';
 
@@ -46,4 +47,42 @@ test('完成状态与回执原子更新且三轮后只过期未处理决策', as
   const [expired] = await listRoomDispatches(dataDir, 'work-a', 'room-a');
   assert.equal(expired.decisionState, 'expired');
   assert.equal(expired.response, '接口已经完成');
+});
+
+test('相同来源轮次与顺序的重复派发只落盘一次', async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-dispatch-idempotent-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const input = {
+    workshopId: 'work-a', sourceKind: 'room' as const, sourceRoomId: 'room-a',
+    sourceSeatId: 'seat-a', sourceSeatTitle: '架构', sourceTurnId: 'turn-1',
+    sourceRoundSeq: 1, dispatchOrder: 0, targetSeatId: 'seat-b',
+    targetSeatTitle: '后端', task: '实现接口',
+  };
+
+  const [first, repeated] = await Promise.all([
+    createDispatch(dataDir, input),
+    createDispatch(dataDir, input),
+  ]);
+
+  assert.equal(repeated.id, first.id);
+  assert.equal((await listWorkshopDispatches(dataDir, 'work-a')).length, 1);
+});
+
+test('相同投递身份不能悄悄改写任务内容', async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-dispatch-conflict-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const input = {
+    workshopId: 'work-a', sourceKind: 'seat' as const, sourceRoomId: '',
+    sourceSeatId: 'seat-a', sourceSeatTitle: '架构', sourceTurnId: 'turn-1',
+    sourceRoundSeq: 0, dispatchOrder: 0, targetSeatId: 'seat-b',
+    targetSeatTitle: '后端', task: '实现接口', receiptState: 'pending' as const,
+  };
+  await createDispatch(dataDir, input);
+
+  await assert.rejects(
+    createDispatch(dataDir, { ...input, task: '删除接口' }),
+    /派发幂等键冲突/,
+  );
+  const [saved] = await listWorkshopDispatches(dataDir, 'work-a');
+  assert.equal(saved.task, '实现接口');
 });

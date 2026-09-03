@@ -2,6 +2,7 @@ import type { ContextMessage, LLMOptions } from '../shared/types.js';
 import { callLLM, type TokenUsage } from '../shared/llm-bridge.js';
 import { runReActLoop as runSharedTextLoop } from '../shared/react/text-loop.js';
 import type { ReActStreamEvent } from '../shared/react/native-loop.js';
+import type { ReActTermination } from '../shared/react/outcome.js';
 import { callTool } from './tool-bridge.js';
 import { executeConvectionMemoryTool } from './convection-memory.js';
 
@@ -16,6 +17,7 @@ export interface AgentReActResult {
   rawContent: string;
   toolCalls: ToolCallRecord[];
   usage?: TokenUsage;
+  termination: ReActTermination;
 }
 
 export interface ConvectionReActEvent {
@@ -121,6 +123,7 @@ export async function runConvectionReActWith(
     rawContent: result.rawContent,
     toolCalls: result.toolCalls,
     usage: result.usage,
+    termination: result.termination,
   };
 }
 

@@ -5,7 +5,7 @@
  * - 检测 token 阈值 → 触发压缩
  * - 按轮次粒度归档旧消息到磁盘
  * - 调 LLM 生成全量摘要替换旧消息
- * - 失败策略：重试一次 → 仍失败则禁用压缩 + 推警告
+ * - 失败策略：归档失败中止提交；摘要失败不重试，禁用后续压缩并推警告
  *
  * 设计要点：
  * - 压缩是独立 LLM 调用（只传待压缩消息 + 摘要 prompt）
@@ -16,9 +16,7 @@
 
 import type { ContextMessage } from '../../shared/types';
 import { callLLM } from '../../shared/llm-bridge';
-import { atomicWriteFile } from '../../shared/atomic-io';
-import fs from 'node:fs/promises';
-import path from 'node:path';
+import { prepareCompactionArchive } from '../../shared/compaction-archive.js';
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
@@ -40,6 +38,8 @@ export interface CompactorOpts {
   threshold: number;
   /** 压缩完成/警告回调 */
   onEvent?: (ev: CompactEvent) => void;
+  /** 测试与受控运行时可注入摘要执行器。 */
+  summarize?: (messages: ContextMessage[]) => Promise<string>;
 }
 
 export type CompactEvent =
@@ -48,7 +48,7 @@ export type CompactEvent =
   | { type: 'compact-warn'; message: string };
 
 export interface CompactState {
-  /** 压缩是否已被禁用（两次失败后） */
+  /** 压缩是否已被禁用（摘要失败后） */
   disabled: boolean;
   /** 当前已归档的轮次序号 */
   archiveSeq: number;
@@ -132,19 +132,7 @@ export async function compactIfNeeded(
 
   // 归档到磁盘
   const toArchive = toCompactRounds.flat();
-  state.archiveSeq++;
-  const archiveFileName = `round-${String(state.archiveSeq).padStart(3, '0')}.json`;
-
-  try {
-    await fs.mkdir(opts.archiveDir, { recursive: true });
-    await atomicWriteFile(
-      path.join(opts.archiveDir, archiveFileName),
-      JSON.stringify(toArchive, null, 2),
-    );
-  } catch (e) {
-    // 归档失败不阻塞压缩（摘要仍在上下文里，非灾难性），但显式告警，不静默吞。
-    opts.onEvent?.({ type: 'compact-warn', message: `归档写入失败（摘要仍生效）：${(e as Error).message}` });
-  }
+  if (!await prepareArchive(toArchive, state, opts, '归档写入失败，压缩已中止')) return false;
 
   // 调 LLM 生成摘要（独立调用，只传待压缩消息）
   const summaryMessages: ContextMessage[] = [
@@ -154,17 +142,11 @@ export async function compactIfNeeded(
 
   let summary: string;
   try {
-    summary = await callSummaryLLM(summaryMessages, opts);
-  } catch (firstErr) {
-    // 重试一次
-    try {
-      summary = await callSummaryLLM(summaryMessages, opts);
-    } catch {
-      // 两次失败 → 禁用压缩
-      state.disabled = true;
-      opts.onEvent?.({ type: 'compact-warn', message: `压缩失败已禁用：${(firstErr as Error).message}` });
-      return false;
-    }
+    summary = await summarizeMessages(summaryMessages, opts);
+  } catch (error) {
+    state.disabled = true;
+    opts.onEvent?.({ type: 'compact-warn', message: `压缩失败已禁用：${(error as Error).message}` });
+    return false;
   }
 
   // 重组 messages：system + 摘要消息 + 保留轮次
@@ -209,6 +191,33 @@ async function callSummaryLLM(
   });
   if (!result.content.trim()) throw new Error('摘要 LLM 返回空内容');
   return result.content;
+}
+
+async function summarizeMessages(
+  messages: ContextMessage[],
+  opts: CompactorOpts,
+): Promise<string> {
+  const summary = opts.summarize
+    ? await opts.summarize(messages)
+    : await callSummaryLLM(messages, opts);
+  if (!summary.trim()) throw new Error('摘要 LLM 返回空内容');
+  return summary;
+}
+
+async function prepareArchive(
+  messages: unknown[],
+  state: CompactState,
+  opts: CompactorOpts,
+  failureLabel: string,
+): Promise<boolean> {
+  const archive = await prepareCompactionArchive(state, {
+    archiveDir: opts.archiveDir,
+    fileName: sequence => `round-${String(sequence).padStart(3, '0')}.json`,
+    payload: messages,
+  });
+  if (archive.ok) return true;
+  opts.onEvent?.({ type: 'compact-warn', message: `${failureLabel}：${archive.error.message}` });
+  return false;
 }
 
 // ── 会议室压缩 ────────────────────────────────────────────────────
@@ -290,19 +299,7 @@ export async function compactMeetingIfNeeded(
 
   // 归档到磁盘
   const toArchive = toCompactCycles.flat();
-  state.archiveSeq++;
-  const archiveFileName = `round-${String(state.archiveSeq).padStart(3, '0')}.json`;
-
-  try {
-    await fs.mkdir(opts.archiveDir, { recursive: true });
-    await atomicWriteFile(
-      path.join(opts.archiveDir, archiveFileName),
-      JSON.stringify(toArchive, null, 2),
-    );
-  } catch (e) {
-    // 归档失败不阻塞压缩（摘要仍在上下文里，非灾难性），但显式告警，不静默吞。
-    opts.onEvent?.({ type: 'compact-warn', message: `归档写入失败（摘要仍生效）：${(e as Error).message}` });
-  }
+  if (!await prepareArchive(toArchive, state, opts, '会议归档失败，压缩已中止')) return false;
 
   // 会长做摘要
   const speakerLabels = participants ?? extractSpeakers(toArchive);
@@ -314,15 +311,11 @@ export async function compactMeetingIfNeeded(
 
   let summary: string;
   try {
-    summary = await callSummaryLLM(summaryMessages, opts);
-  } catch (firstErr) {
-    try {
-      summary = await callSummaryLLM(summaryMessages, opts);
-    } catch {
-      state.disabled = true;
-      opts.onEvent?.({ type: 'compact-warn', message: `会议压缩失败已禁用：${(firstErr as Error).message}` });
-      return false;
-    }
+    summary = await summarizeMessages(summaryMessages, opts);
+  } catch (error) {
+    state.disabled = true;
+    opts.onEvent?.({ type: 'compact-warn', message: `会议压缩失败已禁用：${(error as Error).message}` });
+    return false;
   }
 
   // 重组 publicMessages：摘要消息 + 保留周期

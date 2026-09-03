@@ -39,6 +39,9 @@ import { NodeEventEmitter } from '../streaming/node-event-emitter';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { normalizeSystemMessages } from '../../shared/system-messages.js';
+import { resolveTradewindTermination } from './tradewind-outcome.js';
+import type { FrameworkErrorKind } from '../../shared/framework-error.js';
+import { frameworkTransportErrorFromUnknown } from '../../shared/framework-error-transport.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -52,6 +55,8 @@ export interface QueuedMessage {
    * info.autoOutcome：自动模式终结门结果（'completed'/'anomaly'），手动/普通为 undefined。
    */
   onComplete?: (output: string, info?: { autoOutcome?: 'completed' | 'anomaly' }) => void;
+  /** 信封/contact 轮真实失败时拒绝等待方，不把错误文本当交付。 */
+  onFailure?: (error: Error) => void;
   /**
    * 内部标记：续跑（resume）重投的消息。为 true 时 handle 跳过"追加 user message"
    * （原消息已在上下文里）——便宜版续跑 = 在既有上下文上重跑本轮 react。外部勿设。
@@ -82,7 +87,7 @@ export type NodeRunnerEvent = (
   | { type: 'compact-start' }
   | { type: 'compact-done'; archivedRounds: number; summaryLength: number }
   | { type: 'compact-warn'; message: string }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind }
   | { type: 'done'; outcome?: 'completed' | 'stopped' | 'error' }
   | { type: 'paused' }
 ) & {
@@ -309,6 +314,7 @@ export class NodeRunner {
 
     try {
       const result = await this.runReAct(emit, msg.source);
+      resolveTradewindTermination(result.termination, result.autoOutcome);
       // 追加 assistant 回复到上下文
       this.messages.push({
         role: 'assistant',
@@ -348,16 +354,15 @@ export class NodeRunner {
       }
 
       if (!isAbort) {
-        emit({ type: 'error', message: (e as Error).message });
+        const failure = frameworkTransportErrorFromUnknown(e, 'tradewind.node');
+        emit({ type: 'error', message: failure.message, code: failure.code, kind: failure.kind });
       }
-      // 全局停止 / 错误 → 信封/contact 来源必须兜底 onComplete，否则下游/发起方永久悬挂。
-      // （全局停止时 agent.ts 已提前 return、不会 sendHandoff，此 fallback 无害；
-      //  这里只保住 contact 发起方的 await 不悬挂。）
+      if (disposition === 'fail') {
+        msg.onFailure?.(e instanceof Error ? e : new Error(String(e)));
+      }
+      // 全局停止时只解除等待，调用方会根据 abort 拒绝下游投递。
       if (disposition === 'deliver') {
-        const fallback = isAbort
-          ? '[工作流已停止]'
-          : `[错误] ${(e as Error).message}`;
-        msg.onComplete!(fallback);
+        msg.onComplete!('[工作流已停止]');
       }
       emit({ type: 'done', outcome: isAbort ? 'stopped' : 'error' });
     } finally {

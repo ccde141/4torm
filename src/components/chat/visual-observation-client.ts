@@ -1,3 +1,5 @@
+import type { FrameworkErrorKind } from '../../api/error-contract';
+
 export type VisualObservationScope = 'conversation' | 'cyclone';
 export type VisualObservationStatus = 'running' | 'waiting' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'crashed';
 export type VisualObservationControl = 'agent' | 'human';
@@ -15,6 +17,8 @@ export interface VisualObservationDetail {
   finishedAt?: number;
   status: VisualObservationStatus;
   error?: string;
+  errorCode?: string;
+  errorKind?: FrameworkErrorKind;
   viewerState?: {
     control: VisualObservationControl;
     revision: number;

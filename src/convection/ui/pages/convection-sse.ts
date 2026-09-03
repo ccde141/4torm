@@ -1,3 +1,10 @@
+import {
+  ClientFrameworkError,
+  errorFromPayload,
+  errorFromResponse,
+  type ClientErrorData,
+} from '../../../api/error-contract';
+
 type ConvectionEvent = { type?: string; message?: string; [key: string]: unknown };
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 interface ConvectionSseErrors { missingStream: string; executionFailed: string; interrupted: string }
@@ -5,23 +12,13 @@ const DEFAULT_ERRORS: ConvectionSseErrors = {
   missingStream: 'SSE 响应缺少数据流', executionFailed: '对流执行失败', interrupted: 'SSE 连接意外中断（未收到 done）',
 };
 
-export class ConvectionHttpError extends Error {
+export class ConvectionHttpError extends ClientFrameworkError {
   readonly status: number;
 
-  constructor(message: string, status: number) {
-    super(message);
+  constructor(data: ClientErrorData, status: number) {
+    super(data);
     this.name = 'ConvectionHttpError';
     this.status = status;
-  }
-}
-
-async function readHttpError(response: Response): Promise<string> {
-  const text = await response.text();
-  try {
-    const data = JSON.parse(text) as { error?: string };
-    return data.error || text || `HTTP ${response.status}`;
-  } catch {
-    return text || `HTTP ${response.status}`;
   }
 }
 
@@ -39,7 +36,10 @@ export async function streamConvectionSSE(
     body: JSON.stringify(body),
     signal,
   });
-  if (!response.ok) throw new ConvectionHttpError(await readHttpError(response), response.status);
+  if (!response.ok) {
+    const error = await errorFromResponse(response);
+    throw new ConvectionHttpError(error, response.status);
+  }
   const reader = response.body?.getReader();
   if (!reader) throw new Error(errors.missingStream);
 
@@ -62,7 +62,7 @@ export async function streamConvectionSSE(
       if (!payload || payload === '[DONE]') continue;
       const event = JSON.parse(payload) as ConvectionEvent;
       if (event.type === 'done') return;
-      if (event.type === 'error') throw new Error(event.message || errors.executionFailed);
+      if (event.type === 'error') throw errorFromPayload(event, errors.executionFailed);
       onEvent(event);
     }
   }

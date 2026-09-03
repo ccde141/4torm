@@ -32,6 +32,8 @@ test('编排器保留到达 output 的正常终态供状态接口读取', async 
   await orchestrator.start();
   assert.equal(await orchestrator.whenSettled(), 'done');
   assert.equal(orchestrator.getOutcome(), 'done');
+  const meta = JSON.parse(await fs.readFile(path.join(orchestrator.getRunDir(), 'meta.json'), 'utf8')) as { status: string };
+  assert.equal(meta.status, 'done');
 });
 
 test('未到达 output 的人工停止保留 stopped 终态', async (t) => {
@@ -46,4 +48,7 @@ test('未到达 output 的人工停止保留 stopped 终态', async (t) => {
   await orchestrator.start();
   await orchestrator.stop();
   assert.equal(orchestrator.getOutcome(), 'stopped');
+  assert.equal(await orchestrator.whenSettled(), 'stopped');
+  const meta = JSON.parse(await fs.readFile(path.join(orchestrator.getRunDir(), 'meta.json'), 'utf8')) as { status: string };
+  assert.equal(meta.status, 'stopped');
 });

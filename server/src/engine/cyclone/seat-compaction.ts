@@ -65,12 +65,13 @@ function userTurnStarts(messages: SeatContextMessage[]): number[] {
 export function planSeatCompaction(
   messages: SeatContextMessage[],
   promptTokens?: number,
+  promptTokenThreshold = CYCLONE_COMPACT_MIN_TOKENS,
 ): SeatCompactionPlan {
   const estimatedTokens = promptTokens && promptTokens > 0
     ? promptTokens
     : messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
   const starts = userTurnStarts(messages);
-  if (estimatedTokens < CYCLONE_COMPACT_MIN_TOKENS) {
+  if (estimatedTokens < promptTokenThreshold) {
     return { ok: false, reason: 'below-threshold', estimatedTokens, turnCount: starts.length };
   }
   if (starts.length <= CYCLONE_COMPACT_KEEP_TURNS) {

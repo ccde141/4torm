@@ -7,6 +7,7 @@ import {
   DEFAULT_LOCALE, readStoredLocale, resolveMessage,
   type Locale, type MessageKey, type MessageValues,
 } from '../../../i18n/locale';
+import { errorFromResponse, type FrameworkErrorKind } from '../../../api/error-contract';
 
 type EventHandler = (event: any) => void;
 
@@ -104,10 +105,15 @@ function streamMessage(key: MessageKey, values?: MessageValues): string {
 export function connectionFailureEvents(
   error: unknown,
   locale: Locale = currentLocale(),
-): Array<{ type: string; message?: string }> {
+): Array<{ type: string; message?: string; code?: string; kind?: FrameworkErrorKind }> {
   const detail = error instanceof Error ? error.message : String(error);
   return [
-    { type: 'error', message: resolveMessage(locale, 'tradewind.stream.disconnected', { detail }) },
+    {
+      type: 'error',
+      message: resolveMessage(locale, 'tradewind.stream.disconnected', { detail }),
+      code: 'STREAM_DISCONNECTED',
+      kind: 'protocol',
+    },
     { type: 'done' },
   ];
 }
@@ -128,7 +134,9 @@ export async function readUnifiedSSE(
   onEvent: EventHandler,
   signal?: AbortSignal,
 ): Promise<void> {
-  if (!response.ok) throw new Error(streamMessage('tradewind.stream.requestFailed', { status: response.status }));
+  if (!response.ok) {
+    throw await errorFromResponse(response, streamMessage('tradewind.stream.requestFailed', { status: response.status }));
+  }
   const reader = response.body?.getReader();
   if (!reader) throw new Error(streamMessage('tradewind.stream.missingBody'));
   const decoder = new TextDecoder();

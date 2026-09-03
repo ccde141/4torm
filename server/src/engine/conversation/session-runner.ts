@@ -45,6 +45,8 @@ import {
 } from '../shared/background-execution-tools.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import type { FrameworkErrorKind } from '../shared/framework-error.js';
+import { resolveConversationTermination } from './conversation-outcome.js';
 
 // 一次文件改动记录：executor（edit_file/write_file）算好 unified diff 经 meta.diff 回传
 type FileChange = { path: string; kind: 'edit' | 'write'; text: string; add: number; del: number };
@@ -84,7 +86,7 @@ export type ConversationEvent =
   | { type: 'ask'; question: string; options?: string[] }
   | { type: 'answer'; content: string; rawContent: string; native?: boolean; nativeContext?: ContextMessage[] }
   | { type: 'usage'; usage: TokenUsage }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind }
   | { type: 'notice'; message: string }
   | { type: 'done' };
 
@@ -340,7 +342,7 @@ export class SessionRunner {
         if (tool === 'task_board') {
           onEvent({ type: 'tool-call', tool, args });
           const bf = this.opts.sessionId ? taskboardFile(dataDir, this.opts.agentId, this.opts.sessionId) : null;
-          const { result, meta } = execTaskBoard(bf, args);
+          const { result, meta } = await execTaskBoard(bf, args);
           onEvent({ type: 'tool-result', tool, result, ok: true, meta });
           return result;
         }
@@ -471,6 +473,12 @@ export class SessionRunner {
         pendingToolCallId: result.suspended.pendingToolCallId,
       };
       onEvent({ type: 'ask', question: result.suspended.question, options: result.suspended.options });
+      onEvent({ type: 'done' });
+      return { content: '', rawContent: '' };
+    }
+
+    const termination = resolveConversationTermination(result.termination);
+    if (termination === 'aborted') {
       onEvent({ type: 'done' });
       return { content: '', rawContent: '' };
     }

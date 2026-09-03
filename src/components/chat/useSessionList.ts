@@ -14,6 +14,7 @@ import { streamUrl } from '../../lib/apiBase';
 import { createLatestRequestGuard } from '../../lib/latest-request';
 import { shouldApplySessionRefresh } from './session-list-state';
 import { useLocale } from '../../i18n/LocaleContext';
+import { errorMessage } from '../../api/error-contract';
 
 /** 流注册表钩子（来自 useStreamRunners）：让切会话/删会话与后台流协同。 */
 interface StreamHooks {
@@ -196,7 +197,7 @@ export function useSessionList(
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({ error: translate('chat.compact.requestFailed') }));
-        notice(`⚠️ ${data.error || res.statusText}`);
+        notice(`⚠️ ${errorMessage(data, res.statusText)}`);
         return;
       }
 
@@ -243,7 +244,7 @@ export function useSessionList(
               }
             } else if (evt.type === 'error') {
               receivedDone = true;
-              notice(translate('chat.compact.failed', { detail: evt.error }));
+              notice(translate('chat.compact.failed', { detail: errorMessage(evt, translate('chat.compact.requestFailed')) }));
             }
           } catch { /* 非 JSON 行忽略 */ }
       };

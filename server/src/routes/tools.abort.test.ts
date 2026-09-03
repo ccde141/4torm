@@ -36,6 +36,8 @@ test('命令非零退出作为完整业务失败返回，而不是 HTTP 500', as
     ok: false,
     error: '(命令退出码 7)\nTraceback\nValueError: final detail',
     exitCode: 7,
+    errorCode: 'TOOL_COMMAND_FAILED',
+    errorKind: 'tool',
   });
 });
 

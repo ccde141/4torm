@@ -2,6 +2,62 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
+  build: {
+    rolldownOptions: {
+      output: {
+        strictExecutionOrder: true,
+        codeSplitting: {
+          groups: [
+            {
+              name: 'react-vendor',
+              test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+              priority: 30,
+            },
+            {
+              name: 'flow-vendor',
+              test: /node_modules[\\/]@xyflow[\\/]/,
+              priority: 20,
+            },
+            {
+              name: 'content-vendor',
+              test: /node_modules[\\/](react-markdown|remark-|rehype-|katex|micromark|mdast-util|hast-util|unified|unist-util|vfile)/,
+              priority: 15,
+            },
+            {
+              name: 'vendor',
+              test: /node_modules/,
+              priority: 10,
+            },
+            {
+              name: 'conversation-feature',
+              test: /src[\\/](components[\\/]chat|engine[\\/]chat|store[\\/]chat)/,
+              priority: 8,
+            },
+            {
+              name: 'convection-feature',
+              test: /src[\\/]convection[\\/]/,
+              priority: 8,
+            },
+            {
+              name: 'cyclone-feature',
+              test: /src[\\/]cyclone[\\/]/,
+              priority: 8,
+            },
+            {
+              name: 'tradewind-feature',
+              test: /src[\\/]tradewind[\\/]/,
+              priority: 8,
+            },
+            {
+              name: 'tide-feature',
+              test: /src[\\/]tide[\\/]/,
+              priority: 8,
+            },
+          ],
+        },
+      },
+    },
+  },
   server: {
     host: '0.0.0.0',
     // 前端 dev 只需监听项目本体（src/ + public/ + index.html + 根级配置）。

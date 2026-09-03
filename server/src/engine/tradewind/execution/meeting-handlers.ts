@@ -33,6 +33,10 @@ import { runTradewindReActNative } from './native-adapter';
 import { buildVirtualToolDefs } from './virtual-tools';
 import { appendMeetingReasoning, createChairAssistantMessage } from './meeting-reasoning';
 import { createMeetingIdleGuard, MEETING_IDLE_TIMEOUT_MS } from './meeting-idle-guard';
+import { resolveTradewindTermination } from './tradewind-outcome.js';
+import { FrameworkError } from '../../shared/framework-error.js';
+import type { ReActTermination } from '../../shared/react/outcome.js';
+import type { FrameworkErrorKind } from '../../shared/framework-error.js';
 import {
   buildTradewindChairMeta,
   buildTradewindMeetingMeta,
@@ -60,7 +64,7 @@ export type MeetingStreamEvent =
   | { type: 'chair-reasoning'; chunk: string }
   | { type: 'chair-done'; content: string; reasoningContent?: string }
   | { type: 'minutes-done'; content: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind };
 
 // ── 辅助 ──────────────────────────────────────────────────────────
 
@@ -124,6 +128,10 @@ async function execMeetingContact(
         onComplete: (output) => {
           clearTimeout(timeout);
           resolve(output);
+        },
+        onFailure: (error) => {
+          clearTimeout(timeout);
+          reject(error);
         },
       });
 
@@ -247,7 +255,11 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       } : undefined;
 
       // 双路径分流执行
-      let result: { content: string; rawContent: string; toolCalls: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>; lastPromptTokens?: number };
+      let result: {
+        content: string; rawContent: string;
+        toolCalls: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>;
+        lastPromptTokens?: number; termination: ReActTermination;
+      };
 
       try {
       if (nativeDecision.native) {
@@ -290,6 +302,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           rawContent: nativeResult.rawContent,
           toolCalls: nativeResult.toolCalls,
           lastPromptTokens: nativeResult.lastPromptTokens,
+          termination: nativeResult.termination,
         };
       } else {
         // ── text 路径（原有逻辑）──
@@ -341,6 +354,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           rawContent: textResult.rawContent,
           toolCalls: textResult.toolCalls,
           lastPromptTokens: textResult.lastPromptTokens,
+          termination: textResult.termination,
         };
       }
       } finally {
@@ -350,11 +364,16 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       // 记录最后一个 participant 的 promptTokens
       if (result.lastPromptTokens) lastPromptTokens = result.lastPromptTokens;
 
-      // 正常完成使用循环的最终正文；中止时保留已经流式展示的自然语言。
+      // 外部中止是人类操作；静默超时和模型失败则必须进入错误终态。
       const aborted = signal?.aborted;
       if (idleGuard.timedOut()) {
-        onEvent?.({ type: 'error', message: `LLM 静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s 无响应）` });
+        throw new FrameworkError({
+          code: 'TRADEWIND_MEETING_TIMEOUT', kind: 'timeout',
+          message: `LLM 静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s 无响应）`,
+          source: 'tradewind.meeting', retryable: false,
+        });
       }
+      if (!aborted) resolveTradewindTermination(result.termination);
       const streamedContent = session.streamingCurrent?.content?.trim() || '';
       const reasoning = session.streamingCurrent?.reasoning || undefined;
       const finalContent = (aborted ? streamedContent : result.content).trim();
@@ -409,7 +428,12 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
   session.chairMessages.push({ role: 'user', content: humanMessage });
 
   const agent = await loadAgent(dataDir, session.chairAgentId);
-  if (!agent) { onEvent?.({ type: 'error', message: '会长 Agent 不存在' }); return; }
+  if (!agent) {
+    throw new FrameworkError({
+      code: 'AGENT_NOT_FOUND', kind: 'not_found', message: '会长 Agent 不存在',
+      source: 'tradewind.meeting.chair', retryable: false,
+    });
+  }
 
   const snapshot = formatPublicContext(session);
   const system: ContextMessage = {
@@ -454,10 +478,15 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
     session.chairMessages.push(createChairAssistantMessage(r.content, r.reasoningContent));
     onEvent?.({ type: 'chair-done', content: r.content, reasoningContent: r.reasoningContent });
   } catch (e) {
-    const message = idleGuard.timedOut()
-      ? `LLM 静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s 无响应）`
-      : (e as Error).message;
-    onEvent?.({ type: 'error', message });
+    if (signal?.aborted) return;
+    if (idleGuard.timedOut()) {
+      throw new FrameworkError({
+        code: 'TRADEWIND_CHAIR_TIMEOUT', kind: 'timeout',
+        message: `LLM 静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s 无响应）`,
+        source: 'tradewind.meeting.chair', retryable: false,
+      }, { cause: e });
+    }
+    throw e;
   } finally {
     idleGuard.dispose();
   }

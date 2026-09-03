@@ -20,6 +20,7 @@ import {
 } from '../../shared/react/native-loop';
 import type { ToolCallRecord } from './tradewind-react-adapter';
 import type { NodeRunnerEvent } from './node-runner';
+import type { ReActTermination } from '../../shared/react/outcome.js';
 
 export interface NativeAdapterParams {
   dataDir: string;
@@ -40,7 +41,11 @@ export interface NativeAdapterParams {
  */
 export async function runTradewindReActNative(
   params: NativeAdapterParams,
-): Promise<{ content: string; rawContent: string; toolCalls: ToolCallRecord[]; turns: number; usage?: TokenUsage; lastPromptTokens?: number; autoOutcome?: 'completed' | 'anomaly' }> {
+): Promise<{
+  content: string; rawContent: string; toolCalls: ToolCallRecord[]; turns: number;
+  usage?: TokenUsage; lastPromptTokens?: number; autoOutcome?: 'completed' | 'anomaly';
+  termination: ReActTermination;
+}> {
   const { dataDir, model, temperature, messages, toolDefs, toolCaller, onEvent, signal, completion } = params;
 
   const llm: LLMCaller = {
@@ -76,6 +81,7 @@ export async function runTradewindReActNative(
     usage: result.usage,
     lastPromptTokens: result.usage?.promptTokens,
     autoOutcome: result.autoOutcome,
+    termination: result.termination,
   };
 }
 
@@ -88,6 +94,5 @@ interface NativeLoopEvent {
 export function translateNativeLoopEvent(event: NativeLoopEvent): NodeRunnerEvent | undefined {
   if (event.type === 'token') return { type: 'token', content: event.chunk ?? '' };
   if (event.type === 'reasoning') return { type: 'reasoning', content: event.chunk ?? '' };
-  if (event.type === 'error') return { type: 'error', message: event.message ?? '' };
   return undefined;
 }

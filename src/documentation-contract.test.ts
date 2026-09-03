@@ -167,10 +167,10 @@ test('data layout documents current owners, persistence, and backup boundaries',
   assert.match(layout, /agents\/.*memory\/.*index\.md/s);
   assert.match(layout, /taskboard\.json/);
   assert.match(layout, /dispatches\/.*dispatchId/s);
-  assert.match(layout, /## 不写入文件的状态/);
-  assert.match(layout, /data\/labels\.json/);
-  assert.match(layout, /data\/skin-textures\//);
   assert.match(layout, /## 备份与迁移/);
+  assert.doesNotMatch(layout, /## Git 跟踪边界/);
+  assert.doesNotMatch(layout, /## 写入与恢复/);
+  assert.doesNotMatch(layout, /## 不写入文件的状态/);
   assert.doesNotMatch(layout, /好处是|代价是|删库/);
 });
 
@@ -503,8 +503,8 @@ test('中英文故障排查按真实 HTTP 状态码说明原因', async () => {
     assert.ok(troubleshooting.includes(`| \`${code}\``), code);
     assert.ok(troubleshootingEn.includes(`| \`${code}\``), code);
   }
-  assert.match(troubleshooting, /429.*502.*503.*最多重试 3 次/s);
-  assert.match(troubleshootingEn, /429.*502.*503.*up to three retries/is);
+  assert.match(troubleshooting, /429.*502.*503.*不会在后台隐式重试/s);
+  assert.match(troubleshootingEn, /429.*502.*503.*does not retry them implicitly/is);
   assert.doesNotMatch(troubleshooting, /LM Studio 报|请求超过上下文上限|图片发送失败|npm run docs:build/);
   assert.doesNotMatch(troubleshootingEn, /LM Studio Reports|Request Exceeds the Context Window|Image Sending Fails|npm run docs:build/);
   assert.match(config, /故障排查.*\/guide\/troubleshooting/);

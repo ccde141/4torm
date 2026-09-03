@@ -11,7 +11,9 @@ import { useStreamRunners } from './useStreamRunners';
 import QueuedChips, { MAX_QUEUE } from './QueuedChips';
 import TaskBoardDrawer, { RAIL_W } from './TaskBoardDrawer';
 import { useTaskboardObservations } from './useTaskboardObservations';
-import { loadTaskboard, saveTaskboard, type TaskBoard } from '../../utils/taskboard';
+import {
+  loadTaskboard, saveTaskboard, TaskboardConflictError, type TaskBoard,
+} from '../../utils/taskboard';
 import { runStreamLoop } from '../../engine/chat/streamLoop';
 import { appendToolStep, finishLatestToolStep } from '../../engine/chat/tool-step-events';
 import { applyDelegateStreamEvent, finalizeStreamAnswer, isDelegateStreamEvent } from '../../engine/chat/delegate-stream-events';
@@ -160,8 +162,15 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
   const handleTaskboardChange = useCallback((next: TaskBoard | null) => {
     setTaskboard(next);
     const sid = activeSessionIdRef.current;
-    if (sid) saveTaskboard(sid, next).catch(e => console.error('[taskboard] 保存失败', e));
-  }, []);
+    if (!sid) return;
+    const expectedRevision = taskboard?.revision ?? 0;
+    saveTaskboard(sid, next, expectedRevision)
+      .then(setTaskboard)
+      .catch(error => {
+        if (error instanceof TaskboardConflictError) setTaskboard(error.current);
+        console.error('[taskboard] 保存失败', error);
+      });
+  }, [taskboard]);
 
   const addImageFiles = useCallback(async (files: File[]) => {
     if (!files.length) return;

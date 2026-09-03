@@ -45,10 +45,14 @@ test('failed commands are retained for inspection but leave the active list', ()
   const observer = createObserver();
   const run = observer.start({ scope: 'conversation', ownerId: 'session-a', command: 'python analyze.py' });
   observer.append(run.id, 'stdout', 'starting\n');
-  observer.finish(run.id, { status: 'failed', error: 'exit 1' });
+  observer.finish(run.id, {
+    status: 'failed', error: 'exit 1', errorCode: 'TOOL_COMMAND_FAILED', errorKind: 'tool',
+  });
 
   assert.deepEqual(observer.listActive('conversation', 'session-a'), []);
   assert.deepEqual(observer.get(run.id)?.output, [{ stream: 'stdout', text: 'starting\n' }]);
+  assert.equal(observer.get(run.id)?.errorCode, 'TOOL_COMMAND_FAILED');
+  assert.equal(observer.get(run.id)?.errorKind, 'tool');
 });
 
 test('observations retain the latest terminal progress as a compact summary', () => {
@@ -110,6 +114,7 @@ test('startup recovery marks persisted running observations as crashed', async (
 
   assert.equal(crashed, 1);
   assert.equal(observer.get('running-command')?.status, 'crashed');
+  assert.equal(observer.get('running-command')?.errorCode, 'EXECUTION_INTERRUPTED_BY_RESTART');
   await fs.rm(dir, { recursive: true, force: true });
 });
 

@@ -34,4 +34,14 @@ test('Tradewind text loop preserves token usage and tool metadata', async () => 
   assert.equal(result.lastPromptTokens, 24);
   assert.deepEqual(result.toolCalls[0]?.meta, { artifact: 'report.json' });
   assert.deepEqual(events.find(event => event.type === 'tool-result')?.meta, { artifact: 'report.json' });
+  assert.equal(result.termination.status, 'succeeded');
+});
+
+test('Tradewind text adapter preserves model failure termination', async () => {
+  const result = await runReActLoop({
+    messages: [{ role: 'user', content: 'run' }],
+    llm: { async call() { throw new Error('provider unavailable'); } },
+  });
+
+  assert.equal(result.termination.status, 'failed');
 });

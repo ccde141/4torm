@@ -77,7 +77,11 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
   }, [executionOwnerKey, observations]);
 
   const patch = (nextTasks: Task[], nextGoal = goal) =>
-    onChange(nextTasks.length ? { goal: nextGoal, tasks: nextTasks, updatedAt: board?.updatedAt ?? 0 } : null);
+    onChange(nextTasks.length ? {
+      goal: nextGoal, tasks: nextTasks,
+      updatedAt: board?.updatedAt ?? 0,
+      revision: board?.revision ?? 0,
+    } : null);
   const setStatus = (id: string, status: TaskStatus) => patch(tasks.map(t => t.id === id ? { ...t, status } : t));
   const removeTask = (id: string) => patch(tasks.filter(t => t.id !== id));
   const startEdit = (t: Task) => { setEditingId(t.id); setDraft(t.title); setDraftNote(t.note ?? ''); };

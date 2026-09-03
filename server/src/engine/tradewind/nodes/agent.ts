@@ -31,6 +31,7 @@ import { markEnvelopePending, markEnvelopeDone } from '../foundation/node-status
 import { abortableSleep, readDeliveryDelaySec } from '../execution/delivery-delay';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { waitForTaskFailureOrAbort } from '../execution/execution-lifetime.js';
 
 /** 活跃 NodeRunner 注册表：nodeId → NodeRunner */
 export const activeNodeRunners = new Map<string, NodeRunner>();
@@ -191,11 +192,12 @@ export class AgentExecutor implements NodeExecutor {
                   `[系统信息：工作流上游传来的工作指令 ${i + 1}/${envelopes.length}]\n${e.content}`,
                 ).join('\n\n');
 
-            const result = await new Promise<{ output: string; autoOutcome?: 'completed' | 'anomaly' }>((resolve) => {
+            const result = await new Promise<{ output: string; autoOutcome?: 'completed' | 'anomaly' }>((resolve, reject) => {
               runner.push({
                 source: 'envelope',
                 content: userMessage,
                 onComplete: (output, info) => resolve({ output, autoOutcome: info?.autoOutcome }),
+                onFailure: reject,
               });
               // abort 兜底：工作流停止时强制 resolve，避免 Promise 永挂
               ctx.signal.addEventListener('abort', () => resolve({ output: '' }), { once: true });
@@ -233,26 +235,21 @@ export class AgentExecutor implements NodeExecutor {
       }
     })();
 
-    // 主流程挂起等待工作流停止（期间人类可持续对话，信封到达自动后台处理）
-    await new Promise<void>((resolve) => {
-      ctx.signal.addEventListener('abort', () => resolve(), { once: true });
-    });
-
-    // 等后台 envelopeTask 收尾（abort 触发后会快速退出）
-    await envelopeTask.catch(() => {});
-
-    // 归档节点上下文（messages 写入 runDir）
     try {
-      const archiveDir = path.join(ctx.runDir, 'nodes', ctx.nodeId);
-      await fs.mkdir(archiveDir, { recursive: true });
-      await fs.writeFile(
-        path.join(archiveDir, 'messages.json'),
-        JSON.stringify(runner.getMessages(), null, 2),
-      );
-    } catch { /* 归档失败不阻塞 */ }
-
-    // 清理
-    activeNodeRunners.delete(ctx.nodeId);
-    ctx.setState('idle');
+      // 正常待命由工作流 abort 收口；后台处理失败则立即抛给编排器。
+      await waitForTaskFailureOrAbort(envelopeTask, ctx.signal);
+      await envelopeTask;
+    } finally {
+      try {
+        const archiveDir = path.join(ctx.runDir, 'nodes', ctx.nodeId);
+        await fs.mkdir(archiveDir, { recursive: true });
+        await fs.writeFile(
+          path.join(archiveDir, 'messages.json'),
+          JSON.stringify(runner.getMessages(), null, 2),
+        );
+      } catch { /* 归档失败不阻塞 */ }
+      activeNodeRunners.delete(ctx.nodeId);
+      ctx.setState('idle');
+    }
   }
 }

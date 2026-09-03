@@ -7,6 +7,7 @@
  */
 
 import type { ServerResponse } from 'node:http';
+import type { FrameworkErrorKind } from '../../shared/framework-error.js';
 import { pushUnified } from './unified-stream';
 
 export type MeetingBroadcastEvent =
@@ -32,7 +33,7 @@ export type MeetingBroadcastEvent =
   | { type: 'compact-done'; archivedRounds?: number; summaryLength?: number }
   | { type: 'compact-warn'; message: string }
   | { type: 'done'; messages: unknown[] }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind };
 
 const clients = new Map<string, Set<ServerResponse>>();
 

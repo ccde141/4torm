@@ -33,6 +33,8 @@ import { agentAvatarRoutes } from './routes/agent-avatar.js';
 import { executionObserver } from './services/execution-observer.js';
 import { backgroundExecutions } from './services/background-execution.js';
 import { modelRuntimeRoutes } from './routes/model-runtime.js';
+import { taskboardRoutes } from './routes/taskboard.js';
+import { installFrameworkErrorHandler } from './routes/error-handler.js';
 
 applyDeveloperMode();
 
@@ -63,15 +65,8 @@ app.addHook('onResponse', (req, reply, done) => {
 
 await app.register(cors, { origin: true });
 
-// 全局错误兜底：未被路由 try/catch 捕获的异常不泄露堆栈
-app.setErrorHandler((error, _req, reply) => {
-  const err = error as Error & { statusCode?: number };
-  const status = err.statusCode || 500;
-  app.log.error(error);
-  reply.status(status).send({
-    error: status >= 500 ? '服务器内部错误' : err.message,
-  });
-});
+// 全局错误兜底：旧 error 字段兼容，并附加稳定错误身份；未知异常不泄露堆栈。
+installFrameworkErrorHandler(app);
 
 // 让路由能访问 dataDir
 app.decorate('dataDir', DATA_DIR);
@@ -111,6 +106,7 @@ if (crashedObservations > 0) console.log(`[startup] 标记异常中断的终端�
 
 // 注册路由
 await app.register(storageRoutes, { prefix: '/api/storage' });
+await app.register(taskboardRoutes, { prefix: '/api/taskboard' });
 await app.register(llmProxyRoutes, { prefix: '/api/llm' });
 await app.register(modelRuntimeRoutes, { prefix: '/api/model-runtime' });
 await app.register(skinRoutes, { prefix: '/skin' });

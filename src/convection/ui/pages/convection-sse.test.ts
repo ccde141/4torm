@@ -34,18 +34,24 @@ test('连接在 done 前关闭时报告意外中断', async () => {
 test('服务端 error 事件转换为真实异常', async () => {
   await assert.rejects(
     streamConvectionSSE('/test', {}, () => {}, undefined, async () => response([
-      'data: {"type":"error","message":"模型失败"}\n\n',
+      'data: {"type":"error","message":"模型失败","code":"MODEL_FAILED","kind":"provider"}\n\n',
     ])),
-    /模型失败/,
+    (error: unknown) => error instanceof Error
+      && error.message === '模型失败'
+      && Reflect.get(error, 'code') === 'MODEL_FAILED'
+      && Reflect.get(error, 'kind') === 'provider',
   );
 });
 
 test('HTTP 冲突保留状态码供界面撤销乐观消息', async () => {
   await assert.rejects(
     streamConvectionSSE('/test', {}, () => {}, undefined, async () => new Response(
-      JSON.stringify({ error: '该会话正在处理中，请稍后再试' }),
+      JSON.stringify({ error: '该会话正在处理中，请稍后再试', errorCode: 'SESSION_BUSY', errorKind: 'conflict' }),
       { status: 409, headers: { 'Content-Type': 'application/json' } },
     )),
-    (error: unknown) => error instanceof ConvectionHttpError && error.status === 409,
+    (error: unknown) => error instanceof ConvectionHttpError
+      && error.status === 409
+      && error.code === 'SESSION_BUSY'
+      && error.kind === 'conflict',
   );
 });

@@ -22,6 +22,7 @@ import { withAgentActivity } from '../engine/shared/agent-activity.js';
 import type { ContextMessage } from '../engine/shared/types';
 import { resolveConversationImages, type ConversationImageRef } from '../services/conversation-attachments.js';
 import { prependSystemPrompt } from '../engine/conversation/context-messages.js';
+import { frameworkSseErrorFromUnknown } from '../engine/shared/framework-error-transport.js';
 
 // ── 活跃 runner 注册表（内存级） ─────────────────────────────────
 
@@ -212,7 +213,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     }).catch((e) => {
       unbindDisconnect();
       try {
-        pushSSE(raw, { type: 'error', message: (e as Error).message });
+        pushSSE(raw, frameworkSseErrorFromUnknown(e, 'sse.conversation.chat'));
         raw.end();
       } catch {}
       clearActiveRunner(body.sessionId!, runner); // 出错必清
@@ -277,7 +278,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     }).catch((e) => {
       unbindDisconnect();
       try {
-        pushSSE(raw, { type: 'error', message: (e as Error).message });
+        pushSSE(raw, frameworkSseErrorFromUnknown(e, 'sse.conversation.reply'));
         raw.end();
       } catch {}
       clearActiveRunner(body.sessionId!, runner); // 出错必清

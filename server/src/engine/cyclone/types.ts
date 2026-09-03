@@ -139,6 +139,10 @@ export interface RoomMessage {
   rawContent?: string;
   /** 本轮原生思考流（不进 LLM 上下文，仅存盘供重载展示） */
   reasoning?: string;
+  /** 外置思考流对应的稳定消息 ID；旧数据可继续内联 reasoning。 */
+  reasoningRef?: string;
+  /** 外置内容校验值，也用于避免每次保存重复写入大文件。 */
+  reasoningHash?: string;
   /** 本轮工具调用记录 */
   toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }>;
   /** 可选展示分段；旧消息缺省时继续使用 content/toolCalls。 */

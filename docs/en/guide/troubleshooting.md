@@ -19,4 +19,4 @@
 | `503` | The model service is temporarily unavailable, loading, or overloaded | Inference-service state and current load |
 | `504` | The upstream service or gateway did not finish the request in time | Whether the model is still running, network state, and gateway timeout |
 
-The agent execution path applies up to three retries for `429`, `502`, and `503`. If one of these errors is still shown, the failure did not recover during those retries.
+The agent execution path reports `429`, `502`, and `503` failures immediately and does not retry them implicitly. Resolve the rate limit or service fault, then rerun the operation explicitly.

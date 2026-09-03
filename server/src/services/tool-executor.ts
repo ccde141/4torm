@@ -14,10 +14,15 @@ import type { ToolDefinition } from '../tools/tool-definition.js';
 import type { ToolExecutionMode } from '../tools/tool-definition.js';
 import { loadAgent } from '../engine/shared/agent-loader.js';
 import { loadAgentToolDefs } from '../engine/shared/tool-defs-loader.js';
+import { FrameworkError } from '../engine/shared/framework-error.js';
 
-export class ToolPermissionError extends Error {
+export class ToolPermissionError extends FrameworkError {
   constructor(tool: string, agentId: string) {
-    super(`Agent ${agentId} 未获准使用工具：${tool}`);
+    super({
+      code: 'TOOL_PERMISSION_DENIED', kind: 'permission',
+      message: `Agent ${agentId} 未获准使用工具：${tool}`,
+      source: 'tool.executor', retryable: false,
+    });
     this.name = 'ToolPermissionError';
   }
 }

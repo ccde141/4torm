@@ -17,6 +17,8 @@ import { browserExecutionProducer } from '../services/browser-execution-producer
 import { normalizeBrowserEngine } from '../services/browser-engine.js';
 import { executionCapabilities } from '../services/builtin-execution-capabilities.js';
 import { listToolCatalog, replaceCustomTools } from '../tools/custom-registry.js';
+import { toolErrorFromUnknown } from '../engine/shared/tool-error.js';
+import { frameworkErrorToHttp } from '../engine/shared/framework-error.js';
 
 export interface ToolRouteOptions {
   executeTool?: typeof executeTool;
@@ -95,11 +97,16 @@ export async function toolRoutes(app: FastifyInstance, options: ToolRouteOptions
           if (snapshot.status === 'completed') {
             executionObserver.finish(trackedEntry.id, { status: 'completed', exitCode: 0 });
           } else if (snapshot.status === 'cancelled') {
-            executionObserver.finish(trackedEntry.id, { status: 'cancelled', error: snapshot.error });
+            executionObserver.finish(trackedEntry.id, {
+              status: 'cancelled', error: snapshot.error,
+              errorCode: snapshot.errorCode, errorKind: snapshot.errorKind,
+            });
           } else if (snapshot.status === 'failed') {
             executionObserver.finish(trackedEntry.id, {
               status: 'failed',
               error: snapshot.error,
+              errorCode: snapshot.errorCode,
+              errorKind: snapshot.errorKind,
               exitCode: typeof snapshot.exitCode === 'number' ? snapshot.exitCode : undefined,
             });
           }
@@ -142,6 +149,8 @@ export async function toolRoutes(app: FastifyInstance, options: ToolRouteOptions
           return reply.send({
             ok: false,
             error: background.error,
+            errorCode: background.errorCode,
+            errorKind: background.errorKind,
             exitCode: background.exitCode,
             observationId: trackedEntry.id,
             executionId: trackedEntry.id,
@@ -149,7 +158,9 @@ export async function toolRoutes(app: FastifyInstance, options: ToolRouteOptions
         }
         if (background.status === 'cancelled') {
           if (requestDisconnected) return;
-          return reply.status(409).send({ error: 'execution cancelled' });
+          return reply.status(409).send({
+            error: 'execution cancelled', errorCode: 'TOOL_EXECUTION_CANCELLED', errorKind: 'cancelled',
+          });
         }
         return reply.send({
           result: background.result ?? '',
@@ -165,23 +176,37 @@ export async function toolRoutes(app: FastifyInstance, options: ToolRouteOptions
         undefined,
       );
       if (controller.signal.aborted) {
-        return reply.status(409).send({ error: 'execution cancelled' });
+        return reply.status(409).send({
+          error: 'execution cancelled', errorCode: 'TOOL_EXECUTION_CANCELLED', errorKind: 'cancelled',
+        });
       }
       return reply.send({ result, meta });
     } catch (e) {
       const permissionFailure = e instanceof ToolPermissionError;
       const commandFailure = isCommandExecutionError(e) ? e : undefined;
+      const failure = toolErrorFromUnknown(e, 'http.tools.exec');
       if (tracked) executionObserver.finish(tracked.id, {
         status: controller.signal.aborted ? 'cancelled' : 'failed',
         error: (e as Error).message,
+        errorCode: failure.data.code,
+        errorKind: failure.data.kind,
         exitCode: commandFailure && typeof commandFailure.exitCode === 'number' ? commandFailure.exitCode : undefined,
       });
-      if (permissionFailure) return reply.status(403).send({ error: (e as Error).message });
+      if (permissionFailure) return reply.status(403).send({
+        error: failure.message, errorCode: failure.data.code, errorKind: failure.data.kind,
+      });
       if (requestDisconnected) return;
-      if (controller.signal.aborted) return reply.status(409).send({ error: 'execution cancelled' });
+      if (controller.signal.aborted) return reply.status(409).send({
+        error: 'execution cancelled', errorCode: 'TOOL_EXECUTION_CANCELLED', errorKind: 'cancelled',
+      });
       // 子进程非零退出是命令的业务结果，不是 HTTP 服务故障。
-      if (commandFailure) return reply.send({ ok: false, error: commandFailure.message, exitCode: commandFailure.exitCode, observationId: tracked?.id });
-      return reply.status(500).send({ error: (e as Error).message });
+      if (commandFailure) return reply.send({
+        ok: false, error: commandFailure.message, exitCode: commandFailure.exitCode,
+        errorCode: failure.data.code, errorKind: failure.data.kind, observationId: tracked?.id,
+      });
+      req.log.error(e);
+      const mapped = frameworkErrorToHttp(failure);
+      return reply.status(mapped.statusCode).send(mapped.body);
     } finally {
       if (!detached) releaseLifecycle?.();
       req.raw.removeListener('aborted', abort);
@@ -317,6 +342,8 @@ function toObservationSummary(item: ReturnType<typeof executionObserver.list>[nu
     status: item.status,
     exitCode: item.exitCode,
     error: item.error,
+    errorCode: item.errorCode,
+    errorKind: item.errorKind,
     progress: item.progress,
     outputTruncated: item.outputTruncated,
     presentation: item.viewerState?.presentation,

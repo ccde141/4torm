@@ -66,6 +66,7 @@ export function buildVirtualToolDefs(
         type: 'object',
         properties: {
           action: { type: 'string', description: 'set=整体覆盖写入 / get=读取当前板子 / clear=清空' },
+          expectedRevision: { type: 'integer', description: '（set/clear 时）当前任务板 revision；空板首次创建传 0。版本冲突时先 get 再合并' },
           goal: { type: 'string', description: '（set 时）本会话总目标，一句话' },
           tasks: { type: 'array', description: '（set 时）完整任务列表，覆盖式写入，须含所有任务的最新状态。每项为对象 { title, status: todo|doing|done|blocked, note? }' },
         },

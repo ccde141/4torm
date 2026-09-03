@@ -22,6 +22,11 @@ import { validateGraph } from '../workflow-validation';
 import type { WorkflowMode } from '../../types';
 import type { ExecutionPhase } from '../hooks/execution-phase';
 import { useLocale } from '../../../i18n/LocaleContext';
+import {
+  forgetPersistedWorkflow,
+  readPersistedWorkflow,
+  rememberPersistedWorkflow,
+} from '../workflow-recovery';
 
 export default function TradeWindPage() {
   const { t } = useLocale();
@@ -71,14 +76,15 @@ export default function TradeWindPage() {
   // 页面加载时恢复上次打开的工作流，失败则自动新建
   useEffect(() => {
     const init = async () => {
-      const lastId = localStorage.getItem('tw-last-workflow');
-      if (lastId && lastId !== 'untitled') {
+      const lastId = readPersistedWorkflow(localStorage);
+      if (lastId) {
         const res = await fetch(`/api/tradewind/workflow/load/${lastId}`);
         if (res.ok) {
           const data = await res.json() as { workflowId: string; name?: string; graph: import('../../types').WorkflowGraph };
           store.loadGraph(data.graph, data.workflowId, data.name);
           return;
         }
+        forgetPersistedWorkflow(localStorage, lastId);
       }
       // 没有可恢复的工作流，开一张空白画布（仅内存，不落盘；加了节点保存/运行时才创建目录）
       const newId = `wf-${Date.now().toString(36)}`;
@@ -86,13 +92,6 @@ export default function TradeWindPage() {
     };
     init();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // workflowId 变化时记住
-  useEffect(() => {
-    if (store.workflowId !== 'untitled') {
-      localStorage.setItem('tw-last-workflow', store.workflowId);
-    }
-  }, [store.workflowId]);
 
   // 监听 Agent 节点"交流"按钮事件
   useEffect(() => {
@@ -136,6 +135,7 @@ export default function TradeWindPage() {
   // 5 分钟自动保存
   const runAutoSave = useEffectEvent(async () => {
     if (await store.save()) {
+      rememberPersistedWorkflow(localStorage, store.workflowId);
       setSaveError(null);
       setSaveTime(Date.now());
     }
@@ -162,6 +162,7 @@ export default function TradeWindPage() {
         setSaveError(t('tradewind.emptyWorkspace'));
         return;
       }
+      rememberPersistedWorkflow(localStorage, store.workflowId);
       setSaveError(null);
       execution.start(graph, store.workflowId, undefined, mode, profileId);
     } catch (error) {
@@ -175,7 +176,10 @@ export default function TradeWindPage() {
 
   const handleSave = useCallback(async () => {
     try {
-      if (await store.save()) setSaveTime(Date.now());
+      if (await store.save()) {
+        rememberPersistedWorkflow(localStorage, store.workflowId);
+        setSaveTime(Date.now());
+      }
       setSaveError(null);
     } catch (error) {
       setSaveError((error as Error).message || t('tradewind.saveFailed'));
@@ -184,7 +188,7 @@ export default function TradeWindPage() {
 
   const handleOpenWorkspace = useCallback(async () => {
     try {
-      await store.save();
+      if (await store.save()) rememberPersistedWorkflow(localStorage, store.workflowId);
       await openWorkflowWorkspace(store.workflowId, t('tradewind.openWorkspaceFailed'));
       setSaveError(null);
     } catch (error) {
@@ -205,7 +209,10 @@ export default function TradeWindPage() {
       throw new Error(t('tradewind.deleteRunning'));
     }
     await deleteWorkflow(id, t('tradewind.workflowList.deleteFailed'));
-    if (id === store.workflowId) handleNew();
+    if (id === store.workflowId) {
+      forgetPersistedWorkflow(localStorage, id);
+      handleNew();
+    }
   }, [execution.running, store.workflowId, handleNew, t]);
 
   const selectedNode = useMemo(
@@ -250,7 +257,11 @@ export default function TradeWindPage() {
           visible={listVisible}
           currentId={store.workflowId}
           onClose={() => setListVisible(false)}
-          onLoad={(id) => { clearPanels(); setSessionEnded(false); store.load(id); }}
+          onLoad={async (id) => {
+            clearPanels();
+            setSessionEnded(false);
+            if (await store.load(id)) rememberPersistedWorkflow(localStorage, id);
+          }}
           onNew={handleNew}
           onDelete={handleDelete}
         />

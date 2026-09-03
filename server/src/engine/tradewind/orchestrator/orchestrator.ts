@@ -80,6 +80,7 @@ export class Orchestrator {
   private abortController = new AbortController();
   private running = false;
   private outcome: LapOutcome | null = null;
+  private stopPromise: Promise<void> | null = null;
   private agentActivities = new Map<string, AgentActivityHandle>();
 
   /** 本圈结束信号：Output → 'done'；出错 → 'error'；外部 stop 未出 output → 'stopped'。供 LoopController 等待。 */
@@ -255,19 +256,19 @@ export class Orchestrator {
     }
   }
 
-  async stop(): Promise<void> {
-    if (!this.running) return;
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
+    if (!this.running) return Promise.resolve();
+    this.stopPromise = this.performStop();
+    return this.stopPromise;
+  }
+
+  private async performStop(): Promise<void> {
     this.running = false;
     if (!this.outcome) this.outcome = 'stopped';
 
-    // 兜底：若本圈未经 output/error 就被外部停止，也要 resolve settled，
-    // 否则等待中的 LoopController 会永挂。Promise 只 resolve 一次，重复调用无害。
-    this.settledResolve(this.outcome);
-
-    // 写终结状态：被 stop 掐断的圈（未跑到 output）此前会因 handleNodeDone 闸门而不写 meta，
-    // 永留 'running'。这里补写 'stopped'，使 meta 状态真实反映"被中止"而非崩溃残留。
-    // ?. 守卫：gap 期停整个循环时 archive 可能尚未在 start() 中建立。
-    if (this.outcome === 'stopped') await this.archive?.writeEnd('stopped');
+    // 所有终态都先落盘；settled 必须等到归档与运行资源收口后才公布。
+    await this.archive?.writeEnd(this.outcome);
 
     // 0. 清理 Contact Registry
     clearContactRegistry();
@@ -297,6 +298,8 @@ export class Orchestrator {
     // 4. 清理节点上下文存储
     clearNodeContextStore(this.executionId);
     clearNodeStatusStore(this.executionId);
+    // Promise 只 resolve 一次；正常、失败和人工停止共用同一真实收口。
+    this.settledResolve(this.outcome);
   }
 
   private handleNodeDone(nodeId: string): void {
@@ -320,9 +323,7 @@ export class Orchestrator {
           ? BUILTIN_EVENT_IDS.LAP_DONE
           : BUILTIN_EVENT_IDS.WORKFLOW_END,
       });
-      this.archive.writeEnd('done');
-      this.settledResolve('done');
-      this.stop();
+      void this.stop();
     }
   }
 
@@ -339,9 +340,7 @@ export class Orchestrator {
       eventTypeId: 'node-error',
       payload: { message: error.message },
     });
-    this.archive.writeEnd('error');
-    this.settledResolve('error');
-    this.stop();
+    void this.stop();
   }
 }
 

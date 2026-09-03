@@ -21,6 +21,8 @@ export interface ExecToolOpts {
   signal?: AbortSignal;
   /** UI 侧通道：接收执行器回传的展示元数据（如覆盖写入旧内容），不影响 LLM 结果字符串 */
   onMeta?: (meta: unknown) => void;
+  /** 后台执行句柄侧通道；正文仍原样回给模型。 */
+  onObservationId?: (observationId: string) => void;
   observation?: { scope: 'conversation' | 'cyclone'; ownerId: string };
 }
 
@@ -41,7 +43,10 @@ export async function execToolUnified(
   opts: ExecToolOpts,
   deps: ExecToolDeps = defaultDeps,
 ): Promise<string> {
-  const { tool, args, agentId, workspaceDir, sandboxLevel, signal, onMeta, observation } = opts;
+  const {
+    tool, args, agentId, workspaceDir, sandboxLevel, signal,
+    onMeta, onObservationId, observation,
+  } = opts;
 
   // MCP 工具：直接走 MCP client
   if (tool.startsWith('mcp:')) {
@@ -64,5 +69,6 @@ export async function execToolUnified(
 
   const data = await readToolBridgeResponse(res);
   if (data.meta !== undefined && data.meta !== null) onMeta?.(data.meta);
+  if (data.observationId) onObservationId?.(data.observationId);
   return data.result;
 }

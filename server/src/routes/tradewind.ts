@@ -44,6 +44,7 @@ import {
   startTradewindExecution,
   stopActiveTradewindExecution,
 } from '../services/tradewind-execution.js';
+import { frameworkSseErrorFromUnknown } from '../engine/shared/framework-error-transport.js';
 
 /** 获取会长的 model key（用于压缩摘要 LLM 调用） */
 async function getChairModel(dataDir: string, chairAgentId: string): Promise<string> {
@@ -732,7 +733,8 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       meeting.roundAbort = null;
       meeting.signal.removeEventListener('abort', onGlobalAbort);
       clearInterval(hb);
-      const errEvent = { type: 'error' as const, message: (e as Error).message };
+      req.log.error(e);
+      const errEvent = frameworkSseErrorFromUnknown(e, 'sse.tradewind.meeting');
       try {
         raw.write(`data: ${JSON.stringify(errEvent)}\n\n`);
         raw.end();
@@ -792,7 +794,8 @@ export async function tradewindRoutes(app: FastifyInstance): Promise<void> {
       } catch {}
     }).catch((e) => {
       clearInterval(hb);
-      const errEvent = { type: 'error' as const, message: (e as Error).message };
+      req.log.error(e);
+      const errEvent = frameworkSseErrorFromUnknown(e, 'sse.tradewind.chair');
       try {
         raw.write(`data: ${JSON.stringify(errEvent)}\n\n`);
         raw.end();

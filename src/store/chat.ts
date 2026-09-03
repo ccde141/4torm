@@ -2,6 +2,7 @@ import { readJson, writeJson, ensureDir, deleteFile } from '../api/storage';
 import type { Agent, ChatMessage } from '../types';
 import { MissingIndexReadCache } from './session-index-cache';
 import { deleteConversationImages } from '../engine/chat/image-attachments';
+import { getAgents } from './agent';
 import {
   tokenUsageFromMeta,
   tokenUsageToMeta,
@@ -247,7 +248,6 @@ export function autoTitle(messages: ChatMessage[]): string {
 export async function getAllSessions(): Promise<ChatSession[]> {
   // This is expensive with file-based storage. Use the agent registry.
   // For dashboard stats, we need a lightweight way.
-  const { getAgents } = await import('./agent');
   const agents = await getAgents();
   const all: ChatSession[] = [];
   for (const a of agents) {

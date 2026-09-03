@@ -6,6 +6,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { readJsonFile } from '../../services/json-file-store.js';
 import { atomicWriteFile } from '../shared/atomic-io.js';
 
@@ -62,6 +63,19 @@ export function roomFile(dataDir: string, workshopId: string, roomId: string): s
 /** 群聊目录：data/cyclone/{id}/rooms/ */
 export function roomsDir(dataDir: string, workshopId: string): string {
   return path.join(workshopDir(dataDir, workshopId), 'rooms');
+}
+
+/** 单个群聊的思考流旁路目录，不让大段 reasoning 膨胀群聊主体 JSON。 */
+export function roomReasoningDir(dataDir: string, workshopId: string, roomId: string): string {
+  return path.join(roomsDir(dataDir, workshopId), `${roomId}.reasoning`);
+}
+
+/** 消息 ID 只作为身份输入，文件名固定哈希，避免历史脏 ID 逃逸目录。 */
+export function roomReasoningFile(
+  dataDir: string, workshopId: string, roomId: string, messageId: string,
+): string {
+  const digest = createHash('sha256').update(messageId).digest('hex');
+  return path.join(roomReasoningDir(dataDir, workshopId, roomId), `${digest}.txt`);
 }
 
 /** 异步派发目录：data/cyclone/{id}/dispatches/ */

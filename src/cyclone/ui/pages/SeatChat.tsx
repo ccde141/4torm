@@ -16,7 +16,9 @@ import AskCard from '../../../components/chat/AskCard';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import TaskBoardDrawer, { RAIL_W } from '../../../components/chat/TaskBoardDrawer';
 import { useTaskboardObservations } from '../../../components/chat/useTaskboardObservations';
-import { loadSeatTaskboard, saveSeatTaskboard, type TaskBoard } from '../../../utils/taskboard';
+import {
+  loadSeatTaskboard, saveSeatTaskboard, TaskboardConflictError, type TaskBoard,
+} from '../../../utils/taskboard';
 import { contextToDisplay, type DisplayMessage } from './messageDisplay';
 import type { SeatStreamRunners } from './useSeatStreamRunners';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
@@ -146,8 +148,14 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   }), []);
   const onTbChange = useCallback((next: TaskBoard | null) => {
     setBoard(next);
-    saveSeatTaskboard(workshopId, seatId, next).catch(e => console.error('[cyclone] 任务板保存失败', e));
-  }, [workshopId, seatId]);
+    const expectedRevision = board?.revision ?? 0;
+    saveSeatTaskboard(workshopId, seatId, next, expectedRevision)
+      .then(setBoard)
+      .catch(error => {
+        if (error instanceof TaskboardConflictError) setBoard(error.current);
+        console.error('[cyclone] 任务板保存失败', error);
+      });
+  }, [workshopId, seatId, board]);
 
   /** 拉取工位/会议助理会话。notifyParent=true 时通知父级刷新侧栏 */
   const reload = useCallback(async (notifyParent = false) => {

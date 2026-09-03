@@ -1,21 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { getTools, saveTools, CATEGORY_LABELS, buildToolsPrompt } from '../../store/tools';
 import type { ToolDef } from '../../store/tools';
 import { useLocale } from '../../i18n/LocaleContext';
 import type { Locale } from '../../i18n/locale';
+import { useActiveCapabilityList } from '../capabilities/useActiveCapabilityList';
 import '../../styles/components/capability-management.css';
 
-export default function ToolsPage() {
+export default function ToolsPage({ active }: { active: boolean }) {
   const { t } = useLocale();
-  const [tools, setTools] = useState<ToolDef[]>([]);
+  const { items: tools, loadError, refresh } = useActiveCapabilityList(active, getTools);
   const [adding, setAdding] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
-
-  useEffect(() => {
-    getTools().then(setTools);
-  }, []);
-
-  const refresh = () => getTools().then(setTools);
 
   return (
     <div className="capability-page" style={{ height: '100%', overflowY: 'auto' }}>
@@ -26,16 +21,23 @@ export default function ToolsPage() {
             {t('tools.page.subtitle')}
           </p>
         </div>
-        {!adding && (
-          <button className="capability-button capability-button--primary" onClick={() => setAdding(true)}>
-            {t('tools.page.register')}
+        <div className="capability-actions">
+          <button className="capability-button capability-button--secondary" onClick={() => void refresh().catch(() => undefined)}>
+            {t('tools.page.refresh')}
           </button>
-        )}
+          {!adding && (
+            <button className="capability-button capability-button--primary" onClick={() => setAdding(true)}>
+              {t('tools.page.register')}
+            </button>
+          )}
+        </div>
       </div>
+
+      {loadError && <div className="capability-alert" role="alert">{loadError.message}</div>}
 
       {adding && (
         <ToolForm
-          onSave={async (tool) => { await saveTools([...tools, { ...tool, source: 'custom', readonly: false }]); setAdding(false); refresh(); }}
+          onSave={async (tool) => { await saveTools([...tools, { ...tool, source: 'custom', readonly: false }]); setAdding(false); await refresh(); }}
           onCancel={() => setAdding(false)}
         />
       )}
@@ -54,13 +56,13 @@ export default function ToolsPage() {
             <ToolForm
               key={t.name}
               initial={t}
-              onSave={async (tool) => { await saveTools(tools.map(x => x.name === editingName ? { ...tool, source: 'custom', readonly: false } : x)); setEditingName(null); refresh(); }}
+              onSave={async (tool) => { await saveTools(tools.map(x => x.name === editingName ? { ...tool, source: 'custom', readonly: false } : x)); setEditingName(null); await refresh(); }}
               onCancel={() => setEditingName(null)}
             />
           ) : (
             <ToolCard key={t.name} tool={t} onEdit={() => setEditingName(t.name)} onDelete={async () => {
               await saveTools(tools.filter(x => x.name !== t.name));
-              refresh();
+              await refresh();
             }} />
           )
         ))}

@@ -18,6 +18,7 @@ import { normalizeDelegateProgressAtToolBoundary } from '../../../engine/chat/de
 import type { ChatMessage } from '../../../types';
 import { appendToolStep, finishLatestToolStep } from '../../../engine/chat/tool-step-events';
 import AgentChatView, { type AgentChatActivity } from './AgentChatView';
+import type { FrameworkErrorKind } from '../../../api/error-contract';
 
 interface AgentChatWindowProps {
   nodeId: string;
@@ -49,7 +50,7 @@ type StreamEvent =
   | { type: 'contact-done'; target: string; result: string; ok: boolean }
   | { type: 'answer'; content: string; rawContent: string }
   | { type: 'paused' }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind }
   | { type: 'done' };
 
 // ── 组件 ──────────────────────────────────────────────────────────

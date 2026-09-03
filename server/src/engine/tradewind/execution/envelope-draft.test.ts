@@ -172,8 +172,8 @@ run('classifyRoundInterrupt：全局停止（abort 但非 pausing）+ 信封 →
   assert.equal(classifyRoundInterrupt(true, false, true), 'deliver');
 });
 
-run('classifyRoundInterrupt：真错误 + 信封 → deliver 兜底（不悬挂下游）', () => {
-  assert.equal(classifyRoundInterrupt(false, false, true), 'deliver');
+run('classifyRoundInterrupt：真错误 + 信封 → fail（失败不得投递下游）', () => {
+  assert.equal(classifyRoundInterrupt(false, false, true), 'fail');
 });
 
 run('classifyRoundInterrupt：pausing 但不承载信封（human 轮）→ silent', () => {

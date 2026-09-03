@@ -16,6 +16,15 @@ import {
   type ReActLoopResult,
   type ToolCallRecord,
 } from './native-loop.js';
+import {
+  abortedTermination,
+  anomalyTermination,
+  failedTermination,
+  reactError,
+  reactErrorData,
+  succeededTermination,
+  waitingTermination,
+} from './outcome.js';
 
 const CONTINUATION_HINT = [
   '[System: continuation]',
@@ -133,29 +142,63 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (params.signal?.aborted) {
-      return { content: '[Interrupted]', rawContent: '', toolCalls, turns: turn, usage };
+      return { content: '[Interrupted]', rawContent: '', toolCalls, turns: turn, usage, termination: abortedTermination() };
     }
     const tokenGate = new TextToolStreamGate(chunk => params.onEvent?.({ type: 'token', chunk }));
-    const response = await callModel(params, recordUsage, tokenGate);
-    const reply = response.finishReason === 'length'
-      ? await completeTruncatedResponse(params, response.content, recordUsage, tokenGate)
-      : response.content;
+    let response: Awaited<ReturnType<typeof callModel>>;
+    let reply: string;
+    try {
+      response = await callModel(params, recordUsage, tokenGate);
+      reply = response.finishReason === 'length'
+        ? await completeTruncatedResponse(params, response.content, recordUsage, tokenGate)
+        : response.content;
+    } catch (error) {
+      if (params.signal?.aborted) {
+        return { content: '[Interrupted]', rawContent: '', toolCalls, turns: turn, usage, termination: abortedTermination() };
+      }
+      const failure = reactError(error, reactErrorData(
+        'MODEL_REQUEST_FAILED', 'provider', '模型请求失败', 'react.text.model',
+      ));
+      params.onEvent?.({ type: 'error', message: failure.message });
+      return {
+        content: `[错误] ${failure.message}`,
+        rawContent: '',
+        toolCalls,
+        turns: turn,
+        usage,
+        termination: failedTermination(failure),
+      };
+    }
     params.messages.push({ role: 'assistant', content: reply });
 
     const parsed = parseTextToolResponse(reply);
     if (parsed.kind === 'invalid') {
       tokenGate.finish(false);
-      throw new Error(`Invalid text tool call: ${parsed.error}`);
+      const failure = reactErrorData(
+        'MODEL_PROTOCOL_ERROR', 'protocol', '模型返回了无效的工具调用格式', 'react.text.protocol',
+      );
+      params.onEvent?.({ type: 'error', message: failure.message });
+      return {
+        content: `[错误] ${failure.message}`,
+        rawContent: reply,
+        toolCalls,
+        turns: turn + 1,
+        usage,
+        termination: failedTermination(failure),
+      };
     }
     if (parsed.kind === 'final') {
       tokenGate.finish(true);
-      return { content: parsed.content, rawContent: reply, toolCalls, turns: turn + 1, usage };
+      return { content: parsed.content, rawContent: reply, toolCalls, turns: turn + 1, usage, termination: succeededTermination() };
     }
     tokenGate.finish(false);
 
     const execution = await executeTool(params, parsed);
     if (execution.suspended) {
-      return { content: '', rawContent: reply, toolCalls, turns: turn + 1, usage, suspended: execution.suspended };
+      return {
+        content: '', rawContent: reply, toolCalls, turns: turn + 1, usage,
+        suspended: execution.suspended, termination: waitingTermination(),
+      };
     }
     const result = execution.result ?? '';
     toolCalls.push({
@@ -170,5 +213,16 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
     });
   }
 
-  throw new Error(`Text tool loop exceeded ${maxTurns} turns.`);
+  const failure = reactErrorData(
+    'REACT_TURN_LIMIT', 'protocol', `工具循环达到 ${maxTurns} 轮上限`, 'react.text.loop',
+  );
+  params.onEvent?.({ type: 'error', message: failure.message });
+  return {
+    content: `[错误] ${failure.message}`,
+    rawContent: '',
+    toolCalls,
+    turns: maxTurns,
+    usage,
+    termination: anomalyTermination(failure),
+  };
 }

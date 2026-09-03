@@ -90,7 +90,7 @@ Room participants can turn public discussion into concrete work by contacting pe
 
 Use `contact` for progress checks, verification, or quick judgment. If the target is busy, waiting for a human, or would create a communication cycle, the system returns the reason instead of waiting forever.
 
-`dispatch` delegates longer work and lets the current agent continue. The target executes independently in its private conversation; progress and outcome form a dispatch record. After completion, the human decides whether to bring the result back into the room.
+`dispatch` delegates longer work and lets the current agent continue. The target executes independently in its private conversation; progress and outcome form a dispatch record. After completion, the human decides whether to bring the result back into the room. If no decision is made within three completed room rounds, the result is not included by default, while its content and dispatch record remain available.
 
 Both forms share workshop files without merging private contexts.
 

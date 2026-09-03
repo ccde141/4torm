@@ -9,6 +9,7 @@ import {
   type TimelineMessage,
 } from './dispatch-timeline.js';
 import { publicToFeed } from './room-messages.js';
+import { cycloneEn, cycloneZh } from '../../../i18n/cyclone-messages.js';
 
 function dispatch(id: string, turnId: string, order: number): CycloneDispatch {
   return {
@@ -47,6 +48,11 @@ test('未处理数量只统计已经结束且仍待决策的派发', () => {
   const running = { ...dispatch('running', 'turn-a', 1), status: 'running' as const };
   const dismissed = { ...dispatch('ignored', 'turn-a', 2), decisionState: 'dismissed' as const };
   assert.equal(countPendingDispatches([completed, running, dismissed]), 1);
+});
+
+test('三轮未决结果明确显示为默认不带入而非结果丢失', () => {
+  assert.equal(cycloneZh['cyclone.dispatch.expired'], '已默认不带入');
+  assert.equal(cycloneEn['cyclone.dispatch.expired'], 'Not included by default');
 });
 
 test('带入讨论的系统消息保留为人类侧异步回执而非归档摘要', () => {

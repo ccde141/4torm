@@ -44,3 +44,18 @@ test('convection text adapter preserves configured temperature and reasoning str
     { type: 'reasoning', label: 'Agent A', chunk: '分析' },
   ]);
 });
+
+test('convection adapter keeps the shared ReAct terminal state', async () => {
+  const result = await runConvectionReActWith({
+    dataDir: 'data', model: 'demo:model', temperature: 0, agentId: 'a',
+    sessionId: 's', label: 'Agent A', messages: [{ role: 'user', content: 'Discuss.' }],
+  }, {
+    callModel: async () => { throw new Error('secret provider body'); },
+    callAgentTool: async () => 'unused',
+  });
+
+  assert.equal(result.termination.status, 'failed');
+  if (result.termination.status === 'failed') {
+    assert.equal(result.termination.error.code, 'MODEL_REQUEST_FAILED');
+  }
+});

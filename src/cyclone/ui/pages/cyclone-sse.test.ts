@@ -13,10 +13,10 @@ function response(frames: string[]): Response {
 }
 
 test('Cyclone SSE 以 done 或 error 作为终止事件', async () => {
-  const events: string[] = [];
-  await readCycloneSSE(response(['data: {"type":"done"}\n\n']), event => events.push(event.type));
-  await readCycloneSSE(response(['data: {"type":"error","message":"失败"}\n\n']), event => events.push(event.type));
-  assert.deepEqual(events, ['error']);
+  const events: Array<{ type: string; code?: unknown; kind?: unknown }> = [];
+  await readCycloneSSE(response(['data: {"type":"done"}\n\n']), () => {});
+  await readCycloneSSE(response(['data: {"type":"error","message":"失败","code":"SEAT_FAILED","kind":"provider"}\n\n']), event => events.push(event));
+  assert.deepEqual(events, [{ type: 'error', message: '失败', code: 'SEAT_FAILED', kind: 'provider' }]);
 });
 
 test('Cyclone SSE 无终止事件关闭时报告断线', async () => {

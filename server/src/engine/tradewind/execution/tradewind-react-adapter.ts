@@ -6,6 +6,7 @@ import {
   type ToolCallRecord,
 } from '../../shared/react/native-loop.js';
 import { runReActLoop as runSharedTextLoop } from '../../shared/react/text-loop.js';
+import type { ReActTermination } from '../../shared/react/outcome.js';
 
 export type { ToolCallRecord };
 
@@ -47,6 +48,8 @@ export interface ReActLoopResult {
   toolCalls: ToolCallRecord[];
   turns: number;
   lastPromptTokens?: number;
+  termination: ReActTermination;
+  autoOutcome?: 'completed' | 'anomaly';
 }
 
 export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopResult> {
@@ -65,5 +68,6 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
     toolCalls: result.toolCalls,
     turns: result.turns,
     lastPromptTokens: result.usage?.promptTokens,
+    termination: result.termination,
   };
 }

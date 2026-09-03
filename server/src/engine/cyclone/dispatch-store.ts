@@ -47,6 +47,10 @@ export interface CycloneDispatch {
   receiptState?: DispatchReceiptState;
   response?: string;
   error?: string;
+  errorCode?: string;
+  errorKind?: import('../shared/framework-error.js').FrameworkErrorKind;
+  /** 本派发启动的已有后台执行；旧记录缺省为空。 */
+  executionIds?: string[];
   completedAt?: string;
   decisionDeadlineRoundSeq?: number;
   includedMessageId?: string;
@@ -61,8 +65,30 @@ export type NewDispatch = Omit<
 
 const mutationQueues = new Map<string, Promise<unknown>>();
 
-function mutationKey(workshopId: string, dispatchId: string): string {
-  return `${workshopId}/${dispatchId}`;
+function mutationKey(dataDir: string, workshopId: string, dispatchId: string): string {
+  return `${dataDir}/${workshopId}/${dispatchId}`;
+}
+
+function creationKey(dataDir: string, input: NewDispatch): string {
+  const sourceKind = input.sourceKind ?? 'room';
+  return [
+    dataDir, input.workshopId, sourceKind, input.sourceRoomId,
+    input.sourceSeatId, input.sourceTurnId, input.dispatchOrder,
+  ].join('/');
+}
+
+function matchesDispatchInput(item: CycloneDispatch, input: NewDispatch): boolean {
+  return (item.sourceKind ?? 'room') === (input.sourceKind ?? 'room')
+    && item.sourceRoomId === input.sourceRoomId
+    && item.sourceSeatId === input.sourceSeatId
+    && item.sourceSeatTitle === input.sourceSeatTitle
+    && item.sourceTurnId === input.sourceTurnId
+    && item.sourceRoundSeq === input.sourceRoundSeq
+    && (item.contextVersion ?? 0) === (input.contextVersion ?? 0)
+    && item.dispatchOrder === input.dispatchOrder
+    && item.targetSeatId === input.targetSeatId
+    && item.targetSeatTitle === input.targetSeatTitle
+    && item.task === input.task;
 }
 
 async function listFiles(dir: string): Promise<string[]> {
@@ -92,18 +118,31 @@ async function serializeMutation<T>(key: string, mutation: () => Promise<T>): Pr
 }
 
 export async function createDispatch(dataDir: string, input: NewDispatch): Promise<CycloneDispatch> {
-  const now = new Date().toISOString();
-  const item: CycloneDispatch = {
-    ...input,
-    id: genId('dispatch'),
-    status: 'queued',
-    readState: 'unread',
-    decisionState: input.sourceKind === 'seat' ? 'not_applicable' : 'pending',
-    createdAt: now,
-    updatedAt: now,
-  };
-  await writeDispatch(dataDir, item);
-  return item;
+  return serializeMutation(creationKey(dataDir, input), async () => {
+    const existing = (await listWorkshopDispatches(dataDir, input.workshopId)).find(item => (
+      (item.sourceKind ?? 'room') === (input.sourceKind ?? 'room')
+      && item.sourceRoomId === input.sourceRoomId
+      && item.sourceSeatId === input.sourceSeatId
+      && item.sourceTurnId === input.sourceTurnId
+      && item.dispatchOrder === input.dispatchOrder
+    ));
+    if (existing) {
+      if (matchesDispatchInput(existing, input)) return existing;
+      throw new Error(`派发幂等键冲突：${input.sourceTurnId}/${input.dispatchOrder}`);
+    }
+    const now = new Date().toISOString();
+    const item: CycloneDispatch = {
+      ...input,
+      id: genId('dispatch'),
+      status: 'queued',
+      readState: 'unread',
+      decisionState: input.sourceKind === 'seat' ? 'not_applicable' : 'pending',
+      createdAt: now,
+      updatedAt: now,
+    };
+    await writeDispatch(dataDir, item);
+    return item;
+  });
 }
 
 export async function loadDispatch(
@@ -120,7 +159,7 @@ export async function updateDispatch(
   dispatchId: string,
   patch: Partial<CycloneDispatch>,
 ): Promise<CycloneDispatch | null> {
-  return serializeMutation(mutationKey(workshopId, dispatchId), async () => {
+  return serializeMutation(mutationKey(dataDir, workshopId, dispatchId), async () => {
     const current = await loadDispatch(dataDir, workshopId, dispatchId);
     if (!current) return null;
     const updated = { ...current, ...patch, id: current.id, workshopId, updatedAt: new Date().toISOString() };

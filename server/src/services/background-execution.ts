@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ObservationScope } from './execution-observation-contract.js';
+import type { FrameworkErrorKind } from '../engine/shared/framework-error.js';
+import { toolErrorFromUnknown } from '../engine/shared/tool-error.js';
 
 export type BackgroundExecutionStatus =
   | 'running'
@@ -28,6 +30,8 @@ export interface BackgroundExecutionSnapshot {
   finishedAt?: number;
   result?: string;
   error?: string;
+  errorCode?: string;
+  errorKind?: FrameworkErrorKind;
   exitCode?: number | null;
 }
 
@@ -106,6 +110,19 @@ export class BackgroundExecutionCoordinator {
     return this.snapshot(entry);
   }
 
+  /** 框架父任务等待真实终态；不设 UI 的 30 秒交互上限，也不进行轮询。 */
+  async waitUntilSettled(
+    executionId: string,
+    scope: ObservationScope,
+    ownerId: string,
+  ): Promise<BackgroundExecutionSnapshot> {
+    this.prune();
+    const entry = this.owned(executionId, scope, ownerId);
+    if (!entry) throw new Error('execution not found');
+    await entry.settled;
+    return this.snapshot(entry);
+  }
+
   async terminate(executionId: string, scope: ObservationScope, ownerId: string): Promise<boolean> {
     this.prune();
     const entry = this.owned(executionId, scope, ownerId);
@@ -132,12 +149,16 @@ export class BackgroundExecutionCoordinator {
   ): Promise<void> {
     try {
       entry.result = await run(entry.controller.signal);
-      entry.status = entry.controller.signal.aborted ? 'cancelled' : 'completed';
+      if (entry.controller.signal.aborted) markCancelled(entry);
+      else entry.status = 'completed';
     } catch (error) {
-      if (entry.controller.signal.aborted) entry.status = 'cancelled';
+      if (entry.controller.signal.aborted) markCancelled(entry);
       else {
+        const failure = toolErrorFromUnknown(error, 'background.execution');
         entry.status = 'failed';
-        entry.error = error instanceof Error ? error.message : String(error);
+        entry.error = failure.message;
+        entry.errorCode = failure.data.code;
+        entry.errorKind = failure.data.kind;
         entry.exitCode = readExitCode(error);
       }
     } finally {
@@ -173,6 +194,13 @@ export class BackgroundExecutionCoordinator {
       this.entries.delete(terminal[index].executionId);
     }
   }
+}
+
+function markCancelled(entry: Entry): void {
+  entry.status = 'cancelled';
+  entry.error = '工具执行已中止';
+  entry.errorCode = 'TOOL_EXECUTION_CANCELLED';
+  entry.errorKind = 'cancelled';
 }
 
 function readExitCode(error: unknown): number | null | undefined {

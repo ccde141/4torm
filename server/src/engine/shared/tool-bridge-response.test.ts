@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readToolBridgeResponse } from './tool-bridge-response.js';
+import { FrameworkError } from './framework-error.js';
 
 test('工具桥接错误保留完整 traceback 尾部', async () => {
   const traceback = `Traceback (most recent call last):\n${'frame\n'.repeat(100)}ValueError: formula 允许为空`;
@@ -26,7 +27,22 @@ test('HTTP 200 中的命令业务失败仍作为工具失败交给 Agent', async
 
   await assert.rejects(
     readToolBridgeResponse(response),
-    error => error instanceof Error
-      && error.message === '(命令退出码 1)\nValueError: invalid row',
+    error => error instanceof FrameworkError
+      && error.message === '(命令退出码 1)\nValueError: invalid row'
+      && error.data.code === 'TOOL_EXECUTION_FAILED'
+      && error.data.details?.exitCode === 1,
+  );
+});
+
+test('工具桥保留服务端稳定错误身份', async () => {
+  const response = new Response(JSON.stringify({
+    error: '未获准使用工具', errorCode: 'TOOL_PERMISSION_DENIED', errorKind: 'permission',
+  }), { status: 403, headers: { 'content-type': 'application/json' } });
+
+  await assert.rejects(
+    readToolBridgeResponse(response),
+    error => error instanceof FrameworkError
+      && error.data.code === 'TOOL_PERMISSION_DENIED'
+      && error.data.kind === 'permission',
   );
 });

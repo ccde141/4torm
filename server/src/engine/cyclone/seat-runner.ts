@@ -33,6 +33,7 @@ import {
   type ToolCaller,
 } from '../shared/react/native-loop';
 import { runReActLoop } from '../shared/react/text-loop';
+import type { ReActTermination } from '../shared/react/outcome.js';
 import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { buildSeatSystemPrompt } from './seat-prompt';
 import { workshopWorkspace } from './paths';
@@ -59,6 +60,7 @@ import {
   isCycloneMemoryTool,
   withCycloneMemoryTools,
 } from './cyclone-memory.js';
+import { compactSeatBeforeTurn } from './seat-auto-compaction.js';
 
 /** 工位执行事件（流式推送用） */
 export type SeatEvent =
@@ -133,10 +135,11 @@ function makeToolCaller(opts: {
   agentId: string; sandboxLevel: string; wsDir: string;
   signal: AbortSignal | undefined; onEvent: (ev: SeatEvent) => void;
   onToolRegistration: (proposal: ToolRegistrationProposal) => void;
+  onExecution: (executionId: string) => void;
 }): ToolCaller {
   const {
     dataDir, workshopId, seatId, seatTitle, agentId, sandboxLevel, wsDir,
-    signal, onEvent, onToolRegistration,
+    signal, onEvent, onToolRegistration, onExecution,
   } = opts;
   const sourceTurnId = `seat-turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   let dispatchOrder = 0;
@@ -203,7 +206,7 @@ function makeToolCaller(opts: {
       // task_board 假工具：服务端 inline 落盘（工位目录），meta 走 UI 侧通道刷新任务板抽屉
       if (tool === 'task_board') {
         onEvent({ type: 'tool-call', tool, args });
-        const { result, meta } = execTaskBoard(seatTaskboardFile(dataDir, workshopId, seatId), args);
+        const { result, meta } = await execTaskBoard(seatTaskboardFile(dataDir, workshopId, seatId), args);
         onEvent({ type: 'tool-result', tool, result, ok: true, meta });
         return result;
       }
@@ -242,6 +245,7 @@ function makeToolCaller(opts: {
         const result = await execToolUnified({
           tool, args, agentId, workspaceDir: wsDir, sandboxLevel, signal,
           observation: { scope: 'cyclone', ownerId: `${workshopId}:${seatId}` },
+          onObservationId: onExecution,
         });
         onEvent({ type: 'tool-result', tool, result, ok: true });
         return result;
@@ -276,15 +280,22 @@ interface DriveCtx {
  * native 优先走 runReActLoopNative；否则 runReActLoop 文本退路。
  * ask 挂起 → 存 pending；正常完成 → 存 assistant 回复 + 清 pending。
  */
-async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: string }> {
+async function driveSeat(ctx: DriveCtx): Promise<{
+  content: string;
+  rawContent: string;
+  termination: ReActTermination;
+  executionIds: string[];
+}> {
   const { dataDir, workshopId, seat, messages, native, toolDefs, agent, contactTargets, signal, onEvent } = ctx;
   const wsDir = wsRelPath(dataDir, workshopId);
   const llm = makeLLM(dataDir, agent.model, agent.temperature);
   let pendingToolRegistration: ToolRegistrationProposal | undefined;
+  const executionIds = new Set<string>();
   const toolCaller = makeToolCaller({
     dataDir, workshopId, seatId: seat.id, seatTitle: seat.title,
     agentId: agent.id, sandboxLevel: agent.sandboxLevel, wsDir, signal, onEvent,
     onToolRegistration: proposal => { pendingToolRegistration = proposal; },
+    onExecution: executionId => executionIds.add(executionId),
   });
   const nativeToolDefs = [...withBackgroundExecutionGuidance(toolDefs), ...buildSeatVirtualToolDefs({
     allowAsk: true, allowDelegate: true, allowDispatch: true,
@@ -348,22 +359,40 @@ async function driveSeat(ctx: DriveCtx): Promise<{ content: string; rawContent: 
     await saveSeat(dataDir, workshopId, seat);
     onEvent({ type: 'ask', question: result.suspended.question, options: result.suspended.options });
     onEvent({ type: 'done' });
-    return { content: '', rawContent: '' };
+    return {
+      content: '', rawContent: '', termination: result.termination,
+      executionIds: [...executionIds],
+    };
   }
 
   seat.pending = undefined;
   await saveSeat(dataDir, workshopId, seat);
   onEvent({ type: 'answer', content: result.content, rawContent: result.rawContent });
   onEvent({ type: 'done' });
-  return { content: result.content, rawContent: result.rawContent };
+  return {
+    content: result.content, rawContent: result.rawContent, termination: result.termination,
+    executionIds: [...executionIds],
+  };
 }
 
 /** 加载工位 + 绑定 agent + 工具定义 + 决议 native + 可联络名单（chat/resume 共用前置） */
-async function prepare(dataDir: string, workshopId: string, seatId: string, taskHint: string) {
+async function prepare(
+  dataDir: string,
+  workshopId: string,
+  seatId: string,
+  taskHint: string,
+  signal?: AbortSignal,
+) {
   const seat = await loadSeat(dataDir, workshopId, seatId);
   if (!seat) throw new Error(`工位不存在：${seatId}`);
   const agent = await loadAgent(dataDir, seat.agentId);
   if (!agent) throw new Error(`工位绑定的 agent 不存在或已删除：${seat.agentId}`);
+  const compacted = await compactSeatBeforeTurn({
+    dataDir, workshopId, seat, modelKey: agent.model, signal,
+  });
+  if (compacted.compacted) {
+    console.info(`[cyclone] 工位 ${seat.id} 自动压缩 ${compacted.archivedCount} 条早期消息`);
+  }
   const toolDefs = withCycloneMemoryTools(
     await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode),
   );
@@ -380,14 +409,21 @@ async function prepare(dataDir: string, workshopId: string, seatId: string, task
 export async function chatSeat(
   dataDir: string, workshopId: string, seatId: string,
   humanMessage: string, onEvent: (ev: SeatEvent) => void, signal?: AbortSignal,
-): Promise<{ content: string; rawContent: string }> {
+): Promise<{
+  content: string;
+  rawContent: string;
+  termination: ReActTermination;
+  executionIds: string[];
+}> {
   const release = tryAcquireSeatLock(workshopId, seatId);
   if (!release) throw new Error('工位正在执行中');
   try {
     const queuedSeat = await loadSeat(dataDir, workshopId, seatId);
     if (!queuedSeat) throw new Error(`工位不存在：${seatId}`);
     return await withAgentActivity(queuedSeat.agentId, 'cyclone', async () => {
-        const { seat, agent, toolDefs, native, contactTargets, memorySection } = await prepare(dataDir, workshopId, seatId, humanMessage);
+        const { seat, agent, toolDefs, native, contactTargets, memorySection } = await prepare(
+          dataDir, workshopId, seatId, humanMessage, signal,
+        );
         if (seat.agentId !== queuedSeat.agentId) throw new Error(`工位「${queuedSeat.title}」已更换 Agent，本轮已跳过`);
         if (seat.pending) throw new Error('工位处于挂起状态，请先回复其提问（resume）');
         await deliverSeatDispatchReceipts(dataDir, workshopId, seat);
@@ -413,7 +449,12 @@ export async function chatSeat(
 export async function resumeSeat(
   dataDir: string, workshopId: string, seatId: string,
   answer: string, onEvent: (ev: SeatEvent) => void, signal?: AbortSignal,
-): Promise<{ content: string; rawContent: string }> {
+): Promise<{
+  content: string;
+  rawContent: string;
+  termination: ReActTermination;
+  executionIds: string[];
+}> {
   const release = tryAcquireSeatLock(workshopId, seatId);
   if (!release) throw new Error('工位正在执行中');
   try {
@@ -423,7 +464,9 @@ export async function resumeSeat(
         const native = await applyPendingSeatResponse(
           dataDir, workshopId, queuedSeat, answer, onEvent,
         );
-        const { seat, agent, toolDefs, contactTargets, memorySection } = await prepare(dataDir, workshopId, seatId, answer);
+        const { seat, agent, toolDefs, contactTargets, memorySection } = await prepare(
+          dataDir, workshopId, seatId, answer, signal,
+        );
         if (seat.agentId !== queuedSeat.agentId) throw new Error(`工位「${queuedSeat.title}」已更换 Agent，本轮已跳过`);
         // 原生 tool result 已持久化；回执只能在回答落位后注入。
         await deliverSeatDispatchReceipts(dataDir, workshopId, seat);

@@ -110,7 +110,8 @@ export function isEnvelopeRound(source: string, native: boolean | undefined): bo
 /** 一轮被中断时的处置。 */
 export type RoundInterrupt =
   | 'pause'       // 暂停：扣住信封、绝不 onComplete（续跑时重跑本轮）
-  | 'deliver'     // 全局停止/错误：信封来源必须 onComplete 兜底，否则下游/发起方悬挂
+  | 'deliver'     // 全局停止：信封来源需要 onComplete 兜底，避免等待方悬挂
+  | 'fail'        // 真实失败：终止上游节点，不投递错误字符串
   | 'silent';     // 纯对话轮（human）被中断：无投递承诺，静默收尾
 
 /**
@@ -122,7 +123,8 @@ export type RoundInterrupt =
  *
  * 规则：
  * - 暂停（pause() 触发的轮级 abort）且承载信封 → 'pause'：扣住，绝不投递。
- * - 承载信封的其它中断（全局停止 / 错误）→ 'deliver'：必须兜底 onComplete。
+ * - 承载信封的全局停止 → 'deliver'：兜底 onComplete。
+ * - 承载信封的真实失败 → 'fail'：不得伪装交付。
  * - 不承载信封（human 轮）→ 'silent'：无承诺，静默。
  */
 export function classifyRoundInterrupt(
@@ -131,6 +133,7 @@ export function classifyRoundInterrupt(
   carriesEnvelope: boolean,
 ): RoundInterrupt {
   if (isAbort && pausing && carriesEnvelope) return 'pause';
+  if (!isAbort && carriesEnvelope) return 'fail';
   if (carriesEnvelope) return 'deliver';
   return 'silent';
 }

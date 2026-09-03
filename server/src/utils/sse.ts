@@ -3,6 +3,7 @@
  */
 
 import type { FastifyReply } from 'fastify';
+import { frameworkSseErrorFromUnknown } from '../engine/shared/framework-error-transport.js';
 
 /** 初始化 SSE 响应头 */
 export function initSSE(reply: FastifyReply): void {
@@ -27,6 +28,15 @@ export function initSSE(reply: FastifyReply): void {
 /** 推送一条 SSE 事件 */
 export function pushSSE(reply: FastifyReply, data: unknown): void {
   reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+/** 推送统一错误帧；旧 type/message 保持不变，新增 code/kind。 */
+export function pushSSEError(
+  reply: FastifyReply,
+  error: unknown,
+  source: string,
+): void {
+  pushSSE(reply, frameworkSseErrorFromUnknown(error, source));
 }
 
 /** 心跳：每 15 秒发注释行保持连接活跃，返回 stop 函数 */

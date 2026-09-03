@@ -12,9 +12,7 @@
 
 import type { ContextMessage } from '../shared/types';
 import { callLLM } from '../shared/llm-bridge';
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { atomicWriteFile } from '../shared/atomic-io.js';
+import { prepareCompactionArchive } from '../shared/compaction-archive.js';
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
@@ -97,15 +95,13 @@ export async function compactConvectionIfNeeded(
   const nextArchiveSeq = state.archiveSeq + 1;
   const archiveFileName = `${String(nextArchiveSeq).padStart(3, '0')}.json`;
 
-  try {
-    await fs.mkdir(opts.archiveDir, { recursive: true });
-    await atomicWriteFile(
-      path.join(opts.archiveDir, archiveFileName),
-      JSON.stringify(toArchive, null, 2),
-    );
-    state.archiveSeq = nextArchiveSeq;
-  } catch (error) {
-    opts.onEvent?.({ type: 'compact-warn', message: `对流归档失败，压缩已中止：${(error as Error).message}` });
+  const archive = await prepareCompactionArchive(state, {
+    archiveDir: opts.archiveDir,
+    fileName: () => archiveFileName,
+    payload: toArchive,
+  });
+  if (!archive.ok) {
+    opts.onEvent?.({ type: 'compact-warn', message: `对流归档失败，压缩已中止：${archive.error.message}` });
     return false;
   }
 

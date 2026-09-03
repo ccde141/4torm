@@ -38,7 +38,7 @@ export interface WorkflowStoreActions {
   getGraph: () => WorkflowGraph;
   loadGraph: (graph: WorkflowGraph, workflowId: string, workflowName?: string) => void;
   save: (name?: string) => Promise<boolean>;
-  load: (workflowId: string) => Promise<void>;
+  load: (workflowId: string) => Promise<boolean>;
   setWorkflowName: (name: string) => void;
 }
 
@@ -208,9 +208,10 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
 
   const load = useCallback(async (id: string) => {
     const res = await fetch(`/api/tradewind/workflow/load/${id}`);
-    if (!res.ok) return;
+    if (!res.ok) return false;
     const data = await res.json() as { workflowId: string; name?: string; graph: WorkflowGraph };
     loadGraph(data.graph, data.workflowId, data.name);
+    return true;
   }, [loadGraph]);
 
   return {

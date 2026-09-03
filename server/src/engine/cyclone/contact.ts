@@ -36,6 +36,7 @@ import { beginExternalSeatActivity } from './seat-activity.js';
 import { normalizeSystemMessages } from '../shared/system-messages.js';
 import { toSeatProgressEvent, type LoopProgressEvent } from './loop-event-forwarder.js';
 import path from 'node:path';
+import { compactSeatBeforeTurn } from './seat-auto-compaction.js';
 
 /** 嵌套联络深度上限（A→B→C→…），超过即拒绝，防失控递归 */
 const MAX_CONTACT_DEPTH = 5;
@@ -153,6 +154,12 @@ async function runContactedTurn(
 
   const agent = await loadAgent(dataDir, seat.agentId);
   if (!agent) throw new Error(`「${seat.title}」绑定的 agent 已删除`);
+  const compacted = await compactSeatBeforeTurn({
+    dataDir, workshopId, seat, modelKey: agent.model, signal,
+  });
+  if (compacted.compacted) {
+    console.info(`[cyclone] 联络前自动压缩工位 ${seat.id} 的 ${compacted.archivedCount} 条早期消息`);
+  }
 
   const toolDefs = withCycloneMemoryTools(
     await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode),

@@ -14,6 +14,16 @@ import type { ToolPreparationProgress } from '../tool-progress';
 import { salvageToolArgs } from '../tool-bridge';
 import { createAssistantContextMessage } from '../provider-messages.js';
 import { SuspendSignal } from '../suspend-signal.js';
+import {
+  abortedTermination,
+  anomalyTermination,
+  failedTermination,
+  reactError,
+  reactErrorData,
+  succeededTermination,
+  waitingTermination,
+  type ReActTermination,
+} from './outcome.js';
 export { SuspendSignal } from '../suspend-signal.js';
 
 // ── 共享常量（native + text 双路径共用） ──────────────────────────
@@ -145,6 +155,8 @@ export interface ReActLoopResult {
   turns: number;
   /** 累计 token 用量（所有 LLM 调用之和） */
   usage?: TokenUsage;
+  /** 机器可判定的终态；正文只负责展示，不能再被上层用于推断成功。 */
+  termination: ReActTermination;
   /** 是否因 ask 挂起（需要人类回复后 resume） */
   suspended?: {
     question: string;
@@ -190,7 +202,6 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
   const maxTurns = params.maxTurns ?? MAX_TURNS;
   const allToolCalls: ToolCallRecord[] = [];
   let latestUsage: TokenUsage | undefined;
-  let emptyNudge = 0;
   let continuations = 0;
   let continueNudge = 0; // completion 门：无终结工具时"继续"提示计数
   let escalated = false; // completion 门：已进入"强制总结"升级阶段（此后收口一律判 anomaly）
@@ -202,13 +213,17 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (signal?.aborted) {
-      return { content: '[中止]', rawContent: '', toolCalls: allToolCalls, turns: turn, usage: latestUsage };
+      return {
+        content: '[中止]', rawContent: '', toolCalls: allToolCalls, turns: turn,
+        usage: latestUsage, termination: abortedTermination(),
+      };
     }
 
     // ── LLM 调用（带 tools 参数，激活原生）+ 心跳/超时 ──
     const llmStart = Date.now();
     const abortCtrl = new AbortController();
-    const llmTimer = setTimeout(() => abortCtrl.abort(), LLM_TIMEOUT_MS);
+    let timedOut = false;
+    const llmTimer = setTimeout(() => { timedOut = true; abortCtrl.abort(); }, LLM_TIMEOUT_MS);
     const onAbort = () => abortCtrl.abort();
     signal?.addEventListener('abort', onAbort, { once: true });
 
@@ -245,11 +260,21 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       toolCalls = result.toolCalls;
       if (result.usage) latestUsage = result.usage;
     } catch (e) {
-      const msg = abortCtrl.signal.aborted
-        ? `LLM 响应超时（${LLM_TIMEOUT_MS / 1000}s），已中止`
-        : (e as Error).message;
-      onEvent?.({ type: 'error', message: msg });
-      return { content: `[错误] ${msg}`, rawContent: '', toolCalls: allToolCalls, turns: turn, usage: latestUsage };
+      if (signal?.aborted) {
+        return {
+          content: '[中止]', rawContent: '', toolCalls: allToolCalls, turns: turn,
+          usage: latestUsage, termination: abortedTermination(),
+        };
+      }
+      const fallback = timedOut
+        ? reactErrorData('MODEL_TIMEOUT', 'timeout', '模型响应超时', 'react.native.model')
+        : reactErrorData('MODEL_REQUEST_FAILED', 'provider', '模型请求失败', 'react.native.model');
+      const failure = reactError(e, fallback);
+      onEvent?.({ type: 'error', message: failure.message });
+      return {
+        content: `[错误] ${failure.message}`, rawContent: '', toolCalls: allToolCalls, turns: turn,
+        usage: latestUsage, termination: failedTermination(failure),
+      };
     } finally {
       if (hbInterval) clearInterval(hbInterval);
       clearTimeout(llmTimer);
@@ -280,7 +305,13 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
             ? `【异常自动封口】模型多轮未显式调用 ${params.completion.tool}。以下为其最后输出，供下游参考：\n${content.trim()}`
             : `【异常自动封口】模型多轮未显式完成，且末轮无有效输出。已按当前信封内容强制封口。`;
           const sealed = tools ? await tools.call(params.completion.tool, { note }) : note;
-          return { content: sealed, rawContent: content, toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage, autoOutcome: 'anomaly' };
+          const failure = reactErrorData(
+            'REACT_COMPLETION_ANOMALY', 'protocol', '模型未显式完成任务，已异常封口', 'react.native.completion',
+          );
+          return {
+            content: sealed, rawContent: content, toolCalls: allToolCalls, turns: turn + 1,
+            usage: latestUsage, autoOutcome: 'anomaly', termination: anomalyTermination(failure),
+          };
         }
         if (continueNudge < MAX_NUDGES) {
           continueNudge++;
@@ -303,23 +334,21 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
 
       if (content.trim()) {
         const answer = completeAnswer(answerParts, content);
-        return { content: answer, rawContent: answer, toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage };
+        return {
+          content: answer, rawContent: answer, toolCalls: allToolCalls, turns: turn + 1,
+          usage: latestUsage, termination: succeededTermination(),
+        };
       }
-      // 空 content 且无 tool_call：调过工具的逼一句收尾（决策 4 / bug #9），否则重试
-      if (emptyNudge < MAX_NUDGES) {
-        emptyNudge++;
-        msgs.push({
-          role: 'user',
-          content: allToolCalls.length > 0
-            ? '【系统提示】请用一句话总结你已完成的工作和最终交付，作为本次回复的结论。'
-            : '【系统提示】你的回复为空，请重新作答。',
-        });
-        continue;
-      }
-      return { content: '（模型未返回内容，建议重试。）', rawContent: '', toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage };
+      // 空响应是本次模型调用的真实失败，不在框架内部隐藏地再次请求。
+      const failure = reactErrorData(
+        'MODEL_EMPTY_RESPONSE', 'protocol', '模型未返回内容', 'react.native.model',
+      );
+      return {
+        content: '（模型未返回内容，建议重试。）', rawContent: '', toolCalls: allToolCalls,
+        turns: turn + 1, usage: latestUsage, termination: failedTermination(failure),
+      };
     }
 
-    emptyNudge = 0;
     continueNudge = 0; // 有工具调用 = 有进展，重置终结门的"继续"计数
 
     // ── 被截断的 tool_call：finishReason='length' 表示输出（含最后一个 tool_call 的参数 JSON）
@@ -353,7 +382,10 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
         for (let rj = ti; rj < toolCalls.length; rj++) {
           msgs.push({ role: 'tool', toolCallId: toolCalls[rj].id, content: '（已中止，未执行）' });
         }
-        return { content: '[中止]', rawContent: content, toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage };
+        return {
+          content: '[中止]', rawContent: content, toolCalls: allToolCalls, turns: turn + 1,
+          usage: latestUsage, termination: abortedTermination(),
+        };
       }
       let args: Record<string, string> = {};
       let argParseErr: string | undefined;
@@ -419,6 +451,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
             turns: turn + 1,
             usage: latestUsage,
             suspended: { question: decision.question, options: decision.options, pendingToolCallId: tc.id },
+            termination: waitingTermination(),
           };
         }
         result = `错误：${(e as Error).message}`;
@@ -433,13 +466,20 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       // （同轮终结工具之后的其它 tool_call 不再处理——任务已声明完成。）
       // 若是被"强制总结"逼出来的封口（escalated），仍照常交接下游，但打 anomaly 标记。
       if (params.completion && tc.name === params.completion.tool) {
+        const autoOutcome = escalated ? 'anomaly' : 'completed';
+        const termination = escalated
+          ? anomalyTermination(reactErrorData(
+            'REACT_COMPLETION_ANOMALY', 'protocol', '模型在强制升级后才完成任务', 'react.native.completion',
+          ))
+          : succeededTermination();
         return {
           content: result,
           rawContent: content,
           toolCalls: allToolCalls,
           turns: turn + 1,
           usage: latestUsage,
-          autoOutcome: escalated ? 'anomaly' : 'completed',
+          autoOutcome,
+          termination,
         };
       }
     }
@@ -455,7 +495,19 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     const sealed = await tools.call(params.completion.tool, {
       note: `【异常自动封口】达到最大轮次（${maxTurns}）仍未显式调用 ${params.completion.tool}，已按当前信封内容强制封口。`,
     });
-    return { content: sealed, rawContent: raw, toolCalls: allToolCalls, turns: maxTurns, usage: latestUsage, autoOutcome: 'anomaly' };
+    const failure = reactErrorData(
+      'REACT_TURN_LIMIT', 'protocol', `工具循环达到 ${maxTurns} 轮上限`, 'react.native.loop',
+    );
+    return {
+      content: sealed, rawContent: raw, toolCalls: allToolCalls, turns: maxTurns,
+      usage: latestUsage, autoOutcome: 'anomaly', termination: anomalyTermination(failure),
+    };
   }
-  return { content: answer || '（达到最大轮次）', rawContent: answer, toolCalls: allToolCalls, turns: maxTurns, usage: latestUsage };
+  const failure = reactErrorData(
+    'REACT_TURN_LIMIT', 'protocol', `工具循环达到 ${maxTurns} 轮上限`, 'react.native.loop',
+  );
+  return {
+    content: answer || '（达到最大轮次）', rawContent: answer, toolCalls: allToolCalls,
+    turns: maxTurns, usage: latestUsage, termination: anomalyTermination(failure),
+  };
 }

@@ -7,6 +7,8 @@
  * 信风独立副本，可自主演进。
  */
 
+import { errorFromResponse, type FrameworkErrorKind } from '../../../api/error-contract';
+
 export type ToolStepStatus = 'running' | 'done' | 'error';
 
 export interface ToolStep {
@@ -80,7 +82,7 @@ export type MeetingBroadcastEvent =
   | { type: 'compact-done'; archivedRounds?: number; summaryLength?: number }
   | { type: 'compact-warn'; message: string }
   | { type: 'done'; messages: Array<{ role: string; content: string }> }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind };
 
 
 /** 发送公共发言（fire-and-forget，事件通过 /events 流返回） */
@@ -92,8 +94,8 @@ export async function sendSpeak(nodeId: string, message: string, signal?: AbortS
     signal,
   });
   if (res.ok) return { ok: true };
-  const text = await res.text().catch(() => '');
-  return { ok: false, error: text || `HTTP ${res.status}` };
+  const error = await errorFromResponse(res);
+  return { ok: false, error: error.message };
 }
 
 /** 发送会议助理私聊（fire-and-forget，事件通过 /events 流返回） */
@@ -105,8 +107,8 @@ export async function sendChair(nodeId: string, message: string, signal?: AbortS
     signal,
   });
   if (res.ok) return { ok: true };
-  const text = await res.text().catch(() => '');
-  return { ok: false, error: text || `HTTP ${res.status}` };
+  const error = await errorFromResponse(res);
+  return { ok: false, error: error.message };
 }
 
 /** 人类结束会议 → 会议助理生成纪要 */
@@ -114,14 +116,14 @@ export async function endMeeting(nodeId: string): Promise<{ minutes: string }> {
   const res = await fetch(`/api/tradewind/meeting/${nodeId}/end`, {
     method: 'POST',
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await errorFromResponse(res);
   return res.json();
 }
 
 /** 获取会议状态 */
 export async function getStatus(nodeId: string): Promise<MeetingStatus> {
   const res = await fetch(`/api/tradewind/meeting/${nodeId}/status`);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await errorFromResponse(res);
   return res.json();
 }
 
@@ -132,7 +134,7 @@ export async function joinMeeting(nodeId: string, participantNodeId: string): Pr
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ participantNodeId }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await errorFromResponse(res);
   return res.json();
 }
 
@@ -143,7 +145,7 @@ export async function leaveMeeting(nodeId: string, participantNodeId: string): P
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ participantNodeId }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await errorFromResponse(res);
   return res.json();
 }
 
@@ -154,6 +156,6 @@ export async function reorderMeeting(nodeId: string, order: string[]): Promise<{
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ order }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await errorFromResponse(res);
   return res.json();
 }

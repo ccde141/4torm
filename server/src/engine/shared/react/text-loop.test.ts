@@ -27,6 +27,7 @@ test('text loop executes a JSON tool call and accepts a natural-language answer'
   });
 
   assert.equal(result.content, 'The file contains hello.');
+  assert.deepEqual(result.termination, { status: 'succeeded' });
   assert.deepEqual(calls, [{ name: 'read_file', args: { filePath: 'a.txt' } }]);
   assert.equal(messages.at(-2)?.content, JSON.stringify({
     type: 'tool_result', name: 'read_file', ok: true, content: 'hello',
@@ -86,9 +87,9 @@ test('text loop treats an ordinary answer as complete without nudging', async ()
   assert.equal(calls, 1);
 });
 
-test('text loop throws malformed tool-call envelopes without retrying', async () => {
+test('text loop reports malformed tool-call envelopes as a protocol failure without retrying', async () => {
   let calls = 0;
-  await assert.rejects(() => runReActLoop({
+  const result = await runReActLoop({
     messages: [{ role: 'user', content: 'Use ping.' }],
     llm: {
       call: async () => {
@@ -96,8 +97,26 @@ test('text loop throws malformed tool-call envelopes without retrying', async ()
         return reply('{"type":"tool_call","name":"ping","arguments":');
       },
     },
-  }), /not valid JSON/);
+  });
+  assert.equal(result.termination.status, 'failed');
+  if (result.termination.status === 'failed') {
+    assert.equal(result.termination.error.code, 'MODEL_PROTOCOL_ERROR');
+  }
   assert.equal(calls, 1);
+});
+
+test('text loop reports a provider failure as a failed terminal state', async () => {
+  const result = await runReActLoop({
+    messages: [{ role: 'user', content: 'Hello' }],
+    llm: { call: async () => { throw new Error('secret upstream body'); } },
+  });
+
+  assert.equal(result.termination.status, 'failed');
+  if (result.termination.status === 'failed') {
+    assert.equal(result.termination.error.code, 'MODEL_REQUEST_FAILED');
+    assert.equal(result.termination.error.message, '模型请求失败');
+  }
+  assert.doesNotMatch(result.content, /secret upstream body/);
 });
 
 test('text loop refuses a tool that was not offered this turn', async () => {

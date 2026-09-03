@@ -16,7 +16,7 @@ import { handleSpeak, handleChair } from '../engine/convection/handlers';
 import type { ConvectionStreamEvent } from '../engine/convection/handlers';
 import { loadAgent } from '../engine/shared/agent-loader';
 import { callLLM } from '../engine/shared/llm-bridge';
-import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse';
+import { initSSE, pushSSE, pushSSEError, startHeartbeat, endSSE } from '../utils/sse';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -75,7 +75,8 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
         await handleSpeak(dataDir, s, body.message.trim(), onEvent, abort.signal);
         pushSSE(reply, { type: 'done' });
       } catch (e) {
-        pushSSE(reply, { type: 'error', message: (e as Error).message });
+        req.log.error(e);
+        pushSSEError(reply, e, 'sse.convection.speak');
       } finally {
         clearActiveConvectionRound(sessionId, abort);
         release();
@@ -101,7 +102,8 @@ export async function convectionRoutes(app: FastifyInstance): Promise<void> {
         await handleChair(dataDir, s, body.message.trim(), onEvent, abort.signal);
         pushSSE(reply, { type: 'done' });
       } catch (e) {
-        pushSSE(reply, { type: 'error', message: (e as Error).message });
+        req.log.error(e);
+        pushSSEError(reply, e, 'sse.convection.chair');
       } finally {
         clearActiveConvectionRound(sessionId, abort);
         release();

@@ -1,3 +1,5 @@
+import type { FrameworkErrorKind } from '../../api/error-contract';
+
 export interface TaskboardObservation {
   id: string;
   surfaceId?: string;
@@ -9,6 +11,8 @@ export interface TaskboardObservation {
   finishedAt?: number;
   exitCode?: number;
   error?: string;
+  errorCode?: string;
+  errorKind?: FrameworkErrorKind;
   progress?: string;
   outputTruncated?: boolean;
   presentation?: 'embedded-visible' | 'external-visible' | 'hidden';

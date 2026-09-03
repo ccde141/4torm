@@ -20,6 +20,7 @@ import {
 import { callTool } from './tool-bridge';
 import type { ToolCallRecord, ConvectionReActEvent } from './convection-react-adapter';
 import { executeConvectionMemoryTool } from './convection-memory.js';
+import type { ReActTermination } from '../shared/react/outcome.js';
 
 /**
  * 对流原生模式协议段：工具调用由 provider 的结构化通道承载。
@@ -59,7 +60,13 @@ export interface NativeAdapterParams {
  */
 export async function runConvectionReActNative(
   params: NativeAdapterParams,
-): Promise<{ cleanContent: string; rawContent: string; toolCalls: ToolCallRecord[]; usage?: TokenUsage }> {
+): Promise<{
+  cleanContent: string;
+  rawContent: string;
+  toolCalls: ToolCallRecord[];
+  usage?: TokenUsage;
+  termination: ReActTermination;
+}> {
   const { dataDir, model, temperature, agentId, sessionId, label, messages, toolDefs, onEvent, signal } = params;
   const wsPath = `data/convection/sessions/${sessionId}/workspace`;
 
@@ -119,5 +126,6 @@ export async function runConvectionReActNative(
     rawContent: result.rawContent,
     toolCalls: result.toolCalls,
     usage: result.usage,
+    termination: result.termination,
   };
 }

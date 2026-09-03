@@ -14,7 +14,12 @@ import { agentTaskboardFile } from '../../services/data-paths.js';
 
 export type TaskStatus = 'todo' | 'doing' | 'done' | 'blocked';
 export interface Task { id: string; title: string; status: TaskStatus; note?: string }
-export interface TaskBoard { goal: string; tasks: Task[]; updatedAt: number }
+export interface TaskBoard { goal: string; tasks: Task[]; updatedAt: number; revision: number }
+export interface TaskBoardExecution {
+  result: string;
+  meta?: { taskboard: TaskBoard | null };
+  conflict?: true;
+}
 
 const STATUSES: TaskStatus[] = ['todo', 'doing', 'done', 'blocked'];
 
@@ -27,7 +32,16 @@ export function taskboardTempFile(filePath: string): string {
 }
 
 export function readTaskboard(fp: string): TaskBoard | null {
-  try { return JSON.parse(fs.readFileSync(fp, 'utf-8')); } catch { return null; }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(fp, 'utf-8')) as Partial<TaskBoard>;
+    return { ...parsed, revision: validRevision(parsed.revision) } as TaskBoard;
+  } catch {
+    return null;
+  }
+}
+
+function validRevision(value: unknown): number {
+  return Number.isInteger(value) && (value as number) >= 0 ? value as number : 0;
 }
 
 function normalizeTasks(raw: unknown): Task[] {
@@ -57,32 +71,54 @@ export function summarizeTaskboard(board: TaskBoard | null): string {
  * 执行 task_board 假工具。返回给 toolCaller：result 进 LLM，meta 走 UI 侧通道。
  * @param boardFile 任务板落盘绝对路径（各模式自行定位；null = 无会话上下文，不支持）
  */
-export function execTaskBoard(
+const mutationQueues = new Map<string, Promise<unknown>>();
+
+export async function execTaskBoard(
   boardFile: string | null,
   args: Record<string, any>,
-): { result: string; meta?: { taskboard: TaskBoard | null } } {
+): Promise<TaskBoardExecution> {
   if (!boardFile) {
     return { result: '任务板需要会话上下文（本次调用缺少会话定位），当前环境暂不支持任务板。' };
   }
-  const fp = boardFile;
+  const previous = mutationQueues.get(boardFile) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(() => execTaskBoardMutation(boardFile, args));
+  mutationQueues.set(boardFile, current);
+  try {
+    return await current;
+  } finally {
+    if (mutationQueues.get(boardFile) === current) mutationQueues.delete(boardFile);
+  }
+}
+
+function execTaskBoardMutation(
+  fp: string,
+  args: Record<string, any>,
+): TaskBoardExecution {
   const action = args.action || 'set';
 
   if (action === 'get') {
     const board = readTaskboard(fp);
     if (!board) return { result: '任务板为空。可用 task_board(action:"set", goal, tasks) 创建。' };
-    return { result: summarizeTaskboard(board), meta: { taskboard: board } };
+    return { result: `revision=${board.revision}；${summarizeTaskboard(board)}`, meta: { taskboard: board } };
   }
 
   if (action === 'clear') {
+    const current = readTaskboard(fp);
+    const conflict = revisionConflict(current, args.expectedRevision);
+    if (conflict) return conflict;
     try { fs.rmSync(fp, { force: true }); } catch { /* ignore */ }
     return { result: '任务板已清空', meta: { taskboard: null } };
   }
 
   // set：整体覆盖写入
+  const current = readTaskboard(fp);
+  const conflict = revisionConflict(current, args.expectedRevision);
+  if (conflict) return conflict;
   const board: TaskBoard = {
     goal: String(args.goal ?? '').slice(0, 500),
     tasks: normalizeTasks(args.tasks),
     updatedAt: Date.now(),
+    revision: (current?.revision ?? 0) + 1,
   };
   if (!board.tasks.length) {
     return { result: '任务板未更新：tasks 为空或格式不对，请传入 [{ title, status }] 数组。' };
@@ -95,6 +131,27 @@ export function execTaskBoard(
   return { result: `任务板已更新：${summarizeTaskboard(board)}`, meta: { taskboard: board } };
 }
 
+function revisionConflict(
+  current: TaskBoard | null,
+  expected: unknown,
+): TaskBoardExecution | null {
+  const actual = current?.revision ?? 0;
+  if (!current && expected === undefined) return null;
+  if (normalizeExpectedRevision(expected) === actual) return null;
+  return {
+    result: `任务板版本冲突：当前 revision=${actual}，本次基于 revision=${String(expected ?? '未提供')}。请先 get 后合并再提交。`,
+    meta: { taskboard: current },
+    conflict: true,
+  };
+}
+
+function normalizeExpectedRevision(value: unknown): number | null {
+  if (Number.isSafeInteger(value) && (value as number) >= 0) return value as number;
+  if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
 const STATUS_MARK: Record<string, string> = { done: '[x]', doing: '[~]', blocked: '[!]', todo: '[ ]' };
 
 /**
@@ -102,13 +159,15 @@ const STATUS_MARK: Record<string, string> = { done: '[x]', doing: '[~]', blocked
  * 与 buildDelegateSection / buildAskSection 同级，各引擎 prompt-builder 复用。
  */
 export function buildTaskBoardSection(board: TaskBoard | null, native = false): string {
+  const revision = board?.revision ?? 0;
   const example = native
-    ? '调用 task_board，传入 action、goal 和完整 tasks。'
-    : '调用示例：\n`{"type":"tool_call","name":"task_board","arguments":{"action":"set","goal":"实现登录","tasks":[{"title":"设计接口","status":"done"},{"title":"写代码","status":"doing"},{"title":"写测试","status":"todo"}]}}`';
+    ? `调用 task_board，传入 action、expectedRevision（当前为 ${revision}）、goal 和完整 tasks。`
+    : `调用示例：\n\`{"type":"tool_call","name":"task_board","arguments":{"action":"set","expectedRevision":${revision},"goal":"实现登录","tasks":[{"title":"设计接口","status":"done"},{"title":"写代码","status":"doing"},{"title":"写测试","status":"todo"}]}}\``;
   const usage = `### task_board
   描述: 维护本会话的任务板（用户可见的结构化进度清单）。它有两个作用——让用户实时看到你的计划与进度，同时**是你给自己的工作备忘**：把大任务拆成子任务落在板上，逐项推进，不漏步、不跑偏。
   参数:
     action: string [必填] — set=整体覆盖写入 / get=读取当前板子 / clear=清空
+    expectedRevision: integer [set/clear 必填] — 你读取到的当前 revision；空板首次创建传 0
     goal: string [可选] — （set 时）本会话总目标，一句话
     tasks: array [可选] — （set 时）完整任务列表，覆盖式写入，须含所有任务的最新状态。每项 { title: 标题, status: "todo"|"doing"|"done"|"blocked", note?: 备注 }
 
@@ -132,6 +191,7 @@ export function buildTaskBoardSection(board: TaskBoard | null, native = false): 
   return `${usage}
 
 #### 当前任务板状态
+revision：${board.revision}
 ${board.goal ? `目标：${board.goal}\n` : ''}${lines}
 
 标记含义：[x] 已完成 [~] 进行中 [ ] 待办 [!] 受阻

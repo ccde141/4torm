@@ -14,6 +14,7 @@ import { useRef, useCallback } from 'react';
 import { streamUrl } from '../../../lib/apiBase';
 import { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { readCycloneSSE } from './cyclone-sse';
+import { errorFromResponse } from '../../../api/error-contract';
 import { formatStreamStatus } from '../../../components/chat/stream-status';
 import type { Locale } from '../../../i18n/locale';
 import { appendRoomDispatch, appendRoomText, appendRoomTool, completeRoomTool,
@@ -146,7 +147,7 @@ function applyEvent(ev: any, r: RoomRunner, locale: Locale = 'zh-CN'): void {
 
 async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal: AbortSignal, locale: Locale): Promise<void> {
   const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw await errorFromResponse(res);
   await readCycloneSSE(res, onEvent, signal, locale === 'en-US' ? {
     missingBody: 'The SSE response does not contain a data stream.',
     disconnected: 'The SSE connection closed before a done/error event.',
