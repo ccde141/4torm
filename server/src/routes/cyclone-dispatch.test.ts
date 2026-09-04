@@ -66,6 +66,26 @@ test('工位来源派发只进入工作室总览，不进入任意房间列表',
   assert.deepEqual(roomList.json(), []);
 });
 
+test('打开目标工位的已读接口返回并保存已确认结果', async (t) => {
+  const { app, dataDir } = await createTestApp(t);
+  const workshop = await createWorkshop(dataDir, { title: '测试' });
+  const created = await createDispatch(dataDir, {
+    workshopId: workshop.id, sourceKind: 'seat', sourceRoomId: '', sourceSeatId: 'seat-a',
+    sourceSeatTitle: '架构', sourceTurnId: 'turn-a', sourceRoundSeq: 0,
+    dispatchOrder: 0, targetSeatId: 'seat-b', targetSeatTitle: '执行', task: '写报告',
+  });
+  await updateDispatch(dataDir, workshop.id, created.id, { status: 'completed', response: '完成' });
+
+  const response = await app.inject({
+    method: 'POST',
+    url: `/api/cyclone/workshop/${workshop.id}/seat/seat-b/dispatches/read`,
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json().map((item: { id: string }) => item.id), [created.id]);
+  assert.equal((await loadDispatch(dataDir, workshop.id, created.id))?.readState, 'read');
+});
+
 async function createTestApp(t: test.TestContext) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-dispatch-reset-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));

@@ -8,6 +8,7 @@ test('the global sidebar collapses to a persistent accessible rail', () => {
   const app = read('src/App.tsx');
   const sidebar = read('src/components/layout/Sidebar.tsx');
   const styles = read('src/styles/components/sidebar.css');
+  const locale = read('src/i18n/locale.ts');
 
   assert.match(app, /useState\(false\)/);
   assert.match(app, /collapsed={sidebarCollapsed}/);
@@ -16,7 +17,9 @@ test('the global sidebar collapses to a persistent accessible rail', () => {
   assert.match(sidebar, /className="sidebar__body"/);
   assert.match(sidebar, /inert={collapsed}/);
   assert.doesNotMatch(sidebar, /!collapsed && <nav/);
-  assert.match(sidebar, /收起功能区|展开功能区/);
+  assert.match(sidebar, /t\(collapsed \? 'nav\.expand' : 'nav\.collapse'\)/);
+  assert.match(locale, /'nav\.expand': '展开功能区'/);
+  assert.match(locale, /'nav\.collapse': 'Collapse navigation'/);
   assert.match(styles, /sidebar--collapsed/);
   assert.match(styles, /\.sidebar__body[\s\S]*width: var\(--sidebar-width\)/);
   assert.match(styles, /\.sidebar__toggle[\s\S]*background: transparent/);
@@ -39,40 +42,46 @@ test('approved shared controls animate explicit properties only', () => {
 test('meeting assistant side panels use a role title without an Agent identity', () => {
   const convection = read('src/convection/ui/pages/ConvectionPage.tsx');
   const cyclone = read('src/cyclone/ui/pages/ChairDrawer.tsx');
-  const tradewind = read('src/tradewind/ui/meeting/MeetingPanel.tsx');
+  const tradewind = read('src/tradewind/ui/meeting/MeetingPanelView.tsx');
 
-  assert.match(convection, /conv__chair-name">会议助理 私聊/);
+  assert.match(convection, /conv__chair-name">\{translate\('convection\.page\.chairPrivate'\)\}/);
   assert.doesNotMatch(convection, /getName\(activeSession\.chairAgentId\)/);
-  assert.match(cyclone, />\s*会议助理 私聊\s*</);
+  assert.match(cyclone, /t\('cyclone\.chair\.chat'\)/);
   assert.doesNotMatch(cyclone, /const chairName/);
-  assert.match(tradewind, /tw-meeting-panel__section-title">会议助理 私聊/);
+  assert.match(tradewind, /tw-meeting-panel__section-title">\{t\('tradewind\.meeting\.chairTitle'\)\}/);
 });
 
-test('shared icon controls expose Chinese accessible names', () => {
+test('shared icon controls expose localized accessible names', () => {
   const header = read('src/components/layout/Header.tsx');
   const chat = read('src/components/chat/ChatPage.tsx');
-  const cyclone = read('src/cyclone/ui/pages/CyclonePage.tsx');
+  const cyclone = read('src/cyclone/ui/pages/CycloneSidebar.tsx');
   const tide = read('src/tide/ui/TidePage.tsx');
 
-  assert.match(header, /aria-label="打开皮肤设置"/);
-  assert.match(chat, /aria-label="新建会话"/);
-  assert.match(cyclone, /aria-label="新建工作室"/);
-  assert.match(tide, /aria-label="新增自动化任务"/);
+  assert.match(header, /aria-label=\{t\('header\.skin'\)\}/);
+  assert.match(chat, /aria-label=\{translate\('chat\.page\.newSession'\)\}/);
+  assert.match(cyclone, /addLabel=\{t\('cyclone\.shell\.createWorkshop'\)\}/);
+  assert.match(tide, /aria-label=\{t\('tide\.page\.addTask'\)\}/);
 });
 
 test('feature navigation names the feature before its managed object', () => {
   const app = read('src/App.tsx');
   const sidebar = read('src/components/layout/Sidebar.tsx');
+  const locale = read('src/i18n/locale.ts');
 
+  for (const feature of ['monsoon', 'convection', 'cyclone', 'tradewind', 'tide']) {
+    assert.ok(sidebar.includes(`'nav.${feature}'`), `missing navigation key: ${feature}`);
+  }
+  for (const page of ['chat', 'convection', 'cyclone', 'tradewind', 'tide']) {
+    assert.ok(app.includes(`'page.${page}.title'`), `missing page title key: ${page}`);
+  }
   for (const label of ['季风 · 对话', '对流 · 会议室', '气旋 · 工作室', '信风 · 工作流', '潮汐 · 自动化']) {
-    assert.ok(app.includes(label), `missing page title: ${label}`);
-    assert.ok(sidebar.includes(label), `missing navigation label: ${label}`);
+    assert.ok(locale.includes(label), `missing localized feature title: ${label}`);
   }
 });
 
 test('convection and cyclone list cards expose a real primary button', () => {
   const convection = read('src/convection/ui/pages/ConvectionPage.tsx');
-  const cyclone = read('src/cyclone/ui/pages/CyclonePage.tsx');
+  const cyclone = read('src/cyclone/ui/pages/CycloneSidebar.tsx');
   const styles = read('src/styles/components/convection.css');
 
   assert.match(convection, /className="conv__session-card-main"/);
@@ -83,7 +92,7 @@ test('convection and cyclone list cards expose a real primary button', () => {
   assert.match(styles, /border-radius: var\(--border-radius-md\)/);
   assert.match(styles, /\.conv__sidebar[\s\S]*width: 240px/);
   assert.match(styles, /\.conv__sessions[\s\S]*padding: 0 var\(--space-3\) var\(--space-3\)/);
-  assert.match(convection, /conv__sidebar-title">会议室</);
+  assert.match(convection, /conv__sidebar-title">\{translate\('convection\.page\.rooms'\)\}</);
 });
 
 test('approved modal controls avoid broad transitions and name icon actions', () => {
@@ -95,8 +104,8 @@ test('approved modal controls avoid broad transitions and name icon actions', ()
     'src/styles/components/skin-custom.css',
   ]) assert.doesNotMatch(read(file), /transition:\s*all/, file);
 
-  assert.match(read('src/components/agents/AgentConfigModal.tsx'), /aria-label="关闭 Agent 配置"/);
-  assert.match(read('src/components/agents/MemoryPanel.tsx'), /aria-label="关闭长期记忆"/);
-  assert.match(read('src/components/chat/MessageItem.tsx'), /aria-label="编辑消息"/);
-  assert.match(read('src/cyclone/ui/pages/ChairDrawer.tsx'), /aria-label="收起会议助理私聊"/);
+  assert.match(read('src/components/agents/AgentConfigModal.tsx'), /aria-label=\{t\('config\.close'\)\}/);
+  assert.match(read('src/components/agents/MemoryPanel.tsx'), /aria-label=\{t\('memory\.close'\)\}/);
+  assert.match(read('src/components/chat/MessageItem.tsx'), /aria-label=\{t\('chat\.editMessage'\)\}/);
+  assert.match(read('src/cyclone/ui/pages/ChairDrawer.tsx'), /aria-label=\{t\('cyclone\.chair\.collapse'\)\}/);
 });

@@ -127,6 +127,10 @@ import { cycloneRoutes } from './routes/cyclone';
 await app.register(cycloneRoutes, { prefix: '/api/cyclone' });
 import { cycloneDispatchRoutes } from './routes/cyclone-dispatch';
 await app.register(cycloneDispatchRoutes, { prefix: '/api/cyclone' });
+import { cycloneOrganizationRoutes } from './routes/cyclone-organization';
+await app.register(cycloneOrganizationRoutes, { prefix: '/api/cyclone' });
+import { cycloneActivityRoutes } from './routes/cyclone-activity';
+await app.register(cycloneActivityRoutes, { prefix: '/api/cyclone' });
 import { memoryRoutes } from './routes/memory';
 await app.register(memoryRoutes, { prefix: '/api/memory' });
 

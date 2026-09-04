@@ -208,7 +208,7 @@ export async function cycloneRoutes(app: FastifyInstance): Promise<void> {
       const [seats, rooms, bulletin] = await Promise.all([
         Promise.all(w.seatIds.map(async (sid) => {
           const s = await loadSeat(dataDir, workshopId, sid);
-          return s ? { id: s.id, title: s.title, pending: !!s.pending } : null;
+          return s ? { id: s.id, agentId: s.agentId, title: s.title, duty: s.duty, pending: !!s.pending } : null;
         })),
         Promise.all(w.roomIds.map(async (rid) => {
           const rm = await loadRoom(dataDir, workshopId, rid);

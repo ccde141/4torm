@@ -1,4 +1,4 @@
-import { loadDispatch, updateDispatch, type CycloneDispatch } from './dispatch-store.js';
+import { listWorkshopDispatches, loadDispatch, updateDispatch, type CycloneDispatch } from './dispatch-store.js';
 import { isDispatchVisibleInRoom } from './dispatch-visibility.js';
 import { loadRoom, saveRoom, tryAcquireRoomLock } from './room-store.js';
 
@@ -34,6 +34,17 @@ export async function markDispatchRead(
   const item = await requireRoomDispatch(dataDir, workshopId, roomId, dispatchId);
   if (item.readState === 'read') return item;
   return saveDecision(dataDir, item, { readState: 'read' });
+}
+
+export async function markSeatDispatchesRead(
+  dataDir: string, workshopId: string, seatId: string,
+): Promise<CycloneDispatch[]> {
+  const unreadResults = (await listWorkshopDispatches(dataDir, workshopId)).filter(item => (
+    item.targetSeatId === seatId
+    && item.readState === 'unread'
+    && (item.status === 'completed' || item.status === 'failed')
+  ));
+  return Promise.all(unreadResults.map(item => saveDecision(dataDir, item, { readState: 'read' })));
 }
 
 export async function dismissDispatch(

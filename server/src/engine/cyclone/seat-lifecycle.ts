@@ -1,4 +1,5 @@
 import { listWorkshopDispatches } from './dispatch-store.js';
+import { removeSeatFromOrganization } from './organization/organization-store.js';
 import { loadRoom, RoomSettingsConflictError, saveRoom, tryAcquireRoomLock } from './room-store.js';
 import { deleteSeat, loadSeat } from './seat-store.js';
 import type { RoomData, RoomMessage } from './types.js';
@@ -93,6 +94,7 @@ export async function deleteSeatFromWorkshop(
     await assertDeletionIdle(dataDir, workshopId, seatId, rooms);
     const seatTitle = seat?.title || historicSeatTitle(rooms, seatId);
     await removeSeatFromRooms(dataDir, workshopId, seatId, seatTitle, rooms);
+    await removeSeatFromOrganization(dataDir, workshopId, seatId);
     if (seat) await deleteSeat(dataDir, workshopId, seatId);
   } finally {
     releases.reverse().forEach(release => release());

@@ -46,6 +46,7 @@ async function defaultExecuteSeat(dataDir: string, item: CycloneDispatch): Promi
     item.targetSeatId,
     'dispatch',
     `正在执行来自「${item.sourceSeatTitle}」的异步派发`,
+    item.sourceSeatId,
   );
   const onEvent = (event: SeatEvent) => {
     live.emit({ ...event });

@@ -6,12 +6,14 @@ Talk directly with a seat or create group rooms where selected seats discuss in 
 
 Each seat conversation has an independent taskboard, used like the [Monsoon conversation taskboard](./chat#conversation-taskboard). The workshop also has a bulletin board shared by all agents for durable information, common agreements, and goals.
 
-Seats and room participants communicate in two ways:
+Within the boundaries allowed by the collaboration structure, seats and room participants communicate in two ways:
 
 - `contact` is synchronous: the current agent asks a target seat and waits for its reply before continuing.
 - `dispatch` is asynchronous: the current agent delegates longer work to a target seat and continues without waiting.
 
 A workshop may also have a meeting assistant. It occupies no seat and does not speak in rooms; it provides private advice in each room's right sidebar, like the [Convection meeting assistant](./convection#private-meeting-assistant).
+
+![Collaboration structure in a Cyclone workshop](/images/cyclone/collaboration-structure.webp)
 
 ## Create a Workshop
 
@@ -51,6 +53,14 @@ Memory belongs to the agent, not the workshop or seat. Rebinding keeps prior con
 
 A `dispatch` runs as the target seat and therefore uses its bound agent's memory. Temporary SubAgents created with `delegate` remain isolated and do not automatically use long-term memory. Meeting assistants have no tools and do not access agent memory.
 
+## Collaboration Structure
+
+The collaboration structure defines how seats in a workshop discover and communicate with one another. Every node on the canvas remains an independent seat. Groups and relation lines define only the collaboration boundaries between seats: they do not merge private conversation histories or create group rooms automatically.
+
+Seats in the same group can `contact` and `dispatch` to one another. Seats in different groups need a relation line between them. A two-way relation lets both ends contact and dispatch to each other; a one-way relation permits operations only from its source seat to its target seat. Seats that neither share a group nor have a relation line do not appear among each other's available communication targets.
+
+Creating groups, moving seats, changing membership, and editing relation lines on the canvas initially affect only the local draft. The new collaboration boundaries are written to the workshop and take effect only after you select **Save Collaboration Structure**. Deleting a group only removes the membership relationship and does not delete its seats. Deleting a seat also removes its memberships, relation lines, and canvas position.
+
 ## Create and Manage Group Rooms
 
 Use the plus button beside the room list. Set a name, topic, run mode, and initial seats. A room may start empty and invite seats later.
@@ -84,7 +94,7 @@ After refresh, persisted text, tool records, and dispatch information return in 
 
 ### Communication Between Seats
 
-Room participants can turn public discussion into concrete work by contacting permanent seats.
+Seats in private conversations and participating seats in rooms can communicate only with target seats allowed by the collaboration structure, turning current work into synchronous questions or asynchronous execution.
 
 `contact` sends a question or update to a target seat and waits. The exchange enters the target seat's private history. Its reply returns only as the current tool result and is not automatically posted publicly.
 
@@ -129,10 +139,11 @@ Summary resets require an available model; public-room summaries also require a 
 
 ## Data and Recovery
 
-Workshop settings, seat conversations, rooms, bulletin board, dispatches, and shared files are local and reload after refresh. Incomplete live output and tool progress are not replayed as completed records.
+Workshop settings, collaboration structure, seat conversations, rooms, bulletin board, dispatches, and shared files are local and reload after refresh. Incomplete live output and tool progress are not replayed as completed records.
 
 - Workshop index: `data/cyclone/_index.json`
 - Workshop metadata: `data/cyclone/{workshopId}/meta.json`
+- Collaboration structure: `data/cyclone/{workshopId}/organization.json`
 - Shared workspace: `data/cyclone/{workshopId}/workspace/`
 - Bulletin and history: `bulletin.json`, `bulletin-history.json`
 - Seat conversations and taskboards: `data/cyclone/{workshopId}/seats/`

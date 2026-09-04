@@ -4,6 +4,7 @@ import {
   beginExternalSeatActivity,
   clearExternalSeatActivities,
   readExternalSeatActivity,
+  readWorkshopExternalSeatActivities,
 } from './seat-activity.js';
 
 test('external seat activity streams incremental events and exposes completion', () => {
@@ -32,4 +33,17 @@ test('dispatch can publish a live external seat activity without persisting toke
   assert.deepEqual(snapshot?.events.map(item => item.event), [
     { type: 'token', content: '实时正文' },
   ]);
+});
+
+test('workshop activity snapshot returns only currently running seats', () => {
+  clearExternalSeatActivities();
+  const running = beginExternalSeatActivity('workshop-a', 'seat-a', 'contact', '联络中', 'seat-source');
+  const finished = beginExternalSeatActivity('workshop-a', 'seat-b', 'dispatch', '派发中');
+  finished.finish();
+  beginExternalSeatActivity('workshop-other', 'seat-c', 'contact', '其他工作室');
+
+  assert.deepEqual(readWorkshopExternalSeatActivities('workshop-a'), {
+    'seat-a': { id: readExternalSeatActivity('workshop-a', 'seat-a')?.id, kind: 'contact', sourceSeatId: 'seat-source' },
+  });
+  running.finish();
 });

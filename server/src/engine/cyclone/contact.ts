@@ -29,7 +29,9 @@ import {
 import { execBulletin } from './bulletin';
 import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { loadSeat, saveSeat, tryAcquireSeatLock } from './seat-store';
-import { findSeatIdByTitle, listOtherSeats, tryRegisterWait, clearWait } from './contact-registry';
+import { listOtherSeats, tryRegisterWait, clearWait } from './contact-registry';
+import { resolveAuthorizedTarget } from './organization/organization-authorization.js';
+import { FrameworkError } from '../shared/framework-error.js';
 import { workshopWorkspace } from './paths';
 import type { SeatData } from './types';
 import { beginExternalSeatActivity } from './seat-activity.js';
@@ -100,12 +102,16 @@ export async function execContact(ctx: ContactCtx, target: string, message: stri
   }
 
   // 1. 寻址：title → seatId
-  const targetSeatId = await findSeatIdByTitle(dataDir, workshopId, target);
-  if (!targetSeatId) {
-    return `联络失败：本工作室找不到名为「${target}」的工位。请检查可联络名单中的名称。`;
-  }
-  if (targetSeatId === fromSeatId) {
-    return `联络失败：不能联络自己。`;
+  let targetSeatId: string;
+  try {
+    targetSeatId = (await resolveAuthorizedTarget(
+      dataDir, workshopId, fromSeatId, target, 'contact',
+    )).id;
+  } catch (error) {
+    if (error instanceof FrameworkError && ['not_found', 'permission'].includes(error.data.kind)) {
+      return `联络失败：${error.message}`;
+    }
+    throw error;
   }
 
   // 2. 环检测（复刻信风 waitGraph）
@@ -122,6 +128,7 @@ export async function execContact(ctx: ContactCtx, target: string, message: stri
 
   const activity = beginExternalSeatActivity(
     workshopId, targetSeatId, 'contact', `正在处理来自「${fromTitle}」的联络`,
+    fromSeatId,
   );
   try {
     const answer = await runContactedTurn(ctx, targetSeatId, message, activity.emit);

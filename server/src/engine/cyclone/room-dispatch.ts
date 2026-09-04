@@ -1,4 +1,4 @@
-import { findSeatIdByTitle } from './contact-registry.js';
+import { resolveAuthorizedTarget } from './organization/organization-authorization.js';
 import { createDispatch, type CycloneDispatch } from './dispatch-store.js';
 
 interface CreateRoomDispatchOpts {
@@ -18,8 +18,10 @@ export async function createRoomDispatchRecord(
   dataDir: string,
   opts: CreateRoomDispatchOpts,
 ): Promise<CycloneDispatch> {
-  const targetSeatId = await findSeatIdByTitle(dataDir, opts.workshopId, opts.targetSeatTitle);
-  if (!targetSeatId) throw new Error(`找不到工位「${opts.targetSeatTitle}」`);
+  const targetSeatId = (await resolveAuthorizedTarget(
+    dataDir, opts.workshopId, opts.sourceSeatId, opts.targetSeatTitle, 'dispatch',
+    { allowSelf: true },
+  )).id;
   return createDispatch(dataDir, {
     workshopId: opts.workshopId,
     sourceKind: 'room',

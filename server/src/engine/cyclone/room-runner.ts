@@ -193,7 +193,7 @@ async function runSeatInRoom(
   const wsDir = wsRelPath(dataDir, workshopId);
   const llm = makeLLM(dataDir, agent.model, agent.temperature);
   const contactTargets = await listOtherSeats(dataDir, workshopId, seat.id);
-  const dispatchTargets = await listWorkshopSeats(dataDir, workshopId);
+  const dispatchTargets = await listWorkshopSeats(dataDir, workshopId, seat.id);
   const virtualToolDefs = buildSeatVirtualToolDefs({
     allowAsk: false, allowDelegate: false, allowDispatch: true, contactTargets, dispatchTargets,
   });

@@ -32,7 +32,7 @@ features:
     linkText: 进入引导
   - icon: 🏢
     title: 气旋 · 工作室
-    details: 让一批固定工位长期协作，既能单独交流，也能按需组成群聊
+    details: 用可视化协作结构组织固定工位，既能单独交流，也能按需组成群聊
     link: /modes/cyclone
     linkText: 进入引导
   - icon: 🔀

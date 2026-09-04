@@ -1,442 +1,260 @@
-/**
- * 气旋工作室页面
- *
- * 功能：建/选工作室 → 加工位(绑 agent + 角色提示词) → 与工位一对一私聊。
- * 支持 ask 挂起：工位提问时显示输入框，回答后 resume。
- * 管理工作室、工位、群聊、公告板和会议助理私聊。
- */
-
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { getAgents } from '../../../store/agent';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
-import type { Agent } from '../../../types';
-import RoomPanel from './RoomPanel';
-import CreateRoomPanel from './CreateRoomPanel';
-import CreateWorkshopPanel from './CreateWorkshopPanel';
-import SeatPanel, { type SeatDraft } from './SeatPanel';
-import SeatEditorLoading from './SeatEditorLoading';
-import { resolveLoadedSeatEditor } from './seat-editor-state';
-import SeatChat from './SeatChat';
-import ChairDrawer, { chairStreamKey } from './ChairDrawer';
-import BulletinBoard, { type BulletinEntry } from './BulletinBoard';
-import { useSeatStreamRunners } from './useSeatStreamRunners';
-import { useRoomStreamRunners } from './useRoomStreamRunners';
-import { useWorkshopDispatches } from './useWorkshopDispatches';
-import { createLatestRequestGuard } from '../../../lib/latest-request';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { createLatestRequestGuard } from '../../../lib/latest-request';
+import { getAgents } from '../../../store/agent';
+import type { Agent } from '../../../types';
+import { closeWorkspaceTab, openWorkspaceTab, tabKey, type WorkspaceTab } from '../organization/workspace-tabs';
+import type { BulletinEntry } from './BulletinBoard';
+import { chairStreamKey } from './ChairDrawer';
+import { CycloneSidebar } from './CycloneSidebar';
+import { CycloneWorkspacePane } from './CycloneWorkspacePane';
+import { readCycloneError, type CycloneView, type RoomSummary, type SeatSummary, type WorkshopSummary } from './cyclone-page-model';
+import { projectWorkspaceStatus } from './cyclone-workspace-status';
+import { resolveLoadedSeatEditor } from './seat-editor-state';
+import type { SeatDraft } from './SeatPanel';
+import { useRoomStreamRunners } from './useRoomStreamRunners';
+import { useSeatStreamRunners } from './useSeatStreamRunners';
+import { useWorkshopDispatches } from './useWorkshopDispatches';
 import '../../../styles/components/cyclone.css';
-
-interface WorkshopSummary {
-  id: string; title: string; seatCount: number; roomCount: number;
-  createdAt: string; updatedAt: string;
-}
-/** 侧栏工位摘要（轻量，不含会话内容） */
-interface Seat {
-  id: string; title: string; pending?: boolean;
-}
-interface RoomLite { id: string; title: string; }
-
-async function readErrorMessage(r: Response, fallback: string): Promise<string> {
-  const e = await r.json().catch(() => ({}));
-  return e?.error || `${fallback}（HTTP ${r.status}）`;
-}
 
 export default function CyclonePage({ active }: { active?: boolean }) {
   const { t, locale } = useLocale();
-  const tRef = useRef(t);
-  tRef.current = t;
+  const tRef = useRef(t); tRef.current = t;
   const confirm = useConfirm();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [workshops, setWorkshops] = useState<WorkshopSummary[]>([]);
   const [activeWid, setActiveWid] = useState<string | null>(null);
-  const [seats, setSeats] = useState<Seat[]>([]);
-  const [, setActiveSeatId] = useState<string | null>(null);
-  const [rooms, setRooms] = useState<RoomLite[]>([]);
+  const [seats, setSeats] = useState<SeatSummary[]>([]);
+  const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [chairAgentId, setChairAgentId] = useState<string | null>(null);
-  /** 会议助理私聊抽屉是否展开（常驻右侧，独立于主区 view） */
   const [chairOpen, setChairOpen] = useState(false);
   const [, forceChairRunTick] = useState(0);
-  /** 工作室公告板条目（工作室级，全体工位可见）—— 作为工作室主区默认页 */
+  const [, forceTabStatusTick] = useState(0);
   const [bulletin, setBulletin] = useState<BulletinEntry[]>([]);
+  const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([]);
+  const [view, setView] = useState<CycloneView>(null);
   const workshopRequestGuard = useRef(createLatestRequestGuard());
-  /** 右侧视图：私聊某工位 / 进入某群聊 / 创建群聊 / 创建工作室 / 创建工位 / 编辑工位 */
-  const [view, setView] = useState<
-    | { kind: 'seat'; id: string } | { kind: 'room'; id: string }
-    | { kind: 'create-room' } | { kind: 'create-workshop' }
-    | { kind: 'create-seat' } | { kind: 'loading-seat'; id: string; error?: string }
-    | { kind: 'edit-seat'; id: string; draft: SeatDraft }
-    | null
-  >(null);
-  const viewRef = useRef(view);
-  useEffect(() => { viewRef.current = view; }, [view]);
-  /** 当前正在查看的会议（room）id —— 会议助理私聊绑定到它，换会议即换会议助理上下文 */
+  const viewRef = useRef(view); viewRef.current = view;
+  const activeWidRef = useRef(activeWid); activeWidRef.current = activeWid;
   const activeRoomId = view?.kind === 'room' ? view.id : null;
+  const visibleSeatId = view?.kind === 'seat' ? view.id : null;
 
-  const refreshAgents = useCallback(async () => { try { setAgents(await getAgents()); } catch (e) { console.error(`[cyclone] ${tRef.current('cyclone.shell.loadAgentsFailed')}`, e); } }, []);
+  const refreshAgents = useCallback(async () => {
+    try { setAgents(await getAgents()); }
+    catch (error) { console.error(`[cyclone] ${tRef.current('cyclone.shell.loadAgentsFailed')}`, error); }
+  }, []);
   const refreshWorkshops = useCallback(async () => {
-    try { const r = await fetch('/api/cyclone/list'); if (r.ok) setWorkshops(await r.json()); else console.error(await readErrorMessage(r, tRef.current('cyclone.shell.loadListFailed'))); } catch (e) { console.error(`[cyclone] ${tRef.current('cyclone.shell.loadListFailed')}`, e); }
+    try {
+      const response = await fetch('/api/cyclone/list');
+      if (response.ok) setWorkshops(await response.json());
+      else console.error(await readCycloneError(response, tRef.current('cyclone.shell.loadListFailed')));
+    } catch (error) { console.error(`[cyclone] ${tRef.current('cyclone.shell.loadListFailed')}`, error); }
   }, []);
-
-  const loadWorkshop = useCallback(async (wid: string) => {
+  const loadWorkshop = useCallback(async (workshopId: string) => {
     const request = workshopRequestGuard.current.begin();
-    // 侧栏只取轻量摘要（一次请求，服务端并行读），不拉每个工位/群聊的完整会话。
-    // 完整内容由 SeatChat/RoomPanel 选中时各自加载。
-    const r = await fetch(`/api/cyclone/workshop/${wid}/summary`);
-    if (!r.ok) { if (request.isCurrent()) console.error(await readErrorMessage(r, tRef.current('cyclone.shell.loadWorkshopFailed'))); return; }
-    const sum: { id: string; title: string; chairAgentId?: string; seats: Seat[]; rooms: RoomLite[]; bulletin?: { entries: BulletinEntry[] } } = await r.json();
+    const response = await fetch(`/api/cyclone/workshop/${workshopId}/summary`);
+    if (!response.ok) {
+      if (request.isCurrent()) console.error(await readCycloneError(response, tRef.current('cyclone.shell.loadWorkshopFailed')));
+      return;
+    }
+    const summary: { chairAgentId?: string; seats: SeatSummary[]; rooms: RoomSummary[];
+      bulletin?: { entries: BulletinEntry[] } } = await response.json();
     if (!request.isCurrent()) return;
-    setSeats(sum.seats);
-    setRooms(sum.rooms);
-    setChairAgentId(sum.chairAgentId ?? null);
-    setBulletin(sum.bulletin?.entries ?? []);
-    setActiveSeatId(prev => (sum.seats.length && !sum.seats.some(s => s.id === prev)) ? sum.seats[0].id : prev);
+    setSeats(summary.seats); setRooms(summary.rooms); setChairAgentId(summary.chairAgentId ?? null);
+    setBulletin(summary.bulletin?.entries ?? []);
   }, []);
 
-  useEffect(() => { if (!active) return; refreshAgents(); refreshWorkshops(); }, [active, refreshAgents, refreshWorkshops]);
-  useEffect(() => { if (activeWid) loadWorkshop(activeWid); }, [activeWid, loadWorkshop]);
-  useEffect(() => { if (!activeWid) workshopRequestGuard.current.cancel(); }, [activeWid]);
-
-  // 流式注册表：运行态从组件抽到此层（始终挂载），切工位不掐流、后台续跑、切回恢复
-  const activeWidRef = useRef(activeWid);
-  useEffect(() => { activeWidRef.current = activeWid; }, [activeWid]);
-  const { dispatches, refresh: refreshDispatches, act: dispatchAction } = useWorkshopDispatches(activeWid, !!active, {
-    requestFailed: t('cyclone.dispatch.requestFailed', { status: '{status}' }),
-    noWorkshop: t('cyclone.dispatch.noWorkshop'),
+  const { dispatches, refresh: refreshDispatches, act: dispatchAction, markSeatRead } = useWorkshopDispatches(activeWid, !!active, {
+    requestFailed: t('cyclone.dispatch.requestFailed', { status: '{status}' }), noWorkshop: t('cyclone.dispatch.noWorkshop'),
   });
   const seatRunners = useSeatStreamRunners(useCallback(() => {
-    // 任一工位流结束 → 刷新侧栏 pending 标记
-    if (activeWidRef.current) loadWorkshop(activeWidRef.current);
+    if (activeWidRef.current) void loadWorkshop(activeWidRef.current);
   }, [loadWorkshop]), locale);
-
-  useEffect(() => {
-    if (!activeRoomId) return;
-    return seatRunners.subscribe(chairStreamKey(activeRoomId), () => forceChairRunTick(tick => tick + 1));
-  }, [activeRoomId, seatRunners.subscribe]);
-
-  // 群聊流式注册表：同理，切走房间不掐流、后台续跑、切回读 roundFeed 恢复
+  const refreshDispatchesSafely = useCallback(() => {
+    void refreshDispatches().catch(error => console.error('[cyclone] 刷新异步派发失败', error));
+  }, [refreshDispatches]);
   const roomRunners = useRoomStreamRunners(useCallback(() => {
-    if (activeWidRef.current) loadWorkshop(activeWidRef.current);
-    void refreshDispatches().catch(error => console.error('[cyclone] 刷新异步派发失败', error));
-  }, [loadWorkshop, refreshDispatches]), useCallback(() => {
-    void refreshDispatches().catch(error => console.error('[cyclone] 刷新异步派发失败', error));
-  }, [refreshDispatches]), locale);
+    if (activeWidRef.current) void loadWorkshop(activeWidRef.current);
+    refreshDispatchesSafely();
+  }, [loadWorkshop, refreshDispatchesSafely]), refreshDispatchesSafely, locale);
+  const subscribeSeat = seatRunners.subscribe;
+  const subscribeRoom = roomRunners.subscribe;
+  const workspaceStatus = projectWorkspaceStatus({
+    seats, rooms, dispatches, getSeatRunner: seatRunners.getRunner,
+    getRoomRunner: roomRunners.getRunner, chairKey: chairStreamKey,
+  });
 
-  // 切走当前工位时把它的流转后台（不掐流）
-  const prevViewRef = useRef<string | null>(null);
+  useEffect(() => { if (active) { void refreshAgents(); void refreshWorkshops(); } }, [active, refreshAgents, refreshWorkshops]);
+  useEffect(() => { if (activeWid) void loadWorkshop(activeWid); else workshopRequestGuard.current.cancel(); }, [activeWid, loadWorkshop]);
+  const visibleSeatHasUnreadResult = visibleSeatId !== null && dispatches.some(item => (
+    item.targetSeatId === visibleSeatId && item.readState === 'unread'
+    && (item.status === 'completed' || item.status === 'failed')
+  ));
   useEffect(() => {
-    const cur = view?.kind === 'seat' ? view.id : null;
-    if (prevViewRef.current && prevViewRef.current !== cur) {
-      seatRunners.background(prevViewRef.current);
-    }
-    prevViewRef.current = cur;
+    if (!visibleSeatId || !visibleSeatHasUnreadResult) return;
+    void markSeatRead(visibleSeatId)
+      .catch(error => console.error('[cyclone] 标记工位派发已读失败', error));
+  }, [markSeatRead, visibleSeatHasUnreadResult, visibleSeatId]);
+  useEffect(() => activeRoomId
+    ? subscribeSeat(chairStreamKey(activeRoomId), () => forceChairRunTick(tick => tick + 1))
+    : undefined, [activeRoomId, subscribeSeat]);
+  useEffect(() => {
+    const update = () => forceTabStatusTick(value => value + 1);
+    const subscriptions = [...seats.map(seat => subscribeSeat(seat.id, update)),
+      ...rooms.map(room => subscribeRoom(room.id, update))];
+    return () => subscriptions.forEach(unsubscribe => unsubscribe());
+  }, [rooms, seats, subscribeRoom, subscribeSeat]);
+
+  const previousSeatRef = useRef<string | null>(null);
+  useEffect(() => {
+    const current = view?.kind === 'seat' ? view.id : null;
+    if (previousSeatRef.current && previousSeatRef.current !== current) seatRunners.background(previousSeatRef.current);
+    previousSeatRef.current = current;
   }, [view, seatRunners]);
-
-  // 会议助理抽屉收起 / 切会议 → 该会议的会议助理流转后台（不掐流，注册表续跑，切回恢复）
-  const prevChairRoomRef = useRef<string | null>(null);
+  const previousChairRoomRef = useRef<string | null>(null);
   useEffect(() => {
-    const cur = (chairOpen && activeRoomId) ? activeRoomId : null;
-    if (prevChairRoomRef.current && prevChairRoomRef.current !== cur) {
-      seatRunners.background(chairStreamKey(prevChairRoomRef.current));
+    const current = chairOpen && activeRoomId ? activeRoomId : null;
+    if (previousChairRoomRef.current && previousChairRoomRef.current !== current) {
+      seatRunners.background(chairStreamKey(previousChairRoomRef.current));
     }
-    prevChairRoomRef.current = cur;
-  }, [chairOpen, activeRoomId, seatRunners]);
-
-  // 切换工作室时关上会议助理抽屉（会议助理随会议而设）
-  const prevWidRef = useRef<string | null>(null);
+    previousChairRoomRef.current = current;
+  }, [activeRoomId, chairOpen, seatRunners]);
+  const previousWorkshopRef = useRef<string | null>(null);
   useEffect(() => {
-    if (prevWidRef.current && prevWidRef.current !== activeWid) setChairOpen(false);
-    prevWidRef.current = activeWid;
+    if (previousWorkshopRef.current && previousWorkshopRef.current !== activeWid) {
+      setChairOpen(false); setWorkspaceTabs([]);
+    }
+    previousWorkshopRef.current = activeWid;
   }, [activeWid]);
 
-  /** 设置 / 更换 / 清空会议助理（建后也能改，对齐对流配置栏） */
-  const setChair = useCallback(async (agentId: string) => {
+  const openWorkspaceView = useCallback((tab: WorkspaceTab) => {
+    setWorkspaceTabs(current => openWorkspaceTab(current, tab));
+    setView({ kind: tab.kind, id: tab.id });
+  }, []);
+  const closeWorkspaceView = useCallback((tab: WorkspaceTab) => {
+    const activeKey = viewRef.current?.kind === 'seat' || viewRef.current?.kind === 'room' ? tabKey(viewRef.current) : null;
+    const result = closeWorkspaceTab(workspaceTabs, activeKey, tabKey(tab));
+    setWorkspaceTabs(result.tabs);
+    if (activeKey !== tabKey(tab)) return;
+    const fallback = result.tabs.find(item => tabKey(item) === result.activeKey);
+    setView(fallback ? { kind: fallback.kind, id: fallback.id } : null);
+  }, [workspaceTabs]);
+  const openSeat = useCallback((seatId: string) => {
+    const seat = seats.find(item => item.id === seatId);
+    if (seat) openWorkspaceView({ kind: 'seat', id: seat.id, title: seat.title });
+  }, [openWorkspaceView, seats]);
+
+  async function setChair(agentId: string) {
     if (!activeWid) return;
-    const r = await fetch(`/api/cyclone/workshop/${activeWid}/set-chair`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chairAgentId: agentId }),
+    const response = await fetch(`/api/cyclone/workshop/${activeWid}/set-chair`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chairAgentId: agentId }),
     });
-    if (!r.ok) { alert(await readErrorMessage(r, tRef.current('cyclone.shell.setChairFailed'))); return; }
-    setChairAgentId(agentId || null);
-    loadWorkshop(activeWid);
-  }, [activeWid, loadWorkshop]);
-
-  const activeSeat = view?.kind === 'seat' ? seats.find(s => s.id === view.id) || null : null;
-
-  async function handleCreateWorkshop(cfg: { title: string; chairAgentId?: string }) {
-    const r = await fetch('/api/cyclone/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
-    if (!r.ok) { alert(await readErrorMessage(r, t('cyclone.shell.createWorkshopFailed'))); return; }
-    const w = await r.json();
-    await refreshWorkshops();
-    setActiveWid(w.id);
-    setView(null);
+    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.setChairFailed'))); return; }
+    setChairAgentId(agentId || null); await loadWorkshop(activeWid);
   }
-
+  async function createWorkshop(config: { title: string; chairAgentId?: string }) {
+    const response = await fetch('/api/cyclone/create', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config),
+    });
+    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.createWorkshopFailed'))); return; }
+    const workshop = await response.json(); await refreshWorkshops(); setActiveWid(workshop.id); setView(null);
+  }
   async function openWorkshopWorkspace() {
     if (!activeWid) return;
-    const r = await fetch(`/api/cyclone/workshop/${activeWid}/open-workspace`, { method: 'POST' });
-    if (!r.ok) { alert(await readErrorMessage(r, t('cyclone.shell.openWorkspaceFailed'))); return; }
+    const response = await fetch(`/api/cyclone/workshop/${activeWid}/open-workspace`, { method: 'POST' });
+    if (!response.ok) alert(await readCycloneError(response, t('cyclone.shell.openWorkspaceFailed')));
   }
-
-  async function deleteWorkshop(wid: string, title: string) {
+  async function deleteWorkshop(workshopId: string, title: string) {
     if (!(await confirm({ title: t('cyclone.shell.deleteWorkshopTitle', { title }), message: t('cyclone.shell.deleteWorkshopMessage'), confirmText: t('common.delete'), danger: true }))) return;
-    // 删的是当前工作室 → 掐掉其各会议的会议助理流（仅当前工作室的 rooms 在内存里可知）
-    if (activeWid === wid) rooms.forEach(rm => seatRunners.kill(wid, chairStreamKey(rm.id)));
-    const r = await fetch(`/api/cyclone/workshop/${wid}/delete`, { method: 'POST' });
-    if (!r.ok) { alert(await readErrorMessage(r, t('cyclone.shell.deleteWorkshopFailed'))); return; }
-    if (activeWid === wid) { setActiveWid(null); setView(null); setSeats([]); setRooms([]); setChairOpen(false); }
+    if (activeWid === workshopId) rooms.forEach(room => seatRunners.kill(workshopId, chairStreamKey(room.id)));
+    const response = await fetch(`/api/cyclone/workshop/${workshopId}/delete`, { method: 'POST' });
+    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.deleteWorkshopFailed'))); return; }
+    if (activeWid === workshopId) { setActiveWid(null); setView(null); setSeats([]); setRooms([]); setChairOpen(false); }
     await refreshWorkshops();
   }
-
-  async function submitCreateSeat(d: SeatDraft) {
+  async function createSeat(draft: SeatDraft) {
     if (!activeWid) return;
-    const r = await fetch(`/api/cyclone/workshop/${activeWid}/add-seat`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(d),
+    const response = await fetch(`/api/cyclone/workshop/${activeWid}/add-seat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft),
     });
-    if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.error || t('cyclone.shell.addSeatFailed')); return; }
-    const seat = await r.json();
-    await refreshWorkshops(); await loadWorkshop(activeWid);
-    setActiveSeatId(seat.id); setView({ kind: 'seat', id: seat.id });
+    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.addSeatFailed'))); return; }
+    const seat = await response.json(); await refreshWorkshops(); await loadWorkshop(activeWid);
+    openWorkspaceView({ kind: 'seat', id: seat.id, title: seat.title });
   }
-
   async function openEditSeat(seatId: string) {
     if (!activeWid) return;
     setView({ kind: 'loading-seat', id: seatId });
-    const r = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/status`);
-    if (!r.ok) {
-      const error = await readErrorMessage(r, t('cyclone.shell.loadSeatFailed'));
-      setView(current => current?.kind === 'loading-seat' && current.id === seatId
-        ? { ...current, error }
-        : current);
+    const response = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/status`);
+    if (!response.ok) {
+      const error = await readCycloneError(response, t('cyclone.shell.loadSeatFailed'));
+      setView(current => current?.kind === 'loading-seat' && current.id === seatId ? { ...current, error } : current);
       return;
     }
-    const s = await r.json();
-    const draft: SeatDraft = {
-      agentId: s.agentId, title: s.title, rolePrompt: s.rolePrompt || '',
-      duty: s.duty || '', overrideAgentRole: !!s.overrideAgentRole,
-    };
+    const seat = await response.json();
+    const draft: SeatDraft = { agentId: seat.agentId, title: seat.title, rolePrompt: seat.rolePrompt || '', duty: seat.duty || '', overrideAgentRole: !!seat.overrideAgentRole };
     setView(current => resolveLoadedSeatEditor(current, seatId, draft));
   }
-
-  async function submitEditSeat(seatId: string, d: SeatDraft) {
+  async function editSeat(seatId: string, draft: SeatDraft) {
     if (!activeWid) return;
-    const r = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/update-role`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(d),
+    const response = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/update-role`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft),
     });
-    if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.error || t('cyclone.shell.saveSeatFailed')); return; }
-    await loadWorkshop(activeWid);
-    setActiveSeatId(seatId); setView({ kind: 'seat', id: seatId });
+    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.saveSeatFailed'))); return; }
+    await loadWorkshop(activeWid); openWorkspaceView({ kind: 'seat', id: seatId, title: draft.title });
   }
-
   async function deleteSeat(seatId: string, title: string) {
-    if (!activeWid) return;
-    if (!(await confirm({ title: t('cyclone.shell.deleteSeatTitle', { title }), message: t('cyclone.shell.deleteSeatMessage'), confirmText: t('common.delete'), danger: true }))) return;
-    seatRunners.kill(activeWid, seatId); // 流式中删除 → 掐流防僵尸
-    const r = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/delete`, { method: 'POST' });
-    if (!r.ok) { alert(await readErrorMessage(r, t('cyclone.shell.deleteSeatFailed'))); return; }
-    if (view?.kind === 'seat' && view.id === seatId) setView(null);
+    if (!activeWid || !(await confirm({ title: t('cyclone.shell.deleteSeatTitle', { title }), message: t('cyclone.shell.deleteSeatMessage'), confirmText: t('common.delete'), danger: true }))) return;
+    seatRunners.kill(activeWid, seatId);
+    const response = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/delete`, { method: 'POST' });
+    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.deleteSeatFailed'))); return; }
+    const tab = workspaceTabs.find(item => item.kind === 'seat' && item.id === seatId); if (tab) closeWorkspaceView(tab);
     await refreshWorkshops(); await loadWorkshop(activeWid);
   }
-
   async function deleteRoom(roomId: string, title: string) {
-    if (!activeWid) return;
-    if (!(await confirm({
-      title: t('cyclone.shell.deleteRoomTitle', { title }),
-      message: t('cyclone.shell.deleteRoomMessage'),
-      confirmText: t('common.delete'), danger: true,
-    }))) return;
+    if (!activeWid || !(await confirm({ title: t('cyclone.shell.deleteRoomTitle', { title }), message: t('cyclone.shell.deleteRoomMessage'), confirmText: t('common.delete'), danger: true }))) return;
     const workshopId = activeWid;
-    const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/delete`, { method: 'POST' });
-    if (!r.ok) { alert(await readErrorMessage(r, t('cyclone.shell.deleteRoomFailed'))); return; }
-    roomRunners.kill(workshopId, roomId);
-    seatRunners.kill(workshopId, chairStreamKey(roomId));
-    if (activeWidRef.current === workshopId && viewRef.current?.kind === 'room' && viewRef.current.id === roomId) {
-      setView(null);
-      setChairOpen(false);
-    }
+    const response = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/delete`, { method: 'POST' });
+    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.deleteRoomFailed'))); return; }
+    roomRunners.kill(workshopId, roomId); seatRunners.kill(workshopId, chairStreamKey(roomId));
+    const tab = workspaceTabs.find(item => item.kind === 'room' && item.id === roomId); if (tab) closeWorkspaceView(tab);
+    if (activeWidRef.current === workshopId) { setChairOpen(false); await loadWorkshop(workshopId); await refreshDispatches(); }
     await refreshWorkshops();
-    if (activeWidRef.current === workshopId) {
-      await loadWorkshop(workshopId);
-      await refreshDispatches();
-    }
   }
-
-  /** 创建群聊：建群 → 跑入会发言（SSE 流式落库）→ 进入。入会发言的可视化在 RoomPanel 进入后 reload 自然呈现。 */
-  async function handleCreateRoom(cfg: {
-    title: string; topic: string; mode: 'build' | 'plan';
-    participantSeatIds: string[];
-    intros: Array<{ seatId: string; behavior: 'summary' | 'intro' | 'none' }>;
-  }) {
+  async function createRoom(config: { title: string; topic: string; mode: 'build' | 'plan'; participantSeatIds: string[];
+    intros: Array<{ seatId: string; behavior: 'summary' | 'intro' | 'none' }> }) {
     if (!activeWid) return;
-    const r = await fetch(`/api/cyclone/workshop/${activeWid}/create-room`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: cfg.title, topic: cfg.topic, mode: cfg.mode, participantSeatIds: cfg.participantSeatIds }),
+    const response = await fetch(`/api/cyclone/workshop/${activeWid}/create-room`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config),
     });
-    if (!r.ok) { alert(await readErrorMessage(r, t('cyclone.shell.createRoomFailed'))); return; }
-    const rm = await r.json();
-    await loadWorkshop(activeWid);
-    setView({ kind: 'room', id: rm.id });
-    // 入会发言立即进入群聊流注册表：侧栏显示运行中，房间内逐字展示。
-    const needIntro = cfg.intros.some(i => i.behavior !== 'none');
-    if (needIntro) {
-      roomRunners.startIntro(activeWid, rm.id, cfg.intros);
-    }
+    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.createRoomFailed'))); return; }
+    const room = await response.json(); await loadWorkshop(activeWid);
+    openWorkspaceView({ kind: 'room', id: room.id, title: room.title });
+    if (config.intros.some(item => item.behavior !== 'none')) roomRunners.startIntro(activeWid, room.id, config.intros);
   }
 
   if (!active) return null;
-
-  return (
-    <div style={{ display: 'flex', height: '100%' }}>
-      {/* 左：工作室 + 工位 + 群聊 */}
-      <div style={leftPanelStyle}>
-        <div style={sectionHeadStyle}>
-          <span style={sectionLabelStyle}>{t('cyclone.shell.workshops')}</span>
-          <button onClick={() => setView({ kind: 'create-workshop' })} className="icon-add-btn icon-add-btn--sm" title={t('cyclone.shell.createWorkshop')} aria-label={t('cyclone.shell.createWorkshop')}>+</button>
-        </div>
-        {workshops.map(w => (
-          <div key={w.id}
-            style={{ ...itemStyle, display: 'flex', alignItems: 'center', gap: 4, ...(w.id === activeWid ? itemActiveStyle : null) }}>
-            <button type="button" onClick={() => { setActiveWid(w.id); setView(null); }} style={itemMainStyle}>
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{w.title} <span style={{ opacity: .5 }}>({w.seatCount})</span></span>
-            </button>
-            <button onClick={() => deleteWorkshop(w.id, w.title)} style={delBtnStyle} title={t('cyclone.shell.deleteWorkshop')} aria-label={t('cyclone.shell.deleteWorkshopLabel', { title: w.title })}>×</button>
-          </div>
-        ))}
-        {activeWid && (
-          <button type="button" onClick={openWorkshopWorkspace} className="cyclone__workspace-btn" title={t('cyclone.shell.openWorkspace')}>
-            <span className="cyclone__workspace-btn-icon">↗</span>
-            <span>{t('cyclone.shell.workspace')}</span>
-          </button>
-        )}
-        {activeWid && (
-          <>
-            <div style={sectionHeadStyle}>
-              <span style={sectionLabelStyle}>{t('cyclone.shell.seats')}</span>
-              <button onClick={() => setView({ kind: 'create-seat' })} className="icon-add-btn icon-add-btn--sm" title={t('cyclone.shell.addSeat')} aria-label={t('cyclone.shell.addSeat')}>+</button>
-            </div>
-            {seats.map(s => (
-              <div key={s.id}
-                style={{ ...itemStyle, display: 'flex', alignItems: 'center', gap: 4, ...(view?.kind === 'seat' && view.id === s.id ? itemActiveStyle : null) }}>
-                <button type="button" onClick={() => { setActiveSeatId(s.id); setView({ kind: 'seat', id: s.id }); }} style={itemMainStyle}>
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title}{s.pending ? ' ❓' : ''}</span>
-                </button>
-                {dispatches.some(item => item.targetSeatId === s.id && (item.status === 'queued' || item.status === 'running')) && (
-                  <span className="cyclone-room__dispatch-mark cyclone-room__dispatch-mark--active" title={t('cyclone.shell.dispatchRunning')} />
-                )}
-                <button onClick={() => openEditSeat(s.id)} style={delBtnStyle} title={t('cyclone.shell.seatSettings')} aria-label={t('cyclone.shell.seatSettingsLabel', { title: s.title })}>⚙</button>
-                <button onClick={() => deleteSeat(s.id, s.title)} style={delBtnStyle} title={t('cyclone.shell.deleteSeat')} aria-label={t('cyclone.shell.deleteSeatLabel', { title: s.title })}>×</button>
-              </div>
-            ))}
-            <div style={sectionHeadStyle}>
-              <span style={sectionLabelStyle}>{t('cyclone.shell.rooms')}</span>
-              <button onClick={() => setView({ kind: 'create-room' })} className="icon-add-btn icon-add-btn--sm" title={t('cyclone.shell.createRoom')} aria-label={t('cyclone.shell.createRoom')}>+</button>
-            </div>
-            {rooms.map(rm => {
-              const items = dispatches.filter(item => item.sourceRoomId === rm.id);
-              const dispatchRunning = items.some(item => (
-                item.status === 'queued' || item.status === 'running' || item.status === 'awaiting_human'
-              ));
-              const running = dispatchRunning
-                || !!roomRunners.getRunner(rm.id)?.streaming
-                || !!seatRunners.getRunner(chairStreamKey(rm.id))?.streaming;
-              const unread = items.some(item => item.readState === 'unread' && (item.status === 'completed' || item.status === 'failed'));
-              return (
-                <div key={rm.id}
-                  style={{ ...itemStyle, display: 'flex', alignItems: 'center', gap: 8, ...(view?.kind === 'room' && view.id === rm.id ? itemActiveStyle : null) }}>
-                  <button type="button" onClick={() => setView({ kind: 'room', id: rm.id })} style={itemMainStyle}>
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}># {rm.title}</span>
-                  </button>
-                  {(running || unread) && <span className={`cyclone-room__dispatch-mark${running ? ' cyclone-room__dispatch-mark--active' : ''}`} title={running ? t('cyclone.shell.dispatchRunning') : t('cyclone.shell.dispatchUnread')} />}
-                  <button disabled={running} onClick={() => deleteRoom(rm.id, rm.title)}
-                    style={{ ...delBtnStyle, opacity: running ? .35 : 1 }} title={t('cyclone.shell.deleteRoom')} aria-label={t('cyclone.shell.deleteRoomLabel', { title: rm.title })}>×</button>
-                </div>
-              );
-            })}
-          </>
-        )}
-      </div>
-
-      {/* 右：私聊 / 群聊 / 创建群聊 / 创建工作室 */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        {view?.kind === 'create-workshop' && (
-          <CreateWorkshopPanel agents={agents} onCreate={handleCreateWorkshop} onCancel={() => setView(null)} />
-        )}
-        {view?.kind === 'create-seat' && activeWid && (
-          <SeatPanel key="create-seat" mode="create" agents={agents} workshopId={activeWid}
-            onSubmit={submitCreateSeat} onCancel={() => setView(null)} />
-        )}
-        {view?.kind === 'loading-seat' && (
-          <SeatEditorLoading
-            key={`loading-seat-${view.id}`}
-            error={view.error}
-            onRetry={() => openEditSeat(view.id)}
-            onCancel={() => setView({ kind: 'seat', id: view.id })}
-          />
-        )}
-        {view?.kind === 'edit-seat' && activeWid && (
-          <SeatPanel key={`edit-seat-${view.id}`} mode="edit" agents={agents} workshopId={activeWid} initial={view.draft}
-            onSubmit={d => submitEditSeat(view.id, d)} onCancel={() => setView({ kind: 'seat', id: view.id })} />
-        )}
-        {view?.kind === 'create-room' && activeWid && (
-          <CreateRoomPanel
-            seats={seats.map(s => ({ id: s.id, title: s.title }))}
-            onCreate={handleCreateRoom}
-            onCancel={() => setView(null)}
-          />
-        )}
-        {view?.kind === 'room' && activeWid && (
-          <RoomPanel key={view.id} workshopId={activeWid} roomId={view.id}
-            seats={seats.map(s => ({ id: s.id, title: s.title }))} runners={roomRunners}
-            dispatches={dispatches} onDispatchAction={dispatchAction}
-            settingsLocked={
-              !!seatRunners.getRunner(chairStreamKey(view.id))?.streaming
-              || dispatches.some(item => item.sourceRoomId === view.id
-                && (item.status === 'queued' || item.status === 'running' || item.status === 'awaiting_human'))
-            }
-            onOpenSeat={seatId => { setActiveSeatId(seatId); setView({ kind: 'seat', id: seatId }); }}
-            onChanged={() => loadWorkshop(activeWid)} active={active} />
-        )}
-        {!activeWid && (view === null || (view.kind === 'seat' && !activeSeat)) && <div style={{ color: 'var(--color-text-secondary)', margin: 'auto', textShadow: 'var(--text-halo)' }}>{t('cyclone.shell.empty')}</div>}
-        {activeWid && (view === null || (view.kind === 'seat' && !activeSeat)) && (
-          <BulletinBoard
-            workshopId={activeWid}
-            title={workshops.find(w => w.id === activeWid)?.title}
-            entries={bulletin}
-            onSaved={e => setBulletin(e)}
-            onRenamed={refreshWorkshops}
-          />
-        )}
-        {view?.kind === 'seat' && activeSeat && activeWid && (
-          <SeatChat key={activeSeat.id} workshopId={activeWid} seatId={activeSeat.id}
-            runners={seatRunners} dispatches={dispatches}
-            onReloaded={() => loadWorkshop(activeWid)} active={active} />
-        )}
-      </div>
-
-      {/* 右：会议助理私聊抽屉（可折叠；会议助理随会议而设，仅进入某群聊时出现，按 room 隔离不串台） */}
-      {activeWid && activeRoomId && (
-        <ChairDrawer
-          workshopId={activeWid}
-          roomId={activeRoomId}
-          roomTitle={rooms.find(r => r.id === activeRoomId)?.title}
-          chairAgentId={chairAgentId}
-          agents={agents}
-          runners={seatRunners}
-          open={chairOpen}
-          onToggle={() => setChairOpen(o => !o)}
-          onSetChair={setChair}
-          onReloaded={() => loadWorkshop(activeWid)}
-        />
-      )}
-    </div>
-  );
+  return <div style={{ display: 'flex', height: '100%' }}>
+    <CycloneSidebar workshops={workshops} activeWid={activeWid} seats={seats} rooms={rooms} view={view}
+      status={workspaceStatus}
+      onCreateWorkshop={() => setView({ kind: 'create-workshop' })}
+      onSelectWorkshop={id => { setActiveWid(id); setWorkspaceTabs([]); setView(null); }}
+      onDeleteWorkshop={(id, title) => void deleteWorkshop(id, title)} onOpenWorkspace={() => void openWorkshopWorkspace()}
+      onCreateSeat={() => setView({ kind: 'create-seat' })} onOpenSeat={seat => openSeat(seat.id)}
+      onEditSeat={id => void openEditSeat(id)} onDeleteSeat={(id, title) => void deleteSeat(id, title)}
+      onCreateRoom={() => setView({ kind: 'create-room' })} onOpenRoom={room => openWorkspaceView({ kind: 'room', ...room })}
+      onDeleteRoom={(id, title) => void deleteRoom(id, title)} />
+    <CycloneWorkspacePane active={!!active} agents={agents} activeWid={activeWid} workshops={workshops} seats={seats}
+      rooms={rooms} bulletin={bulletin} dispatches={dispatches} view={view} tabs={workspaceTabs}
+      status={workspaceStatus}
+      chairAgentId={chairAgentId} chairOpen={chairOpen} seatRunners={seatRunners} roomRunners={roomRunners}
+      dispatchAction={dispatchAction} setView={setView} onCreateWorkshop={createWorkshop}
+      onCreateSeat={createSeat} onRetrySeat={id => void openEditSeat(id)}
+      onEditSeat={editSeat} onCreateRoom={createRoom}
+      onSelectTab={tab => tab ? openWorkspaceView(tab) : setView(null)} onCloseTab={closeWorkspaceView}
+      onOpenSeat={openSeat}
+      onWorkshopReload={() => { if (activeWid) void loadWorkshop(activeWid); }}
+      onWorkshopsReload={() => void refreshWorkshops()} onBulletinSaved={setBulletin}
+      onChairToggle={() => setChairOpen(open => !open)} onSetChair={agentId => void setChair(agentId)} />
+  </div>;
 }
-
-const leftPanelStyle: React.CSSProperties = { width: '240px', borderRight: '1px solid var(--border-color)', padding: 'var(--space-4)', overflowY: 'auto', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '2px', background: 'var(--glass-bg-strong)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))' };
-const sectionHeadStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'var(--space-3)', marginBottom: 'var(--space-1)' };
-const sectionLabelStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--color-text-secondary)' };
-const itemStyle: React.CSSProperties = { padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', border: '1px solid transparent', transition: 'background var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo)' };
-const itemMainStyle: React.CSSProperties = { minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', padding: 0, border: 'none', background: 'transparent', color: 'inherit', font: 'inherit', textAlign: 'left', cursor: 'pointer' };
-const itemActiveStyle: React.CSSProperties = { background: 'var(--color-accent-subtle)', borderColor: 'var(--color-accent)', color: 'var(--color-accent)', fontWeight: 600 };
-const delBtnStyle: React.CSSProperties = { width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: 'var(--color-text-tertiary)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-md)', cursor: 'pointer', lineHeight: 1, flexShrink: 0, padding: 0 };

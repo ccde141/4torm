@@ -9,58 +9,29 @@
  * 只 import 本目录模块，零交叉代码。
  */
 
-import { loadWorkshop } from './workshop-store';
-import { loadSeat } from './seat-store';
-import { DEFAULT_DUTY } from './types';
+import { listAuthorizedTargets } from './organization/organization-authorization.js';
 
 /** 一个可联络目标：工位名 + 职责名片（供发起方判断该不该联络它） */
 export interface ContactTarget { title: string; duty: string; }
 
 // ── 寻址 ─────────────────────────────────────────────────────────
 
-/**
- * 在工作室内按 title 找工位 seatId。
- * title 在工作室内唯一（addSeat/updateSeatRole 时校验），找不到返回 null。
- */
-export async function findSeatIdByTitle(
-  dataDir: string, workshopId: string, title: string,
-): Promise<string | null> {
-  const w = await loadWorkshop(dataDir, workshopId);
-  if (!w) return null;
-  for (const sid of w.seatIds) {
-    const seat = await loadSeat(dataDir, workshopId, sid);
-    if (seat && seat.title === title) return sid;
-  }
-  return null;
-}
-
 /** 列出工作室内其他工位（去掉指定 seatId 自身），带职责名片，用于热注入 contact 名单 */
 export async function listOtherSeats(
   dataDir: string, workshopId: string, selfSeatId: string,
 ): Promise<ContactTarget[]> {
-  const w = await loadWorkshop(dataDir, workshopId);
-  if (!w) return [];
-  const out: ContactTarget[] = [];
-  for (const sid of w.seatIds) {
-    if (sid === selfSeatId) continue;
-    const seat = await loadSeat(dataDir, workshopId, sid);
-    if (seat) out.push({ title: seat.title, duty: seat.duty?.trim() || DEFAULT_DUTY });
-  }
-  return out;
+  return (await listAuthorizedTargets(
+    dataDir, workshopId, selfSeatId, 'contact',
+  )).map(({ title, duty }) => ({ title, duty }));
 }
 
-/** 列出全部固定工位；群聊 dispatch 可把任务落回当前副本对应的自身工位。 */
+/** 列出允许派发的固定工位；群聊可额外包含当前副本对应的自身工位。 */
 export async function listWorkshopSeats(
-  dataDir: string, workshopId: string,
+  dataDir: string, workshopId: string, selfSeatId: string, includeSelf = true,
 ): Promise<ContactTarget[]> {
-  const w = await loadWorkshop(dataDir, workshopId);
-  if (!w) return [];
-  const out: ContactTarget[] = [];
-  for (const sid of w.seatIds) {
-    const seat = await loadSeat(dataDir, workshopId, sid);
-    if (seat) out.push({ title: seat.title, duty: seat.duty?.trim() || DEFAULT_DUTY });
-  }
-  return out;
+  return (await listAuthorizedTargets(
+    dataDir, workshopId, selfSeatId, 'dispatch', { includeSelf },
+  )).map(({ title, duty }) => ({ title, duty }));
 }
 
 // ── 等待图 + 环检测（按 workshopId 隔离） ─────────────────────────

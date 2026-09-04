@@ -25,6 +25,11 @@ export function workshopMetaFile(dataDir: string, id: string): string {
   return path.join(workshopDir(dataDir, id), 'meta.json');
 }
 
+/** 工作室显式组织关系；缺失表示旧版自由协作模式。 */
+export function workshopOrganizationFile(dataDir: string, id: string): string {
+  return path.join(workshopDir(dataDir, id), 'organization.json');
+}
+
 /** 共享工作区：data/cyclone/{id}/workspace/（所有工位 + 群聊共用） */
 export function workshopWorkspace(dataDir: string, id: string): string {
   return path.join(workshopDir(dataDir, id), 'workspace');

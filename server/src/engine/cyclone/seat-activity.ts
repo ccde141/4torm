@@ -10,12 +10,18 @@ export interface ExternalSeatActivityEvent {
 export interface ExternalSeatActivitySnapshot {
   id: string;
   kind: ExternalSeatActivityKind;
+  sourceSeatId?: string;
   label: string;
   running: boolean;
   startedAt: number;
   events: ExternalSeatActivityEvent[];
   latestSeq: number;
 }
+
+export type WorkshopExternalSeatActivities = Record<
+  string,
+  Pick<ExternalSeatActivitySnapshot, 'id' | 'kind' | 'sourceSeatId'>
+>;
 
 interface StoredActivity extends Omit<ExternalSeatActivitySnapshot, 'events' | 'latestSeq'> {
   seq: number;
@@ -41,11 +47,13 @@ export function beginExternalSeatActivity(
   seatId: string,
   kind: ExternalSeatActivityKind,
   label: string,
+  sourceSeatId?: string,
 ): ExternalSeatActivityHandle {
   const activityKey = key(workshopId, seatId);
   const activity: StoredActivity = {
     id: `${kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
     kind,
+    sourceSeatId,
     label,
     running: true,
     startedAt: Date.now(),
@@ -90,6 +98,23 @@ export function readExternalSeatActivity(
     events: activity.events.filter(item => item.seq > since),
     latestSeq: activity.seq,
   };
+}
+
+export function readWorkshopExternalSeatActivities(
+  workshopId: string,
+): WorkshopExternalSeatActivities {
+  const prefix = `${workshopId}/`;
+  const snapshot: WorkshopExternalSeatActivities = {};
+  for (const [activityKey, activity] of activities) {
+    if (!activity.running || !activityKey.startsWith(prefix)) continue;
+    const seatId = activityKey.slice(prefix.length);
+    snapshot[seatId] = {
+      id: activity.id,
+      kind: activity.kind,
+      ...(activity.sourceSeatId ? { sourceSeatId: activity.sourceSeatId } : {}),
+    };
+  }
+  return snapshot;
 }
 
 export function clearExternalSeatActivities(): void {

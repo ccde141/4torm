@@ -32,7 +32,7 @@ features:
     linkText: Read the guide
   - icon: 🏢
     title: Cyclone · Workshops
-    details: Keep a set of permanent seats working together through private conversations and group rooms
+    details: Organize permanent seats in a visual collaboration structure, with private conversations and group rooms as needed
     link: /en/modes/cyclone
     linkText: Read the guide
   - icon: 🔀

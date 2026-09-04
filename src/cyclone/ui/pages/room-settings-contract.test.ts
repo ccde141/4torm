@@ -26,5 +26,5 @@ test('会议运行期间设置入口与写操作都被锁定', () => {
   assert.match(room, /settingsLocked/);
   assert.match(panel, /locked/);
   assert.match(panel, /disabled=\{locked/);
-  assert.match(page, /seatRunners\.subscribe\(chairStreamKey\(activeRoomId\)/);
+  assert.match(page, /subscribeSeat\(chairStreamKey\(activeRoomId\)/);
 });

@@ -183,6 +183,12 @@
 
 .cyclone-room__dispatch-mark { margin-left: auto; }
 
+.cyclone-sidebar-status { width:16px; height:16px; display:inline-grid; place-items:center; flex:0 0 16px; border-radius:50%; font-size:11px; font-weight:700; }
+.cyclone-sidebar-status--running { color:#60a5fa; animation:cyclone-dispatch-pulse 1.5s ease-in-out infinite; }
+.cyclone-sidebar-status--waiting { color:#f59e0b; background:rgba(245,158,11,.12); }
+.cyclone-sidebar-status--failed { color:#ef4444; background:rgba(239,68,68,.12); }
+.cyclone-sidebar-status--unread { color:#22c55e; }
+
 .cyclone-room__dispatch-mark--active,
 .cyclone-dispatch__dot--active {
   animation: cyclone-dispatch-pulse 1.5s ease-in-out infinite;
@@ -408,6 +414,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .cyclone-room__dispatch-mark--active,
-  .cyclone-dispatch__dot--active { animation: none; }
+  .cyclone-dispatch__dot--active,
+  .cyclone-sidebar-status--running { animation: none; }
   .cyclone-dispatch { transition: none; }
 }

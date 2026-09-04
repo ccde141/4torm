@@ -19,8 +19,9 @@ const BEHAVIOR_KEY: Record<JoinBehavior, MessageKey> = {
   none: 'cyclone.room.behaviorNone',
 };
 
-export default function CreateRoomPanel({ seats, onCreate, onCancel }: {
+export default function CreateRoomPanel({ seats, initialSeatIds = [], onCreate, onCancel }: {
   seats: SeatLite[];
+  initialSeatIds?: string[];
   /** 返回创建好的 roomId（用于跳转）；入会发言由本面板内部流式跑完后再调 */
   onCreate: (cfg: {
     title: string; topic: string; mode: RoomMode;
@@ -33,7 +34,9 @@ export default function CreateRoomPanel({ seats, onCreate, onCancel }: {
   const [title, setTitle] = useState(() => t('cyclone.room.defaultTitle'));
   const [topic, setTopic] = useState(() => t('cyclone.room.defaultTopic'));
   const [mode, setMode] = useState<RoomMode>('build');
-  const [picked, setPicked] = useState<Record<string, JoinBehavior>>({});
+  const [picked, setPicked] = useState<Record<string, JoinBehavior>>(() => Object.fromEntries(
+    initialSeatIds.filter(id => seats.some(seat => seat.id === id)).map(id => [id, 'summary']),
+  ));
   const [creating, setCreating] = useState(false);
 
   const pickedIds = Object.keys(picked);

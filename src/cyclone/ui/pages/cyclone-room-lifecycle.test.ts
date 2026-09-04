@@ -3,29 +3,31 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 const page = fs.readFileSync('src/cyclone/ui/pages/CyclonePage.tsx', 'utf8');
+const sidebar = fs.readFileSync('src/cyclone/ui/pages/CycloneSidebar.tsx', 'utf8');
+const workspaceStatus = fs.readFileSync('src/cyclone/ui/pages/cyclone-workspace-status.ts', 'utf8');
 const seatRunners = fs.readFileSync('src/cyclone/ui/pages/useSeatStreamRunners.ts', 'utf8');
 
 test('气旋群聊列表提供带确认的删除入口', () => {
   assert.match(page, /async function deleteRoom\(roomId: string, title: string\)/);
   assert.match(page, /cyclone\.shell\.deleteRoomTitle/);
-  assert.match(page, /title=\{t\('cyclone\.shell\.deleteRoom'\)\}/);
+  assert.match(sidebar, /title=\{t\('cyclone\.shell\.deleteRoom'\)\}/);
 });
 
-test('服务端确认删除后才清理双会话运行态与当前视图', () => {
-  const handler = page.slice(page.indexOf('async function deleteRoom('), page.indexOf('/** 创建群聊'));
+test('服务端确认删除后才清理双会话运行态与对应标签', () => {
+  const handler = page.slice(page.indexOf('async function deleteRoom('), page.indexOf('async function createRoom('));
   const request = handler.indexOf('/room/${roomId}/delete');
   assert.ok(request >= 0);
   assert.ok(handler.indexOf('roomRunners.kill', request) > request);
   assert.ok(handler.indexOf('seatRunners.kill', request) > request);
   assert.match(handler, /chairStreamKey\(roomId\)/);
-  assert.match(handler, /setView\(null\)/);
+  assert.match(handler, /closeWorkspaceView\(tab\)/);
 });
 
 test('运行中的公共会话、会议助理私聊或异步派发禁止触发删除', () => {
-  assert.match(page, /roomRunners\.getRunner\(rm\.id\)\?\.streaming/);
-  assert.match(page, /seatRunners\.getRunner\(chairStreamKey\(rm\.id\)\)\?\.streaming/);
-  assert.match(page, /item\.status === 'awaiting_human'/);
-  assert.match(page, /disabled=\{running\}/);
+  assert.match(workspaceStatus, /getRoomRunner\(room\.id\)\?\.streaming/);
+  assert.match(workspaceStatus, /getSeatRunner\(input\.chairKey\(room\.id\)\)\?\.streaming/);
+  assert.match(workspaceStatus, /'awaiting_human'/);
+  assert.match(sidebar, /disabled=\{running\}/);
 });
 
 test('删除会议助理会话时即使没有 runner 也会清理队列与草稿', () => {

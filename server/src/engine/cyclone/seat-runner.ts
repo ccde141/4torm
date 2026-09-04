@@ -42,7 +42,7 @@ import { seatTaskboardFile } from './paths';
 import { execTaskBoard } from '../shared/taskboard';
 import { execBulletin, readBulletinSync } from './bulletin';
 import { execContact } from './contact';
-import { listOtherSeats } from './contact-registry';
+import { listOtherSeats, listWorkshopSeats } from './contact-registry';
 import type { SeatContextMessage, SeatData } from './types';
 import path from 'node:path';
 import { toSeatProgressEvent } from './loop-event-forwarder';
@@ -271,6 +271,8 @@ interface DriveCtx {
   agent: import('../shared/agent-loader').LoadedAgent;
   /** 可联络的其他工位（热注入 contact 名单，带职责名片） */
   contactTargets: import('./contact-registry').ContactTarget[];
+  /** 可异步派发的其他工位，按组织关系独立于 contact 计算。 */
+  dispatchTargets: import('./contact-registry').ContactTarget[];
   signal?: AbortSignal;
   onEvent: (ev: SeatEvent) => void;
 }
@@ -286,7 +288,10 @@ async function driveSeat(ctx: DriveCtx): Promise<{
   termination: ReActTermination;
   executionIds: string[];
 }> {
-  const { dataDir, workshopId, seat, messages, native, toolDefs, agent, contactTargets, signal, onEvent } = ctx;
+  const {
+    dataDir, workshopId, seat, messages, native, toolDefs, agent,
+    contactTargets, dispatchTargets, signal, onEvent,
+  } = ctx;
   const wsDir = wsRelPath(dataDir, workshopId);
   const llm = makeLLM(dataDir, agent.model, agent.temperature);
   let pendingToolRegistration: ToolRegistrationProposal | undefined;
@@ -299,7 +304,7 @@ async function driveSeat(ctx: DriveCtx): Promise<{
   });
   const nativeToolDefs = [...withBackgroundExecutionGuidance(toolDefs), ...buildSeatVirtualToolDefs({
     allowAsk: true, allowDelegate: true, allowDispatch: true,
-    allowToolRegistration: true, contactTargets,
+    allowToolRegistration: true, contactTargets, dispatchTargets,
   }), ...buildBackgroundExecutionToolDefs()];
   let reasoning = '';
   const generatedContextStart = messages.length;
@@ -398,8 +403,11 @@ async function prepare(
   );
   const memorySection = await buildCycloneMemoryPrompt(dataDir, agent.id, taskHint);
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
-  const contactTargets = await listOtherSeats(dataDir, workshopId, seatId);
-  return { seat, agent, toolDefs, native, contactTargets, memorySection };
+  const [contactTargets, dispatchTargets] = await Promise.all([
+    listOtherSeats(dataDir, workshopId, seatId),
+    listWorkshopSeats(dataDir, workshopId, seatId, false),
+  ]);
+  return { seat, agent, toolDefs, native, contactTargets, dispatchTargets, memorySection };
 }
 
 /**
@@ -421,7 +429,7 @@ export async function chatSeat(
     const queuedSeat = await loadSeat(dataDir, workshopId, seatId);
     if (!queuedSeat) throw new Error(`工位不存在：${seatId}`);
     return await withAgentActivity(queuedSeat.agentId, 'cyclone', async () => {
-        const { seat, agent, toolDefs, native, contactTargets, memorySection } = await prepare(
+        const { seat, agent, toolDefs, native, contactTargets, dispatchTargets, memorySection } = await prepare(
           dataDir, workshopId, seatId, humanMessage, signal,
         );
         if (seat.agentId !== queuedSeat.agentId) throw new Error(`工位「${queuedSeat.title}」已更换 Agent，本轮已跳过`);
@@ -435,7 +443,10 @@ export async function chatSeat(
         };
         seat.messages.push({ role: 'user', content: humanMessage });
         const messages = normalizeSystemMessages([system, ...seat.messages]) as SeatContextMessage[];
-        return driveSeat({ dataDir, workshopId, seat, messages, native, toolDefs, agent, contactTargets, signal, onEvent });
+        return driveSeat({
+          dataDir, workshopId, seat, messages, native, toolDefs, agent,
+          contactTargets, dispatchTargets, signal, onEvent,
+        });
     });
   } finally {
     release();
@@ -464,7 +475,7 @@ export async function resumeSeat(
         const native = await applyPendingSeatResponse(
           dataDir, workshopId, queuedSeat, answer, onEvent,
         );
-        const { seat, agent, toolDefs, contactTargets, memorySection } = await prepare(
+        const { seat, agent, toolDefs, contactTargets, dispatchTargets, memorySection } = await prepare(
           dataDir, workshopId, seatId, answer, signal,
         );
         if (seat.agentId !== queuedSeat.agentId) throw new Error(`工位「${queuedSeat.title}」已更换 Agent，本轮已跳过`);
@@ -477,7 +488,10 @@ export async function resumeSeat(
           }),
         };
         const messages = normalizeSystemMessages([system, ...seat.messages]) as SeatContextMessage[];
-        return driveSeat({ dataDir, workshopId, seat, messages, native, toolDefs, agent, contactTargets, signal, onEvent });
+        return driveSeat({
+          dataDir, workshopId, seat, messages, native, toolDefs, agent,
+          contactTargets, dispatchTargets, signal, onEvent,
+        });
     });
   } finally {
     release();

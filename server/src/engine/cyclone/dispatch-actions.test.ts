@@ -3,8 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createDispatch, updateDispatch } from './dispatch-store.js';
-import { includeDispatchResult, markDispatchRead, dismissDispatch } from './dispatch-actions.js';
+import { createDispatch, loadDispatch, updateDispatch } from './dispatch-store.js';
+import { includeDispatchResult, markDispatchRead, markSeatDispatchesRead, dismissDispatch } from './dispatch-actions.js';
 import { createRoom, loadRoom } from './room-store.js';
 import { createWorkshop } from './workshop-store.js';
 
@@ -66,4 +66,27 @@ test('派发不能通过其他房间的管理接口访问', async (t) => {
     markDispatchRead(dataDir, workshop.id, 'room-other', dispatch.id),
     /派发不存在/,
   );
+});
+
+test('打开目标工位只确认该工位已经结束的未读派发', async (t) => {
+  const { dataDir, workshop, room, dispatch } = await fixture(t);
+  const running = await createDispatch(dataDir, {
+    workshopId: workshop.id, sourceRoomId: room.id, sourceSeatId: 'seat-a',
+    sourceSeatTitle: '调度', sourceTurnId: 'turn-a', sourceRoundSeq: 1,
+    dispatchOrder: 1, targetSeatId: 'seat-b', targetSeatTitle: '执行', task: '继续运行',
+  });
+  await updateDispatch(dataDir, workshop.id, running.id, { status: 'running' });
+  const other = await createDispatch(dataDir, {
+    workshopId: workshop.id, sourceRoomId: room.id, sourceSeatId: 'seat-a',
+    sourceSeatTitle: '调度', sourceTurnId: 'turn-a', sourceRoundSeq: 1,
+    dispatchOrder: 2, targetSeatId: 'seat-c', targetSeatTitle: '审计', task: '审计',
+  });
+  await updateDispatch(dataDir, workshop.id, other.id, { status: 'failed', error: '失败' });
+
+  const updated = await markSeatDispatchesRead(dataDir, workshop.id, 'seat-b');
+
+  assert.deepEqual(updated.map(item => item.id), [dispatch.id]);
+  assert.equal((await loadDispatch(dataDir, workshop.id, dispatch.id))?.readState, 'read');
+  assert.equal((await loadDispatch(dataDir, workshop.id, running.id))?.readState, 'unread');
+  assert.equal((await loadDispatch(dataDir, workshop.id, other.id))?.readState, 'unread');
 });

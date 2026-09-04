@@ -49,6 +49,7 @@ data/
 │   ├── _index.json
 │   └── {workshopId}/
 │       ├── meta.json
+│       ├── organization.json    # groups, seat positions, cross-group relations, organization revision
 │       ├── workspace/
 │       ├── bulletin.json
 │       ├── bulletin-history.json

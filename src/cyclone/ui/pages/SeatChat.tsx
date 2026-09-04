@@ -85,7 +85,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
 
   const isChair = seatId.startsWith('__chair__');
   const runner = runners.getRunner(seatId);
-  const externalActivity = useSeatExternalActivity(workshopId, seatId, !isChair);
+  const externalActivity = useSeatExternalActivity(workshopId, seatId, active && !isChair);
   // 即使 done 也继续显示 live，直到 reload 完成 + clearIfDone 删除 runner，避免终答闪空
   const externalRunning = !!externalActivity?.running;
   const externalActivityId = externalActivity?.id;

@@ -31,7 +31,7 @@ The same agent can be reused across different workspaces. Configure its model, p
 |-----------|---------|-----------------|
 | Monsoon | Conversations | Ongoing conversations with one agent, tool use, and SubAgent delegation |
 | Convection | Meeting rooms | Temporary multi-agent discussions with independent advice from a meeting assistant |
-| Cyclone | Workshops | Long-term collaboration between fixed seats, with private chat, group chat, synchronous contact, and asynchronous dispatch |
+| Cyclone | Workshops | Organize fixed seats in a visual collaboration structure, with private chat, group chat, synchronous contact, and asynchronous dispatch |
 | Tradewind | Workflows | Visual node-based workflows that pass tasks along connected paths |
 | Tide | Automated tasks | Waking agents on a schedule for recurring checks, organization, and reporting |
 

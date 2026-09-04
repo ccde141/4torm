@@ -26,6 +26,14 @@ async function fetchWorkshopDispatches(workshopId: string, fallbackTemplate: str
   return response.json();
 }
 
+export function mergeDispatchReadReceipts(
+  items: CycloneDispatch[], updated: CycloneDispatch[],
+): CycloneDispatch[] {
+  if (updated.length === 0) return items;
+  const byId = new Map(updated.map(item => [item.id, item]));
+  return items.map(item => byId.get(item.id) ?? item);
+}
+
 export function useWorkshopDispatches(
   workshopId: string | null,
   enabled: boolean,
@@ -88,7 +96,25 @@ export function useWorkshopDispatches(
     return updated;
   }, [workshopId]);
 
-  return { dispatches, refresh, act };
+  const markSeatRead = useCallback(async (seatId: string): Promise<CycloneDispatch[]> => {
+    if (!workshopId) throw new Error(messagesRef.current.noWorkshop);
+    const response = await fetch(
+      `/api/cyclone/workshop/${workshopId}/seat/${encodeURIComponent(seatId)}/dispatches/read`,
+      { method: 'POST' },
+    );
+    if (!response.ok) throw await readDispatchError(
+      response,
+      requestFallback(messagesRef.current.requestFailed, response.status),
+    );
+    const updated = await response.json() as CycloneDispatch[];
+    requestSeq.current++;
+    setSnapshot(current => current?.workshopId === workshopId
+      ? { workshopId, items: mergeDispatchReadReceipts(current.items, updated) }
+      : current);
+    return updated;
+  }, [workshopId]);
+
+  return { dispatches, refresh, act, markSeatRead };
 }
 
 export type WorkshopDispatches = ReturnType<typeof useWorkshopDispatches>;

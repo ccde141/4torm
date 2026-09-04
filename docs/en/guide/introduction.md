@@ -8,7 +8,7 @@
 |-----------|---------|-----------------|
 | Monsoon | Conversations | Multi-turn work with one agent, tool use, and subtask delegation |
 | Convection | Meeting rooms | Human-hosted, turn-based discussions between several agents, with a private meeting assistant |
-| Cyclone | Workshops | Permanent seats, private seat conversations, multiple group rooms, and a shared workspace |
+| Cyclone | Workshops | Permanent seats and a visual collaboration structure, with private seat conversations, multiple group rooms, and a shared workspace |
 | Tradewind | Workflows | Relaying, branching, and merging work between multiple agents |
 | Tide | Automated tasks | Triggering agents at intervals and maintaining rolling archives |
 

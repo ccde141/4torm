@@ -4,6 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createDispatch } from './dispatch-store.js';
+import {
+  loadWorkshopOrganization,
+  saveWorkshopOrganization,
+} from './organization/organization-store.js';
 import { createRoom, loadRoom, saveRoom } from './room-store.js';
 import { deleteSeatFromWorkshop } from './seat-lifecycle.js';
 import { addSeat, deleteSeat, loadSeat } from './seat-store.js';
@@ -122,4 +126,39 @@ test('工位私聊派发仍活跃时拒绝删除来源或目标工位', async (t
   );
   assert.equal((await loadSeat(dataDir, workshop.id, source.id))?.title, source.title);
   assert.equal((await loadSeat(dataDir, workshop.id, target.id))?.title, target.title);
+});
+
+test('删除工位同步清理显式组织中的组成员和关系', async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-seat-delete-org-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const workshop = await createWorkshop(dataDir, { title: '测试工作室' });
+  const source = await addSeat(dataDir, workshop.id, { agentId: 'agent-a', title: '产品' });
+  const target = await addSeat(dataDir, workshop.id, { agentId: 'agent-b', title: '开发' });
+  await saveWorkshopOrganization(dataDir, workshop.id, {
+    expectedRevision: 0,
+    groups: [
+      {
+        id: 'product', title: '产品组', seatIds: [source.id],
+        position: { x: 0, y: 0 },
+      },
+      {
+        id: 'engineering', title: '研发组', seatIds: [target.id],
+        position: { x: 400, y: 0 },
+      },
+    ],
+    externalRelations: [
+      {
+        id: 'product-engineering', sourceSeatId: source.id, targetSeatId: target.id,
+        direction: 'both',
+      },
+    ],
+  });
+
+  await deleteSeatFromWorkshop(dataDir, workshop.id, target.id);
+
+  const state = await loadWorkshopOrganization(dataDir, workshop.id);
+  assert.equal(state.mode, 'explicit');
+  assert.deepEqual(state.organization?.groups.map(group => group.seatIds), [[source.id], []]);
+  assert.deepEqual(state.organization?.externalRelations, []);
+  assert.equal(state.organization?.revision, 2);
 });

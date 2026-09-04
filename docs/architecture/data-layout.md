@@ -71,6 +71,8 @@ data/
 │   ├── _index.json
 │   └── {workshopId}/
 │       ├── meta.json
+│       ├── organization.json
+│       │       协作组、工位布局、跨组联络线和组织版本
 │       ├── workspace/
 │       ├── bulletin.json
 │       ├── bulletin-history.json
@@ -82,7 +84,7 @@ data/
 │       ├── dispatches/
 │       │   └── {dispatchId}.json
 │       └── bak/
-│               工作室、工位、群聊、公告板、异步派发和归档
+│               工作室、协作结构、工位、群聊、公告板、异步派发和归档
 │
 ├── tradewind/
 │   ├── workflows/

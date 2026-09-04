@@ -141,7 +141,9 @@ function parseValue(kind: ProviderCustomParameterKind, text: string, options?: s
     validateJsonValue(value);
     return value;
   } catch (cause) {
-    if (cause instanceof SyntaxError) throw new Error(`自定义字段不是有效 JSON：${cause.message}`);
+    if (cause instanceof SyntaxError) {
+      throw new Error(`自定义字段不是有效 JSON：${cause.message}`, { cause });
+    }
     throw cause;
   }
 }

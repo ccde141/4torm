@@ -182,8 +182,8 @@ test('native observation mounts the real surface for both control modes', () => 
   assert.match(observationHook, /requestVisualObservationRefresh/);
   assert.match(view, /surfaceReady/);
   assert.match(view, /surfacePhase/);
-  assert.match(view, /打开中/);
-  assert.match(view, /正在打开浏览器/);
+  assert.match(view, /t\('chat\.execution\.opening'\)/);
+  assert.match(view, /t\('chat\.execution\.openingBrowser'\)/);
   assert.match(view, /<div ref={stageRef} style={stage}>/);
   assert.doesNotMatch(view, /error \? <div style={errorStyle}>/);
   assert.match(view, /isTransientSurfaceError/);

@@ -169,3 +169,10 @@ export function tryAcquireSeatLock(workshopId: string, seatId: string): (() => v
   seatLocks.add(key);
   return () => { seatLocks.delete(key); };
 }
+
+export function listLockedSeatIds(workshopId: string): string[] {
+  const prefix = `${workshopId}/`;
+  return [...seatLocks]
+    .filter(lockKey => lockKey.startsWith(prefix))
+    .map(lockKey => lockKey.slice(prefix.length));
+}

@@ -9,7 +9,7 @@
  *
  * 与季风差异：季风累积 ChatMessage[]；气旋累积 Live（blocks/text/phase/ask）+ 乐观用户消息。
  */
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useMemo } from 'react';
 import { streamUrl } from '../../../lib/apiBase';
 import type { DisplayMessage } from './messageDisplay';
 import type { TaskBoard } from '../../../utils/taskboard';
@@ -34,12 +34,15 @@ export interface Live {
   /** task_board 假工具通过 meta 侧通道回传的最新任务板（undefined=本轮未更新，null=已清空） */
   taskboard?: TaskBoard | null;
 }
+export type SeatRunnerOutcome = 'running' | 'completed' | 'failed' | 'aborted';
+
 /** 单条工位流的运行态。归属 seatId，不归属当前界面。 */
 interface SeatRunner {
   live: Live;
   /** 乐观插入的用户气泡 / 已答 ask 回显（落库前先展示，存进 runner 避免切走丢失） */
   pendingUser: DisplayMessage | null;
   streaming: boolean;
+  outcome: SeatRunnerOutcome;
   /** 流结束（自然/abort）→ true，等当前挂载的 SeatChat reload /status 后 clear */
   done: boolean;
   ctrl: AbortController;
@@ -253,7 +256,7 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
   /** 手动停止：abort 本地流 + 通知服务端 abort。 */
   const abortSeat = useCallback((workshopId: string, seatId: string, pathOverride?: string) => {
     const r = runners.current.get(seatId);
-    if (r) { r.userStopped = true; r.ctrl.abort(); }
+    if (r) { r.userStopped = true; r.outcome = 'aborted'; r.ctrl.abort(); }
     fetch(streamUrl(pathOverride ?? `/api/cyclone/workshop/${workshopId}/seat/${seatId}/abort`), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     }).catch(() => {});
@@ -285,6 +288,7 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
       live: emptyLive(localeRef.current),
       pendingUser: optimisticUser,
       streaming: true,
+      outcome: 'running',
       done: false,
       ctrl,
       abandoned: false,
@@ -320,11 +324,13 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
         );
       } catch (e) {
         if (!ctrl.signal.aborted) {
+          runner.outcome = 'failed';
           appendReplyText(runner.live.segments, `\n[${localeRef.current === 'en-US' ? 'Request failed' : '请求失败'}] ${(e as Error).message}`);
           runner.live.phase = '';
-        }
+        } else runner.outcome = 'aborted';
       } finally {
         if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+        if (runner.outcome === 'running') runner.outcome = 'completed';
         runner.streaming = false;
         runner.done = true;
         notify(seatId);          // 当前挂载的 SeatChat → reload /status 后 clearIfDone
@@ -333,8 +339,11 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
     })();
   }, [notify, onSeatFinished]);
 
-  return { subscribe, getRunner, startStream, background, foreground, abortSeat, kill, clearIfDone,
-    getQueue, enqueue, dequeue, removeQueued, takeAllQueued, getDraft, setDraft };
+  return useMemo(() => ({
+    subscribe, getRunner, startStream, background, foreground, abortSeat, kill, clearIfDone,
+    getQueue, enqueue, dequeue, removeQueued, takeAllQueued, getDraft, setDraft,
+  }), [subscribe, getRunner, startStream, background, foreground, abortSeat, kill, clearIfDone,
+    getQueue, enqueue, dequeue, removeQueued, takeAllQueued, getDraft, setDraft]);
 }
 
 export type SeatStreamRunners = ReturnType<typeof useSeatStreamRunners>;

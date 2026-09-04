@@ -3,6 +3,7 @@ import {
   dismissDispatch,
   includeDispatchResult,
   markDispatchRead,
+  markSeatDispatchesRead,
 } from '../engine/cyclone/dispatch-actions.js';
 import {
   listRoomDispatches,
@@ -17,6 +18,7 @@ import { getAppContext } from '../services/app-context.js';
 interface DispatchParams {
   workshopId: string;
   roomId: string;
+  seatId: string;
   dispatchId: string;
   action: string;
 }
@@ -56,6 +58,14 @@ export async function cycloneDispatchRoutes(app: FastifyInstance): Promise<void>
       return reply.status(404).send({ error: '工作室不存在' });
     }
     return reply.send(await listVisibleWorkshopDispatches(dataDir, workshopId));
+  });
+
+  app.post('/workshop/:workshopId/seat/:seatId/dispatches/read', async (req, reply) => {
+    const { workshopId, seatId } = req.params as DispatchParams;
+    if (!await loadWorkshop(dataDir, workshopId)) {
+      return reply.status(404).send({ error: '工作室不存在' });
+    }
+    return reply.send(await markSeatDispatchesRead(dataDir, workshopId, seatId));
   });
 
   app.get('/workshop/:workshopId/room/:roomId/dispatches', async (req, reply) => {

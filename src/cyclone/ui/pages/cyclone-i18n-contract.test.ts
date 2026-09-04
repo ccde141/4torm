@@ -44,11 +44,11 @@ test('cyclone seat editor localizes guidance without changing submitted fields',
 });
 
 test('cyclone shell localizes navigation without changing view and runner keys', () => {
-  const files = [read('CyclonePage.tsx'), read('DispatchIndex.tsx')].join('\n');
+  const files = [read('CyclonePage.tsx'), read('CycloneSidebar.tsx'), read('DispatchIndex.tsx')].join('\n');
   assert.match(files, /cyclone\.shell\.workshops/);
   assert.match(files, /cyclone\.shell\.deleteRoomTitle/);
   assert.match(files, /cyclone\.dispatch\.index/);
-  assert.match(files, /chairStreamKey\(rm\.id\)/);
+  assert.match(files, /chairStreamKey\(room\.id\)/);
   assert.match(files, /kind: 'room'/);
 });
 

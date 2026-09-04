@@ -10,7 +10,7 @@
  * - 删群标 abandoned + abort 防僵尸。
  */
 
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useMemo } from 'react';
 import { streamUrl } from '../../../lib/apiBase';
 import { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { readCycloneSSE } from './cyclone-sse';
@@ -336,8 +336,11 @@ export function useRoomStreamRunners(
     });
   }, [startRequest]);
 
-  return { subscribe, getRunner, startRound, startIntro, abortRoom, kill, clearIfDone,
-    getQueue, enqueue, dequeue, removeQueued, takeAllQueued, getDraft, setDraft };
+  return useMemo(() => ({
+    subscribe, getRunner, startRound, startIntro, abortRoom, kill, clearIfDone,
+    getQueue, enqueue, dequeue, removeQueued, takeAllQueued, getDraft, setDraft,
+  }), [subscribe, getRunner, startRound, startIntro, abortRoom, kill, clearIfDone,
+    getQueue, enqueue, dequeue, removeQueued, takeAllQueued, getDraft, setDraft]);
 }
 
 export type RoomStreamRunners = ReturnType<typeof useRoomStreamRunners>;

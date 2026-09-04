@@ -1,5 +1,5 @@
 import { createDispatch, listWorkshopDispatches, updateDispatch, type CycloneDispatch } from './dispatch-store.js';
-import { findSeatIdByTitle } from './contact-registry.js';
+import { resolveAuthorizedTarget } from './organization/organization-authorization.js';
 import { saveSeat } from './seat-store.js';
 import type { SeatData, SeatContextMessage } from './types.js';
 
@@ -17,9 +17,9 @@ export async function createSeatDispatchRecord(
   dataDir: string,
   opts: CreateSeatDispatchOpts,
 ): Promise<CycloneDispatch> {
-  const targetSeatId = await findSeatIdByTitle(dataDir, opts.workshopId, opts.targetSeatTitle);
-  if (!targetSeatId) throw new Error(`找不到工位「${opts.targetSeatTitle}」`);
-  if (targetSeatId === opts.sourceSeatId) throw new Error('不能把任务派给自己');
+  const targetSeatId = (await resolveAuthorizedTarget(
+    dataDir, opts.workshopId, opts.sourceSeatId, opts.targetSeatTitle, 'dispatch',
+  )).id;
   return createDispatch(dataDir, {
     workshopId: opts.workshopId,
     sourceKind: 'seat',

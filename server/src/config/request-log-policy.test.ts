@@ -20,6 +20,18 @@ test('气旋派发索引轮询成功时静默，失败时保留日志', () => {
   assert.equal(shouldLogRequest('GET', url, 500), true);
 });
 
+test('气旋工作室活动快照成功时静默，失败时保留日志', () => {
+  const url = '/api/cyclone/workshop/cyc-a/activities';
+  assert.equal(shouldLogRequest('GET', url, 200), false);
+  assert.equal(shouldLogRequest('GET', url, 500), true);
+});
+
+test('气旋可见工位活动轮询成功时静默，失败时保留日志', () => {
+  const url = '/api/cyclone/workshop/cyc-a/seat/seat-a/activity?since=12';
+  assert.equal(shouldLogRequest('GET', url, 200), false);
+  assert.equal(shouldLogRequest('GET', url, 500), true);
+});
+
 test('Agent 活动轮询成功时静默，失败时保留日志', () => {
   const url = '/api/agents/activity';
   assert.equal(shouldLogRequest('GET', url, 200), false);
