@@ -23,6 +23,7 @@ interface Props {
   active: boolean;
   agents: Agent[];
   activeWid: string | null;
+  workshopLoaded: boolean;
   workshops: WorkshopSummary[];
   seats: SeatSummary[];
   rooms: RoomSummary[];
@@ -93,7 +94,7 @@ export function CycloneWorkspacePane(props: Props) {
       {!props.activeWid && props.view === null && <div style={emptyStyle}>{t('cyclone.shell.empty')}</div>}
       {props.activeWid && <div style={{ display: managementView ? 'none' : 'flex', flex: 1, minHeight: 0, flexDirection: 'column' }}>
         <div style={{ display: organizationVisible ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
-          <OrganizationWorkspace workshopId={props.activeWid} agents={props.agents}
+          <OrganizationWorkspace workshopId={props.activeWid} summaryReady={props.workshopLoaded} agents={props.agents}
             title={props.workshops.find(workshop => workshop.id === props.activeWid)?.title} seats={props.seats}
             bulletin={props.bulletin} dispatches={props.dispatches} runners={props.seatRunners}
             seatStatuses={props.status.seats} panel={organizationPanel} active={props.active && organizationVisible}

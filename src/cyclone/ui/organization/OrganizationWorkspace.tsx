@@ -8,7 +8,7 @@ import type { WorkspaceEntityStatus } from '../pages/cyclone-workspace-status';
 import { loadOrganization, saveOrganization } from './organization-client';
 import { createEditableOrganization } from './organization-model';
 import { deriveOrganizationRuntime, updateCompletionSignals, updateContactReturnSignals, updateSeatCompletionSignals } from './organization-runtime';
-import type { EditableOrganization, OrganizationSeat } from './organization-types';
+import type { EditableOrganization, OrganizationSeat, WorkshopOrganizationState } from './organization-types';
 import { CycloneOrganizationCanvas } from './CycloneOrganizationCanvas';
 import type { Agent } from '../../../types';
 import { deriveOrganizationSaveState } from './organization-save-state';
@@ -18,6 +18,7 @@ import { useOrganizationSeatReconciliation } from './useOrganizationSeatReconcil
 
 interface Props {
   workshopId: string;
+  summaryReady: boolean;
   agents: Agent[];
   title?: string;
   seats: OrganizationSeat[];
@@ -32,11 +33,17 @@ interface Props {
   onOpenSeat(seatId: string): void;
 }
 
+interface PendingOrganizationState {
+  workshopId: string;
+  state: WorkshopOrganizationState;
+}
+
 export function OrganizationWorkspace(props: Props) {
   const { t } = useLocale();
   const confirm = useConfirm();
   const [draft, setDraft] = useState<EditableOrganization | null>(null);
   const [savedDraft, setSavedDraft] = useState<EditableOrganization | null>(null);
+  const [pendingOrganizationState, setPendingOrganizationState] = useState<PendingOrganizationState | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [runtimeTick, forceRuntimeTick] = useState(0);
@@ -46,8 +53,6 @@ export function OrganizationWorkspace(props: Props) {
   const contactStatusesRef = useRef(new Map<string, string>());
   const seatOutcomesRef = useRef(new Map<string, SeatRunnerOutcome>());
   const returnTimersRef = useRef(new Map<string, number>());
-  const seatsRef = useRef(props.seats);
-  seatsRef.current = props.seats;
   const reconcilingSeats = useOrganizationSeatReconciliation({
     workshopId: props.workshopId, seats: props.seats, draft, savedDraft,
     loadFailedMessage: t('cyclone.org.loadFailed'), setDraft, setSavedDraft, setError,
@@ -62,8 +67,7 @@ export function OrganizationWorkspace(props: Props) {
     setError('');
     try {
       const state = await loadOrganization(props.workshopId, signal);
-      const loadedDraft = createEditableOrganization(state, seatsRef.current);
-      setDraft(loadedDraft); setSavedDraft(loadedDraft);
+      setPendingOrganizationState({ workshopId: props.workshopId, state });
     } catch (cause) {
       if ((cause as Error).name !== 'AbortError') setError((cause as Error).message || t('cyclone.org.loadFailed'));
     }
@@ -71,10 +75,17 @@ export function OrganizationWorkspace(props: Props) {
 
   useEffect(() => {
     const controller = new AbortController();
-    setDraft(null); setSavedDraft(null);
+    setDraft(null); setSavedDraft(null); setPendingOrganizationState(null);
     void reload(controller.signal);
     return () => controller.abort();
   }, [reload]);
+
+  useEffect(() => {
+    if (!props.summaryReady || !pendingOrganizationState
+      || pendingOrganizationState.workshopId !== props.workshopId) return;
+    const loadedDraft = createEditableOrganization(pendingOrganizationState.state, props.seats);
+    setDraft(loadedDraft); setSavedDraft(loadedDraft); setPendingOrganizationState(null);
+  }, [pendingOrganizationState, props.seats, props.summaryReady, props.workshopId]);
 
   useEffect(() => {
     setCompletedSignals({}); setContactReturnSignals({});

@@ -66,6 +66,19 @@ test('组织版本重基失败时阻止保存并提供显式重新同步', async
   assert.match(canvas, /onRetrySync/);
 });
 
+test('冷启动并行加载时等待当前工作室摘要就绪后再合并协作结构', async () => {
+  const workspace = await fs.readFile(new URL('./OrganizationWorkspace.tsx', import.meta.url), 'utf8');
+  const pane = await fs.readFile(new URL('../pages/CycloneWorkspacePane.tsx', import.meta.url), 'utf8');
+  const page = await fs.readFile(new URL('../pages/CyclonePage.tsx', import.meta.url), 'utf8');
+  assert.match(workspace, /summaryReady: boolean/);
+  assert.match(workspace, /pendingOrganizationState/);
+  assert.match(workspace, /pendingOrganizationState\.workshopId !== props\.workshopId/);
+  assert.match(workspace, /createEditableOrganization\(pendingOrganizationState\.state, props\.seats\)/);
+  assert.doesNotMatch(workspace, /createEditableOrganization\(state, seatsRef\.current\)/);
+  assert.match(pane, /summaryReady=\{props\.workshopLoaded\}/);
+  assert.match(page, /loadedWorkshopId === activeWid/);
+});
+
 test('气旋普通拖动平移画布且只在按住 Shift 时框选工位', async () => {
   const canvas = await fs.readFile(new URL('./CycloneOrganizationCanvas.tsx', import.meta.url), 'utf8');
   assert.match(canvas, /panOnDrag/);

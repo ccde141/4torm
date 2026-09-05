@@ -25,6 +25,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [workshops, setWorkshops] = useState<WorkshopSummary[]>([]);
   const [activeWid, setActiveWid] = useState<string | null>(null);
+  const [loadedWorkshopId, setLoadedWorkshopId] = useState<string | null>(null);
   const [seats, setSeats] = useState<SeatSummary[]>([]);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [chairAgentId, setChairAgentId] = useState<string | null>(null);
@@ -63,6 +64,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     if (!request.isCurrent()) return;
     setSeats(summary.seats); setRooms(summary.rooms); setChairAgentId(summary.chairAgentId ?? null);
     setBulletin(summary.bulletin?.entries ?? []);
+    setLoadedWorkshopId(workshopId);
   }, []);
 
   const { dispatches, refresh: refreshDispatches, act: dispatchAction, markSeatRead } = useWorkshopDispatches(activeWid, !!active, {
@@ -86,7 +88,10 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   });
 
   useEffect(() => { if (active) { void refreshAgents(); void refreshWorkshops(); } }, [active, refreshAgents, refreshWorkshops]);
-  useEffect(() => { if (activeWid) void loadWorkshop(activeWid); else workshopRequestGuard.current.cancel(); }, [activeWid, loadWorkshop]);
+  useEffect(() => {
+    setLoadedWorkshopId(null); setSeats([]); setRooms([]); setChairAgentId(null); setBulletin([]);
+    if (activeWid) void loadWorkshop(activeWid); else workshopRequestGuard.current.cancel();
+  }, [activeWid, loadWorkshop]);
   const visibleSeatHasUnreadResult = visibleSeatId !== null && dispatches.some(item => (
     item.targetSeatId === visibleSeatId && item.readState === 'unread'
     && (item.status === 'completed' || item.status === 'failed')
@@ -170,7 +175,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     if (activeWid === workshopId) rooms.forEach(room => seatRunners.kill(workshopId, chairStreamKey(room.id)));
     const response = await fetch(`/api/cyclone/workshop/${workshopId}/delete`, { method: 'POST' });
     if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.deleteWorkshopFailed'))); return; }
-    if (activeWid === workshopId) { setActiveWid(null); setView(null); setSeats([]); setRooms([]); setChairOpen(false); }
+    if (activeWid === workshopId) { setActiveWid(null); setView(null); setChairOpen(false); }
     await refreshWorkshops();
   }
   async function createSeat(draft: SeatDraft) {
@@ -244,7 +249,8 @@ export default function CyclonePage({ active }: { active?: boolean }) {
       onEditSeat={id => void openEditSeat(id)} onDeleteSeat={(id, title) => void deleteSeat(id, title)}
       onCreateRoom={() => setView({ kind: 'create-room' })} onOpenRoom={room => openWorkspaceView({ kind: 'room', ...room })}
       onDeleteRoom={(id, title) => void deleteRoom(id, title)} />
-    <CycloneWorkspacePane active={!!active} agents={agents} activeWid={activeWid} workshops={workshops} seats={seats}
+    <CycloneWorkspacePane active={!!active} agents={agents} activeWid={activeWid}
+      workshopLoaded={activeWid !== null && loadedWorkshopId === activeWid} workshops={workshops} seats={seats}
       rooms={rooms} bulletin={bulletin} dispatches={dispatches} view={view} tabs={workspaceTabs}
       status={workspaceStatus}
       chairAgentId={chairAgentId} chairOpen={chairOpen} seatRunners={seatRunners} roomRunners={roomRunners}
