@@ -42,6 +42,12 @@ export function finalizeStreamAnswer(
   agentId: string,
 ): ChatMessage[] {
   return messages.map(message => message.id === assistantId ? {
+    ...message,
+    streamingPhase: undefined,
+    streamingStatus: undefined,
+    streamingTool: undefined,
+    streamingArgumentChars: undefined,
+    phaseElapsed: undefined,
     id: assistantId,
     role: 'assistant',
     content: event.rawContent || event.content,

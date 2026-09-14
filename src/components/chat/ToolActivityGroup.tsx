@@ -16,16 +16,17 @@ function targetOf(item: ToolActivityItem): string {
   return '';
 }
 
-function Group<T extends ToolActivityItem>({ items, renderItem }: {
+function Group<T extends ToolActivityItem>({ items, renderItem, stopped }: {
+  stopped?: boolean;
   items: T[];
   renderItem: (item: T, index: number) => ReactNode;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const failed = items.filter(item => item.status === 'error').length;
   const running = items.findLast(item => item.status === 'running' || item.status === 'pending');
   const current = running || items.at(-1)!;
   const target = targetOf(current);
-  const state = failed
+  const state = stopped && running ? (locale === 'en-US' ? 'Stopped · result not received' : '已停止 · 尚未收到结果') : failed
     ? t('chat.tool.failedCount', { count: failed })
     : running ? t('chat.tool.running', { tool: current.tool }) : t('chat.tool.completed');
   return (
@@ -35,14 +36,15 @@ function Group<T extends ToolActivityItem>({ items, renderItem }: {
         <span>{t('chat.tool.operationCount', { count: items.length })}</span>
         <span className="tool-activity-group__state">{state}</span>
         {target && <span className="tool-activity-group__target" title={target}>{target}</span>}
-        {running && <span className="thinking-card__tool-spinner" />}
+        {running && !stopped && <span className="thinking-card__tool-spinner" />}
       </summary>
       <div className="tool-activity-group__body">{items.map(renderItem)}</div>
     </details>
   );
 }
 
-export default function ToolActivityList<T extends ToolActivityItem>({ items, renderItem }: {
+export default function ToolActivityList<T extends ToolActivityItem>({ items, renderItem, stopped }: {
+  stopped?: boolean;
   items: T[];
   renderItem: (item: T, index: number) => ReactNode;
 }) {
@@ -51,6 +53,6 @@ export default function ToolActivityList<T extends ToolActivityItem>({ items, re
     const start = offset;
     offset += part.items.length;
     if (part.kind === 'single') return <Fragment key={partIndex}>{renderItem(part.items[0], start)}</Fragment>;
-    return <Group key={partIndex} items={part.items} renderItem={(item, index) => renderItem(item, start + index)} />;
+    return <Group key={partIndex} items={part.items} stopped={stopped} renderItem={(item, index) => renderItem(item, start + index)} />;
   });
 }

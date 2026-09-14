@@ -14,6 +14,7 @@ import type { ToolPreparationProgress } from '../tool-progress';
 import { salvageToolArgs } from '../tool-bridge';
 import { createAssistantContextMessage } from '../provider-messages.js';
 import { SuspendSignal } from '../suspend-signal.js';
+import { applyPendingInput, skipNativeTools, type ReActSteering } from './steering.js';
 import {
   abortedTermination,
   anomalyTermination,
@@ -85,6 +86,11 @@ export type ReActStreamEvent =
 
 /** ReAct 循环参数 */
 export interface ReActLoopParams {
+  /** Optional owner-managed handoff at a natural finish boundary; never acknowledges work. */
+  beforeFinish?: () => Promise<readonly string[]>;
+  retainFinalContext?: boolean;
+  /** Opt-in human input at safe boundaries. Existing callers retain their execution semantics. */
+  steering?: ReActSteering;
   /** 初始消息（含 system + user） */
   messages: ContextMessage[];
   /** LLM 调用器 */
@@ -219,6 +225,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       };
     }
 
+    applyPendingInput(params);
     // ── LLM 调用（带 tools 参数，激活原生）+ 心跳/超时 ──
     const llmStart = Date.now();
     const abortCtrl = new AbortController();
@@ -281,6 +288,17 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       signal?.removeEventListener('abort', onAbort);
     }
 
+    if (params.steering && signal?.aborted) {
+      return { content: '[中止]', rawContent: content, toolCalls: allToolCalls,
+        turns: turn + 1, usage: latestUsage, termination: abortedTermination() };
+    }
+    if (params.steering?.hasPending()) {
+      msgs.push(createAssistantContextMessage(content, toolCalls, reasoningContent, reasoningEnvelope));
+      skipNativeTools(params, toolCalls ?? [], allToolCalls);
+      if (content.trim()) answerParts.push(content);
+      continue;
+    }
+
     // ── 无工具调用 → 模型说完了，content 即交付（决策 3：finish_reason 隐式终结）──
     if (!toolCalls || toolCalls.length === 0) {
       // bug #2：length 截断且有内容 → 是被截断的半句，不能当最终交付，要续写
@@ -333,7 +351,18 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       }
 
       if (content.trim()) {
+        if (params.beforeFinish) {
+          const notices = await params.beforeFinish();
+          if (signal?.aborted) return { content: '[中止]', rawContent: '', toolCalls: allToolCalls,
+            turns: turn + 1, usage: latestUsage, termination: abortedTermination() };
+          if (notices.length || params.steering?.hasPending()) {
+            msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
+            msgs.push(...notices.map(content => ({ role: 'user' as const, content })));
+            continue;
+          }
+        }
         const answer = completeAnswer(answerParts, content);
+        if (params.steering || params.retainFinalContext) msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
         return {
           content: answer, rawContent: answer, toolCalls: allToolCalls, turns: turn + 1,
           usage: latestUsage, termination: succeededTermination(),
@@ -386,6 +415,10 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
           content: '[中止]', rawContent: content, toolCalls: allToolCalls, turns: turn + 1,
           usage: latestUsage, termination: abortedTermination(),
         };
+      }
+      if (params.steering?.hasPending()) {
+        skipNativeTools(params, toolCalls.slice(ti), allToolCalls);
+        break;
       }
       let args: Record<string, string> = {};
       let argParseErr: string | undefined;

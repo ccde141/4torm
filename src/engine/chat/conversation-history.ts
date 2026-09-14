@@ -5,6 +5,10 @@ export function buildConversationHistory(messages: ChatMessage[]): NativeContext
 }
 
 function mapChatMessage(message: ChatMessage): NativeContextMessage[] {
+  if (message.ask?.answered && typeof message.ask.reply === 'string') {
+    return [assistantMessage(message.content), { role: 'user', content: message.ask.reply }];
+  }
+  if (message.contextExact && message.nativeContext) return message.nativeContext.map(item => ({ ...item }));
   if (message.type === 'compact-marker') {
     return [{ role: 'system', content: `[历史上下文摘要]\n${message.content}` }];
   }

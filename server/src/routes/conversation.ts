@@ -9,6 +9,11 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { registerConversationTitle } from './conversation-title.js';
+import { registerConversationInput, validateInputRunId } from './conversation-input.js';
+import { SessionTeams } from '../engine/conversation/team/registry.js';
+import { registerConversationTeam } from './conversation-team.js';
+import { teamToolDefs } from '../engine/conversation/team/tools.js';
 import type { ServerResponse } from 'node:http';
 import path from 'node:path';
 import { getAppContext } from '../services/app-context.js';
@@ -100,12 +105,18 @@ function pushSSE(raw: ServerResponse, ev: ConversationEvent): void {
 // ── 路由注册 ─────────────────────────────────────────────────────
 
 export async function conversationRoutes(app: FastifyInstance): Promise<void> {
+  const teams = new SessionTeams();
+  app.addHook('onClose', () => teams.shutdown());
+  registerConversationTitle(app);
   const { dataDir } = getAppContext(app);
+  registerConversationInput(app, dataDir, sessionId => activeRunners.get(sessionId));
+  registerConversationTeam(app, dataDir);
 
   // ── POST /api/conversation/chat（SSE 流式） ──
   app.post('/chat', async (req, reply) => {
     const body = req.body as {
       sessionId?: string;
+      inputRunId?: string;
       agentId?: string;
       model?: string;
       messages?: Array<{
@@ -124,6 +135,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: '缺少 sessionId / agentId / messages' });
     }
 
+    const inputRunId = validateInputRunId(body.inputRunId);
     const agent = await loadAgent(dataDir, body.agentId);
     if (!agent) {
       return reply.status(404).send({ error: `Agent 不存在：${body.agentId}` });
@@ -137,6 +149,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     console.log(`[conversation] ${agent.name} (${effectiveModel}) → tools=${nativeDecision.native ? 'structured' : 'text'}`);
 
     const opts: SessionRunnerOpts = {
+      mainAgent: true,
       dataDir,
       agentId: agent.id,
       model: effectiveModel,
@@ -148,8 +161,10 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       sandboxLevel: agent.sandboxLevel,
       sessionId: body.sessionId,
       native: nativeDecision.native,
+      allowDelegate: false,
     };
 
+    opts.extension = await teams.extension(opts);
     const runner = getOrCreateRunner(body.sessionId, opts);
     if (runner.isBusy()) {
       return reply.status(409).send({ error: '会话正在执行中' });
@@ -161,8 +176,9 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     const toolDefs = await loadAgentToolDefs(dataDir, opts.toolNames, opts.skillIds, opts.toolMode);
     const lastUserMsg = body.messages.filter(m => m.role === 'user').pop();
     const systemPrompt = await buildConversationSystemPrompt({
+      mainAgent: true,
       rolePrompt: agent.rolePrompt || '',
-      toolDefs,
+      toolDefs: [...toolDefs, ...teamToolDefs()],
       workspace: opts.workspace,
       workspaceAbs,
       projectDir,
@@ -173,6 +189,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       sessionId: body.sessionId,
       userMessage: lastUserMsg?.content,
       native: nativeDecision.native,
+      allowDelegate: opts.allowDelegate,
     });
 
     // 构造 chatMessages（system + 历史）
@@ -203,7 +220,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     withAgentActivity(body.agentId!, 'conversation', () => (
       runner.chat(systemPrompt, chatMessages, (ev) => {
         try { pushSSE(raw, ev); } catch { runner.abort(); }
-      })
+      }, inputRunId)
     )).then(() => {
       unbindDisconnect();
       try { raw.end(); } catch {}
@@ -229,7 +246,9 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const runner = activeRunners.get(body.sessionId);
+    const teamStopped = teams.stop(body.sessionId);
     if (!runner) {
+      if (teamStopped) return reply.send({ ok: true });
       return reply.status(404).send({ error: '会话不存在或已结束' });
     }
 
@@ -243,7 +262,8 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
 
   // ── POST /api/conversation/reply（恢复 ask 挂起） ──
   app.post('/reply', async (req, reply) => {
-    const body = req.body as { sessionId?: string; answer?: string };
+    const body = req.body as { sessionId?: string; answer?: string; inputRunId?: string };
+    const inputRunId = validateInputRunId(body.inputRunId);
 
     if (!body.sessionId || typeof body.answer !== 'string') {
       return reply.status(400).send({ error: '缺少 sessionId / answer' });
@@ -269,7 +289,7 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
     withAgentActivity(runner.getAgentId(), 'conversation', () => (
       runner.resume(body.answer!, (ev) => {
         try { pushSSE(raw, ev); } catch { runner.abort(); }
-      })
+      }, inputRunId)
     )).then(() => {
       unbindDisconnect();
       try { raw.end(); } catch {}

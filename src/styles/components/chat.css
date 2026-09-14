@@ -1227,6 +1227,48 @@
   color: var(--color-text-secondary);
 }
 
+.chat__human-inputs {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.chat__message--steering .chat__avatar {
+  border-color: rgba(125, 211, 252, 0.62);
+  box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.34) inset, 0 0 14px rgba(125, 211, 252, 0.2);
+}
+
+.chat__message--steering .chat__bubble {
+  border-color: rgba(125, 211, 252, 0.5);
+  box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.3) inset,
+    0 0 18px rgba(125, 211, 252, 0.14), var(--glass-shadow);
+}
+
+.chat__message--steering .chat__bubble::after {
+  border-color: rgba(125, 211, 252, 0.36);
+  box-shadow: 0 0 14px rgba(125, 211, 252, 0.12);
+}
+
+.chat__human-input-status {
+  margin-top: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+.chat__human-input-status--included { color: var(--color-success); }
+.chat__human-input-status--retained,
+.chat__human-input-error { color: var(--color-warning); }
+.chat__human-input-skipped {
+  margin-top: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+.chat__human-input-skipped-names { font-weight: 700; }
+.chat__human-input-notice { align-self: flex-end; max-width: 85%; font-size: var(--text-xs); white-space: pre-wrap; }
+
 .chat__tool-step-summary {
   display: flex;
   align-items: center;

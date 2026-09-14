@@ -10,6 +10,7 @@
  */
 
 import fs from 'node:fs/promises';
+import { createRuntimeFetch } from '../../model-runtime/providers/runtime-fetch.js';
 import path from 'node:path';
 import type {
   ContextMessage,
@@ -265,7 +266,7 @@ export async function resolveModelPromptBudget(
     runtimePolicy: provider.runtimePolicy,
     generationDefaults: provider.generationDefaults,
   };
-  const runtime = await discoverProviderRuntimeCapabilities(identity);
+  const runtime = await discoverProviderRuntimeCapabilities(identity, createRuntimeFetch(provider));
   if (!runtime) return undefined;
   return resolveSafePromptTokens(
     runtime.contextWindowTokens,

@@ -1,0 +1,17 @@
+.turn-process { min-width: 0; margin-bottom: 16px; }
+.turn-process-toolbar { display: flex; align-items: center; gap: 12px; padding: 6px 0; color: var(--color-text-secondary); font-size: 12px; }
+.turn-process-toolbar button { margin-left: auto; padding: 5px 9px; background: transparent; color: inherit; border: 1px solid var(--color-border); border-radius: 6px; cursor: pointer; }
+.turn-process-body { max-height: min(360px, 55vh); overflow-y: auto; scrollbar-width: none; }
+.turn-process-body::-webkit-scrollbar { display: none; }
+.turn-process-content { display: flow-root; }
+.turn-process-body {
+  --process-top: #000;
+  --process-bottom: #000;
+  mask-image: linear-gradient(to bottom, var(--process-top) 0%, #000 10%, #000 90%, var(--process-bottom) 100%);
+  -webkit-mask-image: linear-gradient(to bottom, var(--process-top) 0%, #000 10%, #000 90%, var(--process-bottom) 100%);
+}
+.turn-process-body[data-fade-top="true"] { --process-top: transparent; }
+.turn-process-body[data-fade-bottom="true"] { --process-bottom: transparent; }
+.turn-process-body.is-expanded { max-height: none; }
+.turn-process-reasoning-divider { border: 0; border-top: 1px solid var(--color-border); opacity: .55; margin: 12px 0; }
+.turn-process-body:focus-visible { outline: 1px solid var(--color-border); outline-offset: 2px; }

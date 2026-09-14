@@ -12,6 +12,8 @@
 import { memo } from 'react';
 import StructuredMessage from './StructuredMessage';
 import ReasoningBlock from './ReasoningBlock';
+import TurnProcess from './TurnProcess';
+import LivePhase from './LivePhase';
 import ToolCallMessage from './ToolCallMessage';
 import DelegateCard from './DelegateCard';
 import AskCard from './AskCard';
@@ -32,7 +34,7 @@ import { useLocale } from '../../i18n/LocaleContext';
  * 其余 → ToolCallMessage。两处渲染路径（流式中 / 落定后）共用，保证 sub-agent
  * 卡片按调用顺序 inline 落在工具列里，而非浮在整条消息之上。
  */
-function renderToolStep(step: ToolStep, key: string, timestamp: string) {
+function renderToolStep(step: ToolStep, key: string, timestamp: string, stopped?: boolean) {
   const d = step.delegate;
   if (d) {
     return (
@@ -54,6 +56,7 @@ function renderToolStep(step: ToolStep, key: string, timestamp: string) {
   }
   return (
     <ToolCallMessage
+      interrupted={stopped && (step.status === 'running' || step.status === 'pending')}
       key={`tool-${key}`}
       toolCall={{
         toolName: step.tool,
@@ -67,8 +70,8 @@ function renderToolStep(step: ToolStep, key: string, timestamp: string) {
   );
 }
 
-function renderToolSteps(steps: ToolStep[], messageId: string, timestamp: string) {
-  return <ToolActivityList items={steps} renderItem={(step, i) => renderToolStep(step, `${messageId}-${i}`, timestamp)} />;
+function renderToolSteps(steps: ToolStep[], messageId: string, timestamp: string, stopped?: boolean) {
+  return <ToolActivityList items={steps} stopped={stopped} renderItem={(step, i) => renderToolStep(step, `${messageId}-${i}`, timestamp, stopped)} />;
 }
 
 export interface MessageItemProps {
@@ -191,14 +194,19 @@ function MessageItemInner({
       return (
         <>
           {/* 原生思考流（流式中默认展开） */}
-          {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming />}
+          <TurnProcess kind="reasoning" present={!!msg.reasoningContent} followLatest>
+          {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} breaks={msg.reasoningBreaks} isStreaming />}
+          </TurnProcess>
+          <TurnProcess kind="tools" present={!!steps?.length}>
           {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
           {steps && renderToolSteps(steps, msg.id, msg.timestamp)}
+          </TurnProcess>
           {/* 流式文本气泡 */}
           <div className="chat__message chat__message--assistant">
             <AgentAvatar agent={agent} className="chat__avatar" fallback="AI" />
             <div className="chat__bubble">
-              {phaseLabel && <div className="chat__streaming-phase">{phaseLabel}</div>}
+              {phaseLabel && <LivePhase phase={phase ?? 'llm-waiting'} elapsed={elapsed}
+                tool={msg.streamingTool || lastRunningTool} argumentChars={msg.streamingArgumentChars} notice={msg.streamingStatus} />}
               {display && <div style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>{display}▍</div>}
               {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
             </div>
@@ -214,9 +222,13 @@ function MessageItemInner({
       return (
         <>
           {/* 原生思考流（落定后默认折叠） */}
-          {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming={false} />}
+          <TurnProcess kind="reasoning" present={!!msg.reasoningContent}>
+          {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} breaks={msg.reasoningBreaks} isStreaming={false} />}
+          </TurnProcess>
+          <TurnProcess kind="tools" present={!!toolSteps.length} stopped={msg.streamStopped}>
           {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
-          {renderToolSteps(toolSteps, msg.id, msg.timestamp)}
+          {renderToolSteps(toolSteps, msg.id, msg.timestamp, msg.streamStopped)}
+          </TurnProcess>
           <StructuredMessage
             tools={[]} agent={agent} answer={answer}
             msgId={msg.id}
@@ -234,7 +246,9 @@ function MessageItemInner({
     return (
       <>
         {/* 原生思考流（落定后默认折叠） */}
-        {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} isStreaming={false} />}
+        <TurnProcess kind="reasoning" present={!!msg.reasoningContent} stopped={msg.streamStopped}>
+        {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} breaks={msg.reasoningBreaks} isStreaming={false} />}
+        </TurnProcess>
         <div className={`chat__message chat__message--assistant`}>
           <AgentAvatar agent={agent} className="chat__avatar" fallback="AI" />
           <div className="chat__bubble">

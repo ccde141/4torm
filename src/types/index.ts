@@ -52,6 +52,18 @@ export interface NativeContextMessage {
 
 /** 单条消息 */
 export interface ChatMessage {
+  /** Display-only observation boundaries; absent in legacy sessions. */
+  reasoningBreaks?: number[];
+  streamStopped?: boolean;
+  inputRunId?: string;
+  inputReady?: boolean;
+  inputClosed?: boolean;
+  inputIncludedIds?: string[];
+  humanInputs?: Array<{ id: string; content: string; runId: string; sequence: number; receivedAt: string;
+    state: 'received' | 'included' | 'retained' }>;
+  contextExact?: boolean;
+  inputRecoveryError?: string;
+  inputSkipped?: string[];
   id: string;
   role: MessageRole;
   content: string;

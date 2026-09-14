@@ -9,9 +9,12 @@
 
 import { useState } from 'react';
 import { useLocale } from '../../i18n/LocaleContext';
+import { reasoningSegments } from '../../engine/chat/stream-retention';
+import './turn-process.css';
 
 interface Props {
   reasoning: string;
+  breaks?: number[];
   /** 是否正在流式输出（决定光标 + 默认展开态） */
   isStreaming: boolean;
   /**
@@ -21,7 +24,7 @@ interface Props {
   defaultOpen?: boolean;
 }
 
-export default function ReasoningBlock({ reasoning, isStreaming, defaultOpen }: Props) {
+export default function ReasoningBlock({ reasoning, isStreaming, defaultOpen, breaks }: Props) {
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
   const { t } = useLocale();
   if (!reasoning) return null;
@@ -44,7 +47,9 @@ export default function ReasoningBlock({ reasoning, isStreaming, defaultOpen }: 
       </button>
       {open && (
         <div className="reasoning-block__body">
-          {reasoning}
+          {reasoningSegments(reasoning, breaks).map((text, index) => <span key={index}>
+            {index > 0 && <hr className="turn-process-reasoning-divider" />}{text}
+          </span>)}
           {isStreaming && <span className="thinking-cursor" />}
         </div>
       )}

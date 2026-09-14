@@ -21,6 +21,7 @@ import { buildSelfManagementSection, buildTextToolProtocol } from '../shared/pro
 import { buildTaskBoardSection, readTaskboard, taskboardFile } from '../shared/taskboard';
 import { buildAgentMeta } from '../shared/meta-prompt.js';
 import { SEASON_META } from './meta-profile.js';
+import { buildMainAgentPrompt } from './main-prompt.js';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -75,6 +76,8 @@ SubAgent 有严格的工具调用次数上限（单次最多 25 轮）。超过�
 }
 
 export interface PromptBuildOpts {
+  /** 仅交互主入口启用，其他共享调用方保留既有行为。 */
+  mainAgent?: boolean;
   rolePrompt: string;
   toolDefs: ToolDef[];
   /** 工作区相对路径（项目根相对，如 "data/agents/{id}/.workspace/"） */
@@ -157,6 +160,7 @@ function buildNativeProtocol(): string {
 
 /** 构建完整 system prompt */
 export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Promise<string> {
+  if (opts.mainAgent && opts.sessionId && !opts.surfaceMeta) return buildMainAgentPrompt(opts);
   const parts: string[] = [];
   const allowAsk = opts.allowAsk !== false;
   const allowDelegate = opts.allowDelegate !== false;

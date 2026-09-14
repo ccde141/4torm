@@ -1,8 +1,9 @@
 import { useState, useCallback } from 'react';
-import { getSession, saveSession, autoTitle } from '../../store/chat';
+import { getSession, saveSession } from '../../store/chat';
 import { useConfirm } from '../common/ConfirmDialog';
 import type { Agent, ChatMessage } from '../../types';
 import { useLocale } from '../../i18n/LocaleContext';
+import { editInputAnswer } from '../../engine/chat/input-events';
 
 export function useMessageEditor(
   activeSessionId: string | null,
@@ -22,7 +23,7 @@ export function useMessageEditor(
     if (!session) return;
     const filtered = session.messages.filter(m => m.id !== msgId);
     setMessages(filtered);
-    await saveSession({ ...session, messages: filtered, title: autoTitle(filtered) });
+    await saveSession({ ...session, messages: filtered });
     refreshSessions(selectedAgent);
   }, [activeSessionId, selectedAgent, setMessages, refreshSessions, confirm, translate]);
 
@@ -36,11 +37,11 @@ export function useMessageEditor(
     const session = await getSession(activeSessionId);
     if (!session) return;
     const updated = session.messages.map(m =>
-      m.id === editingMsgId ? { ...m, content: editContent.trim() } : m
+      m.id === editingMsgId ? editInputAnswer(m, editContent.trim()) : m
     );
     setMessages(updated);
     setEditingMsgId(null);
-    await saveSession({ ...session, messages: updated, title: autoTitle(updated) });
+    await saveSession({ ...session, messages: updated });
     refreshSessions(selectedAgent);
   }, [activeSessionId, editingMsgId, editContent, selectedAgent, setMessages, refreshSessions]);
 

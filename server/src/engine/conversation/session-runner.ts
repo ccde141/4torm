@@ -22,12 +22,14 @@ import { runReActLoop } from '../shared/react/text-loop';
 import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import type { ToolPreparationProgress } from '../shared/tool-progress';
 import type { SandboxLevel } from '../shared/sandbox-prompt';
-import { loadAgentToolDefs } from '../shared/tool-defs-loader';
+import { loadAgentToolDefs, type ToolDef } from '../shared/tool-defs-loader';
 import { execToolUnified } from '../shared/exec-tool';
 import { execListAgents, execCreateWorkflow } from '../../services/tradewind-tools/builder';
 import { execListWorkflows, execUpdateWorkflow } from '../../services/tradewind-tools/editor';
 import { execStartWorkflow } from '../../services/tradewind-tools/starter';
 import { buildVirtualToolDefs, shouldAttachToolCaller } from './virtual-tools';
+import { withMainToolGuidance } from './main-tool-defs.js';
+import type { TeamHandoff } from './team/handoff.js';
 import { execMemoryTool, MEMORY_TOOL_NAMES, buildMemoryToolDefs } from '../shared/agent-memory';
 import { execCreateAutomation, execUpdateAutomation, execListAutomations } from '../../services/tide/automation-tools';
 import { execTaskBoard, taskboardFile } from '../shared/taskboard';
@@ -47,6 +49,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { FrameworkErrorKind } from '../shared/framework-error.js';
 import { resolveConversationTermination } from './conversation-outcome.js';
+import { ConversationInputRuntime, type ConversationInputEvent } from './input-runtime.js';
+import { readInputJournal } from './input-journal.js';
+import { inputError } from './input-inbox.js';
 
 // 一次文件改动记录：executor（edit_file/write_file）算好 unified diff 经 meta.diff 回传
 type FileChange = { path: string; kind: 'edit' | 'write'; text: string; add: number; del: number };
@@ -73,8 +78,10 @@ function renderReviewChanges(ledger: FileChange[]): string {
 // ── SSE 事件类型（推送给前端） ────────────────────────────────────
 
 export type ConversationEvent =
+  | ConversationInputEvent
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
+  | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | ({ type: 'tool-progress' } & ToolPreparationProgress)
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
@@ -93,6 +100,12 @@ export type ConversationEvent =
 // ── SessionRunner ────────────────────────────────────────────────
 
 export interface SessionRunnerOpts {
+  mainAgent?: boolean;
+  extension?: { definitions: ToolDef[]; call: (name: string, args: Record<string, string>, signal?: AbortSignal) => Promise<string>;
+    createHandoff?: () => TeamHandoff };
+  memberTools?: string[];
+  maxTurns?: number;
+  checkpoint?: (messages: ContextMessage[]) => Promise<void>;
   dataDir: string;
   agentId: string;
   model: string;
@@ -133,6 +146,8 @@ export class SessionRunner {
   /** 挂起时保存的上下文（messages + systemPrompt），用于 resume */
   private suspendedState: { messages: ContextMessage[]; systemPrompt: string; pendingToolCallId?: string } | null = null;
   private pendingToolRegistration: ToolRegistrationProposal | null = null;
+  private inputRuntime: ConversationInputRuntime | null = null;
+  getInputRuntime(): ConversationInputRuntime | null { return this.inputRuntime; }
 
   constructor(opts: SessionRunnerOpts) {
     this.opts = opts;
@@ -147,6 +162,7 @@ export class SessionRunner {
 
   /** 中止当前执行 */
   abort(): void {
+    this.inputRuntime?.stop();
     this.abortController?.abort();
   }
 
@@ -158,6 +174,7 @@ export class SessionRunner {
   async resume(
     answer: string,
     onEvent: (ev: ConversationEvent) => void,
+    inputRunId?: string,
   ): Promise<{ content: string; rawContent: string }> {
     if (!this.suspended || !this.suspendedState) {
       throw new Error('会话未处于挂起状态');
@@ -188,7 +205,7 @@ export class SessionRunner {
     }
 
     try {
-      return await this.runLoop(systemPrompt, messages, onEvent);
+      return await this.runWithInputs(systemPrompt, messages, onEvent, inputRunId);
     } finally {
       this.busy = false;
       this.abortController = null;
@@ -203,16 +220,40 @@ export class SessionRunner {
     systemPrompt: string,
     chatMessages: ContextMessage[],
     onEvent: (ev: ConversationEvent) => void,
+    inputRunId?: string,
   ): Promise<{ content: string; rawContent: string }> {
     if (this.busy) throw new Error('会话正在执行中');
     this.busy = true;
     this.abortController = new AbortController();
 
     try {
-      return await this.runLoop(systemPrompt, chatMessages, onEvent);
+      return await this.runWithInputs(systemPrompt, chatMessages, onEvent, inputRunId);
     } finally {
       this.busy = false;
       this.abortController = null;
+    }
+  }
+
+  private async runWithInputs(
+    prompt: string, messages: ContextMessage[], emit: (event: ConversationEvent) => void, runId?: string,
+  ): Promise<{ content: string; rawContent: string }> {
+    if (!runId || !this.opts.sessionId) return this.runLoop(prompt, messages, emit);
+    const owner = { agentId: this.opts.agentId, sessionId: this.opts.sessionId, runId };
+    const prior = await readInputJournal(this.opts.dataDir, owner);
+    if (prior.entries.length || prior.checkpoint) throw inputError('INPUT_RUN_REUSED', 'conflict', '执行标识已使用，请发起新一轮');
+    const runtime = new ConversationInputRuntime(this.opts.dataDir, owner, emit);
+    this.inputRuntime = runtime;
+    runtime.bind(messages);
+    let done = false;
+    try {
+      return await this.runLoop(prompt, messages, event => {
+        if (event.type === 'done') done = true;
+        else emit(event);
+      });
+    } finally {
+      try { await runtime.finish(); }
+      finally { this.inputRuntime = null; }
+      if (done) emit({ type: 'done' });
     }
   }
 
@@ -223,6 +264,10 @@ export class SessionRunner {
   ): Promise<{ content: string; rawContent: string }> {
     const { dataDir, model, temperature } = this.opts;
     const signal = this.abortController!.signal;
+    const externalAbort = () => this.abort();
+    this.opts.signal?.addEventListener('abort', externalAbort, { once: true });
+    if (this.opts.signal?.aborted) externalAbort();
+    try {
 
     // 本轮文件改动 ledger：edit_file/write_file 经 meta.diff 回传，供 review_changes 汇总回看。
     // 仅内存、仅本次运行（一个用户回合内的多次编辑），不落盘、不跨回合。
@@ -235,7 +280,7 @@ export class SessionRunner {
     // 原生模式：把虚拟工具（ask/delegate/list_agents/create_workflow）也作为 schema
     // 注入 tools 参数，否则模型在原生通道看不见它们。执行端 toolCaller 按 name 拦截不变。
     // create_automation 仅在可交互会话（有 sessionId）注入：潮汐无人值守运行不给，避免自我繁殖。
-    const nativeToolDefs = [
+    const assembledToolDefs = [
       ...toolDefs,
       ...buildVirtualToolDefs(true, !!this.opts.sessionId, !!this.opts.sessionId, {
         allowAsk: this.opts.allowAsk,
@@ -243,16 +288,45 @@ export class SessionRunner {
       }),
       ...(this.opts.sessionId ? buildBackgroundExecutionToolDefs() : []),
       ...buildMemoryToolDefs(),
-    ];
+      ...(this.opts.extension?.definitions ?? []),
+    ].filter(tool => !this.opts.memberTools || this.opts.memberTools.includes(tool.name));
+    const nativeToolDefs = this.opts.mainAgent && this.opts.sessionId
+      ? withMainToolGuidance(assembledToolDefs) : assembledToolDefs;
 
+    const inputRuntime = this.inputRuntime;
+    const handoff = this.opts.extension?.createHandoff?.();
+    const beforeFinish = handoff ? () => handoff.beforeFinish(signal,
+      () => inputRuntime?.steering.hasPending() ?? false,
+      () => onEvent({ type: 'heartbeat', phase: 'tool-exec', elapsed: 0 })) : undefined;
+    const checkpoint = this.opts.checkpoint;
     const llm: LLMCaller = {
       async call(msgs, _options, onChunk, sig, tools, onReasoning, onToolProgress) {
+        if (!sig?.aborted && handoff) {
+          const notices = await handoff.notifications();
+          msgs.push(...notices.map(content => ({ role: 'user' as const, content })));
+        }
+        await checkpoint?.(msgs);
+        await inputRuntime?.beforeModel();
+        if (inputRuntime && sig?.aborted) throw new Error('Conversation aborted');
         return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools, onReasoning, onToolProgress });
       },
     };
 
     const toolCaller: ToolCaller = {
       call: async (tool, args) => {
+        if (this.opts.memberTools && !this.opts.memberTools.includes(tool)) throw new Error('TEAM_TOOL_NOT_ALLOWED');
+        if (this.opts.extension?.definitions.some(def => def.name === tool)) {
+          onEvent({ type: 'tool-call', tool, args });
+          try {
+            const result = await this.opts.extension.call(tool, args, signal);
+            onEvent({ type: 'tool-result', tool, result, ok: true });
+            return result;
+          } catch (error) {
+            const result = error instanceof Error ? error.message : String(error);
+            onEvent({ type: 'tool-result', tool, result, ok: false });
+            throw error;
+          }
+        }
         // 假工具拦截（潮汐 self-loop schedule_next 等）：短路，不走 HTTP
         if (this.opts.interceptTool) {
           const intercepted = this.opts.interceptTool(tool, args);
@@ -434,6 +508,10 @@ export class SessionRunner {
     const generatedContextStart = chatMessages.length;
     const result = this.opts.native
       ? await runReActLoopNative({
+          retainFinalContext: !!this.opts.checkpoint,
+          beforeFinish,
+          maxTurns: this.opts.maxTurns,
+          steering: inputRuntime?.steering,
           messages: chatMessages,
           llm,
           tools: enableTools ? toolCaller : undefined,
@@ -442,6 +520,7 @@ export class SessionRunner {
             if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
             else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', content: ev.chunk });
             else if (ev.type === 'tool-progress') onEvent(ev);
+            else if (ev.type === 'heartbeat') onEvent(ev);
           },
           // 季风专属：识别 ask 触发的 SuspendSignal，让 core 走挂起分支
           onToolError: (e) => {
@@ -453,6 +532,9 @@ export class SessionRunner {
           signal,
         })
       : await runReActLoop({
+          beforeFinish,
+          maxTurns: this.opts.maxTurns,
+          steering: inputRuntime?.steering,
           messages: chatMessages,
           llm,
           tools: enableTools ? toolCaller : undefined,
@@ -460,6 +542,7 @@ export class SessionRunner {
           onEvent: (ev) => {
             if (ev.type === 'token') onEvent({ type: 'token', content: ev.chunk });
             else if (ev.type === 'reasoning') onEvent({ type: 'reasoning', content: ev.chunk });
+            else if (ev.type === 'heartbeat') onEvent(ev);
           },
           signal,
         });
@@ -491,6 +574,10 @@ export class SessionRunner {
     if (result.usage) onEvent({ type: 'usage', usage: result.usage });
     onEvent({ type: 'done' });
     return { content: result.content, rawContent: result.rawContent };
+    } finally {
+      this.opts.signal?.removeEventListener('abort', externalAbort);
+      await this.opts.checkpoint?.(chatMessages);
+    }
   }
 
   /** 执行普通工具（MCP 工具走 MCP client；其余 HTTP 调 /api/tools/exec） */

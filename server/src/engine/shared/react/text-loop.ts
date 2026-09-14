@@ -6,6 +6,7 @@ import {
   parseTextToolResponse,
 } from '../text-tool-protocol.js';
 import { TextToolStreamGate } from '../text-tool-stream-gate.js';
+import { applyPendingInput, skipTextTool } from './steering.js';
 import {
   HEARTBEAT_INTERVAL_MS,
   LLM_TIMEOUT_MS,
@@ -88,6 +89,7 @@ async function completeTruncatedResponse(
 ): Promise<string> {
   let content = initial;
   for (let count = 0; count < MAX_CONTINUATIONS; count++) {
+    if (params.steering && (params.steering.hasPending() || params.signal?.aborted)) return content;
     params.messages.push({ role: 'assistant', content });
     params.messages.push({ role: 'user', content: CONTINUATION_HINT });
     const result = await callModel(params, onUsage, tokenGate);
@@ -144,6 +146,7 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
     if (params.signal?.aborted) {
       return { content: '[Interrupted]', rawContent: '', toolCalls, turns: turn, usage, termination: abortedTermination() };
     }
+    applyPendingInput(params);
     const tokenGate = new TextToolStreamGate(chunk => params.onEvent?.({ type: 'token', chunk }));
     let response: Awaited<ReturnType<typeof callModel>>;
     let reply: string;
@@ -172,6 +175,16 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
     params.messages.push({ role: 'assistant', content: reply });
 
     const parsed = parseTextToolResponse(reply);
+    if (params.steering && params.signal?.aborted) {
+      tokenGate.finish(false);
+      return { content: '[Interrupted]', rawContent: reply, toolCalls, turns: turn + 1,
+        usage, termination: abortedTermination() };
+    }
+    if (params.steering?.hasPending()) {
+      tokenGate.finish(parsed.kind === 'final');
+      if (parsed.kind === 'tool-call') skipTextTool(params, parsed.name, toolCalls);
+      continue;
+    }
     if (parsed.kind === 'invalid') {
       tokenGate.finish(false);
       const failure = reactErrorData(
@@ -189,6 +202,15 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
     }
     if (parsed.kind === 'final') {
       tokenGate.finish(true);
+      if (params.beforeFinish) {
+        const notices = await params.beforeFinish();
+        if (params.signal?.aborted) return { content: '[Interrupted]', rawContent: '', toolCalls,
+          turns: turn + 1, usage, termination: abortedTermination() };
+        if (notices.length || params.steering?.hasPending()) {
+          params.messages.push(...notices.map(content => ({ role: 'user' as const, content })));
+          continue;
+        }
+      }
       return { content: parsed.content, rawContent: reply, toolCalls, turns: turn + 1, usage, termination: succeededTermination() };
     }
     tokenGate.finish(false);

@@ -3,6 +3,8 @@ import type { Agent, ChatMessage } from '../types';
 import { MissingIndexReadCache } from './session-index-cache';
 import { deleteConversationImages } from '../engine/chat/image-attachments';
 import { getAgents } from './agent';
+import { nameSessionOnce, requestSessionTitle, withSessionWrite } from './session-naming';
+import { recoverInputMessages } from '../engine/chat/input-events';
 import {
   tokenUsageFromMeta,
   tokenUsageToMeta,
@@ -16,6 +18,8 @@ export interface ChatSession {
   agentName: string;
   title: string;
   titleManual?: boolean;
+  /** 仅新会话参与一次模型命名；旧会话缺省不追溯改名。 */
+  titleState?: 'pending' | 'attempted' | 'generated';
   messages: ChatMessage[];
   model: string;
   systemPrompt: string;
@@ -123,6 +127,7 @@ export function buildSession(agent: Agent, model?: string): ChatSession {
     agentId: agent.id,
     agentName: agent.name,
     title: `新会话 ${now.slice(11, 19)}`,
+    titleState: 'pending',
     messages: [],
     model: model || agent.model || '',
     systemPrompt: rp,
@@ -170,6 +175,9 @@ export async function getSession(id: string): Promise<ChatSession | null> {
   const agentId = `${parts[0]}-${parts[1]}`; // agent-xxx format
   const s = await readJson<ChatSession>(sessionPath(agentId, id));
   if (s) {
+    if (s.messages.some(message => message.inputRunId && !message.inputClosed)) {
+      s.messages = await recoverInputMessages(s.messages, agentId, id);
+    }
     if (!cache) cache = {};
     cache[s.id] = s;
     msgCache.set(s.id, s.messages);
@@ -192,7 +200,18 @@ export async function markSessionRead(sessionId: string): Promise<void> {
   await saveSession(s);
 }
 
-export async function saveSession(session: ChatSession) {
+export async function saveSession(session: ChatSession, options: { rename?: boolean } = {}) {
+  return withSessionWrite(session.agentId, async () => {
+    const latest = await getSession(session.id);
+    // 普通消息保存不能用旧快照覆盖已生成或手动修改的标题。
+    if (latest && !options.rename) {
+      session = { ...session, title: latest.title, titleManual: latest.titleManual, titleState: latest.titleState };
+    }
+    await persistSession(session);
+  });
+}
+
+async function persistSession(session: ChatSession) {
   session.updatedAt = new Date().toISOString();
   session.unreadCount = computeUnread(session);
   msgCache.set(session.id, session.messages);
@@ -219,7 +238,12 @@ export async function deleteSession(id: string) {
   const parts = id.split('-');
   if (parts.length < 3) return;
   const agentId = `${parts[0]}-${parts[1]}`;
+  return withSessionWrite(agentId, () => removeSession(id, agentId));
+}
+
+async function removeSession(id: string, agentId: string) {
   await deleteFile(sessionPath(agentId, id));
+  await deleteFile(`agents/${agentId}/sessions/${id}.inputs`);
   await deleteConversationImages(agentId, id);
 
   if (cache) delete cache[id];
@@ -236,13 +260,25 @@ export async function deleteSession(id: string) {
   }
 }
 
-export function autoTitle(messages: ChatMessage[]): string {
-  const firstUser = messages.find(m => m.role === 'user' && !m.content.startsWith('/'));
-  if (firstUser) {
-    const text = firstUser.content.replace(/\n/g, ' ').replace(/```[\s\S]*?```/g, '').trim().slice(0, 30);
-    return text || '空会话';
-  }
-  return '空会话';
+export async function nameCompletedSession(id: string): Promise<void> {
+  const agentId = id.split('-').slice(0, 2).join('-');
+  await nameSessionOnce(id, {
+    claim: () => withSessionWrite(agentId, async () => {
+      const session = await getSession(id);
+      if (!session || session.titleManual || session.titleState !== 'pending') return null;
+      const user = session.messages.find(m => m.role === 'user' && m.content.trim());
+      const assistant = session.messages.findLast(m => m.role === 'assistant' && !m.ask && m.content.trim());
+      if (!user || !assistant) return null;
+      await persistSession({ ...session, titleState: 'attempted' });
+      return { model: session.model, user: user.content.slice(0, 2000), assistant: assistant.content.slice(0, 2000) };
+    }),
+    generate: requestSessionTitle,
+    apply: (_id, title) => withSessionWrite(agentId, async () => {
+      const latest = await getSession(id);
+      if (!latest || latest.titleManual || latest.titleState !== 'attempted') return;
+      await persistSession({ ...latest, title, titleState: 'generated' });
+    }),
+  });
 }
 
 export async function getAllSessions(): Promise<ChatSession[]> {

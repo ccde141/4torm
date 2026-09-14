@@ -1,7 +1,5 @@
 import type { ProviderEntry } from '../../llm';
 import { readModelCapability, type ModelCapability } from '../../llm/model-capabilities';
-import { ModelProfileSelect } from './ModelProfileSelect';
-import type { ProviderProfileSelection } from '../../llm/provider-profiles';
 import { useLocale } from '../../i18n/LocaleContext';
 
 interface Props {
@@ -9,7 +7,6 @@ interface Props {
   probing: ReadonlySet<string>;
   messages: Readonly<Record<string, string>>;
   onProbe: (model: string, capability: ModelCapability) => void;
-  onProfileChange: (model: string, profile: ProviderProfileSelection) => void;
   onRemove: (model: string) => void;
 }
 
@@ -57,7 +54,7 @@ function CapabilityCell({ provider, model, capability, probing, message, onProbe
   );
 }
 
-export function ModelCapabilityPanel({ provider, probing, messages, onProbe, onProfileChange, onRemove }: Props) {
+export function ModelCapabilityPanel({ provider, probing, messages, onProbe, onRemove }: Props) {
   const { t } = useLocale();
   return (
     <section className="provider-capability-panel" style={{ marginTop: 'var(--space-3)' }}>
@@ -79,10 +76,6 @@ export function ModelCapabilityPanel({ provider, probing, messages, onProbe, onP
               <span title={model} style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--color-text)', fontSize: 'var(--text-xs)' }}>
                 {model}
               </span>
-              <ModelProfileSelect
-                value={provider.modelProfiles?.[model] ?? 'auto'}
-                onChange={profile => onProfileChange(model, profile)}
-              />
               <button className="capability-icon-button capability-button--danger provider-remove-model" type="button" onClick={() => onRemove(model)} title={t('model.capability.remove')} aria-label={t('model.capability.remove')} style={removeButtonStyle}>×</button>
             </div>
             <CapabilityCell

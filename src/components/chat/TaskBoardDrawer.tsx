@@ -29,7 +29,8 @@ export const RAIL_W = 42;
  * - 展开态 → 完整清单，左缘可拖动调宽；无板子时给空态引导，可手动新增。
  * 始终反映 taskboard.json（后端单一真相源）。
  */
-export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, glow, observations = [], observationScope, observationOwnerId }: {
+export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, glow, observations = [], observationScope, observationOwnerId, teamView }: {
+  teamView?: React.ReactNode;
   board: TaskBoard | null;
   onChange: (next: TaskBoard | null) => void;
   expanded: boolean;
@@ -216,6 +217,7 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
       )}
 
       <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-2) var(--space-3) var(--space-3)' }}>
+        {teamView}
         {total === 0 ? (
           <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', lineHeight: 1.6, padding: 'var(--space-2) 0' }}>
             {translate('chat.taskboard.empty')}<br />{translate('chat.taskboard.emptyHint')}

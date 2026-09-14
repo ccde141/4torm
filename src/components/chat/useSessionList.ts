@@ -110,7 +110,7 @@ export function useSessionList(
     if (!name) { setEditingTitle(false); return; }
     const session = await getSession(activeSessionId);
     if (!session) return;
-    await saveSession({ ...session, title: name, titleManual: true });
+    await saveSession({ ...session, title: name, titleManual: true }, { rename: true });
     setSessions(prev => prev.map(p => p.id === activeSessionId ? { ...p, title: name } : p));
     setEditingTitle(false);
   }, [activeSessionId, editTitleValue]);

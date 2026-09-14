@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { listModels, probeAndStore, probeVisionAndStore, providerSelectionPatch, updateProvider, type ProviderCatalog, type ProviderEntry } from '../../llm';
 import { retainProviderCapabilities, type ModelCapability } from '../../llm/model-capabilities';
-import { retainModelProfiles, setModelProfile, type ProviderProfileSelection } from '../../llm/provider-profiles';
+import { retainModelProfiles } from '../../llm/provider-profiles';
 import { useLocale } from '../../i18n/LocaleContext';
 import { ModelCapabilityPanel } from './ModelCapabilityPanel';
 import { ProviderConfigurationForm } from './ProviderConfigurationForm';
@@ -54,7 +54,7 @@ function ProviderModelsAndTests({ provider: p, onRefresh }: { provider: Provider
   const capabilities = useCapabilityTests(p, onRefresh);
   return <><div className="provider-models-heading"><div><strong>{t('model.provider.modelsAndTests')}</strong><span>{t('model.provider.modelsAndTestsHint')}</span></div><button className="capability-button capability-button--secondary provider-secondary-action provider-fetch-action" data-loading={models.testing} onClick={models.fetchModels} disabled={models.testing} style={smallBtnStyle}>{models.testing ? t('model.provider.fetching') : models.fetched.length ? t('model.provider.refetch') : t('model.provider.fetch')}</button></div>
     {models.fetched.length > 0 && <ModelPicker models={models.fetched} checked={models.checked} hasChange={models.hasChange} onToggle={models.toggle} onAll={models.selectAll} onClear={models.clear} onConfirm={models.confirm} />}
-    {p.models.length > 0 && <ModelCapabilityPanel provider={p} probing={capabilities.probing} messages={capabilities.messages} onProbe={capabilities.probe} onProfileChange={models.changeProfile} onRemove={models.remove} />}
+    {p.models.length > 0 && <ModelCapabilityPanel provider={p} probing={capabilities.probing} messages={capabilities.messages} onProbe={capabilities.probe} onRemove={models.remove} />}
     <div style={{ marginTop: 'var(--space-3)' }}><div style={fieldLabel}>{t('model.provider.manual')}</div><div style={{ display: 'flex', gap: 'var(--space-2)' }}><input value={models.manual} onChange={event => models.setManual(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') models.add(); }} placeholder={t('model.provider.modelPlaceholder')} style={{ ...inputStyle, flex: 1 }} /><button className="capability-button capability-button--primary provider-primary-action" onClick={models.add} style={primarySmallButton}>{t('model.provider.add')}</button></div></div>
     {models.error && <div className="provider-error-reveal" style={errorStyle}>{t('model.provider.fetchHint', { error: models.error })}</div>}</>;
 }
@@ -68,7 +68,6 @@ function useProviderModels(p: ProviderEntry, onRefresh: () => void) {
   const [manual, setManual] = useState('');
   const add = async () => { const name = manual.trim(); if (!name) return; if (!p.models.includes(name)) await updateProvider(p.id, { models: [...p.models, name] }); setManual(''); onRefresh(); };
   const remove = async (model: string) => { const models = p.models.filter(item => item !== model); await updateProvider(p.id, { models, modelProfiles: retainModelProfiles(p.modelProfiles, models), ...retainProviderCapabilities(p, models) }); onRefresh(); };
-  const changeProfile = async (model: string, profile: ProviderProfileSelection) => { await updateProvider(p.id, { modelProfiles: setModelProfile(p.modelProfiles, model, profile) }); onRefresh(); };
   const fetchModels = async () => {
     if (!p.baseUrl) return; setTesting(true); setError('');
     try { const response = await listModels({ baseUrl: p.baseUrl, apiKey: p.apiKey, headers: p.customHeaders, protocol: p.protocol }); const ids = response.data.map(model => model.id); setFetched(ids); setChecked(new Set(ids)); }
@@ -77,7 +76,7 @@ function useProviderModels(p: ProviderEntry, onRefresh: () => void) {
   };
   const confirm = async () => { const models = [...checked]; await updateProvider(p.id, { models, modelProfiles: retainModelProfiles(p.modelProfiles, models), ...retainProviderCapabilities(p, models) }); setFetched([]); onRefresh(); };
   const toggle = (model: string) => setChecked(current => { const next = new Set(current); if (next.has(model)) next.delete(model); else next.add(model); return next; });
-  return { testing, error, fetched, checked, manual, setManual, add, remove, changeProfile, fetchModels, confirm, toggle,
+  return { testing, error, fetched, checked, manual, setManual, add, remove, fetchModels, confirm, toggle,
     selectAll: () => setChecked(new Set(fetched)), clear: () => setChecked(new Set()),
     hasChange: fetched.length > 0 && (p.models.length !== checked.size || !p.models.every(model => checked.has(model))) };
 }

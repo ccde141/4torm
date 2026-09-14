@@ -1,4 +1,5 @@
 import type { ChatMessage, ToolStep } from '../../types';
+import { markObservation } from './stream-retention';
 
 export function appendToolStep(messages: ChatMessage[], messageId: string, tool: string, args: Record<string, string>): ChatMessage[] {
   return messages.map(message => message.id === messageId
@@ -24,6 +25,6 @@ export function finishLatestToolStep(
       ...(meta?.pendingAutomation ? { pendingAutomation: meta.pendingAutomation } : {}),
       ...(meta?.workflowExecution ? { workflowExecution: meta.workflowExecution } : {}),
     };
-    return { ...message, toolSteps: steps };
+    return markObservation({ ...message, toolSteps: steps });
   });
 }

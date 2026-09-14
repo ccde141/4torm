@@ -3,19 +3,22 @@ import type { ChatMessage } from '../../types';
 import { formatTimestamp } from '../../utils/time';
 import FileDiffCard, { parseFileEdit } from './FileDiffCard';
 import { useLocale } from '../../i18n/LocaleContext';
+import { isTeamTool, TeamToolMessage } from './team/TeamToolMessage';
 
-export default function ToolCallMessage({ toolCall, actions, timestamp }: {
+export default function ToolCallMessage({ toolCall, actions, timestamp, interrupted }: {
+  interrupted?: boolean;
   toolCall: NonNullable<ChatMessage['toolCall']>;
   actions?: React.ReactNode;
   timestamp?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const { t } = useLocale();
-  const isRunning = toolCall.status === 'pending' || toolCall.status === 'running';
+  const { t, locale } = useLocale();
+  const isRunning = !interrupted && (toolCall.status === 'pending' || toolCall.status === 'running');
+  if (isTeamTool(toolCall.toolName)) return <TeamToolMessage toolCall={toolCall} actions={actions} timestamp={timestamp} interrupted={interrupted} />;
 
   // 文件改动类工具（edit_file / write_file）渲染成 diff 卡片，直观展示 AI 改了什么
   const fileEdit = parseFileEdit(toolCall);
-  if (fileEdit) {
+  if (fileEdit && !interrupted) {
     return <FileDiffCard toolCall={toolCall} edit={fileEdit} actions={actions} timestamp={timestamp} />;
   }
 
@@ -38,7 +41,8 @@ export default function ToolCallMessage({ toolCall, actions, timestamp }: {
             {toolCall.toolName}
           </span>
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>
-            {isRunning ? t('chat.tool.runningShort') : (!expanded && toolCall.result ? summary : '')}
+            {interrupted ? (locale === 'en-US' ? 'Stopped before a result was received' : '停止时尚未收到结果')
+              : isRunning ? t('chat.tool.runningShort') : (!expanded && toolCall.result ? summary : '')}
           </span>
         </button>
         {expanded && (

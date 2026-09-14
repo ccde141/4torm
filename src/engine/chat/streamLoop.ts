@@ -13,10 +13,14 @@
 import { streamUrl } from '../../lib/apiBase';
 import type { ChatMessage, Agent } from '../../types';
 import type { ChatSession } from '../../store/chat';
+import { nameCompletedSession } from '../../store/chat';
+import { TitleCompletion } from '../../store/session-naming';
 import type { ToolDef } from '../../store/tools';
 import type { TaskBoard } from '../../utils/taskboard';
 import { applyDelegateStreamEvent, finalizeStreamAnswer } from './delegate-stream-events';
 import { appendToolStep, finishLatestToolStep } from './tool-step-events';
+import { applyInputEvent } from './input-events';
+import { retainStopped } from './stream-retention';
 
 export type StreamCtx = {
   session: ChatSession;
@@ -37,13 +41,12 @@ export type StreamCtx = {
   setMessages: (msgs: ChatMessage[]) => void;
   saveSessionFn: (s: ChatSession) => Promise<void>;
   refreshSessions: (a: Agent) => void;
-  autoTitleFn: (msgs: ChatMessage[]) => string;
   generateMessageIdFn: () => string;
   abortController: AbortController;
   /** finalize 前查询：该会话是否已被删（弃用）→ 跳过存盘，杜绝僵尸复活 */
   isAbandoned?: () => boolean;
   /** 流彻底结束（自然/abort/淘汰/错误）后回调，用于清理 runner 注册表 */
-  onFinish?: () => void;
+  onFinish?: (completed: boolean) => void;
   /** task_board 工具通过 meta 侧通道回传的最新任务板（null = 已清空），用于即时刷新置顶面板 */
   onTaskboard?: (board: TaskBoard | null) => void;
 };
@@ -51,10 +54,11 @@ export type StreamCtx = {
 export async function runStreamLoop(ctx: StreamCtx) {
   const { session, chatMessages, agent, selectedModel,
     setMessages,
-    saveSessionFn, refreshSessions, autoTitleFn, generateMessageIdFn, abortController } = ctx;
+    saveSessionFn, refreshSessions, generateMessageIdFn, abortController } = ctx;
   let allMessages = ctx.allMessages;
 
-  const getTitle = (msgs: ChatMessage[]) => session.titleManual ? session.title : autoTitleFn(msgs);
+  const getTitle = (_msgs: ChatMessage[]) => session.title;
+  const titleCompletion = new TitleCompletion();
 
   // 创建 assistant 占位消息
   const assistantMsgId = generateMessageIdFn();
@@ -73,6 +77,7 @@ export async function runStreamLoop(ctx: StreamCtx) {
   };
   const assistantMsg: ChatMessage = {
     id: assistantMsgId, role: 'assistant', content: '',
+    inputRunId: assistantMsgId,
     timestamp: new Date().toISOString(), agentId: agent.id,
     streamingPhase: 'llm-waiting', phaseElapsed: 0,
   };
@@ -92,12 +97,15 @@ export async function runStreamLoop(ctx: StreamCtx) {
   }, 1000);
 
   try {
+    if (ctx.isAbandoned?.()) throw new Error('Session deleted');
+    await saveSessionFn({ ...session, messages: allMessages, model: selectedModel });
     // POST 到后端 SSE 端点
     const res = await fetch(streamUrl('/api/conversation/chat'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sessionId: session.id,
+        inputRunId: assistantMsgId,
         agentId: agent.id,
         model: selectedModel,
         messages: chatMessages,
@@ -122,6 +130,12 @@ export async function runStreamLoop(ctx: StreamCtx) {
 
       let ev: any;
       try { ev = JSON.parse(json); } catch { return; }
+      titleCompletion.observe(ev.type);
+      if (ev.type?.startsWith('input-')) {
+        allMessages = applyInputEvent(allMessages, assistantMsgId, ev);
+        doFlush();
+        return;
+      }
 
       // task_board 的 meta 侧通道：结构化任务板即时上屏（不进 LLM 上下文）
       if (ev.type === 'tool-result' && ev.meta && 'taskboard' in ev.meta) {
@@ -156,6 +170,7 @@ export async function runStreamLoop(ctx: StreamCtx) {
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     setMessages([...allMessages]);
   } catch (e) {
+    titleCompletion.observe('error');
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     clearInterval(waitInterval);
     // 主动中断：用户点停止 / 切走被淘汰。跨 origin 直连时 abort 抛的是
@@ -168,12 +183,21 @@ export async function runStreamLoop(ctx: StreamCtx) {
     }
   }
 
+  if (abortController.signal.aborted) {
+    allMessages = retainStopped(allMessages, assistantMsgId);
+    setMessages([...allMessages]);
+  }
   // 被删会话（弃用）跳过存盘，否则 saveSession 会把文件和索引重建出来 → 僵尸复活
   if (!ctx.isAbandoned?.()) {
     try {
       await saveSessionFn({ ...session, messages: allMessages, title: getTitle(allMessages), model: selectedModel });
       refreshSessions(agent);
+      if (titleCompletion.ready(abortController.signal.aborted)) {
+        void nameCompletedSession(session.id).then(() => refreshSessions(agent))
+          .catch(error => console.error('[chat] 自动命名失败，原会话已保留', error));
+      }
     } catch (saveError) {
+      titleCompletion.observe('error');
       console.error('[chat] 会话保存失败', saveError);
       const saveErrMsg: ChatMessage = {
         id: generateMessageIdFn(), role: 'assistant',
@@ -183,7 +207,7 @@ export async function runStreamLoop(ctx: StreamCtx) {
       setMessages([...allMessages, saveErrMsg]);
     }
   }
-  ctx.onFinish?.();
+  ctx.onFinish?.(titleCompletion.ready(abortController.signal.aborted));
 }
 
 // ── SSE 事件处理 ─────────────────────────────────────────────────
@@ -330,7 +354,7 @@ async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
         msgs = msgs.map(m => m.id === ctx.assistantMsgId ? { ...m, content: cleanContent } : m);
       } else {
         // 没有可保留内容时，移除空占位
-        msgs = msgs.filter(m => m.id !== ctx.assistantMsgId);
+        msgs = msgs.filter(m => m.id !== ctx.assistantMsgId || m.inputRunId);
       }
       msgs.push(askMsg);
       ctx.setAllMessages(msgs);
