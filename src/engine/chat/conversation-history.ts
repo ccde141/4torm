@@ -5,6 +5,14 @@ export function buildConversationHistory(messages: ChatMessage[]): NativeContext
 }
 
 function mapChatMessage(message: ChatMessage): NativeContextMessage[] {
+  const mapped = mapMessageContent(message);
+  if (!message.streamStopped) return mapped;
+  return [...mapped, assistantMessage(
+    '上一轮执行被人类停止。已返回的工具结果和已经产生的文件改动仍然有效；没有结果的步骤不得视为完成，以上记录不代表任务完成。请结合人类的新消息判断是否继续。',
+  )];
+}
+
+function mapMessageContent(message: ChatMessage): NativeContextMessage[] {
   if (message.ask?.answered && typeof message.ask.reply === 'string') {
     return [assistantMessage(message.content), { role: 'user', content: message.ask.reply }];
   }
@@ -35,7 +43,7 @@ function mapSingleToolCall(message: ChatMessage): NativeContextMessage[] {
         arguments: JSON.stringify(message.toolCall!.params),
       }],
     },
-    { role: 'tool', content: message.toolCall!.result ?? '', toolCallId: id },
+    { role: 'tool', content: toolResult(message.toolCall!), toolCallId: id },
   ];
 }
 
@@ -71,10 +79,17 @@ function mapLegacyToolSteps(message: ChatMessage): NativeContextMessage[] {
       role: 'assistant', content: '',
       toolCalls: [{ id, name: step.tool, arguments: JSON.stringify(step.args) }],
     });
-    output.push({ role: 'tool', content: step.result ?? '', toolCallId: id });
+    output.push({ role: 'tool', content: toolResult(step), toolCallId: id });
   });
   if (message.content.trim()) output.push(assistantMessage(message.content, message.reasoningContent));
   return output;
+}
+
+function toolResult(step: { status: string; result?: string }): string {
+  if ((step.status === 'pending' || step.status === 'running') && step.result === undefined) {
+    return '工具执行被停止，没有返回结果；不要假定该操作成功。';
+  }
+  return step.result ?? '';
 }
 
 function assistantMessage(content: string, reasoningContent?: string): NativeContextMessage {

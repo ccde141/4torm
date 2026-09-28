@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { callLLM, resolveModelPromptBudget } from './llm-bridge.js';
+import { FrameworkError } from './framework-error.js';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -152,13 +153,52 @@ test('provider HTTP failures are surfaced after one request without implicit ret
   let requests = 0;
   t.mock.method(globalThis, 'fetch', async () => {
     requests++;
-    return new Response('{"error":"unavailable"}', { status: 503 });
+    return new Response('{"error":{"message":"temporary unavailable"}}', { status: 503 });
   });
 
   await assert.rejects(callLLM({
     dataDir, fullModelKey: 'cloud:model', messages: [{ role: 'user', content: 'hi' }],
-  }), /LLM HTTP 503/);
+  }), (error: unknown) => error instanceof FrameworkError
+    && error.data.code === 'MODEL_PROVIDER_HTTP_503'
+    && error.data.message === '模型服务暂时不可用（HTTP 503）');
   assert.equal(requests, 1);
+});
+
+test('provider authentication failure is typed without exposing its response body', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-provider-auth-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [{
+    id: 'cloud', baseUrl: 'https://example.test/v1', models: ['model'], apiKey: 'secret-key',
+    providerType: 'openai-compatible', transport: 'openai-chat-completions',
+  }] }));
+  t.mock.method(globalThis, 'fetch', async () => new Response(
+    '{"error":{"message":"bad secret-key"}}', { status: 401 },
+  ));
+
+  await assert.rejects(callLLM({
+    dataDir, fullModelKey: 'cloud:model', messages: [{ role: 'user', content: 'hi' }],
+  }), (error: unknown) => error instanceof FrameworkError
+    && error.data.code === 'MODEL_AUTH_FAILED'
+    && error.data.message === '模型服务鉴权失败（HTTP 401），请检查 API Key'
+    && !JSON.stringify(error.data).includes('secret-key'));
+});
+
+test('provider validation failure keeps the safe upstream reason', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-provider-validation-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [{
+    id: 'cloud', baseUrl: 'https://example.test/v1', models: ['model'],
+    providerType: 'openai-compatible', transport: 'openai-chat-completions',
+  }] }));
+  t.mock.method(globalThis, 'fetch', async () => new Response(
+    '{"error":{"message":"reasoning_effort is incompatible with thinking=auto"}}', { status: 400 },
+  ));
+
+  await assert.rejects(callLLM({
+    dataDir, fullModelKey: 'cloud:model', messages: [{ role: 'user', content: 'hi' }],
+  }), (error: unknown) => error instanceof FrameworkError
+    && error.data.code === 'MODEL_REQUEST_REJECTED'
+    && error.data.message.includes('reasoning_effort is incompatible'));
 });
 
 test('callLLM isolates configured concurrency by provider instance', async t => {

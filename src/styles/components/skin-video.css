@@ -1,0 +1,60 @@
+.skin-video-background {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--color-bg-primary);
+}
+
+.skin-video-control {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-md);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.skin-video-control__drop {
+  border: 1px dashed var(--glass-border-hover);
+  border-radius: var(--border-radius-sm);
+  padding: var(--space-3);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.skin-video-control__drop--active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-subtle);
+}
+
+.skin-video-control__progress {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.skin-video-control__progress progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--color-accent);
+}
+
+.skin-video-control__preview {
+  width: 100%;
+  max-height: 120px;
+  border-radius: var(--border-radius-sm);
+  background: #000;
+}
+
+.skin-video-control__row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.skin-video-control__row > button { flex: 1; }

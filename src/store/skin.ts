@@ -2,8 +2,11 @@
  * 皮肤配置 store — 持久化路径：data/skin-config.json
  */
 
-import { buildTextureBackground, gridBackgroundUrl, getTextureDefaults, type TextureType, type TextureLayer } from '../utils/skin-textures';
-import { hexToRgb, darkenColor, toRgba, onAccentColor, readJson, writeJson, uploadBinary, deleteFile, fileUrl } from './skin-helpers';
+import { buildTextureBackground, gridBackgroundUrl, getTextureDefaults, type TextureLayer } from '../utils/skin-textures';
+import { hexToRgb, darkenColor, toRgba, onAccentColor, readJson, uploadBinary, deleteFile, fileUrl } from './skin-helpers';
+import { persistSkinConfig } from './skin-persistence';
+import { DEFAULT_SKIN, DEFAULT_TEXTURE, normalizeSkinConfig } from './skin-config';
+import type { VideoBackgroundParams } from './skin-video-config';
 import {
   CONTOUR_DEFAULTS,
   CONTOUR_RECOMMENDED,
@@ -43,6 +46,8 @@ export interface SkinTextureConfig {
   customImage?: string;
   /** 自定义图片在 data 目录下的存储路径（清除时据此删文件；旧 base64 数据无此字段） */
   customPath?: string;
+  /** 独立于网格、图片和动态线条的视频底纹 */
+  video?: VideoBackgroundParams;
 }
 
 export interface SkinConfig {
@@ -58,25 +63,7 @@ export interface SkinConfig {
   badge?: SkinBadgeConfig;
 }
 
-const DEFAULT_TEXTURE: SkinTextureConfig = {
-  layers: ['custom'],
-  opacity: 0.5,
-  blur: 0,
-  blend: 'normal',
-  size: 'cover',
-  customImage: '/api/storage/file?path=skin-textures%2Fcustom-1780312588120.png',
-  customPath: 'skin-textures/custom-1780312588120.png',
-};
-
-const DEFAULTS: SkinConfig = {
-  primaryColor: '#FFFFFF',
-  secondaryColor: '#A9F8FE',
-  texture: DEFAULT_TEXTURE,
-  background: DEFAULT_BACKGROUND,
-  badge: DEFAULT_BADGE,
-};
-
-let cached: SkinConfig = { ...DEFAULTS };
+let cached: SkinConfig = { ...DEFAULT_SKIN };
 
 // ── 订阅机制：让 App 等组件监听皮肤变更 ────────
 type Listener = (config: SkinConfig) => void;
@@ -93,7 +80,7 @@ function notify(): void {
 
 function applyConfig(config: SkinConfig): void {
   const root = document.documentElement;
-  const primary = config.primaryColor || DEFAULTS.primaryColor;
+  const primary = config.primaryColor || DEFAULT_SKIN.primaryColor;
   root.style.setProperty('--color-accent', primary);
   root.style.setProperty('--color-accent-hover', darkenColor(primary, 35));
   root.style.setProperty('--color-accent-subtle', toRgba(primary, 0.12));
@@ -101,7 +88,7 @@ function applyConfig(config: SkinConfig): void {
   // 压在强调色上的前景：按强调色亮度选深/浅，保证对比度（亮色→深字，暗色→浅字）
   root.style.setProperty('--color-on-accent', onAccentColor(primary));
 
-  const secondary = config.secondaryColor || DEFAULTS.secondaryColor;
+  const secondary = config.secondaryColor || DEFAULT_SKIN.secondaryColor;
   const rgb = hexToRgb(secondary);
   if (rgb) {
     root.style.setProperty('--ambient-glow-1', `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.35)`);
@@ -138,55 +125,9 @@ function applyTextureVars(config: SkinConfig, root: HTMLElement): void {
   root.style.setProperty('--texture-blend', texture.blend);
 }
 
-/**
- * 迁移底纹图层。新数据用 layers 数组；旧数据用 type('none'|'grid'|'custom')
- * + gridOverlay 布尔，这里折叠成等价的 layers。
- */
-function normalizeTextureLayers(raw: Partial<SkinTextureConfig> | undefined): TextureLayer[] {
-  if (!raw) return [...DEFAULT_TEXTURE.layers];
-  if (Array.isArray(raw.layers)) {
-    return raw.layers.filter((l): l is TextureLayer => l === 'grid' || l === 'custom');
-  }
-  // 旧结构降级读取
-  const legacy = raw as { type?: TextureType; gridOverlay?: boolean };
-  const layers: TextureLayer[] = [];
-  if (legacy.type === 'grid') layers.push('grid');
-  if (legacy.type === 'custom') {
-    if (legacy.gridOverlay === true) layers.push('grid');
-    layers.push('custom');
-  }
-  return layers;
-}
-
-/** 兼容旧数据：补全 texture / background 字段 */
-function normalize(raw: Partial<SkinConfig>): SkinConfig {
-  const primaryColor = raw.primaryColor || DEFAULTS.primaryColor;
-  const secondaryColor = raw.secondaryColor || DEFAULTS.secondaryColor;
-  const texture: SkinTextureConfig = {
-    layers: normalizeTextureLayers(raw.texture),
-    opacity: typeof raw.texture?.opacity === 'number' ? raw.texture.opacity : DEFAULT_TEXTURE.opacity,
-    blur: typeof raw.texture?.blur === 'number' ? raw.texture.blur : DEFAULT_TEXTURE.blur,
-    blend: (raw.texture?.blend as TextureBlend) ?? DEFAULT_TEXTURE.blend,
-    size: (raw.texture?.size as TextureSize) ?? 'cover',
-    customImage: typeof raw.texture?.customImage === 'string' ? raw.texture.customImage : undefined,
-    customPath: typeof raw.texture?.customPath === 'string' ? raw.texture.customPath : undefined,
-  };
-  const background: SkinBackgroundConfig = {
-    type: (raw.background?.type as BackgroundType) ?? DEFAULT_BACKGROUND.type,
-    contour: { ...CONTOUR_DEFAULTS, ...(raw.background?.contour ?? {}) },
-    wind: { ...WIND_DEFAULTS, ...(raw.background?.wind ?? {}) },
-  };
-  const badge: SkinBadgeConfig = {
-    enabled: typeof raw.badge?.enabled === 'boolean' ? raw.badge.enabled : DEFAULT_BADGE.enabled,
-    text: typeof raw.badge?.text === 'string' ? raw.badge.text : DEFAULT_BADGE.text,
-    subtitle: typeof raw.badge?.subtitle === 'string' ? raw.badge.subtitle : DEFAULT_BADGE.subtitle,
-  };
-  return { primaryColor, secondaryColor, texture, background, badge };
-}
-
 export async function loadSkinConfig(): Promise<SkinConfig> {
   const data = await readJson<Partial<SkinConfig>>('skin-config.json');
-  const config = data ? normalize(data) : { ...DEFAULTS };
+  const config = data ? normalizeSkinConfig(data) : { ...DEFAULT_SKIN };
   cached = config;
   applyConfig(config);
   // 通知所有订阅者（Sidebar 等独立组件）：初始加载完成。
@@ -203,7 +144,7 @@ function scheduleWrite(): void {
   writeTimer = setTimeout(() => {
     writeTimer = null;
     // 后台写，失败仅 console，不阻塞用户操作
-    writeJson('skin-config.json', cached).catch(err => {
+    persistSkinConfig(cached).catch(err => {
       console.error('[skin] 持久化失败:', err);
     });
   }, 250);
@@ -234,15 +175,15 @@ export function toggleTextureLayer(layer: TextureLayer): SkinConfig {
   const layers = has
     ? current.layers.filter(l => l !== layer)
     : [...current.layers, layer];
-  const wasEmpty = current.layers.length === 0;
-  const defaults = getTextureDefaults(layer);
+  const wasEmpty = !current.layers.some(item => item === 'grid' || item === 'custom');
+  const defaults = getTextureDefaults(layer === 'video' ? 'none' : layer);
   const texture: SkinTextureConfig = {
     ...current,
     layers,
     // 从空到有：以新图层的建议值起步；否则沿用用户已调的参数
-    opacity: wasEmpty && !has ? defaults.opacity : current.opacity,
-    blur: wasEmpty && !has ? defaults.blur : current.blur,
-    blend: wasEmpty && !has ? (defaults.blend as TextureBlend) : current.blend,
+    opacity: wasEmpty && !has && layer !== 'video' ? defaults.opacity : current.opacity,
+    blur: wasEmpty && !has && layer !== 'video' ? defaults.blur : current.blur,
+    blend: wasEmpty && !has && layer !== 'video' ? (defaults.blend as TextureBlend) : current.blend,
   };
   return saveSkinConfig({ texture });
 }

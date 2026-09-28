@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ContextMessage } from '../types.js';
+import { frameworkError } from '../framework-error.js';
 import { runReActLoop } from './text-loop.js';
 
 function reply(content: string) {
@@ -117,6 +118,22 @@ test('text loop reports a provider failure as a failed terminal state', async ()
     assert.equal(result.termination.error.message, '模型请求失败');
   }
   assert.doesNotMatch(result.content, /secret upstream body/);
+});
+
+test('text loop preserves a safe typed provider failure for the UI', async () => {
+  const result = await runReActLoop({
+    messages: [{ role: 'user', content: 'Hello' }],
+    llm: { call: async () => { throw frameworkError({
+      code: 'MODEL_REQUEST_REJECTED', kind: 'validation',
+      message: '模型服务拒绝请求（HTTP 400）：unsupported option',
+      source: 'llm-bridge', retryable: false,
+    }); } },
+  });
+  assert.equal(result.termination.status, 'failed');
+  if (result.termination.status === 'failed') {
+    assert.equal(result.termination.error.code, 'MODEL_REQUEST_REJECTED');
+    assert.match(result.content, /unsupported option/);
+  }
 });
 
 test('text loop refuses a tool that was not offered this turn', async () => {

@@ -25,6 +25,7 @@ import { appendToolStep, finishLatestToolStep } from '../../engine/chat/tool-ste
 import { applyDelegateStreamEvent, finalizeStreamAnswer, isDelegateStreamEvent } from '../../engine/chat/delegate-stream-events';
 import { buildConversationHistory } from '../../engine/chat/conversation-history';
 import { streamUrl } from '../../lib/apiBase';
+import { requestConversationStop } from '../../engine/chat/conversation-stop';
 import { useDroppedPathInput } from '../../lib/useDroppedPathInput';
 import { formatTokenUsage } from '../../store/chat-token';
 import ExecutionStatusBar from './ExecutionStatusBar';
@@ -745,6 +746,15 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
 
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
 
+  const handleStop = () => {
+    if (!activeSessionId) return;
+    const runner = streamRunners.runners.current.get(activeSessionId);
+    if (!runner || runner.userStopped) return;
+    setImageError('');
+    void requestConversationStop(activeSessionId, runner, streamUrl('/api/conversation/abort'))
+      .catch(error => setImageError(error instanceof Error ? error.message : String(error)));
+  };
+
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       <div style={leftPanelStyle}>
@@ -883,7 +893,7 @@ export default function ChatPage({ active, preselectSession, onClearPreselect }:
                     <button className="chat__send-btn" onClick={() => handleSend()} disabled={!input.trim() || humanInput.busy} title={locale === 'en-US' ? 'Send human steering' : '发送插话'} aria-label={locale === 'en-US' ? 'Send human steering' : '发送插话'}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
                     </button>
-                    <button className="chat__stop-btn" onClick={() => { if (activeSessionId) { const r = streamRunners.runners.current.get(activeSessionId); if (r) r.userStopped = true; r?.abort(); } fetch(streamUrl('/api/conversation/abort'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: activeSessionId }) }).catch(() => {}); }} title={translate('chat.page.stop')}>
+                    <button className="chat__stop-btn" onClick={handleStop} title={translate('chat.page.stop')}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                     </button>
                   </>

@@ -37,7 +37,7 @@ Tools determine what an agent can execute; skills provide reusable methods and k
 
 Built-in framework tools are enabled for new agents by default, allowing file access, command execution, and web lookup. Disable them manually if the agent should only converse.
 
-Some capabilities belong to a workspace rather than the agent's Console tool list. Monsoon and Cyclone seat conversations can ask the human and delegate to SubAgents. Tradewind agent nodes can delegate but cannot ask the human mid-run. Convection, Tide, and Cyclone group rooms do not provide SubAgents.
+Some capabilities belong to a workspace rather than the agent's Console tool list. Monsoon can ask the human and organize a session team. Cyclone seat conversations can ask the human and delegate to SubAgents. Tradewind agent nodes can delegate but cannot ask the human mid-run. Convection, Tide, and Cyclone group rooms do not provide SubAgents.
 
 Cyclone `contact`, `dispatch`, and bulletin-board capabilities, along with taskboards in Monsoon and Cyclone, are also controlled by their workspaces. Moving between workspaces does not modify the agent's saved tool configuration.
 

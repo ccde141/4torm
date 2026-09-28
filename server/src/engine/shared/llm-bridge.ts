@@ -50,6 +50,7 @@ import { resolveProviderSelection } from '../../model-runtime/config/provider-se
 import { resolveLoggedProviderSelection } from '../../model-runtime/config/provider-selection-log.js';
 import type { TransportId } from '../../model-runtime/contracts/provider-config.js';
 import { providerScheduler } from '../../model-runtime/scheduling/provider-scheduler.js';
+import { providerHttpError, providerNetworkError } from './provider-request-error.js';
 
 interface Provider {
   id: string;
@@ -453,18 +454,12 @@ async function callLLMInner(
     });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw error;
-    const cause = error instanceof Error ? error.cause : undefined;
-    const detail = readNetworkCause(cause);
-    const base = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      detail ? `${base}（${detail} — 无法连接 ${url}，请确认该地址/服务可达）` : base,
-      { cause: error },
-    );
+    throw providerNetworkError(error);
   }
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`LLM HTTP ${res.status}: ${text.slice(0, 200)}`);
+    throw providerHttpError(res.status, text);
   }
 
     // 成功响应
@@ -519,13 +514,6 @@ async function callLLMInner(
     const normalized = applyTextToolFallback(result, params.tools, nameMap);
     gate?.finish(Boolean(normalized.content));
     return normalized;
-}
-
-function readNetworkCause(cause: unknown): string {
-  if (!cause || typeof cause !== 'object') return '';
-  const value = cause as { code?: unknown; message?: unknown };
-  if (typeof value.code === 'string') return value.code;
-  return typeof value.message === 'string' ? value.message : '';
 }
 
 /** 标准化 finish_reason：不同 provider 可能返回不同值 */

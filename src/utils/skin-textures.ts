@@ -13,7 +13,7 @@
 
 export type TextureType = 'none' | 'grid' | 'custom';
 /** 可独立开关、可共存的底纹图层种类（多选模型） */
-export type TextureLayer = 'grid' | 'custom';
+export type TextureLayer = 'grid' | 'custom' | 'video';
 
 /** 把 SVG 字符串转成 data URL（不用 btoa，直接 URL 编码兼容中文） */
 function svgToDataUrl(svg: string): string {

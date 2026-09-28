@@ -6,6 +6,7 @@ const SILENT_GET_PREFIXES = [
   '/api/skills/list',
   '/api/tradewind/status',
   '/api/agents/activity',
+  '/api/tools/observations',
 ];
 
 const SILENT_SUCCESS_REQUESTS = [
@@ -18,6 +19,7 @@ export function shouldLogRequest(method: string, url: string, statusCode: number
   if (method === 'GET' && /^\/api\/cyclone\/workshop\/[^/]+\/activities(?:\?|$)/.test(url)) return false;
   if (method === 'GET' && /^\/api\/cyclone\/workshop\/[^/]+\/seat\/[^/]+\/activity(?:\?|$)/.test(url)) return false;
   if (method === 'GET' && /^\/api\/cyclone\/workshop\/[^/]+\/seat\/[^/]+\/revision(?:\?|$)/.test(url)) return false;
+  if (method === 'GET' && /^\/api\/conversation\/team(?:\?|$)/.test(url)) return false;
   if (method === 'GET' && SILENT_GET_PREFIXES.some(prefix => url.startsWith(prefix))) return false;
   return !SILENT_SUCCESS_REQUESTS.some(rule => method === rule.method && url.startsWith(rule.prefix));
 }

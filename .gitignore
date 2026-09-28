@@ -58,6 +58,7 @@ data/sandbox/_index.json
 # 用户界面主题偏好
 data/skin-config.json
 data/skin-textures/
+data/skin-videos/
 
 # 用户自定义 Agent 标签
 data/labels.json

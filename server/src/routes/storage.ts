@@ -11,6 +11,7 @@ import path from 'node:path';
 import { atomicWriteFile } from '../engine/shared/atomic-io.js';
 import { getAppContext } from '../services/app-context.js';
 import { resolveSafePath } from '../utils/path-guard.js';
+import { migrateSkinVideoConfig } from './skin-config-migration.js';
 
 const MIME_MAP: Record<string, string> = {
   '.png': 'image/png',
@@ -45,6 +46,10 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
       } else {
         reply.header('Content-Type', 'text/plain; charset=utf-8');
       }
+      if (filePath === 'skin-config.json') {
+        try { return reply.send(migrateSkinVideoConfig(JSON.parse(raw))); }
+        catch { return reply.send(raw); }
+      }
       return reply.send(raw);
     } catch {
       return reply.status(404).send({ error: '文件不存在' });
@@ -73,7 +78,11 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
     await fs.mkdir(path.dirname(resolved), { recursive: true });
     // Fastify 自动解析 JSON body 为对象，需要 stringify 回 string
     const raw = req.body;
-    const body = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
+    let body = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
+    if (filePath === 'skin-config.json') {
+      try { body = JSON.stringify(migrateSkinVideoConfig(JSON.parse(body)), null, 2); }
+      catch { return reply.status(400).send({ error: '皮肤配置不是有效 JSON' }); }
+    }
     await atomicWriteFile(resolved, body);
     return reply.send({ ok: true });
   });

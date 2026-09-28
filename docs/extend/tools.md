@@ -27,7 +27,7 @@
 | `webfetch_advanced` | 使用浏览器获取动态网页内容 |
 | `use_skill` | 按需加载已经启用的技能说明 |
 
-`ask`、`delegate`、任务板等由功能区提供的系统工具不属于全局工具，不会出现在 Tools 管理页面中。
+`ask`、任务板、季风工作队以及特定功能区中的 `delegate` 等系统能力不属于全局工具，不会出现在 Tools 管理页面中。
 
 框架内置工具定义固定在 `server/src/tools/framework/catalog.json`，由服务端维护并在 Tools 页面中显示为只读。用户注册表不能用同名定义覆盖它们。
 

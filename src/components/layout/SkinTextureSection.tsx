@@ -16,12 +16,14 @@ import {
   type TextureLayer,
 } from '../../store/skin';
 import SkinCustomTextureControl from './SkinCustomTextureControl';
+import BackgroundVideoControl from './BackgroundVideoControl';
 import '../../styles/components/skin-texture.css';
 
 // 平级、可共存的底纹图层（多选）
 const TEXTURE_LAYERS: Array<{ layer: TextureLayer; name: string; desc: string }> = [
   { layer: 'grid', name: '网格', desc: '细线栅格' },
   { layer: 'custom', name: '自定义', desc: '上传图片作为底纹' },
+  { layer: 'video', name: '视频', desc: '上传视频作为底纹，可与动态线条叠加' },
 ];
 
 const BLEND_OPTIONS: Array<{ value: TextureBlend; label: string }> = [
@@ -44,7 +46,7 @@ const SkinTextureSection: React.FC<Props> = ({ config, onApply }) => {
   };
   const layers = texture.layers ?? [];
   const isCustom = layers.includes('custom');
-  const showDetails = layers.length > 0;
+  const showDetails = layers.some(layer => layer === 'grid' || layer === 'custom');
 
   const handleToggle = (layer: TextureLayer) => {
     setError(null);
@@ -77,7 +79,7 @@ const SkinTextureSection: React.FC<Props> = ({ config, onApply }) => {
             );
           })}
         </div>
-        <div className="skin-panel__hint-text">可多选叠加 · 网格恒显示在自定义图之上</div>
+        <div className="skin-panel__hint-text">底纹可多选叠加，动态线条在下方独立选择</div>
 
         {error && <div className="skin-panel__error">{error}</div>}
 
@@ -88,6 +90,8 @@ const SkinTextureSection: React.FC<Props> = ({ config, onApply }) => {
             onError={setError}
           />
         )}
+
+        {layers.includes('video') && <BackgroundVideoControl config={config} onApply={onApply} />}
 
         {/* 透明度 / 模糊 / 混合模式 — 作用于全部启用图层 */}
         {showDetails && (

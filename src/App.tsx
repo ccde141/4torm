@@ -36,6 +36,7 @@ import CyclonePage from './cyclone/ui/pages/CyclonePage';
 import { McpPage } from './components/mcp/McpPage';
 import ContourBackground from './components/layout/ContourBackground';
 import WindBackground from './components/layout/WindBackground';
+import VideoBackground from './components/layout/VideoBackground';
 import { getSkinConfig, loadSkinConfig, subscribeSkin, type SkinConfig } from './store/skin';
 import { freezeBackground } from './components/layout/bgFreeze';
 import { useLocale } from './i18n/LocaleContext';
@@ -120,6 +121,9 @@ export default function App() {
   return (
     <ErrorBoundary>
       <ConfirmProvider>
+      {skin.texture?.layers.includes('video') && skin.texture.video && (
+        <VideoBackground params={skin.texture.video} />
+      )}
       {bgType === 'contour' && contourParams && (
         <ContourBackground params={contourParams} />
       )}

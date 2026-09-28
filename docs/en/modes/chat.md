@@ -2,7 +2,7 @@
 
 ## What Is Monsoon?
 
-Monsoon is the persistent conversation interface for a single agent. Talk with an agent, ask it to read information, edit files, run commands, use skills, or delegate part of the work to another agent.
+Monsoon is the persistent conversation interface for a single agent. Talk with an agent, ask it to read information, edit files, run commands, use skills, or organize a session team when useful.
 
 One agent can have several independent conversations. Each stores its own messages, tool execution, reasoning, taskboard, and model selection, while all conversations share the agent's identity, capabilities, and workspace.
 
@@ -44,13 +44,13 @@ Background commands appear on the taskboard with live output and a manual stop a
 
 Messages sent during a reply enter an ordered queue and can be withdrawn above the composer. Switching conversations or agents does not interrupt the task. Return later to continue watching, or use the stop button to end the current run.
 
-## Delegate Subtasks
+## Work with a Session Team
 
-For complex work, an agent can call `delegate` to create a temporary SubAgent. It receives an isolated conversation context while sharing the current model, tools, and workspace. Its result returns to the main agent, which continues the task.
+When a task contains responsibility units that can be advanced and reviewed independently, the main agent can create session-team members and dispatch work to them. Members are persistent collaborators within the current conversation. Each keeps an independent message context and can receive follow-up questions or later assignments. They share the workspace with the main agent but do not automatically inherit the complete main-conversation history.
 
-Delegation appears as a separate card containing the SubAgent's reasoning, tool calls, and final result.
+The main agent supplies the necessary background, limits the operating scope, reviews member reports, and decides whether the overall goal is complete. A report remains available in the team after a member finishes a run so the main agent can read and integrate it later.
 
-![SubAgent and conversation taskboard](/images/chat/subagent-taskboard.webp)
+Use the team entry beside the workspace control to inspect the collaboration graph, member state, assignments, and reports. This panel is read-only; the main agent creates members, supplies context, and dispatches work.
 
 ## Build Workflows and Automation
 

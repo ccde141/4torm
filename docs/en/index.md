@@ -22,7 +22,7 @@ hero:
 features:
   - icon: 🌬️
     title: Monsoon · Chat
-    details: Hold ongoing conversations with one agent, use tools, or delegate subtasks
+    details: Hold ongoing conversations with one agent, use tools, or organize a session team
     link: /en/modes/chat
     linkText: Read the guide
   - icon: 🌀

@@ -102,11 +102,12 @@ test('public introduction entry points use the current page name', async () => {
   }
 });
 
-test('personal labels and skin textures stay out of version control', async () => {
+test('personal labels and skin media stay out of version control', async () => {
   const gitignore = await fs.readFile(new URL('../.gitignore', import.meta.url), 'utf8');
 
   assert.match(gitignore, /^data\/labels\.json$/m);
   assert.match(gitignore, /^data\/skin-textures\/$/m);
+  assert.match(gitignore, /^data\/skin-videos\/$/m);
 });
 
 test('user-created tools and skills stay local while built-ins remain versioned', async () => {
@@ -511,14 +512,36 @@ test('中英文故障排查按真实 HTTP 状态码说明原因', async () => {
 });
 
 test('Agent 管理区分控制台工具与功能区系统能力', async () => {
-  const agents = await fs.readFile(
-    new URL('../docs/guide/agents.md', import.meta.url),
-    'utf8',
-  );
+  const [agents, agentsEn] = await Promise.all([
+    fs.readFile(new URL('../docs/guide/agents.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/en/guide/agents.md', import.meta.url), 'utf8'),
+  ]);
 
   assert.match(agents, /部分能力由当前功能区直接提供/);
+  assert.match(agents, /季风.*工作队/s);
   assert.match(agents, /对流、潮汐和气旋群聊不提供 SubAgent/);
+  assert.doesNotMatch(agents, /季风和气旋工位私聊.*SubAgent/);
   assert.doesNotMatch(agents, /`ask`、`task_board` 和 `delegate`.*仍会保留/);
+  assert.match(agentsEn, /Monsoon.*session team/is);
+  assert.doesNotMatch(agentsEn, /Monsoon and Cyclone seat conversations.*SubAgents/);
+});
+
+test('季风文档以工作队描述协作且不再暴露 delegate', async () => {
+  const [chat, chatEn, index, indexEn] = await Promise.all([
+    fs.readFile(new URL('../docs/modes/chat.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/en/modes/chat.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/index.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/en/index.md', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(chat, /工作队/);
+  assert.match(chat, /持续协作者/);
+  assert.doesNotMatch(chat, /`delegate`|SubAgent/);
+  assert.match(chatEn, /session team/i);
+  assert.match(chatEn, /persistent collaborators/i);
+  assert.doesNotMatch(chatEn, /`delegate`|SubAgent/i);
+  assert.match(index, /工作队/);
+  assert.match(indexEn, /session team/i);
 });
 
 test('季风文档说明图片输入、保存方式与功能区边界', async () => {

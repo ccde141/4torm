@@ -37,3 +37,13 @@ test('Agent 活动轮询成功时静默，失败时保留日志', () => {
   assert.equal(shouldLogRequest('GET', url, 200), false);
   assert.equal(shouldLogRequest('GET', url, 500), true);
 });
+
+test('会话观察轮询成功时静默，失败时保留日志', () => {
+  const observations = '/api/tools/observations?scope=conversation&ownerId=session-a';
+  const team = '/api/conversation/team?agentId=agent-a&sessionId=session-a';
+  assert.equal(shouldLogRequest('GET', observations, 200), false);
+  assert.equal(shouldLogRequest('GET', observations, 500), true);
+  assert.equal(shouldLogRequest('GET', team, 200), false);
+  assert.equal(shouldLogRequest('GET', team, 500), true);
+  assert.equal(shouldLogRequest('GET', '/api/conversation/team/context?memberId=member-a', 200), true);
+});

@@ -29,6 +29,7 @@ const BackgroundSection: React.FC<Props> = ({ config, onApply }) => {
   const bgType = config.background?.type ?? 'none';
 
   const handleTypeChange = (type: BackgroundType) => {
+    setModalOpen(false);
     onApply(applyBackground(type));
   };
 

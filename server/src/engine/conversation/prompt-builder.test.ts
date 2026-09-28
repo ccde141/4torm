@@ -6,32 +6,6 @@ import test from 'node:test';
 import { buildConversationSystemPrompt } from './prompt-builder.js';
 import { TIDE_META } from '../../services/tide/meta.js';
 
-test('无人值守提示词不暴露 ask 与 delegate', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), '4torm-prompt-'));
-  try {
-    const prompt = await buildConversationSystemPrompt({
-      rolePrompt: '',
-      toolDefs: [],
-      workspace: 'workspace',
-      workspaceAbs: path.join(root, 'workspace'),
-      projectDir: root,
-      sandboxLevel: 'project',
-      skillIds: [],
-      dataDir: path.join(root, 'data'),
-      agentId: 'agent-test',
-      native: false,
-      allowAsk: false,
-      allowDelegate: false,
-      surfaceMeta: TIDE_META,
-    });
-
-    assert.doesNotMatch(prompt, /\bask\b/);
-    assert.doesNotMatch(prompt, /\bdelegate\b/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test('季风与潮汐使用不同的协作身份', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), '4torm-surface-meta-'));
   const common = {

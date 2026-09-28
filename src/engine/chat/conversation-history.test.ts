@@ -76,3 +76,18 @@ test('用户消息中的图片随文字进入模型上下文', () => {
 
   assert.deepEqual(history, [{ role: 'user', content: '看看这张图', images }]);
 });
+
+test('被停止的执行回灌已完成证据，并明确标记没有结果的工具与未完成状态', () => {
+  const history = buildConversationHistory([{
+    id: 'stopped-1', role: 'assistant', content: '已经完成第一步',
+    timestamp: '2026-01-01T00:00:00.000Z', streamStopped: true,
+    toolSteps: [
+      { tool: 'write_file', args: { path: 'done.md' }, result: 'written', status: 'done' },
+      { tool: 'run_command', args: { command: 'long task' }, status: 'running' },
+    ],
+  }]);
+
+  assert.equal(history[1]?.content, 'written');
+  assert.match(history[3]?.content ?? '', /执行被停止.*没有返回结果/);
+  assert.match(history.at(-1)?.content ?? '', /上一轮执行被人类停止.*不代表任务完成/);
+});

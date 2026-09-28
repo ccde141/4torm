@@ -22,7 +22,7 @@ hero:
 features:
   - icon: 🌬️
     title: 季风 · 对话
-    details: 与单个 Agent 持续对话，让它调用工具或委托子任务
+    details: 与单个 Agent 持续对话，让它调用工具并按需组织工作队
     link: /modes/chat
     linkText: 进入引导
   - icon: 🌀

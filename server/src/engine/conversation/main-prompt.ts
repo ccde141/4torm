@@ -6,8 +6,9 @@ import { buildBackgroundExecutionToolDefs } from '../shared/background-execution
 import { readTaskboard, taskboardFile } from '../shared/taskboard.js';
 import { buildVirtualToolDefs } from './virtual-tools.js';
 import { withMainToolGuidance, renderMainToolDefinitions, MAIN_WORKFLOW_CONTRACT } from './main-tool-defs.js';
-import { MAIN_IDENTITY, MAIN_COLLABORATION, MAIN_ORGANIZATION, MAIN_COMPLETION,
-  MAIN_TEAM, MAIN_CAPABILITY_GUIDANCE as guidance } from './main-guidance.js';
+import { MAIN_IDENTITY, MAIN_COLLABORATION, MAIN_ORGANIZATION, MAIN_WORK_SHAPE_CHECK, MAIN_COMPLETION,
+  MAIN_CAPABILITY_GUIDANCE as guidance } from './main-guidance.js';
+import { MAIN_CAPABILITIES, renderCapabilityRouter } from './main-capabilities.js';
 import type { ToolDef } from '../shared/tool-defs-loader.js';
 
 function frameworkDefinitions(opts: PromptBuildOpts): ToolDef[] {
@@ -20,23 +21,23 @@ function frameworkDefinitions(opts: PromptBuildOpts): ToolDef[] {
 }
 
 function capabilitySections(opts: PromptBuildOpts, defs: ToolDef[]): string[] {
-  const section = (intro: string, names: string[], extra = '') => {
-    const tools = defs.filter(def => names.includes(def.name));
+  const active = MAIN_CAPABILITIES.filter(capability =>
+    capability.tools.some(name => defs.some(def => def.name === name)));
+  const section = (capability: (typeof MAIN_CAPABILITIES)[number]) => {
+    const tools = defs.filter(def => capability.tools.includes(def.name));
     const definitions = opts.native ? '' : renderMainToolDefinitions(tools);
-    const fields = opts.native && names.includes('team_create')
-      ? renderMainToolDefinitions(tools.filter(def => def.name === 'team_create')) : '';
-    return tools.length ? [intro, extra, definitions, fields].filter(Boolean).join('\n\n') : '';
+    const fields = opts.native && capability.nativeSchemaTools
+      ? renderMainToolDefinitions(tools.filter(def => capability.nativeSchemaTools!.includes(def.name))) : '';
+    const extra = capability.detail === 'workflow-contract' ? MAIN_WORKFLOW_CONTRACT
+      : capability.detail === 'taskboard-state'
+        ? `set/clear 使用当前 expectedRevision；空板为0，冲突后先 get 再合并。当前任务板：\n${JSON.stringify(board)}`
+        : '';
+    return [capability.guidance, extra, definitions, fields].filter(Boolean).join('\n\n');
   };
   const board = opts.sessionId ? readTaskboard(taskboardFile(opts.dataDir, opts.agentId, opts.sessionId)) : null;
-  return [
-    section(guidance.ask, ['ask']),
-    section(guidance.background, ['inspect_execution', 'wait_execution', 'terminate_execution']),
-    section(guidance.workflow, ['list_agents', 'list_workflows', 'create_workflow', 'update_workflow', 'start_workflow'], MAIN_WORKFLOW_CONTRACT),
-    section(guidance.tide, ['create_automation', 'update_automation', 'list_automations']),
-    section(MAIN_TEAM, ['team_create', 'team_dispatch', 'team_read', 'team_wait', 'team_ack', 'team_review', 'team_dismiss']),
-    section(guidance.board, ['task_board'], `set/clear 使用当前 expectedRevision；空板为0，冲突后先 get 再合并。当前任务板：\n${JSON.stringify(board)}`),
-    section(guidance.memory, ['memory_write', 'memory_list', 'memory_read']),
-  ];
+  const workShapeCheck = active.some(capability => capability.id === 'team')
+    ? MAIN_WORK_SHAPE_CHECK : '';
+  return [workShapeCheck, renderCapabilityRouter(active), ...active.map(section)];
 }
 
 /** 仅季风主会话使用；历史与提供商适配仍由原调用链处理。 */

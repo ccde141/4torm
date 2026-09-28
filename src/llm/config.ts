@@ -60,6 +60,7 @@ export interface ModelOption {
 const FILE = 'providers.json';
 
 let cache: { providers: ProviderEntry[]; activeModel: string } | null = null;
+let writeQueue: Promise<void> = Promise.resolve();
 
 function resolveApiKey(provider: ProviderEntry): string {
   if (provider.apiKey) return provider.apiKey;
@@ -79,7 +80,10 @@ async function load(): Promise<{ providers: ProviderEntry[]; activeModel: string
 
 async function save(providers: ProviderEntry[], activeModel: string) {
   cache = { providers, activeModel };
-  await writeJson(FILE, cache);
+  const snapshot = structuredClone(cache);
+  const write = writeQueue.catch(() => undefined).then(() => writeJson(FILE, snapshot));
+  writeQueue = write;
+  await write;
 }
 
 function nextId(): string {

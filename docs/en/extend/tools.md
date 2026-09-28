@@ -25,7 +25,7 @@ A dangerous marker identifies write, delete, or command capability and supports 
 | `webfetch_advanced` | Fetch dynamic pages through a browser |
 | `use_skill` | Load enabled skill instructions on demand |
 
-Feature-owned tools such as `ask`, `delegate`, and taskboards are not global tools. Framework definitions live in `server/src/tools/framework/catalog.json`, are read-only in the Tools page, and cannot be replaced by user definitions.
+Feature-owned capabilities such as `ask`, taskboards, the Monsoon session team, and `delegate` in supported workspaces are not global tools. Framework definitions live in `server/src/tools/framework/catalog.json`, are read-only in the Tools page, and cannot be replaced by user definitions.
 
 ## Create and Manage Tools
 
