@@ -17,9 +17,13 @@ test('公聊与会长使用各自的最近计量，未知调用清除旧值', ()
 });
 
 test('界面显示 provider 输入用量，缺失时明确标未知和估算', () => {
-  assert.equal(formatConvectionUsage(actual, 900, 'zh-CN').label, '12.3K tokens');
+  const reported = formatConvectionUsage(actual, 900, 'zh-CN');
+  assert.equal(reported.label, '12.3K tokens');
+  assert.equal(reported.compactLabel, '12.3K');
   const missing = formatConvectionUsage(undefined, 900, 'zh-CN');
   assert.equal(missing.label, 'Token 未知');
+  assert.equal(missing.compactLabel, '未知');
+  assert.equal(formatConvectionUsage(undefined, 900, 'en-US').compactLabel, 'Unknown');
   assert.match(missing.title, /估算/);
   assert.match(missing.title, /900/);
 });

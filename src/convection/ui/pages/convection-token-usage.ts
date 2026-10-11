@@ -30,15 +30,17 @@ export function formatConvectionUsage(
   usage: ConvectionUsage | undefined,
   textEstimate: number,
   locale: Locale,
-): { label: string; title: string } {
+): { label: string; compactLabel: string; title: string } {
   if (usage) return {
     label: `${shortTokens(usage.promptTokens)} tokens`,
+    compactLabel: shortTokens(usage.promptTokens),
     title: locale === 'en-US'
       ? `Latest model request: ${usage.promptTokens} input tokens reported by provider`
       : `最近一次模型请求：提供商报告输入 ${usage.promptTokens} token`,
   };
   return {
     label: locale === 'en-US' ? 'Token unknown' : 'Token 未知',
+    compactLabel: locale === 'en-US' ? 'Unknown' : '未知',
     title: locale === 'en-US'
       ? `Provider did not report usage. Visible message text estimate: about ${textEstimate} tokens.`
       : `提供商未报告实际用量。仅可见消息正文估算约 ${textEstimate} token。`,

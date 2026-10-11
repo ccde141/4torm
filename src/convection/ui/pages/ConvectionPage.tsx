@@ -715,7 +715,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
                 <span className="conv__session-card-title">{s.title}</span>
                 <span className="conv__session-card-meta">
                   <span className="conv__session-card-id">{s.id}</span>
-                  <span className="conv__session-card-tokens" title={token.title}>{token.label}</span>
+                  <span className="conv__session-card-tokens" title={token.title}>{token.compactLabel}</span>
                 </span>
               </button>
               {confirmingDeleteId === s.id ? (
