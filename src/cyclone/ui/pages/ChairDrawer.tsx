@@ -94,7 +94,9 @@ export default function ChairDrawer({
               workshopId={workshopId}
               seatId={chairStreamKey(roomId)}
               chairBase={chairBaseUrl(workshopId, roomId)}
+              chairRoomId={roomId}
               runners={runners}
+              active={open}
               onReloaded={onReloaded}
             />
           ) : (

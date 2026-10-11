@@ -1,5 +1,7 @@
-import type { FeedMsg } from './useRoomStreamRunners';
+import type { FeedMsg } from './room-stream-events';
 import type { RoomReplySegment } from './room-reply-segments';
+import type { CycloneUsage } from './cyclone-token-usage';
+import type { StoredCompactionFeedback } from '../../../components/common/compaction-feedback';
 
 export interface RoomToolCall {
   tool: string;
@@ -30,6 +32,9 @@ export interface RoomData {
   mode?: 'build' | 'plan';
   participantSeatIds: string[];
   publicMessages: RoomMsg[];
+  tokenUsage?: CycloneUsage;
+  publicLatestTokenUsage?: CycloneUsage;
+  compactionNotice?: StoredCompactionFeedback;
 }
 
 export async function readRoomError(response: Response, fallback: string): Promise<string> {

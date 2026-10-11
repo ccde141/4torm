@@ -4,10 +4,11 @@ import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { useLocale } from '../../../i18n/LocaleContext';
 
 export default function RoomComposer({ inputRef, input, streaming, phase, queue,
-  onInput, onSend, onStop, onRemoveQueued }: {
+  onInput, onSend, onStop, onRemoveQueued, disabled = false }: {
   inputRef: RefObject<HTMLTextAreaElement | null>;
   input: string;
   streaming: boolean;
+  disabled?: boolean;
   phase?: string;
   queue: string[];
   onInput: (value: string) => void;
@@ -22,7 +23,7 @@ export default function RoomComposer({ inputRef, input, streaming, phase, queue,
 
   return (
     <div className="chat__input-area">
-      <ExecutionStatusBar label={streaming ? phase : undefined} />
+      <ExecutionStatusBar label={streaming || disabled ? phase : undefined} />
       <QueuedChips items={queue} onRemove={onRemoveQueued} />
       <div className="chat__input-wrapper">
         <textarea ref={inputRef} className="chat__input" value={input}
@@ -35,7 +36,7 @@ export default function RoomComposer({ inputRef, input, streaming, phase, queue,
           placeholder={streaming ? t('cyclone.composer.streamingPlaceholder') : t('cyclone.composer.placeholder')}
           rows={1} aria-label={t('cyclone.composer.label')} />
         <button className="chat__send-btn" onClick={onSend}
-          disabled={!input.trim() || (streaming && queue.length >= MAX_QUEUE)}
+          disabled={disabled || !input.trim() || (streaming && queue.length >= MAX_QUEUE)}
           title={streaming ? queue.length >= MAX_QUEUE ? t('cyclone.composer.queueFull') : t('cyclone.composer.enqueue') : t('cyclone.composer.send')}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
         </button>
@@ -47,7 +48,7 @@ export default function RoomComposer({ inputRef, input, streaming, phase, queue,
       </div>
       <div className="cyclone-room__input-hint">
         <span>{t('cyclone.composer.commands')}</span><code>/reset</code><span>{t('cyclone.composer.reset')}</span>
-        <code>/reset summary</code><span>{t('cyclone.composer.resetSummary')}</span>
+        <code>/compact</code><span>{t('cyclone.composer.resetSummary')}</span>
         <code>/reset all</code><span>{t('cyclone.composer.resetAll')}</span>
       </div>
     </div>

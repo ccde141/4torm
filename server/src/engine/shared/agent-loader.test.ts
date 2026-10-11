@@ -36,3 +36,10 @@ test('旧权限值加载为项目级，新无限制值保持不变', async () =>
   const unrestrictedAgent = await loadAgent(unrestrictedDir, 'agent-a');
   assert.equal(unrestrictedAgent?.sandboxLevel, 'unrestricted');
 });
+
+test('仅加载名册自有的 Agent ID，不把对象原型当作 Agent', async t => {
+  const dataDir = await createAgentData({});
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  assert.equal(await loadAgent(dataDir, '__proto__'), null);
+  assert.equal(await loadAgent(dataDir, 'constructor'), null);
+});

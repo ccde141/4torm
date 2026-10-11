@@ -200,9 +200,11 @@ export async function uploadCustomTexture(file: File): Promise<SkinConfig> {
   const version = Date.now();
   const storePath = `skin-textures/custom-${version}.${ext}`;
 
-  // 先删旧文件（避免不同扩展名残留孤儿）
+  // 先删旧的用户文件；随包提供的默认图必须保留。
   const prev = cached.texture;
-  if (prev?.customPath) await deleteFile(prev.customPath);
+  if (prev?.customPath && prev.customPath !== DEFAULT_TEXTURE.customPath) {
+    await deleteFile(prev.customPath);
+  }
 
   await uploadBinary(storePath, file);
 
@@ -224,7 +226,9 @@ export async function uploadCustomTexture(file: File): Promise<SkinConfig> {
 /** 清除自定义图片 + 退回 none（同时删除存储文件） */
 export function clearCustomTexture(): SkinConfig {
   const current = cached.texture ?? DEFAULT_TEXTURE;
-  if (current.customPath) void deleteFile(current.customPath);
+  if (current.customPath && current.customPath !== DEFAULT_TEXTURE.customPath) {
+    void deleteFile(current.customPath);
+  }
   // 只移除自定义图层，网格若开着则保留
   return saveSkinConfig({
     texture: {

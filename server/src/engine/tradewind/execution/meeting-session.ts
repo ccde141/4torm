@@ -11,6 +11,7 @@
  */
 
 import type { ContextMessage } from '../../shared/types';
+import { TokenUsageRecorder } from './token-usage.js';
 
 // ── 数据结构 ──────────────────────────────────────────────────
 
@@ -49,6 +50,10 @@ export interface MeetingSessionData {
   publicMessages: MeetingMessage[];
   /** 会长私聊历史 */
   chairMessages: ContextMessage[];
+  /** Exact private model context after compaction, independent of public meeting records. */
+  chairActiveContext?: ContextMessage[];
+  chairContextRawCount?: number;
+  chairContextPublicAnchor?: { timestamp: number; content: string };
   /** 当前轮次 */
   round: number;
   /** 是否正在处理一轮 speak（轮次锁） */
@@ -59,9 +64,12 @@ export interface MeetingSessionData {
    * - discussion: 讨论阶段（人类主导 speak/chair/end）
    * - ended: 会议已结束（只读历史 + 会长私聊仍可用）
    */
-  phase: 'opening' | 'discussion' | 'ended';
+  phase: 'opening' | 'discussion' | 'ending' | 'ended';
   /** 当前正在流式产出的消息（面板关了再开时 replay 用） */
   streamingCurrent?: { speaker: string; content: string; reasoning?: string };
+  /** Provider-reported usage for every model call in this meeting activation. */
+  usageRecorder: TokenUsageRecorder;
+  compactionNotice?: string;
 }
 
 // ── 工厂 ──────────────────────────────────────────────────────
@@ -72,6 +80,7 @@ export interface CreateMeetingOpts {
   chairAgentId: string;
   participants: MeetingParticipant[];
   topic: string;
+  usageFile?: string;
 }
 
 export function createMeetingSession(opts: CreateMeetingOpts): MeetingSessionData {
@@ -86,5 +95,6 @@ export function createMeetingSession(opts: CreateMeetingOpts): MeetingSessionDat
     round: 0,
     busy: false,
     phase: 'opening',
+    usageRecorder: new TokenUsageRecorder(opts.usageFile),
   };
 }

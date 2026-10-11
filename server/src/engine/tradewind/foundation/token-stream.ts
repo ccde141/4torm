@@ -6,7 +6,7 @@
  * - 维护 partialContent 缓冲（前端中途连上时先推累积内容）
  * - 一轮 LLM 完成后 flush（清空 partial，推 round-end 信号）
  *
- * 不落盘：token 级事件 IO 压力太大，完整 messages 由现有归档机制保证。
+ * token 事件不落盘；完整消息由节点历史另行保存。
  */
 
 import type { ServerResponse } from 'node:http';

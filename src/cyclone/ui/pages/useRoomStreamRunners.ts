@@ -15,31 +15,10 @@ import { streamUrl } from '../../../lib/apiBase';
 import { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { readCycloneSSE } from './cyclone-sse';
 import { errorFromResponse } from '../../../api/error-contract';
-import { formatStreamStatus } from '../../../components/chat/stream-status';
 import type { Locale } from '../../../i18n/locale';
-import { appendRoomDispatch, appendRoomText, appendRoomTool, completeRoomTool,
-  reconcileRoomAnswer, type FeedTool, type RoomReplySegment } from './room-reply-segments';
-
-/** 统一渲染项：历史消息 + 本轮实时消息共用（仿对流单数组模型） */
-export interface FeedMsg {
-  key: string;
-  sourceIndex?: number;
-  turnId?: string;
-  speaker: string;
-  content: string;
-  isHuman: boolean;
-  isArchiveSummary?: boolean;
-  streaming?: boolean;
-  phase?: string;
-  /** 原生思考流（流式当轮显示；不进上下文，重载不保留） */
-  reasoning?: string;
-  kind?: 'dispatch-result' | 'membership';
-  dispatchId?: string;
-  seatId?: string;
-  membershipAction?: 'joined' | 'left';
-  tools: FeedTool[];
-  segments?: RoomReplySegment[];
-}
+import { abortCycloneExecution } from './cyclone-execution-client';
+import { applyRoomEvent, type FeedMsg } from './room-stream-events';
+import type { CycloneUsage } from './cyclone-token-usage';
 
 /** 单个群聊一轮的运行态。归属 roomId，不归属当前界面。 */
 interface RoomRunner {
@@ -47,103 +26,20 @@ interface RoomRunner {
   roundFeed: FeedMsg[];
   /** 当前正在说话的工位标签；'' = 无（用于把 token/tool 定位到对应消息） */
   activeSpeaker: string;
+  tokenUsage: CycloneUsage | null;
+  compactionNotice?: string | null;
   streaming: boolean;
   done: boolean;
   ctrl: AbortController;
   abandoned: boolean;
   /** 用户手动「停止」→ true。done-effect 据此「退回队列入框」而非续发。 */
   userStopped: boolean;
+  operationId?: string;
+  runId?: string;
+  abortRequested: boolean;
+  abortInFlight: boolean;
 }
 
-/** 把一个 RoomEvent 应用到 roundFeed（流式累积逻辑，从 RoomPanel.speak 内联处理抽出）。 */
-function applyEvent(ev: any, r: RoomRunner, locale: Locale = 'zh-CN'): void {
-  const feed = r.roundFeed;
-  switch (ev.type) {
-    case 'seat-start':
-      r.activeSpeaker = ev.speaker;
-      feed.push({ key: ev.turnId || `intro-${ev.speaker}-${feed.length}`, turnId: ev.turnId, speaker: ev.speaker, content: '', isHuman: false, streaming: true, phase: formatStreamStatus('llm-waiting', 0, undefined, undefined, locale), tools: [], segments: [] });
-      break;
-    case 'seat-waiting': {
-      const m = feed[feed.length - 1];
-      if (m && m.speaker === ev.speaker) m.phase = locale === 'en-US' ? "Waiting for this Agent's current task" : '等待同一 Agent 的当前任务结束';
-      break;
-    }
-    case 'token': {
-      const m = feed[feed.length - 1];
-      if (m && m.speaker === r.activeSpeaker) {
-        m.content += ev.content;
-        appendRoomText(m.segments!, ev.content);
-        m.phase = formatStreamStatus('model-output', 0, undefined, undefined, locale);
-      }
-      break;
-    }
-    case 'reasoning': {
-      const m = feed[feed.length - 1];
-      if (m && m.speaker === r.activeSpeaker) { m.reasoning = (m.reasoning || '') + ev.content; m.phase = formatStreamStatus('model-output', 0, undefined, undefined, locale); }
-      break;
-    }
-    case 'tool-progress': {
-      const m = feed[feed.length - 1];
-      if (m && m.speaker === ev.speaker) {
-        m.phase = formatStreamStatus('tool-preparing', Math.round((ev.elapsed || 0) / 1000), ev.tool, ev.argumentChars, locale);
-      }
-      break;
-    }
-    case 'tool-call': {
-      const m = feed[feed.length - 1];
-      if (m && m.speaker === r.activeSpeaker) {
-        m.tools.push({ tool: ev.tool, args: ev.args, status: 'running' });
-        appendRoomTool(m.segments!, ev.tool, ev.args);
-        m.phase = formatStreamStatus('tool-exec', 0, ev.tool, undefined, locale);
-      }
-      break;
-    }
-    case 'heartbeat': {
-      const m = feed[feed.length - 1];
-      if (m && m.speaker === ev.speaker) {
-        const tool = m.tools.findLast(t => t.status === 'running')?.tool;
-        m.phase = formatStreamStatus(
-          ev.phase === 'tool-exec' ? 'tool-exec' : 'llm-waiting',
-          Math.round((ev.elapsed || 0) / 1000),
-          tool,
-          undefined,
-          locale,
-        );
-      }
-      break;
-    }
-    case 'tool-result': {
-      const m = feed[feed.length - 1];
-      if (m && m.speaker === r.activeSpeaker) {
-        for (let k = m.tools.length - 1; k >= 0; k--) {
-          if (m.tools[k].status === 'running') { m.tools[k] = { ...m.tools[k], result: ev.result, status: ev.ok ? 'success' : 'error' }; break; }
-        }
-        completeRoomTool(m.segments!, ev.result, ev.ok);
-        m.phase = formatStreamStatus('llm-waiting', 0, undefined, undefined, locale);
-      }
-      break;
-    }
-    case 'dispatch-created': {
-      const m = feed[feed.length - 1];
-      if (m && m.speaker === r.activeSpeaker) appendRoomDispatch(m.segments!, ev.dispatch.id);
-      break;
-    }
-    case 'seat-done': {
-      const m = feed[feed.length - 1];
-      if (m && m.speaker === ev.speaker) {
-        m.content = ev.content || m.content;
-        reconcileRoomAnswer(m.segments!, m.content);
-        m.streaming = false;
-        m.phase = '';
-      }
-      r.activeSpeaker = '';
-      break;
-    }
-    case 'error':
-      feed.push({ key: `error-${feed.length}`, speaker: '系统', content: ev.message, isHuman: false, tools: [] });
-      break;
-  }
-}
 
 async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal: AbortSignal, locale: Locale): Promise<void> {
   const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
@@ -222,23 +118,40 @@ export function useRoomStreamRunners(
 
   const getRunner = useCallback((roomId: string): RoomRunner | undefined => runners.current.get(roomId), []);
 
-  /** 手动停止：abort 本地流 + 通知服务端 abort。 */
-  const abortRoom = useCallback((workshopId: string, roomId: string) => {
+  const requestAbort = useCallback((roomId: string, runner: RoomRunner) => {
+    if (!runner.operationId || !runner.runId || runner.abortInFlight) return;
+    runner.abortInFlight = true;
+    void abortCycloneExecution(runner.operationId!, runner.runId!)
+      .then(() => runner.ctrl.abort())
+      .catch(error => {
+        runner.abortInFlight = false;
+        runner.abortRequested = false;
+        runner.userStopped = false;
+        runner.roundFeed.push({
+          key: `stop-error-${runner.roundFeed.length}`, speaker: '系统', isHuman: false, tools: [],
+          content: `[${localeRef.current === 'en-US' ? 'Stop failed' : '停止失败'}] ${(error as Error).message}`,
+        });
+        notify(roomId);
+      });
+  }, [notify]);
+
+  /** 手动停止：中心确认后再切断本地流。 */
+  const abortRoom = useCallback((roomId: string) => {
     const r = runners.current.get(roomId);
-    if (r) { r.userStopped = true; r.ctrl.abort(); }
-    fetch(streamUrl(`/api/cyclone/workshop/${workshopId}/room/${roomId}/abort`), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-    }).catch(() => {});
-  }, []);
+    if (!r) return;
+    r.userStopped = true;
+    r.abortRequested = true;
+    requestAbort(roomId, r);
+  }, [requestAbort]);
 
   /** 删群：标弃用 + 掐流 + 通知服务端 abort。 */
-  const kill = useCallback((workshopId: string, roomId: string) => {
+  const kill = useCallback((roomId: string) => {
     const r = runners.current.get(roomId);
     queues.current.delete(roomId);   // 删群连带清掉其排队 / 草稿
     drafts.current.delete(roomId);
     if (!r) return;
     r.abandoned = true;
-    abortRoom(workshopId, roomId);
+    abortRoom(roomId);
   }, [abortRoom]);
 
   /** RoomPanel reload /status 完成后清出已结束的 runner（释放 roundFeed 缓冲）。 */
@@ -261,11 +174,14 @@ export function useRoomStreamRunners(
     const runner: RoomRunner = {
       roundFeed: initialFeed,
       activeSpeaker: '',
+      tokenUsage: null,
       streaming: true,
       done: false,
       ctrl,
       abandoned: false,
       userStopped: false,
+      abortRequested: false,
+      abortInFlight: false,
     };
     runners.current.set(roomId, runner);
     notify(roomId);
@@ -289,7 +205,12 @@ export function useRoomStreamRunners(
           path,
           body,
           (ev) => {
-            applyEvent(ev, runner, localeRef.current);
+            if (ev.type === 'execution-start') {
+              runner.operationId = ev.operationId;
+              runner.runId = ev.runId;
+              if (runner.abortRequested) requestAbort(roomId, runner);
+            }
+            applyRoomEvent(ev, runner, localeRef.current);
             if (ev.type === 'dispatch-created') onDispatchCreated(roomId);
             if (HIGH_FREQ.has(ev.type)) scheduleNotify(); else flushNotify();
           },
@@ -308,7 +229,7 @@ export function useRoomStreamRunners(
         onRoomFinished(roomId);    // 刷新侧栏（即使 RoomPanel 未挂载也生效）
       }
     })();
-  }, [notify, onDispatchCreated, onRoomFinished]);
+  }, [notify, onDispatchCreated, onRoomFinished, requestAbort]);
 
   /** 发起一轮群聊（fire-and-forget，脱离组件生命周期）。 */
   const startRound = useCallback((workshopId: string, roomId: string, text: string) => {

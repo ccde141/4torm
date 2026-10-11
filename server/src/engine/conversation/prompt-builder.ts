@@ -9,14 +9,12 @@
  *   5. 协议段（native / text）— 我有什么工具
  *   6. delegate 说明
  *   7. ask 说明
- *   8. 工作流搭建假工具
- *   9. 长期记忆（条目化召回 + 记忆自觉引导）
+ *   8. 长期记忆（条目化召回 + 记忆自觉引导）
  */
 
 import type { ToolDef } from '../shared/tool-defs-loader';
 import { recallMemory } from '../shared/agent-memory';
 import { buildSandboxSection, type SandboxLevel } from '../shared/sandbox-prompt';
-import { buildWorkflowToolsSection } from '../../services/tradewind-tools/builder';
 import { buildSelfManagementSection, buildTextToolProtocol } from '../shared/prompt';
 import { buildTaskBoardSection, readTaskboard, taskboardFile } from '../shared/taskboard';
 import { buildAgentMeta } from '../shared/meta-prompt.js';
@@ -202,16 +200,13 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   // 7. ask 说明
   if (allowAsk) parts.push(buildAskSection());
 
-  // 8. 工作流搭建假工具
-  parts.push(buildWorkflowToolsSection(opts.native, allowAsk));
-
-  // 8.5 能力扩展（查看 / 创建工具、技能、MCP）— 与对流/气旋/信风共用 shared 单一来源
+  // 8. 能力扩展（查看 / 创建工具、技能、MCP）— 与对流/气旋/信风共用 shared 单一来源
   parts.push(buildSelfManagementSection({
     allowToolRegistration: Boolean(opts.sessionId),
     native: opts.native,
   }));
 
-  // 9. 长期记忆（新机制：条目化 + 相关性召回，替代旧 MEMORY.md 全文注入）
+  // 9. 长期记忆（条目化 + 相关性召回，替代旧 MEMORY.md 全文注入）
   //    userMessage 作 taskHint：feedback 常驻档必带，情境档按相关性挑。召回失败静默降级。
   try {
     const memSection = await recallMemory(opts.dataDir, opts.agentId, opts.userMessage);
@@ -222,10 +217,10 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   parts.push(buildMemoryAwarenessSection());
 
   // 10. 任务板假工具：始终描述用法（与 ask/delegate 同级）；已有板子时附当前状态（放最后，最贴近用户轮次）
-  const board = opts.sessionId
-    ? readTaskboard(taskboardFile(opts.dataDir, opts.agentId, opts.sessionId))
-    : null;
-  parts.push(`## 任务板\n\n${buildTaskBoardSection(board, opts.native)}`);
+  if (opts.sessionId) {
+    const board = readTaskboard(taskboardFile(opts.dataDir, opts.agentId, opts.sessionId));
+    parts.push(`## 任务板\n\n${buildTaskBoardSection(board, opts.native)}`);
+  }
 
   return parts.join('\n\n');
 }

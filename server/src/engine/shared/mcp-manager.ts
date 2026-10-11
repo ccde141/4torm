@@ -1,7 +1,7 @@
 import { createMcpClient } from './mcp-client.js';
 import { readMcpConfigs, watchMcpConfigs } from './mcp-config-store.js';
 import { withAutomaticWorkspaces } from './mcp-workspaces.js';
-import type { McpClient, McpServerConfig, McpToolDef } from './mcp-types.js';
+import type { McpClient, McpServerConfig, McpToolDef, McpToolOutcome } from './mcp-types.js';
 import type { ToolDef } from './tool-defs-loader.js';
 
 export interface McpToolEntry {
@@ -161,11 +161,17 @@ export function resolveMcpTools(toolNames: string[]): ToolDef[] {
 }
 
 export async function callMcpTool(fullName: string, args: Record<string, unknown>): Promise<string> {
+  return (await callMcpToolOutcome(fullName, args)).result;
+}
+
+export async function callMcpToolOutcome(
+  fullName: string, args: Record<string, unknown>,
+): Promise<McpToolOutcome> {
   const entry = toolPool.get(fullName);
   if (!entry) throw new Error(`MCP 工具不存在：${fullName}`);
   const client = clients.get(entry.serverName);
   if (!client?.connected) throw new Error(`MCP server ${entry.serverName} 未连接`);
-  return client.callTool(entry.toolName, args);
+  return client.callToolOutcome(entry.toolName, args);
 }
 
 export function getMcpStatus(): McpServerStatus[] {

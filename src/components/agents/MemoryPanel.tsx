@@ -18,12 +18,12 @@ const CATEGORIES = Object.keys(CATEGORY_META) as MemoryCategory[];
 interface Props {
   agentId: string;
   agentName: string;
-  onClose: () => void;
+  embedded: true;
 }
 
 const EMPTY_DRAFT: MemoryDraft = { detail: '', category: 'fact', tags: [] };
 
-export default function MemoryPanel({ agentId, agentName, onClose }: Props) {
+export default function MemoryPanel({ agentId, agentName }: Props) {
   const { t } = useLocale();
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,11 +42,6 @@ export default function MemoryPanel({ agentId, agentName, onClose }: Props) {
   }, [agentId]);
 
   useEffect(() => { reload(); }, [reload]);
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [onClose]);
 
   const [showTags, setShowTags] = useState(false);
 
@@ -120,16 +115,7 @@ export default function MemoryPanel({ agentId, agentName, onClose }: Props) {
   );
 
   return (
-    <div className="config-modal-overlay" onClick={onClose}>
-      <div className="config-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', width: 'min(680px, 92vw)' }}>
-        <div className="config-modal-header">
-          <div>
-            <h2 className="config-modal-title">{t('memory.title')}</h2>
-            <p className="config-modal-subtitle">{t('memory.subtitle', { agent: agentName })}</p>
-          </div>
-          <button className="config-modal-close" onClick={onClose} aria-label={t('memory.close')}>✕</button>
-        </div>
-
+    <div className="agent-detail__memory-content">
         <div className="config-modal-body" style={{ overflowY: 'auto' }}>
           {error && <div className="mem-error">{error}</div>}
 
@@ -171,7 +157,6 @@ export default function MemoryPanel({ agentId, agentName, onClose }: Props) {
             </ul>
           )}
         </div>
-      </div>
     </div>
   );
 }

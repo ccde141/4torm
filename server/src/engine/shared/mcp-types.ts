@@ -40,9 +40,15 @@ export interface McpClient {
   connect(): Promise<void>;
   refreshTools(): Promise<McpToolDef[]>;
   callTool(toolName: string, args: Record<string, unknown>): Promise<string>;
+  callToolOutcome(toolName: string, args: Record<string, unknown>): Promise<McpToolOutcome>;
   disconnect(): void;
   on(event: 'log', listener: (message: string) => void): this;
   on(event: 'disconnected', listener: (info: { code: number | null; intentional: boolean }) => void): this;
+}
+
+export interface McpToolOutcome {
+  result: string;
+  ok: boolean;
 }
 
 export interface JsonRpcRequest {

@@ -186,6 +186,7 @@
 .cyclone-sidebar-status { width:16px; height:16px; display:inline-grid; place-items:center; flex:0 0 16px; border-radius:50%; font-size:11px; font-weight:700; }
 .cyclone-sidebar-status--running { color:#60a5fa; animation:cyclone-dispatch-pulse 1.5s ease-in-out infinite; }
 .cyclone-sidebar-status--waiting { color:#f59e0b; background:rgba(245,158,11,.12); }
+.cyclone-sidebar-status--unknown { color:#94a3b8; background:rgba(148,163,184,.12); }
 .cyclone-sidebar-status--failed { color:#ef4444; background:rgba(239,68,68,.12); }
 .cyclone-sidebar-status--unread { color:#22c55e; }
 

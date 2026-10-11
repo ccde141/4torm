@@ -56,7 +56,11 @@ const PAGE_TITLES: Record<string, { title: MessageKey; subtitle: MessageKey }> =
   mcp:       { title: 'page.mcp.title', subtitle: 'page.mcp.subtitle' },
 };
 
-function PageContent({ page, preselectSession, onClearPreselect, onNavigate }: { page: string; preselectSession?: string | null; onClearPreselect?: () => void; onNavigate: (page: string) => void }) {
+function PageContent({ page, preselectSession, onClearPreselect, onNavigate }: {
+  page: string; preselectSession?: string | null;
+  onClearPreselect?: () => void;
+  onNavigate: (page: string, targetId?: string) => void;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevPageRef = useRef(page);
 
@@ -81,14 +85,14 @@ function PageContent({ page, preselectSession, onClearPreselect, onNavigate }: {
 
   return (
     <div ref={containerRef} style={{ height: '100%' }}>
-      <div className="page-panel" data-page="agent" style={show('agent')}><div style={scrollArea}><DashboardPage active={page === 'agent'} /></div></div>
+      <div className="page-panel" data-page="agent" style={show('agent')}><div style={scrollArea}><DashboardPage active={page === 'agent'} onNavigate={onNavigate} /></div></div>
       <div className="page-panel" data-page="chat" style={show('chat')}><div style={scrollArea}><ChatPage active={page === 'chat'} preselectSession={preselectSession ?? undefined} onClearPreselect={onClearPreselect} /></div></div>
       <div className="page-panel" data-page="tools" style={show('tools')}><div style={scrollArea}><ToolsPage active={page === 'tools'} /></div></div>
       <div className="page-panel" data-page="skills" style={show('skills')}><div style={scrollArea}><SkillsPage active={page === 'skills'} /></div></div>
-      <div className="page-panel" data-page="convection" style={show('convection')}><div style={scrollArea}><ConvectionPage active={page === 'convection'} onNavigate={onNavigate} /></div></div>
-      <div className="page-panel" data-page="cyclone" style={show('cyclone')}><div style={scrollArea}><CyclonePage active={page === 'cyclone'} /></div></div>
+      <div className="page-panel" data-page="convection" style={show('convection')}><div style={scrollArea}><ConvectionPage active={page === 'convection'} onNavigate={onNavigate} preselectSession={page === 'convection' ? preselectSession : null} onClearPreselect={onClearPreselect} /></div></div>
+      <div className="page-panel" data-page="cyclone" style={show('cyclone')}><div style={scrollArea}><CyclonePage active={page === 'cyclone'} preselectOperation={page === 'cyclone' ? preselectSession : null} onClearPreselect={onClearPreselect} /></div></div>
       <div className="page-panel" data-page="tradewind" style={show('tradewind')}><div style={scrollArea}><TradeWindPage /></div></div>
-      <div className="page-panel" data-page="tide" style={show('tide')}><div style={scrollArea}><TidePage active={page === 'tide'} /></div></div>
+      <div className="page-panel" data-page="tide" style={show('tide')}><div style={scrollArea}><TidePage active={page === 'tide'} preselectTask={page === 'tide' ? preselectSession : null} onClearPreselect={onClearPreselect} /></div></div>
       <div className="page-panel" data-page="model" style={show('model')}><div style={scrollArea}><SettingsPage /></div></div>
       <div className="page-panel" data-page="mcp" style={show('mcp')}><div style={scrollArea}><McpPage /></div></div>
     </div>
@@ -99,7 +103,9 @@ export default function App() {
   const { t } = useLocale();
   const [activePage, setActivePage] = useState('agent');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [preselectSession, setPreselectSession] = useState<string | null>(null);
+  const [navigationTarget, setNavigationTarget] = useState<{
+    page: string; id: string;
+  } | null>(null);
   const [skin, setSkin] = useState<SkinConfig>(getSkinConfig());
   const pageInfo = PAGE_TITLES[activePage] ?? PAGE_TITLES.agent;
 
@@ -111,7 +117,7 @@ export default function App() {
 
   const handleNavigate = (page: string, sessionId?: string) => {
     setActivePage(page);
-    setPreselectSession(sessionId ?? null);
+    setNavigationTarget(sessionId ? { page, id: sessionId } : null);
   };
 
   const bgType = skin.background?.type ?? 'none';
@@ -134,13 +140,15 @@ export default function App() {
         <Sidebar
           activePage={activePage}
           collapsed={sidebarCollapsed}
-          onNavigate={setActivePage}
+          onNavigate={page => { setActivePage(page); setNavigationTarget(null); }}
           onToggle={() => setSidebarCollapsed(value => !value)}
         />
         <div className="main-content" style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
           <Header title={t(pageInfo.title)} subtitle={t(pageInfo.subtitle)} onNavigate={handleNavigate} />
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <PageContent page={activePage} preselectSession={preselectSession} onClearPreselect={() => setPreselectSession(null)} onNavigate={setActivePage} />
+            <PageContent page={activePage}
+              preselectSession={navigationTarget?.page === activePage ? navigationTarget.id : null}
+              onClearPreselect={() => setNavigationTarget(null)} onNavigate={handleNavigate} />
           </div>
         </div>
       </div>

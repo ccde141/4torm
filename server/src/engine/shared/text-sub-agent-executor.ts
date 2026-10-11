@@ -60,8 +60,8 @@ export async function runTextSubAgent(params: TextSubAgentParams): Promise<SubAg
         signal: params.signal,
       }),
       callTool: async (tool, args) => {
-        const { executeTool } = await import('../../services/tool-executor.js');
-        return executeTool(
+        const { executeToolOutcome } = await import('../../services/tool-executor.js');
+        return executeToolOutcome(
           params.dataDir, tool, args, params.agent.id, undefined,
           params.parentSandboxLevel, undefined, params.signal,
         );

@@ -1,28 +1,28 @@
 /**
  * 气旋群聊执行器 —— 人发言 → 在场工位串行响应
  *
- * 对齐对流 handleSpeak：人发一句入 publicMessages → 遍历在场工位 →
+ * 人类发言写入 publicMessages → 遍历在场工位 →
  * 每个工位看公共快照、回一句、追加（下一个能看到）→ 落盘。
  *
  * 群聊是讨论场：剥离 ask/delegate（不阻塞串行循环），保留真实工具。
  * contact 负责群聊与工位之间的同步联络。
  * 工位群里发言只落 room.publicMessages，不落工位私聊会话（seat.messages）。
  *
- * 只 import shared/ 与本目录模块，零交叉代码。
+ * 依赖 shared/ 与本目录模块。
  */
 
 import type { ContextMessage } from '../shared/types';
 import { resolveNativeMode, type TokenUsage } from '../shared/llm-bridge';
 import { loadAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
-import { execToolUnified } from '../shared/exec-tool';
+import { execToolUnifiedOutcome } from '../shared/exec-tool';
 import { runReActLoopNative, type ToolCaller } from '../shared/react/native-loop';
 import { runReActLoop } from '../shared/react/text-loop';
 import { buildSeatRoomSystemPrompt } from './seat-prompt';
 import { execBulletin, readBulletinSync } from './bulletin';
 import { buildSeatVirtualToolDefs } from './virtual-tools';
 import { makeLLM, wsRelPath } from './seat-runner';
-import { execContact } from './contact';
+import { execContactOutcome } from './contact';
 import { listOtherSeats, listWorkshopSeats } from './contact-registry';
 import { loadSeat, saveSeat } from './seat-store';
 import { saveRoom } from './room-store';
@@ -36,6 +36,7 @@ import { runFreshSeatTurn } from './room-seat-turn.js';
 import { expireDispatchDecisions } from './dispatch-store.js';
 import { genId } from './paths.js';
 import { createRoomDispatchRecord } from './room-dispatch.js';
+import { dispatchAcceptance } from './dispatch-acceptance.js';
 import { createRoomMessageSegments } from './room-message-segments.js';
 import {
   buildCycloneMemoryPrompt,
@@ -43,13 +44,15 @@ import {
   isCycloneMemoryTool,
   withCycloneMemoryTools,
 } from './cyclone-memory.js';
-import { compactRoomBeforeRound } from './room-auto-compaction.js';
-import { recordRoomTokenUsage } from './room-token-usage.js';
+import { createRoomCompactionCaller, cycloneMeetingContext } from './meeting-compaction-caller.js';
 import type { ReActTermination } from '../shared/react/outcome.js';
 
 /** 群聊执行事件 */
 export type RoomEvent =
-  | { type: 'seat-start'; speaker: string; turnId: string }
+  | import('../shared/compaction/contracts.js').CompactionNotice
+  | { type: 'input-accepted' }
+  | { type: 'history-updated' }
+  | { type: 'seat-start'; speaker: string; turnId: string; agentId: string }
   | { type: 'seat-waiting'; speaker: string }
   | { type: 'token'; speaker: string; content: string }
   | { type: 'reasoning'; speaker: string; content: string }
@@ -58,6 +61,7 @@ export type RoomEvent =
   | { type: 'tool-call'; speaker: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; speaker: string; tool: string; result: string; ok: boolean }
   | { type: 'seat-done'; speaker: string; content: string }
+  | { type: 'usage'; speaker: string; usage: TokenUsage | null }
   | { type: 'dispatch-created'; dispatch: CycloneDispatch }
   | { type: 'error'; message: string };
 
@@ -67,21 +71,6 @@ function formatPublicContext(room: RoomData): string {
   return '以下是群聊记录：\n\n' + room.publicMessages
     .map(m => `[${m.speaker}] ${m.content}`)
     .join('\n\n');
-}
-
-async function loadRoomModelKeys(
-  dataDir: string,
-  workshopId: string,
-  seatIds: readonly string[],
-): Promise<string[]> {
-  const models: string[] = [];
-  for (const seatId of seatIds) {
-    const seat = await loadSeat(dataDir, workshopId, seatId);
-    if (!seat) continue;
-    const agent = await loadAgent(dataDir, seat.agentId);
-    if (agent?.model) models.push(agent.model);
-  }
-  return models;
 }
 
 interface RoomSeatResult {
@@ -95,7 +84,7 @@ interface RoomSeatResult {
 }
 
 /** 群聊里工位的工具调用器（无 ask/delegate；保留真实工具 + contact） */
-function makeRoomToolCaller(opts: {
+export function makeRoomToolCaller(opts: {
   dataDir: string; workshopId: string; seatId: string; seatTitle: string;
   agentId: string; sandboxLevel: string; wsDir: string;
   speaker: string; signal: AbortSignal | undefined; onEvent: (ev: RoomEvent) => void;
@@ -115,30 +104,34 @@ function makeRoomToolCaller(opts: {
         } catch (error) {
           const result = `记忆工具执行失败: ${(error as Error).message}`;
           onEvent({ type: 'tool-result', speaker, tool, result, ok: false });
-          return result;
+          return { result, ok: false };
         }
       }
-      // bulletin 假工具：群聊里也可改工作室公告板（落款为发言工位 title）
+      // bulletin 假工具：群聊工位可读取和新增公告（落款为发言工位 title）
       if (tool === 'bulletin') {
         onEvent({ type: 'tool-call', speaker, tool, args });
-        const { result } = await execBulletin(dataDir, workshopId, args, seatTitle);
-        onEvent({ type: 'tool-result', speaker, tool, result, ok: true });
-        return result;
+        const { result, ok } = await execBulletin(dataDir, workshopId, args, seatTitle);
+        onEvent({ type: 'tool-result', speaker, tool, result, ok });
+        return { result, ok };
       }
       if (tool === 'contact') {
         onEvent({ type: 'tool-call', speaker, tool, args });
-        const result = await execContact(
+        const outcome = await execContactOutcome(
           { dataDir, workshopId, fromSeatId: seatId, fromTitle: seatTitle, depth: 0, signal },
           args.target || '', args.message || '',
         );
-        const ok = !result.startsWith('联络失败') && !result.startsWith('联络被系统拒绝') && !result.includes('正忙');
-        onEvent({ type: 'tool-result', speaker, tool, result, ok });
-        return result;
+        onEvent({ type: 'tool-result', speaker, tool, result: outcome.result, ok: outcome.ok });
+        return outcome;
       }
       if (tool === 'dispatch') {
+        onEvent({ type: 'tool-call', speaker, tool, args });
         const target = (args.target || '').trim();
         const task = (args.task || '').trim();
-        if (!target || !task) return '异步派发失败：缺少目标工位或任务内容';
+        if (!target || !task) {
+          const result = '异步派发失败：缺少目标工位或任务内容';
+          onEvent({ type: 'tool-result', speaker, tool, result, ok: false });
+          return { result, ok: false };
+        }
         try {
           const dispatch = await createRoomDispatchRecord(dataDir, {
             workshopId, roomId, sourceSeatId: seatId, sourceSeatTitle: seatTitle,
@@ -149,20 +142,24 @@ function makeRoomToolCaller(opts: {
           dispatchStarts.enqueue(dispatch.targetSeatId, {
             immediate: dispatch.targetSeatId === seatId,
           });
-          return `异步任务已送达「${target}」，任务 ID：${dispatch.id}。无需等待，请继续当前讨论。`;
+          const result = dispatchAcceptance(target, dispatch.id, 'room');
+          onEvent({ type: 'tool-result', speaker, tool, result, ok: true });
+          return result;
         } catch (error) {
-          return `异步派发失败：${(error as Error).message}`;
+          const result = `异步派发失败：${(error as Error).message}`;
+          onEvent({ type: 'tool-result', speaker, tool, result, ok: false });
+          return { result, ok: false };
         }
       }
       onEvent({ type: 'tool-call', speaker, tool, args });
       try {
-        const result = await execToolUnified({ tool, args, agentId, workspaceDir: wsDir, sandboxLevel, signal });
-        onEvent({ type: 'tool-result', speaker, tool, result, ok: true });
-        return result;
+        const outcome = await execToolUnifiedOutcome({ tool, args, agentId, workspaceDir: wsDir, sandboxLevel, signal });
+        onEvent({ type: 'tool-result', speaker, tool, result: outcome.result, ok: outcome.ok });
+        return outcome;
       } catch (e) {
         const err = `工具执行失败: ${(e as Error).message}`;
         onEvent({ type: 'tool-result', speaker, tool, result: err, ok: false });
-        return err;
+        return { result: err, ok: false };
       }
     },
   };
@@ -191,11 +188,11 @@ async function runSeatInRoom(
   const effectiveToolDefs = planMode ? toolDefs.filter(t => t.dangerous !== true) : toolDefs;
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
   const wsDir = wsRelPath(dataDir, workshopId);
-  const llm = makeLLM(dataDir, agent.model, agent.temperature);
   const contactTargets = await listOtherSeats(dataDir, workshopId, seat.id);
   const dispatchTargets = await listWorkshopSeats(dataDir, workshopId, seat.id);
   const virtualToolDefs = buildSeatVirtualToolDefs({
-    allowAsk: false, allowDelegate: false, allowDispatch: true, contactTargets, dispatchTargets,
+    allowAsk: false, allowDelegate: false, allowTaskBoard: false,
+    allowDispatch: true, contactTargets, dispatchTargets,
   });
   const segmentCollector = createRoomMessageSegments();
   const emit = (event: RoomEvent) => {
@@ -222,11 +219,13 @@ async function runSeatInRoom(
       bulletinSeenAt: seat.bulletinSeenAt,
     }),
   };
-  const history: ContextMessage = { role: 'user', content: formatPublicContext(room) };
-  const messages: ContextMessage[] = [system, history];
+  const messages: ContextMessage[] = [system, ...cycloneMeetingContext(room.publicMessages)];
+  const llm = await createRoomCompactionCaller({ dataDir, workshopId, room, agent, messages,
+    llm: makeLLM(dataDir, agent.model, agent.temperature), onNotice: onEvent,
+    onCompacted: () => onEvent({ type: 'history-updated' }) });
   // 群聊讨论场：剥 ask/delegate，保留 contact（热注入名单）
   const nativeToolDefs = [...effectiveToolDefs, ...virtualToolDefs];
-  // toolCaller 恒提供：task_board / bulletin 是恒在的虚拟工具，即使没有真实工具/联络对象也要能调用
+  // 群聊只保留公告板等讨论工具；工位任务板属于固定工位的执行上下文。
   // 累积本轮思考流：既实时推给前端，也攒下来随发言落盘（重载可恢复）
   let reasoningAcc = '';
   const result = native
@@ -235,6 +234,7 @@ async function runSeatInRoom(
         onEvent: (ev) => {
           if (ev.type === 'reasoning') reasoningAcc += ev.chunk;
           const progress = toRoomProgressEvent(seat.title, ev);
+          if (progress?.type === 'usage') progress.usage = room.publicLatestTokenUsage ?? null;
           if (progress) emit(progress);
         },
         signal,
@@ -245,6 +245,7 @@ async function runSeatInRoom(
         onEvent: (ev) => {
           if (ev.type === 'reasoning') reasoningAcc += ev.chunk;
           const progress = toRoomProgressEvent(seat.title, ev);
+          if (progress?.type === 'usage') progress.usage = room.publicLatestTokenUsage ?? null;
           if (progress) emit(progress);
         },
         signal,
@@ -274,15 +275,9 @@ export async function speakInRoom(
   dataDir: string, workshopId: string, room: RoomData,
   humanMessage: string, onEvent: (ev: RoomEvent) => void, signal?: AbortSignal,
 ): Promise<void> {
-  const modelKeys = await loadRoomModelKeys(dataDir, workshopId, room.participantSeatIds);
-  if (modelKeys.length > 0) {
-    const compacted = await compactRoomBeforeRound({
-      dataDir, workshopId, room, modelKeys, summaryModel: modelKeys[0], signal,
-    });
-    if (compacted.compacted) {
-      console.info(`[cyclone] 群聊 ${room.id} 自动压缩 ${compacted.archivedCount} 条早期消息`);
-    }
-  }
+  room.publicLatestTokenUsage = undefined;
+  room.publicUsageIncomplete = undefined;
+  room.compactionNotice = undefined;
   const roundSeq = (room.completedRoundSeq ?? 0) + 1;
   const dispatchStarts = createDispatchStartBuffer(seatId => (
     kickDispatchQueue(dataDir, workshopId, seatId)
@@ -290,6 +285,10 @@ export async function speakInRoom(
   room.publicMessages.push({
     id: genId('msg'), speaker: '人类', content: humanMessage, timestamp: Date.now(), roundSeq,
   });
+  // 接受输入后先落盘；后续模型或工具失败不能让已发生的发言消失。
+  await saveRoom(dataDir, workshopId, room);
+
+  onEvent({ type: 'input-accepted' });
 
   try {
     for (const seatId of room.participantSeatIds) {
@@ -300,7 +299,8 @@ export async function speakInRoom(
         continue;
       }
       const turnId = genId('turn');
-      onEvent({ type: 'seat-start', speaker: queuedSeat.title, turnId });
+      onEvent({ type: 'seat-start', speaker: queuedSeat.title, turnId,
+        agentId: queuedSeat.agentId });
       let currentSeat = queuedSeat;
       const r = await runFreshSeatTurn(queuedSeat, {
         load: () => loadSeat(dataDir, workshopId, seatId),
@@ -312,7 +312,6 @@ export async function speakInRoom(
         },
       });
       if (!r) continue;
-      recordRoomTokenUsage(room, r.usage);
       const content = r.content;
       if (r.termination.status === 'succeeded' && content) {
         room.publicMessages.push({
@@ -322,6 +321,7 @@ export async function speakInRoom(
           toolCalls: r.toolCalls.length > 0 ? r.toolCalls : undefined,
           segments: r.segments.length > 0 ? r.segments : undefined,
         });
+        await saveRoom(dataDir, workshopId, room);
         onEvent({ type: 'seat-done', speaker: currentSeat.title, content });
       }
       if (signal?.aborted) break;

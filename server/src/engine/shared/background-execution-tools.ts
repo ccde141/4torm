@@ -69,37 +69,49 @@ export function buildBackgroundExecutionToolDefs(): ToolDef[] {
   ];
 }
 
-export async function executeBackgroundExecutionTool(input: {
+interface BackgroundExecutionToolInput {
   tool: BackgroundExecutionToolName;
   args: Record<string, string>;
   scope: ObservationScope;
   ownerId: string;
-}): Promise<string> {
+}
+
+export interface BackgroundExecutionToolOutcome { result: string; ok: boolean }
+
+export async function executeBackgroundExecutionTool(input: BackgroundExecutionToolInput): Promise<string> {
+  return (await executeBackgroundExecutionToolOutcome(input)).result;
+}
+
+export async function executeBackgroundExecutionToolOutcome(
+  input: BackgroundExecutionToolInput,
+): Promise<BackgroundExecutionToolOutcome> {
   const executionId = input.args.executionId?.trim();
-  if (!executionId) return '操作失败：缺少 executionId。';
+  if (!executionId) return { result: '操作失败：缺少 executionId。', ok: false };
 
   if (input.tool === 'inspect_execution') {
     const snapshot = backgroundExecutions.inspect(executionId, input.scope, input.ownerId);
-    return snapshot ? formatExecutionSnapshot(snapshot) : '操作失败：未找到属于当前会话的执行。';
+    return snapshot
+      ? { result: formatExecutionSnapshot(snapshot), ok: true }
+      : { result: '操作失败：未找到属于当前会话的执行。', ok: false };
   }
 
   if (input.tool === 'wait_execution') {
     const parsed = Number.parseInt(input.args.timeoutMs ?? '', 10);
     const timeoutMs = Number.isFinite(parsed) ? Math.max(0, Math.min(30_000, parsed)) : 10_000;
     try {
-      return formatExecutionSnapshot(await backgroundExecutions.wait(
+      return { result: formatExecutionSnapshot(await backgroundExecutions.wait(
         executionId,
         input.scope,
         input.ownerId,
         timeoutMs,
-      ));
+      )), ok: true };
     } catch {
-      return '操作失败：未找到属于当前会话的执行。';
+      return { result: '操作失败：未找到属于当前会话的执行。', ok: false };
     }
   }
 
   const terminated = await backgroundExecutions.terminate(executionId, input.scope, input.ownerId);
-  if (!terminated) return '操作失败：执行不存在、已结束或不属于当前会话。';
+  if (!terminated) return { result: '操作失败：执行不存在、已结束或不属于当前会话。', ok: false };
   const snapshot = backgroundExecutions.inspect(executionId, input.scope, input.ownerId);
-  return snapshot ? formatExecutionSnapshot(snapshot) : '已提交终止请求。';
+  return { result: snapshot ? formatExecutionSnapshot(snapshot) : '已提交终止请求。', ok: true };
 }

@@ -1,7 +1,7 @@
 import { useLocale } from '../../../i18n/LocaleContext';
 import { tabKey, type WorkspaceTab } from './workspace-tabs';
 
-export type WorkspaceTabStatus = 'running' | 'waiting' | 'failed' | 'unread' | null;
+export type WorkspaceTabStatus = 'running' | 'waiting' | 'unknown' | 'failed' | 'unread' | null;
 
 interface Props {
   tabs: WorkspaceTab[];

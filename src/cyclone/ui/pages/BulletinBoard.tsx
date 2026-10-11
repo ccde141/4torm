@@ -11,6 +11,16 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useLocale } from '../../../i18n/LocaleContext';
+import {
+  mutateCycloneBulletin,
+  renameCycloneWorkshop,
+  revertCycloneBulletin,
+} from './cyclone-control-client';
+import {
+  addBtnStyle, authorStyle, bodyStyle, dirtyStyle, emptyStyle, entrySideStyle,
+  entryStyle, entryTextareaStyle, ghostBtnActiveStyle, ghostBtnStyle, histDescStyle,
+  histMetaStyle, histRowStyle, revertBtnStyle, rootStyle, rowDelStyle,
+} from './bulletin-styles';
 import '../../../styles/components/config-modal.css';
 
 export interface BulletinEntry {
@@ -38,11 +48,6 @@ type BulletinOp =
   | { op: 'add'; text: string }
   | { op: 'update'; id: string; text: string }
   | { op: 'remove'; id: string };
-
-async function readErrorMessage(r: Response, fallback: string): Promise<string> {
-  const e = await r.json().catch(() => ({}));
-  return e?.error || `${fallback}（HTTP ${r.status}）`;
-}
 
 function toRows(entries: BulletinEntry[]): Row[] {
   return entries.map(e => ({ id: e.id, text: e.text, author: e.author }));
@@ -167,12 +172,9 @@ export default function BulletinBoard({
     if (saving || !dirty) return;
     setSaving(true);
     try {
-      const r = await fetch(`/api/cyclone/workshop/${workshopId}/bulletin-mutate`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ops }),
+      applyResult(await mutateCycloneBulletin(workshopId, ops) as {
+        entries: BulletinEntry[]; changes?: BulletinChange[];
       });
-      if (!r.ok) { alert(await readErrorMessage(r, t('cyclone.bulletin.saveFailed'))); return; }
-      applyResult(await r.json());
       setSaved(true);
       setTimeout(() => setSaved(false), 1400);
     } catch (e) {
@@ -187,11 +189,7 @@ export default function BulletinBoard({
     setEditingTitle(false);
     if (!nextTitle || nextTitle === title) return;
     try {
-      const r = await fetch(`/api/cyclone/workshop/${workshopId}/rename`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: nextTitle }),
-      });
-      if (!r.ok) { alert(await readErrorMessage(r, t('cyclone.bulletin.renameFailed'))); return; }
+      await renameCycloneWorkshop(workshopId, nextTitle);
       onRenamed?.();
     } catch (e) {
       alert(t('cyclone.bulletin.errorDetail', { prefix: t('cyclone.bulletin.renameFailed'), error: (e as Error).message }));
@@ -202,12 +200,9 @@ export default function BulletinBoard({
     if (reverting != null) return;
     setReverting(seq);
     try {
-      const r = await fetch(`/api/cyclone/workshop/${workshopId}/bulletin-revert`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ seq }),
+      applyResult(await revertCycloneBulletin(workshopId, seq) as {
+        entries: BulletinEntry[]; changes?: BulletinChange[];
       });
-      if (!r.ok) { alert(await readErrorMessage(r, t('cyclone.bulletin.revertFailed'))); return; }
-      applyResult(await r.json());
     } catch (e) {
       alert(t('cyclone.bulletin.errorDetail', { prefix: t('cyclone.bulletin.revertFailed'), error: (e as Error).message }));
     } finally {
@@ -303,64 +298,3 @@ export default function BulletinBoard({
     </div>
   );
 }
-
-const rootStyle: React.CSSProperties = { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' };
-const bodyStyle: React.CSSProperties = {
-  flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column',
-  gap: 'var(--space-3)', padding: 'var(--space-5) var(--space-6)',
-};
-const emptyStyle: React.CSSProperties = {
-  color: 'var(--color-text-tertiary)', fontSize: 'var(--font-sm)', textShadow: 'var(--text-halo)',
-};
-const entryStyle: React.CSSProperties = { display: 'flex', gap: 'var(--space-3)', alignItems: 'stretch' };
-const entryTextareaStyle: React.CSSProperties = { flex: 1, minHeight: 52, resize: 'vertical', boxSizing: 'border-box' };
-const entrySideStyle: React.CSSProperties = {
-  display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'space-between',
-  flexShrink: 0, width: 64,
-};
-const authorStyle: React.CSSProperties = {
-  fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)', textShadow: 'var(--text-halo)',
-  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
-};
-const rowDelStyle: React.CSSProperties = {
-  width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center',
-  background: 'transparent', color: 'var(--color-text-tertiary)', border: '1px solid var(--glass-border)',
-  borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-md)', cursor: 'pointer', lineHeight: 1,
-};
-const addBtnStyle: React.CSSProperties = {
-  alignSelf: 'flex-start', padding: 'var(--space-2) var(--space-3)',
-  background: 'transparent', color: 'var(--color-text-secondary)',
-  border: '1px dashed var(--glass-border)', borderRadius: 'var(--radius-sm)',
-  fontSize: 'var(--font-sm)', cursor: 'pointer', textShadow: 'var(--text-halo)',
-};
-const dirtyStyle: React.CSSProperties = {
-  fontSize: 'var(--font-xs)', color: 'var(--color-accent)',
-  alignSelf: 'center', marginRight: 'auto', textShadow: 'var(--text-halo)',
-};
-const ghostBtnStyle: React.CSSProperties = {
-  alignSelf: 'center', padding: 'var(--space-1) var(--space-3)',
-  background: 'transparent', color: 'var(--color-text-secondary)',
-  border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-sm)',
-  fontSize: 'var(--font-xs)', cursor: 'pointer', whiteSpace: 'nowrap', textShadow: 'var(--text-halo)',
-};
-const ghostBtnActiveStyle: React.CSSProperties = {
-  background: 'var(--color-accent-subtle)', color: 'var(--color-accent)', borderColor: 'var(--color-accent)',
-};
-const histRowStyle: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 'var(--space-3)',
-  padding: 'var(--space-2) var(--space-3)', border: '1px solid var(--glass-border)',
-  borderRadius: 'var(--radius-sm)', background: 'var(--glass-bg)',
-  backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
-};
-const histDescStyle: React.CSSProperties = {
-  fontSize: 'var(--font-sm)', color: 'var(--color-text-primary)', textShadow: 'var(--text-halo)',
-  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-};
-const histMetaStyle: React.CSSProperties = {
-  fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)', textShadow: 'var(--text-halo)', marginTop: 2,
-};
-const revertBtnStyle: React.CSSProperties = {
-  flexShrink: 0, padding: '2px var(--space-3)', background: 'transparent',
-  color: 'var(--color-text-secondary)', border: '1px solid var(--glass-border)',
-  borderRadius: 'var(--radius-sm)', fontSize: 'var(--font-xs)', cursor: 'pointer',
-};

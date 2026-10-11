@@ -3,7 +3,7 @@
  *
  * 持久化策略：
  * - 后端 activeOrchestrator 是进程级单例，刷新浏览器不影响后端
- * - 挂载时调 GET /api/tradewind/status 恢复 running + executionId
+ * - 挂载时从中心探针恢复 running + executionId
  * - 让 Toolbar "停止" 按钮在刷新后也能用
  *
  * 节点状态轮询：
@@ -13,12 +13,14 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { WorkflowGraph, WorkflowMode } from '../../types';
-import { requestStop } from '../execution-client';
-import { type ExecutionOutcome, type ExecutionPhase } from './execution-phase';
-import { mergeExecutionStatus, type ExecutionIdentityState, type ExecutionStatusUpdate } from './execution-sync';
+import type { WorkflowMode } from '../../types';
+import { requestStart, requestStop } from '../execution-client';
+import { type ExecutionPhase } from './execution-phase';
+import { executionUpdateFromProbe, mergeExecutionStatus, type ExecutionIdentityState, type ExecutionStatusUpdate } from './execution-sync';
 import { subscribeAll, unsubscribeAll } from '../stream/unified-client';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { observeAllFeature } from '../../../api/collaboration';
+import { belongsToExecution, visibleNodeStatuses } from './execution-visibility';
 
 export interface NodeStatus {
   busy: boolean;
@@ -36,11 +38,11 @@ export interface ExecutionState {
 }
 
 export interface ExecutionActions {
-  start: (graph: WorkflowGraph, workflowId: string, initialInput?: string, mode?: WorkflowMode, profileId?: string) => Promise<void>;
+  start: (workflowId: string, initialInput?: string, mode?: WorkflowMode, profileId?: string) => Promise<void>;
   stop: () => Promise<void>;
 }
 
-export function useExecution(): ExecutionState & ExecutionActions {
+export function useExecution(editorWorkflowId: string): ExecutionState & ExecutionActions {
   const { t } = useLocale();
   const [running, setRunning] = useState(false);
   const [executionId, setExecutionId] = useState<string | null>(null);
@@ -50,10 +52,12 @@ export function useExecution(): ExecutionState & ExecutionActions {
   const [lap, setLap] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const stateRef = useRef<ExecutionIdentityState>({ running: false, executionId: null, workflowId: null, phase: 'idle' });
+  const statusRevision = useRef(0);
 
   const applyStatus = useCallback((status: ExecutionStatusUpdate) => {
     const next = mergeExecutionStatus(stateRef.current, status);
     stateRef.current = next;
+    statusRevision.current += 1;
     setRunning(next.running);
     setExecutionId(next.executionId);
     setWorkflowId(next.workflowId);
@@ -70,24 +74,23 @@ export function useExecution(): ExecutionState & ExecutionActions {
     return () => unsubscribeAll(onEvent);
   }, [applyStatus]);
 
-  // SSE 可能在页面休眠期间断开；低频对账负责刷新与漏事件恢复。
+  // SSE 可能在页面休眠期间断开；中心探针对账负责恢复唯一事实。
   useEffect(() => {
     let cancelled = false;
     const sync = async () => {
+      const revisionAtStart = statusRevision.current;
       try {
-        const res = await fetch('/api/tradewind/status');
-        if (!res.ok) return;
-        const data = await res.json() as {
-          running: boolean; executionId?: string; workflowId?: string; outcome?: ExecutionOutcome | null;
-        };
-        if (cancelled) return;
-        applyStatus(data);
-      } catch {
-        // 下一次对账会重试；不以空状态覆盖已知执行。
+        const items = await observeAllFeature('tradewind', { view: 'summary', limit: 100 });
+        if (cancelled || revisionAtStart !== statusRevision.current) return;
+        const probe = items[0];
+        applyStatus(probe ? executionUpdateFromProbe(probe) : { running: false, authoritative: true });
+        if (probe) setError(probe.errorMessage ?? null);
+      } catch (cause) {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
       }
     };
     void sync();
-    const id = setInterval(() => { void sync(); }, 5_000);
+    const id = setInterval(() => { void sync(); }, running ? 1_000 : 5_000);
     const onVisibility = () => { if (!document.hidden) void sync(); };
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
@@ -95,11 +98,11 @@ export function useExecution(): ExecutionState & ExecutionActions {
       clearInterval(id);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [applyStatus]);
+  }, [applyStatus, running]);
 
   // running 时轮询节点状态
   useEffect(() => {
-    if (!running) {
+    if (!running || !executionId || !workflowId || workflowId !== editorWorkflowId) {
       (window as any).__tw_node_status = {};
       window.dispatchEvent(new CustomEvent('tw-node-status'));
       setLap(null);
@@ -112,15 +115,13 @@ export function useExecution(): ExecutionState & ExecutionActions {
         if (!res.ok) return;
         const data = await res.json() as {
           running: boolean; nodes: Record<string, NodeStatus>; lap?: number;
-          executionId?: string; workflowId?: string; outcome?: ExecutionOutcome | null;
+          workflowId?: string; executionId?: string;
         };
         if (stopped) return;
-        applyStatus(data);
-        // 后端工作流已结束 → 同步前端状态
-        // 循环模式每圈全新 executionId：同步到前端，驱动会话面板随圈重置（gap 期无 executionId 时保持不变）
-        // 循环模式回传 lap；单次运行无此字段 → null
-        setLap(typeof data.lap === 'number' ? data.lap : null);
-        (window as any).__tw_node_status = data.nodes || {};
+        const identity = { workflowId, executionId };
+        const matching = belongsToExecution(data, identity);
+        setLap(matching && typeof data.lap === 'number' ? data.lap : null);
+        (window as any).__tw_node_status = visibleNodeStatuses(data, editorWorkflowId, identity);
         window.dispatchEvent(new CustomEvent('tw-node-status'));
       } catch {
         // 静默
@@ -129,27 +130,12 @@ export function useExecution(): ExecutionState & ExecutionActions {
     tick();
     const id = setInterval(tick, 1000);
     return () => { stopped = true; clearInterval(id); };
-  }, [applyStatus, running]);
+  }, [running, executionId, workflowId, editorWorkflowId]);
 
-  const start = useCallback(async (graph: WorkflowGraph, workflowId: string, initialInput?: string, mode: WorkflowMode = 'manual', profileId?: string) => {
+  const start = useCallback(async (workflowId: string, initialInput?: string, mode: WorkflowMode = 'manual', profileId?: string) => {
     setError(null);
     try {
-      const res = await fetch('/api/tradewind/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ graph, workflowId, initialInput, mode, profileId }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        const baseMsg = (data as any).error || `HTTP ${res.status}`;
-        // 后端返回的 errors 数组（ValidationError[]），展开成多行
-        const errs = (data as any).errors as Array<{ message: string }> | undefined;
-        if (Array.isArray(errs) && errs.length > 0) {
-          throw new Error(baseMsg + '：\n\n' + errs.map(e => '· ' + e.message).join('\n'));
-        }
-        throw new Error(baseMsg);
-      }
-      const data = await res.json() as { executionId: string };
+      const data = await requestStart({ workflowId, initialInput, mode, profileId });
       applyStatus({ running: true, executionId: data.executionId, workflowId });
     } catch (e) {
       setPhase('failed');
@@ -159,8 +145,10 @@ export function useExecution(): ExecutionState & ExecutionActions {
 
   const stop = useCallback(async () => {
     try {
-      await requestStop(t('tradewind.stopFailed'));
-      applyStatus({ running: false, executionId: stateRef.current.executionId ?? undefined, outcome: 'stopped' });
+      const currentExecutionId = stateRef.current.executionId;
+      if (!currentExecutionId) throw new Error(t('tradewind.stopFailed'));
+      await requestStop(currentExecutionId, t('tradewind.stopFailed'));
+      applyStatus({ running: false, executionId: currentExecutionId, outcome: 'stopped' });
       abortRef.current?.abort();
     } catch (cause) {
       setError((cause as Error).message || t('tradewind.stopFailed'));

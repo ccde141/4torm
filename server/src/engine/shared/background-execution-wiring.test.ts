@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { buildBackgroundExecutionToolDefs, withBackgroundExecutionGuidance } from './background-execution-tools.js';
+import { buildSeatToolCatalog } from '../cyclone/seat-tool-catalog.js';
 
 const srcRoot = path.resolve(import.meta.dirname, '..');
 
@@ -27,10 +28,12 @@ test('实际开放后台生命周期时，Agent 能从可后台化工具说明�
 });
 
 test('季风仅在有会话身份时开放后台控制，潮汐不会继承该能力', () => {
-  const session = fs.readFileSync(path.join(srcRoot, 'conversation', 'session-runner.ts'), 'utf8');
-  const tide = fs.readFileSync(path.join(srcRoot, '..', 'services', 'tide', 'runner.ts'), 'utf8');
-  assert.match(session, /this\.opts\.sessionId \? buildBackgroundExecutionToolDefs\(\) : \[\]/);
-  assert.match(session, /this\.opts\.sessionId[\s\S]*withBackgroundExecutionGuidance\(loadedToolDefs\)/);
+  const session = fs.readFileSync(
+    path.join(srcRoot, 'conversation', 'session-tool-assembly.ts'), 'utf8',
+  );
+  const tide = fs.readFileSync(path.join(srcRoot, '..', 'modules', 'tide', 'runtime', 'runner.ts'), 'utf8');
+  assert.match(session, /input\.interactive \? buildBackgroundExecutionToolDefs\(\) : \[\]/);
+  assert.match(session, /input\.interactive[\s\S]*withBackgroundExecutionGuidance\(input\.loaded\)/);
   assert.doesNotMatch(tide, /buildBackgroundExecutionToolDefs|inspect_execution|wait_execution|terminate_execution/);
 });
 
@@ -38,8 +41,10 @@ test('气旋只在工位私聊驱动中开放后台控制并使用工位所有�
   const seat = fs.readFileSync(path.join(srcRoot, 'cyclone', 'seat-runner.ts'), 'utf8');
   const room = fs.readFileSync(path.join(srcRoot, 'cyclone', 'room-runner.ts'), 'utf8');
   const contact = fs.readFileSync(path.join(srcRoot, 'cyclone', 'contact.ts'), 'utf8');
-  assert.match(seat, /buildBackgroundExecutionToolDefs\(\)/);
-  assert.match(seat, /withBackgroundExecutionGuidance\(toolDefs\)/);
+  const catalog = buildSeatToolCatalog([], [], []);
+  assert.deepEqual(catalog.slice(-3).map(tool => tool.name),
+    ['inspect_execution', 'wait_execution', 'terminate_execution']);
+  assert.match(seat, /buildSeatToolCatalog\(toolDefs, contactTargets, dispatchTargets\)/);
   assert.match(seat, /ownerId: `\$\{workshopId\}:\$\{seatId\}`/);
   assert.doesNotMatch(room, /buildBackgroundExecutionToolDefs/);
   assert.doesNotMatch(contact, /buildBackgroundExecutionToolDefs/);

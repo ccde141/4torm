@@ -1,25 +1,15 @@
 # Model Providers
 
-A model provider determines which service 4torm calls and how it prepares context, generation parameters, reasoning content, and tool messages. When creating a configuration, choose the **provider type** that matches the actual service. This explicit identity selects the correct behavior without relying on guesses from the API URL or model name.
+In **Provider Management** in the Console, first select the provider type that matches the model service you actually use. Then enter its API URL and key. The type determines how 4torm prepares requests; changing only the URL or model name cannot replace choosing the right type.
 
-## Add a Provider
+## Add Models
 
-Open **Provider Management** in the Console, select **Add Provider**, and choose a preset. Common types covered by the current presets include:
+Select **Add Provider** and choose a preset. Presets include OpenAI Compatible, DeepSeek, Kimi, Alibaba Cloud Model Studio, Zhipu AI, and MiniMax, as well as local inference services such as LM Studio, llama.cpp, Ollama, and vLLM. You can edit the name, URL, and key afterward. Leave the key empty if your local service does not require one.
 
-- **Generic compatible endpoint**: OpenAI Compatible, for other services compatible with OpenAI Chat Completions
-- **Cloud providers**: services such as DeepSeek, Kimi, Alibaba Cloud Model Studio, Zhipu AI, and MiniMax
-- **Local inference runtimes**: runtimes such as LM Studio, llama.cpp, Ollama, and vLLM
+Select **Fetch Model List**, then choose the models you want to use in 4torm. If the service does not expose a complete list, add the exact model ID supplied by that service manually.
 
-After creation, edit the name, API URL, and API Key. Leave the key empty for a local service that does not require one.
+## Configure and Test
 
-**Fetch Model List** reads the models exposed by the service. Some services omit this endpoint or return only part of their catalog; enter the exact server-side model ID manually in that case.
+Start with the default provider parameters and per-model configuration. Change a parameter only when your service or model explicitly requires it. If the model list loads and capability tests pass but an actual conversation fails, check whether the per-model parameters form a combination the service does not accept.
 
-## Per-model Configuration and Capability Tests
-
-The configuration selector on each model row remains available for legacy compatibility and exceptional model-level behavior. With a new explicit provider preset, normally leave it on **Auto** so the provider identity selects the adapter.
-
-The **Image understanding** test confirms only that the endpoint accepted one test image. A passing result allows image input in Monsoon, but stable understanding, supported formats, and size limits still belong to the model and provider. Authentication, proxy, and temporary service failures can also make the test inconclusive.
-
-## Storage
-
-Provider configuration is stored in `data/providers.json`, including API URLs, API keys, enabled models, provider parameters, custom fields, and capability results.
+Model rows provide tool-calling and **Image understanding** tests. A test confirms that the current endpoint accepts one corresponding test request; it cannot guarantee performance on every task. After an image test passes, you can send images to that model in Monsoon. If it fails, use the returned error to distinguish capability limits from authentication or connection problems.

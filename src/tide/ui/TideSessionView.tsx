@@ -1,26 +1,61 @@
-import type { TideSession } from '../../api/tide';
+import { useEffect, useRef, useState } from 'react';
+import { compactTideSession, type TideSession } from '../../api/tide';
 import StructuredMessage from '../../components/chat/StructuredMessage';
 import { useLocale } from '../../i18n/LocaleContext';
 import { actionBtnStyle } from './tide-styles';
+import { formatTideContextTokens } from './tide-token-label';
+import { CompactionNotice } from '../../components/common/CompactionNotice';
+import { visibleTideMessages } from './tide-session-projection';
 
 interface TideSessionViewProps {
   session: TideSession;
   onClose: () => void;
+  onCompacted?: () => Promise<unknown>;
 }
 
-export default function TideSessionView({ session, onClose }: TideSessionViewProps) {
-  const { t } = useLocale();
-  const messages = session.messages.filter(message => message.role !== 'system');
+export default function TideSessionView({ session, onClose, onCompacted }: TideSessionViewProps) {
+  const { locale, t } = useLocale();
+  const [compacting, setCompacting] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const identity = `${session.agentId}:${session.id}`;
+  const currentIdentity = useRef(identity);
+  currentIdentity.current = identity;
+  useEffect(() => { setNotice(''); setError(''); setCompacting(false); }, [identity]);
+  const messages = visibleTideMessages(session);
+  const compact = async () => {
+    setCompacting(true); setError(''); setNotice('');
+    try {
+      const result = await compactTideSession(session.agentId, session.id);
+      if (currentIdentity.current !== identity) return;
+      setNotice(result.notices.join('\n'));
+      await onCompacted?.();
+    } catch (cause) { if (currentIdentity.current === identity) setError((cause as Error).message); }
+    finally { if (currentIdentity.current === identity) setCompacting(false); }
+  };
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
         <h2 style={{ fontSize: 'var(--text-lg)', margin: 0 }}>{session.title}</h2>
-        <button onClick={onClose} style={actionBtnStyle}>{t('tide.session.close')}</button>
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <button onClick={() => void compact()} disabled={compacting || messages.length === 0} style={actionBtnStyle}>
+            {compacting ? (locale === 'en-US' ? 'Compacting…' : '正在压缩…')
+              : (locale === 'en-US' ? 'Compact session' : '压缩会话')}
+          </button>
+          <button onClick={onClose} style={actionBtnStyle}>{t('tide.session.close')}</button>
+        </div>
       </div>
       <div style={{ fontSize: '10px', color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-6)', textAlign: 'center', textShadow: 'var(--text-halo)' }}>
         {t('tide.session.messageCount', { count: messages.length, model: session.model })}
+        <span title={locale === 'en-US'
+          ? 'Provider-reported input tokens for the latest model request'
+          : '最近一次模型请求的输入 token 数，由提供商回报'}>
+          {' · '}{formatTideContextTokens(session.tokenUsage, locale)}{session.tokenUsage ? ' tokens' : ''}
+        </span>
       </div>
       <div className="chat__messages">
+        {notice && <CompactionNotice message={notice} />}
+        {error && <p role="alert" className="agent-detail__error">{error}</p>}
         {messages.map(message => {
           if (message.role === 'tool-call') return <ToolCallBubble key={message.id} content={message.content} timestamp={message.timestamp} />;
           if (message.role === 'tool-result') return <ToolResultBubble key={message.id} content={message.content} timestamp={message.timestamp} />;

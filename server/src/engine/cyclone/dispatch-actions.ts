@@ -7,12 +7,20 @@ async function requireRoomDispatch(
   workshopId: string,
   roomId: string,
   dispatchId: string,
+  action?: 'include',
 ): Promise<CycloneDispatch> {
   const [item, room] = await Promise.all([
     loadDispatch(dataDir, workshopId, dispatchId),
     loadRoom(dataDir, workshopId, roomId),
   ]);
-  if (!item || !room || item.sourceRoomId !== roomId || !isDispatchVisibleInRoom(item, room)) {
+  if (!item || !room) throw new Error('派发不存在');
+  if (action === 'include' && item.sourceKind === 'seat') {
+    throw new Error('工位私聊发起的派发不能带入群聊');
+  }
+  if (action === 'include' && !item.sourceRoomId) {
+    throw new Error('该派发没有来源群聊，不能带入讨论');
+  }
+  if (item.sourceRoomId !== roomId || !isDispatchVisibleInRoom(item, room)) {
     throw new Error('派发不存在');
   }
   return item;
@@ -69,7 +77,7 @@ export async function includeDispatchResult(
   const release = tryAcquireRoomLock(workshopId, roomId);
   if (!release) throw new Error('群聊正在运行，请在本轮结束后重试');
   try {
-    const item = await requireRoomDispatch(dataDir, workshopId, roomId, dispatchId);
+    const item = await requireRoomDispatch(dataDir, workshopId, roomId, dispatchId, 'include');
     if (item.decisionState === 'included') return item;
     assertIncludeable(item);
     const room = await loadRoom(dataDir, workshopId, roomId);

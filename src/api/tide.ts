@@ -5,10 +5,31 @@
  */
 
 import { errorFromResponse } from './error-contract';
+import { invokeFeature } from './collaboration';
 
 const BASE = '/api/tide';
 
 export type TidePushMode = 'accumulate' | 'designated';
+
+export interface TideTokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface TideUsageProgress {
+  calls: number;
+  reportedCalls: number;
+  latest?: TideTokenUsage;
+  total?: TideTokenUsage;
+}
+
+export interface TideRunState {
+  runId: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'aborted' | 'crashed';
+  usage?: TideUsageProgress;
+  compactionNotice?: string;
+}
 
 export interface TideTask {
   id: string;
@@ -32,6 +53,7 @@ export interface TideTask {
 
 export interface TideRunRecord {
   taskId: string;
+  runId?: string;
   timestamp: string;
   status: 'success' | 'error';
   sessionId: string;
@@ -41,6 +63,8 @@ export interface TideRunRecord {
   turns: number;
   durationMs: number;
   error?: string;
+  usage?: TideUsageProgress;
+  notices?: string[];
 }
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
@@ -54,7 +78,9 @@ export async function listTasks(): Promise<TideTask[]> {
   return jsonOrThrow(await fetch(`${BASE}/tasks`));
 }
 
-export async function getTaskDetail(taskId: string): Promise<{ task: TideTask; recent: TideRunRecord[] }> {
+export async function getTaskDetail(taskId: string): Promise<{
+  task: TideTask; recent: TideRunRecord[]; runState?: TideRunState | null;
+}> {
   return jsonOrThrow(await fetch(`${BASE}/task/${taskId}`));
 }
 
@@ -71,31 +97,33 @@ export interface CreateTaskInput {
 }
 
 export async function createTask(input: CreateTaskInput): Promise<TideTask> {
-  return jsonOrThrow(await fetch(`${BASE}/task`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  }));
+  const result = await invokeFeature<{ task: TideTask }>('tide', 'createTask', input);
+  return result.task;
 }
 
 export async function updateTask(taskId: string, patch: Partial<TideTask>): Promise<TideTask> {
-  return jsonOrThrow(await fetch(`${BASE}/task/${taskId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  }));
+  const result = await invokeFeature<{ task: TideTask }>('tide', 'updateTask', { taskId, patch });
+  return result.task;
 }
 
 export async function deleteTask(taskId: string): Promise<void> {
-  await jsonOrThrow(await fetch(`${BASE}/task/${taskId}`, { method: 'DELETE' }));
+  await invokeFeature('tide', 'deleteTask', { taskId });
 }
 
 export async function toggleTask(taskId: string): Promise<TideTask> {
-  return jsonOrThrow(await fetch(`${BASE}/task/${taskId}/toggle`, { method: 'POST' }));
+  const result = await invokeFeature<{ task: TideTask }>('tide', 'toggleTask', { taskId });
+  return result.task;
 }
 
-export async function runNow(taskId: string): Promise<void> {
-  await jsonOrThrow(await fetch(`${BASE}/task/${taskId}/run-now`, { method: 'POST' }));
+export interface TideRunReceipt {
+  ok: true;
+  accepted: true;
+  runId: string;
+}
+
+export async function runNow(taskId: string): Promise<TideRunReceipt> {
+  const result = await invokeFeature<{ accepted: true; runId: string }>('tide', 'runTask', { taskId });
+  return { ok: true, accepted: result.accepted, runId: result.runId };
 }
 
 export async function listRuns(taskId: string, limit = 20): Promise<TideRunRecord[]> {
@@ -109,11 +137,15 @@ export interface TideSession {
   agentId: string;
   agentName: string;
   title: string;
-  messages: Array<{ id: string; role: string; content: string; timestamp?: string }>;
+  messages: Array<{ id: string; role: string; content: string; timestamp?: string;
+    type?: 'compact-marker'; nativeContext?: Array<{ role: string; content: string; toolCallId?: string;
+      toolOk?: boolean; toolCalls?: Array<{ id: string; name: string; arguments: string }> }> }>;
   model: string;
   systemPrompt: string;
   createdAt: string;
   updatedAt: string;
+  tokenUsage?: TideTokenUsage;
+  usage?: TideUsageProgress;
 }
 
 export interface TideSessionSummary {
@@ -128,9 +160,13 @@ export async function listTideSessions(agentId: string): Promise<TideSessionSumm
 }
 
 export async function deleteTideSession(taskId: string): Promise<void> {
-  await jsonOrThrow(await fetch(`${BASE}/session/${taskId}`, { method: 'DELETE' }));
+  await invokeFeature('tide', 'deleteSession', { taskId });
 }
 
 export async function getTideSession(agentId: string, sessionId: string): Promise<TideSession> {
   return jsonOrThrow(await fetch(`${BASE}/session/${agentId}/${sessionId}`));
+}
+
+export function compactTideSession(agentId: string, sessionId: string): Promise<{ compacted: boolean; notices: string[] }> {
+  return invokeFeature('tide', 'compactSession', { agentId, sessionId });
 }

@@ -65,9 +65,8 @@ export function buildVirtualToolDefs(params: BuildVirtualToolDefsParams): ToolDe
 /**
  * 构建自动模式的四个信封工具定义（增/删/扫 + 完成任务）。
  *
- * 仅在自动模式注入（手动模式的信封由人类点"传递"触发，无需这些工具）——
- * 是"两模式代码逻辑分离"的一部分。执行端拦截见 envelope-draft.ts 的
- * execEnvelopeTool；complete_task 由 native 循环识别为终结信号（决策报告 §一、§三）。
+ * 仅在自动模式注入；手动模式由人类触发信封传递。
+ * execEnvelopeTool 处理条目操作；native 循环用 complete_task 结束本轮。
  */
 export function buildEnvelopeToolDefs(): ToolDef[] {
   return [

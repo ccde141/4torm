@@ -1,5 +1,5 @@
 /**
- * Electron 主进程入口（HTTP-on-localhost 架构）
+ * Electron 主进程入口（HTTPS/2-on-localhost 架构）
  *
  * - dev：窗口加载 Vite dev server（http://localhost:5173），/api 由 Vite 代理转发到 Fastify(:3001)。
  * - prod：窗口加载 Fastify 自托管的 dist。
@@ -14,9 +14,10 @@ const { createSurfaceRegistry } = require('./surface-registry.cjs');
 const { createDesktopBrowserBridge, createDesktopBrowserBridgeServer } = require('./desktop-browser-bridge.cjs');
 const { spawn } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
-const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
+const { certificatePath, isPinnedLocalCertificate, isServerReady, waitForServer } = require('./transport.cjs');
+const { createServerRecovery } = require('./server-recovery.cjs');
 
 // 生产模式：打包后必走；未打包时由 ELECTRON_PROD=1 触发生产预览（自托管 dist/）
 const isProd = app.isPackaged || process.env.ELECTRON_PROD === '1';
@@ -24,8 +25,10 @@ const isDev = !isProd;
 const shouldOpenDevTools = isDev && process.env.ELECTRON_OPEN_DEVTOOLS === '1';
 const DEV_URL = process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173';
 const PROD_PORT = parseInt(process.env.PORT || '3001', 10);
-const PROD_URL = process.env.ELECTRON_PROD_URL || `http://localhost:${PROD_PORT}`;
-const SERVER_URL = `http://localhost:${PROD_PORT}`;
+const PROD_URL = process.env.ELECTRON_PROD_URL || `https://localhost:${PROD_PORT}`;
+const SERVER_URL = `https://localhost:${PROD_PORT}`;
+const CERT_PATH = certificatePath(path.join(__dirname, '..'));
+const SERVER_NAME = process.env.FOURTORM_TLS_SERVERNAME || 'localhost';
 
 // 应用名 + 任务栏标识（覆盖 package.json 的 npm 包名，避免显示 agent-dashboard）
 app.setName('4torm');
@@ -51,6 +54,19 @@ const executionSurfaceRegistry = createSurfaceRegistry({ WebContentsView, getWin
 let serverProc = null;
 let desktopBridgeServer = null;
 let desktopBridgeConfig = null;
+const serverRecovery = createServerRecovery({
+  recover: () => ensureServerReady(),
+  onFailure: error => console.error('[electron] server 意外退出后恢复失败：', error),
+});
+
+app.on('certificate-error', (event, webContents, url, _error, certificate, callback) => {
+  const trusted = webContents === mainWindow?.webContents && isPinnedLocalCertificate({
+    url, fingerprint: certificate.fingerprint, certPath: CERT_PATH, port: PROD_PORT,
+  });
+  if (!trusted) return callback(false);
+  event.preventDefault();
+  callback(true);
+});
 
 /** 拉起 Fastify，并把桌面浏览器桥接能力限定为此子进程可见。 */
 function startServer(bridge) {
@@ -75,28 +91,18 @@ function startServer(bridge) {
     windowsHide: true,
     shell: false,
   });
-  serverProc.on('exit', (code) => {
-    console.log(`[electron] server 进程退出 code=${code}`);
+  serverProc.on('exit', (code, signal) => {
+    console.error(`[electron] server 进程退出 code=${code} signal=${signal}`);
     serverProc = null;
-  });
-}
-
-function isServerReady(url) {
-  return new Promise((resolve) => {
-    const req = http.get(url + '/api/health', (res) => {
-      res.resume();
-      resolve(res.statusCode === 200);
-    });
-    req.on('error', () => resolve(false));
-    req.setTimeout(1200, () => { req.destroy(); resolve(false); });
+    void serverRecovery.handleExit();
   });
 }
 
 async function ensureServerReady() {
-  if (await isServerReady(SERVER_URL)) return;
+  if (await isServerReady(SERVER_URL, CERT_PATH, SERVER_NAME)) return;
   if (!desktopBridgeConfig) throw new Error('桌面浏览器桥接尚未初始化');
   startServer(desktopBridgeConfig);
-  await waitForServer(SERVER_URL);
+  await waitForServer(SERVER_URL, CERT_PATH, SERVER_NAME);
 }
 
 async function startDesktopBrowserBridge() {
@@ -107,28 +113,6 @@ async function startDesktopBrowserBridge() {
   await server.listen();
   desktopBridgeServer = server;
   return { endpoint, token };
-}
-
-/** 轮询健康检查，等 Fastify 起来再加载窗口，避免白屏/连接拒绝 */
-function waitForServer(url, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  const health = `${url}/api/health`;
-  return new Promise((resolve, reject) => {
-    const ping = () => {
-      const req = http.get(health, (res) => {
-        res.resume();
-        if (res.statusCode === 200) resolve();
-        else retry();
-      });
-      req.on('error', retry);
-      req.setTimeout(2000, () => req.destroy());
-    };
-    const retry = () => {
-      if (Date.now() > deadline) reject(new Error('等待 server 启动超时'));
-      else setTimeout(ping, 400);
-    };
-    ping();
-  });
 }
 
 function createWindow() {
@@ -215,7 +199,7 @@ function parseSurfaceLease(value) {
 if (ownsSingleInstance) {
   app.on('second-instance', () => {
     void (async () => {
-      const recovered = !(await isServerReady(SERVER_URL));
+      const recovered = !(await isServerReady(SERVER_URL, CERT_PATH, SERVER_NAME));
       try {
         await ensureServerReady();
         if (!mainWindow) createWindow();
@@ -231,7 +215,7 @@ if (ownsSingleInstance) {
     desktopBridgeConfig = bridge;
     startServer(bridge);
     try {
-      await waitForServer(SERVER_URL);
+      await waitForServer(SERVER_URL, CERT_PATH, SERVER_NAME);
     } catch (e) {
       console.error('[electron]', e.message, '—— 仍尝试加载窗口');
     }
@@ -248,6 +232,7 @@ if (ownsSingleInstance) {
 
   // 退出前掐掉托管的 server 子进程，避免端口残留
   app.on('before-quit', () => {
+    serverRecovery.stop();
     if (serverProc) { serverProc.kill(); serverProc = null; }
     if (desktopBridgeServer) {
       void desktopBridgeServer.close().catch(error => console.error('[electron] desktop browser bridge close failed:', error));

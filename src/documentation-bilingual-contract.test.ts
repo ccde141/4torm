@@ -57,10 +57,8 @@ test('quick start documents the in-app language switch in both languages', async
     read('guide/getting-started.md', true),
   ]);
 
-  assert.match(chinese, /侧栏左下角.*中文.*English/s);
-  assert.match(chinese, /记住.*选择/);
-  assert.match(english, /bottom-left.*Chinese.*English/is);
-  assert.match(english, /remember.*selection/is);
+  assert.match(chinese, /侧栏左下角.*中文.*英文/s);
+  assert.match(english, /Chinese.*English.*bottom-left/is);
 });
 
 test('agent guide documents avatar behavior and its display boundary', async () => {

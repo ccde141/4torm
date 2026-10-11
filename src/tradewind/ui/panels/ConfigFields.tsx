@@ -2,12 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Edge, Node } from '@xyflow/react';
 import { AGENTS_CHANGED_EVENT } from '../../../store/agent-events';
 import { useLocale } from '../../../i18n/LocaleContext';
-
-interface AgentSummary {
-  id: string;
-  name: string;
-  model: string;
-}
+import { listTradewindAgents, type TradewindAgentSummary } from '../agent-client';
 
 interface ConfigFieldsProps {
   nodeId: string;
@@ -39,17 +34,18 @@ export function ConfigFields({ nodeId, nodeType, config, label, onUpdate, nodes,
   }
 }
 
-function useTradewindAgents(): AgentSummary[] {
-  const [agents, setAgents] = useState<AgentSummary[]>([]);
+function useTradewindAgents(): { agents: TradewindAgentSummary[]; error: string } {
+  const [agents, setAgents] = useState<TradewindAgentSummary[]>([]);
+  const [error, setError] = useState('');
   useEffect(() => {
     let disposed = false;
     const load = async () => {
       try {
-        const response = await fetch('/api/tradewind/agents');
-        if (!response.ok) return;
-        const data = await response.json() as { agents?: AgentSummary[] };
-        if (!disposed) setAgents(Array.isArray(data.agents) ? data.agents : []);
-      } catch { /* 保留上一次列表，等待下一次刷新 */ }
+        const data = await listTradewindAgents();
+        if (!disposed) { setAgents(data); setError(''); }
+      } catch (cause) {
+        if (!disposed) setError((cause as Error).message);
+      }
     };
     const refresh = () => { void load(); };
     void load();
@@ -61,7 +57,7 @@ function useTradewindAgents(): AgentSummary[] {
       window.removeEventListener('focus', refresh);
     };
   }, []);
-  return agents;
+  return { agents, error };
 }
 
 interface SimpleFieldProps {
@@ -71,7 +67,7 @@ interface SimpleFieldProps {
 
 function AgentFields({ config, onChange }: SimpleFieldProps) {
   const { t } = useLocale();
-  const agents = useTradewindAgents();
+  const { agents, error } = useTradewindAgents();
   const agentId = (config.agentId as string) ?? '';
   const role = (config.role as string) ?? '';
   return <>
@@ -81,6 +77,7 @@ function AgentFields({ config, onChange }: SimpleFieldProps) {
         <option value="">{t('tradewind.config.selectAgent')}</option>
         {agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name} ({agent.id.slice(0, 12)})</option>)}
       </select>
+      {error && <span className="tw-config__hint">{error}</span>}
     </div>
     <div className="tw-config__field">
       <label className="tw-config__label">{t('tradewind.config.role')}</label>
@@ -104,7 +101,7 @@ function MeetingFields({ config, onChange, nodes, currentNodeId }: SimpleFieldPr
   nodes: Node[]; currentNodeId: string;
 }) {
   const { t } = useLocale();
-  const agents = useTradewindAgents();
+  const { agents, error } = useTradewindAgents();
   const chairAgentId = (config.chairAgentId as string) ?? '';
   const participantNodeIds = (config.participantNodeIds as string[]) ?? [];
   const agentNodes = nodes.filter(node => node.type === 'agent' && node.id !== currentNodeId);
@@ -117,6 +114,7 @@ function MeetingFields({ config, onChange, nodes, currentNodeId }: SimpleFieldPr
         <option value="">{t('tradewind.config.selectChair')}</option>
         {agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
       </select>
+      {error && <span className="tw-config__hint">{error}</span>}
     </div>
     <div className="tw-config__field">
       <label className="tw-config__label">{t('tradewind.config.participants')}</label>

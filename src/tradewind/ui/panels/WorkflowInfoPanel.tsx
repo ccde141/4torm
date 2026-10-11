@@ -7,11 +7,12 @@
  *
  * 数据：一条 unified /stream（subscribeAll）聚合全部节点事件，实时展现
  *       节点进度 + 当前信封（条目增删）+ 交接/最终产出。
- * 生命周期：开始新一轮清空、结束冻结保留（配合 TradeWindPage 封存逻辑）。零流成本（静态后流关，state 留存）。
+ * 生命周期：开始新一轮清空、结束冻结保留（配合 TradeWindPage 封存逻辑）。
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { subscribeAll, unsubscribeAll } from '../stream/unified-client';
+import { belongsToExecution } from '../hooks/execution-visibility';
 import { useLocale } from '../../../i18n/LocaleContext';
 
 interface NodeRef { id: string; label: string }
@@ -20,6 +21,8 @@ interface Info { envelope?: string; answer?: string }
 interface Props {
   nodes: NodeRef[];
   outputSourceId: string | null;
+  workflowId: string;
+  executionId: string | null;
   running: boolean;
   sessionEnded: boolean;
   /** 循环模式下当前第几圈（1 起）；非循环运行为 null → 不显示圈数 */
@@ -29,7 +32,9 @@ interface Props {
 const RAIL_W = 42;
 const MIN_W = 280, MAX_W = 620, DEFAULT_W = 360;
 
-export function WorkflowInfoPanel({ nodes, outputSourceId, running, sessionEnded, lap }: Props) {
+export function WorkflowInfoPanel({
+  nodes, outputSourceId, workflowId, executionId, running, sessionEnded, lap,
+}: Props) {
   const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
   const [hovering, setHovering] = useState(false);
@@ -46,6 +51,7 @@ export function WorkflowInfoPanel({ nodes, outputSourceId, running, sessionEnded
   // 一条 unified /stream 收全部节点事件 → 每节点最新信封 / 产出
   useEffect(() => {
     const handler = (ev: any) => {
+      if (ev?.scope !== 'agent' || !belongsToExecution(ev, { workflowId, executionId })) return;
       const id = ev?.nodeId;
       if (!id) return;
       if (ev.type === 'tool-result' && typeof ev.tool === 'string' && ev.tool.startsWith('envelope')) {
@@ -56,7 +62,10 @@ export function WorkflowInfoPanel({ nodes, outputSourceId, running, sessionEnded
     };
     subscribeAll(handler);
     return () => unsubscribeAll(handler);
-  }, []);
+  }, [workflowId, executionId]);
+
+  useEffect(() => { setInfo({}); setStatus({}); }, [workflowId]);
+  useEffect(() => { if (executionId) setInfo({}); }, [executionId]);
 
   useEffect(() => {
     const h = () => setStatus({ ...((window as any).__tw_node_status || {}) });

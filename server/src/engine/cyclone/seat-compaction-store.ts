@@ -32,17 +32,19 @@ export async function applySeatCompaction(
   seat: SeatData,
   plan: ReadyPlan,
   summary: string,
+  preparedArchivePath?: string,
 ): Promise<{ archivePath: string; archivedCount: number; seat: SeatData }> {
   const normalizedSummary = summary.trim();
   if (!normalizedSummary) throw new Error('压缩摘要为空，已保留原上下文');
 
   const state = seat.compactState || { disabled: false, archiveSeq: 0 };
   const nextSequence = state.archiveSeq + 1;
-  const archivePath = cycloneArchiveFile(
+  const archivePath = preparedArchivePath ?? cycloneArchiveFile(
     dataDir, workshopId, compactArchiveName(seat.id, nextSequence),
   );
-  await ensureDir(workshopBakDir(dataDir, workshopId));
-  await atomicWrite(archivePath, JSON.stringify({
+  if (!preparedArchivePath) {
+    await ensureDir(workshopBakDir(dataDir, workshopId));
+    await atomicWrite(archivePath, JSON.stringify({
     type: 'cyclone-seat-context-compact',
     version: 1,
     createdAt: new Date().toISOString(),
@@ -53,7 +55,8 @@ export async function applySeatCompaction(
     keptTurnCount: plan.keptTurnCount,
     tokenUsage: seat.tokenUsage || null,
     compactState: seat.compactState || null,
-  }, null, 2));
+    }, null, 2));
+  }
 
   const nextSeat: SeatData = {
     ...seat,

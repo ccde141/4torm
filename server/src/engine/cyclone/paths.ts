@@ -1,14 +1,14 @@
 /**
  * 气旋工作室路径与底层 IO 助手
  *
- * 自写一份原子写/安全读，不 import 对流的 session.ts（零交叉代码铁律）。
+ * 工作室路径与 IO 独立于对流的 session.ts。
  */
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { readJsonFile } from '../../services/json-file-store.js';
 import { atomicWriteFile } from '../shared/atomic-io.js';
+import { frameworkError } from '../shared/framework-error.js';
 
 /** 工作室根目录：data/cyclone/{workshopId}/ */
 export function workshopDir(dataDir: string, id: string): string {
@@ -43,6 +43,10 @@ export function workshopBulletinFile(dataDir: string, id: string): string {
 /** 公告板改动时间轴：data/cyclone/{id}/bulletin-history.json（审计 + 撤回；独立文件不拖慢 prompt 读） */
 export function workshopBulletinHistoryFile(dataDir: string, id: string): string {
   return path.join(workshopDir(dataDir, id), 'bulletin-history.json');
+}
+
+export function workshopBulletinPendingFile(dataDir: string, id: string): string {
+  return path.join(workshopDir(dataDir, id), 'bulletin-pending.json');
 }
 
 /** 工位文件：data/cyclone/{id}/seats/{seatId}.json */
@@ -106,14 +110,45 @@ export function cycloneArchiveFile(dataDir: string, workshopId: string, name: st
 // ── 底层 IO ──────────────────────────────────────────────────
 
 /**
- * 安全读 JSON。区分三种情形，绝不把"坏了"悄悄当成"没有"：
- * - 文件不存在（ENOENT）→ 返回 null（正常：未创建 / 已删除）
- * - 文件存在但 JSON 损坏 → 隔离改名为 .corrupt-* + 告警，再返回 null（原文件保留可恢复，不静默蒸发）
- * - 其它读失败（权限 / IO）→ 抛出（异常情形，要出声，别假装空）
- * 顺带容忍 UTF-8 BOM —— 当初正是开头的 BOM 让 JSON.parse 抛错、房间凭空消失。
+ * 缺失返回 null；损坏保留原文件并持续报错，避免下一次读取伪装成缺失。
+ * 容忍历史 UTF-8 BOM；权限和 IO 错误保持原样抛出。
  */
 export async function readJsonSafe<T>(file: string): Promise<T | null> {
-  return readJsonFile<T>(file, 'cyclone');
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      await assertNoLegacyQuarantine(file);
+      return null;
+    }
+    throw error;
+  }
+  try {
+    const value: unknown = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
+    if (value === null) throw new Error('unexpected JSON null');
+    return value as T;
+  } catch (cause) {
+    throw frameworkError({
+      code: 'CYCLONE_STORE_CORRUPT', kind: 'io', message: '气旋持久化 JSON 已损坏',
+      source: 'cyclone.store', retryable: false,
+    }, { cause });
+  }
+}
+
+async function assertNoLegacyQuarantine(file: string): Promise<void> {
+  let names: string[];
+  try {
+    names = await fs.readdir(path.dirname(file));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if (!names.some(name => name.startsWith(`${path.basename(file)}.corrupt-`))) return;
+  throw frameworkError({
+    code: 'CYCLONE_STORE_CORRUPT', kind: 'io', message: '气旋持久化 JSON 已损坏并隔离',
+    source: 'cyclone.store', retryable: false,
+  });
 }
 
 /**

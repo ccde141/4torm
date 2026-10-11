@@ -18,10 +18,16 @@ import { appendChairStreamChunk, appendReasoning, applyChairStreamSnapshot } fro
 import { getMeetingPublicStateLabel } from './meeting-status';
 import MeetingPanelView, { type MeetingView } from './MeetingPanelView';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { abortMeetingRound } from '../execution-client';
+import { belongsToExecution } from '../hooks/execution-visibility';
+import { acceptsPanelEvent } from '../stream/panel-identity';
+import { latestProviderUsage, type ProviderUsage } from '../token-usage';
 
 interface MeetingPanelProps {
   nodeId: string;
   nodeLabel: string;
+  workflowId: string;
+  executionId: string;
   onClose: () => void;
   /** 面板是否可见 */
   visible?: boolean;
@@ -39,18 +45,27 @@ interface ChairStreamState {
   reasoningContent: string;
 }
 
-export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: MeetingPanelProps) {
+export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClose, visible = true }: MeetingPanelProps) {
   const { t } = useLocale();
   const [activeView, setActiveView] = useState<MeetingView>('public');
   const [publicMsgs, setPublicMsgs] = useState<MeetingMessage[]>([]);
   const [chairMsgs, setChairMsgs] = useState<MeetingChairMessage[]>([]);
   const [status, setStatus] = useState<MeetingStatus | null>(null);
+  const [latestUsage, setLatestUsage] = useState<ProviderUsage | null | undefined>();
+  const usageVersionRef = useRef(0);
+  const identityRef = useRef({ workflowId, executionId });
+  identityRef.current = { workflowId, executionId };
+  const acceptsStatus = useCallback((value: MeetingStatus) => belongsToExecution(value, identityRef.current), []);
+  const reportStatusError = useCallback((cause: unknown) => {
+    setError(cause instanceof Error ? cause.message : String(cause));
+  }, []);
   const [publicInput, setPublicInput] = useState('');
   const [chairInput, setChairInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [chairBusy, setChairBusy] = useState(false);
   const [endingRequested, setEndingRequested] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [compactionNotice, setCompactionNotice] = useState<string | null>(null);
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
   const [waitingLabel, setWaitingLabel] = useState('');
   const [waitingElapsed, setWaitingElapsed] = useState(0);
@@ -58,7 +73,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
   const chairEndRef = useRef<HTMLDivElement>(null);
   const publicContainerRef = useRef<HTMLDivElement>(null);
   const chairContainerRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const roundIdRef = useRef<string | null>(null);
   const handleEventRef = useRef<(ev: MeetingBroadcastEvent) => void>(() => {});
   const publicStreamRef = useRef<PublicStreamState>({
     currentLabel: '', streamContent: '', reasoningContent: '', pendingTools: [],
@@ -87,10 +102,12 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
 
   // 统一 SSE 事件流（通过 unified-client 复用单连接）
   useEffect(() => {
-    const handler = (ev: any) => handleEventRef.current(ev);
+    const handler = (ev: any) => {
+      if (acceptsPanelEvent(ev, 'meeting', { workflowId, executionId })) handleEventRef.current(ev);
+    };
     subscribe(nodeId, handler);
     return () => { unsubscribe(nodeId, handler); };
-  }, [nodeId]);
+  }, [nodeId, workflowId, executionId]);
 
   // 挂载时通过 REST 拉一次初始状态。
   // 共享 SSE 连接的 connected 快照只在连接首次建立时发一次，
@@ -98,23 +115,35 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
   // 否则 status 永远为 null，phase-change 事件被 setStatus(prev?...) 丢弃，卡在 opening。
   useEffect(() => {
     let cancelled = false;
-    getStatus(nodeId)
+    const usageVersion = usageVersionRef.current;
+    setLatestUsage(undefined);
+    setCompactionNotice(null);
+    getStatus(nodeId, { workflowId, executionId })
       .then((s) => {
-        if (cancelled) return;
+        if (cancelled || !acceptsStatus(s)) return;
+        setError(null);
+        roundIdRef.current = s.runId ?? null;
         setStatus(s);
+        setCompactionNotice(s.compactionNotice ?? null);
+        if (usageVersion === usageVersionRef.current) {
+          setLatestUsage(latestProviderUsage(s.tokenUsage));
+        }
         if (s.publicMessages) setPublicMsgs(s.publicMessages);
         if (s.chairMessages) setChairMsgs(s.chairMessages);
       })
-      .catch(() => { /* 会议尚未注册（404）：等 connected/phase-change 事件 */ });
+      .catch(reportStatusError);
     return () => { cancelled = true; };
-  }, [nodeId]);
+  }, [nodeId, workflowId, executionId, acceptsStatus, reportStatusError]);
 
   // 事件处理中枢：所有会议室事件通过此函数路由
   const handleEvent = useCallback((ev: MeetingBroadcastEvent) => {
     switch (ev.type) {
       case 'connected': {
+        usageVersionRef.current++;
+        roundIdRef.current = ev.runId ?? null;
         setStatus({
-          nodeId,
+          nodeId, workflowId,
+          executionId,
           round: ev.round,
           busy: false,
           phase: ev.phase as MeetingStatus['phase'],
@@ -124,7 +153,10 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
           chairAgentId: '',
           publicMessages: ev.messages as MeetingMessage[],
           chairMessages: ev.chairMessages as MeetingStatus['chairMessages'],
+          tokenUsage: ev.tokenUsage,
         });
+        setLatestUsage(latestProviderUsage(ev.tokenUsage));
+        setCompactionNotice(ev.compactionNotice ?? null);
         setPublicMsgs(ev.messages as MeetingMessage[]);
         setChairMsgs((ev.chairMessages as MeetingStatus['chairMessages']) || []);
         // 恢复公共流快照：前端连接前可能已经发出 agent-start。
@@ -139,11 +171,23 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         }
         break;
       }
-      case 'phase-change':
+      case 'round-start':
+        roundIdRef.current = ev.runId;
+        setBusy(true);
+        break;
+      case 'phase-change': {
+        const usageVersion = usageVersionRef.current;
         setStatus(prev => {
           // prev 为 null（REST 快照尚未回来）：补拉一次，避免 phase 丢失
           if (!prev) {
-            getStatus(nodeId).then(s => setStatus(s)).catch(() => {});
+            getStatus(nodeId, { workflowId, executionId })
+              .then(s => {
+                if (!acceptsStatus(s)) return;
+                setStatus(s);
+                if (usageVersion === usageVersionRef.current) {
+                  setLatestUsage(latestProviderUsage(s.tokenUsage));
+                }
+              }).catch(reportStatusError);
             return prev;
           }
           return { ...prev, phase: ev.phase as MeetingStatus['phase'] };
@@ -160,15 +204,25 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
           // 关键：opening 阶段的开场发言（agent-start/token/agent-done）若因订阅时序
           // 被前端错过，会一直缺失，直到下一轮 round-done 才补出（表现为"打招呼延迟蹦出"）。
           // opening 结束时用服务端权威态 publicMessages 全量同步，补齐所有开场发言。
-          getStatus(nodeId)
+          getStatus(nodeId, { workflowId, executionId })
             .then(s => {
+              if (!acceptsStatus(s)) return;
+              if (usageVersion === usageVersionRef.current) {
+                setLatestUsage(latestProviderUsage(s.tokenUsage));
+              }
               if (s.publicMessages) setPublicMsgs(s.publicMessages);
               if (s.chairMessages) setChairMsgs(s.chairMessages);
             })
-            .catch(() => {});
+            .catch(reportStatusError);
         }
         break;
+      }
+      case 'round-done':
+        roundIdRef.current = null;
+        handleStreamEvent(ev);
+        break;
       case 'agent-start':
+      case 'usage':
       case 'token':
       case 'reasoning':
       case 'tool-call':
@@ -176,7 +230,6 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
       case 'contact-start':
       case 'contact-done':
       case 'agent-done':
-      case 'round-done':
       case 'chair-token':
       case 'chair-reasoning':
       case 'chair-done':
@@ -185,6 +238,9 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
       case 'compact-start':
       case 'compact-done':
       case 'compact-warn':
+      case 'compaction-notice':
+      case 'compaction-notice-clear':
+      case 'history-updated':
       case 'heartbeat':
       case 'error':
       case 'done':
@@ -192,7 +248,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
         handleStreamEvent(ev);
         break;
     }
-  }, [nodeId]);
+  }, [nodeId, workflowId, executionId, acceptsStatus, reportStatusError]);
   handleEventRef.current = handleEvent;
 
   const updateLastPublic = useCallback((mutate: (last: MeetingMessage) => MeetingMessage) => {
@@ -250,6 +306,10 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
   const handleStreamEvent = useCallback((ev: MeetingBroadcastEvent) => {
     const stream = publicStreamRef.current;
     switch (ev.type) {
+      case 'usage':
+        usageVersionRef.current++;
+        setLatestUsage(ev.usage);
+        break;
       case 'agent-start':
         stream.currentLabel = ev.label;
         stream.streamContent = '';
@@ -443,6 +503,16 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
       case 'compact-warn':
         // 压缩事件暂时只透传 UI（后续可加压缩进度条）
         break;
+      case 'compaction-notice':
+        setCompactionNotice(ev.message);
+        break;
+      case 'compaction-notice-clear':
+        setCompactionNotice(null);
+        break;
+      case 'history-updated':
+        setPublicMsgs(ev.messages);
+        setChairMsgs(ev.chairMessages);
+        break;
       case 'heartbeat':
         setWaitingLabel(ev.label);
         break;
@@ -455,36 +525,44 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
       case 'minutes-done':
         break;
     }
-  }, [flushStreamFrame, scheduleStreamFrame, updateLastPublic]);
+  }, [executionId, flushStreamFrame, nodeId, scheduleStreamFrame, updateLastPublic]);
 
   const phase = status?.phase ?? 'opening';
 
   // 参与者管理（从 configuredParticipants 范围内加入/移除，按节点 ID）
   const handleJoin = useCallback(async (participantNodeId: string) => {
-    const result = await joinMeeting(nodeId, participantNodeId);
-    setStatus(prev => prev ? { ...prev, participants: result.participants } : prev);
-  }, [nodeId]);
+    try {
+      const result = await joinMeeting(executionId, nodeId, participantNodeId);
+      setStatus(prev => prev ? { ...prev, participants: result.participants } : prev);
+    } catch (cause) { setError((cause as Error).message); }
+  }, [executionId, nodeId]);
 
   const handleLeave = useCallback(async (participantNodeId: string) => {
-    const result = await leaveMeeting(nodeId, participantNodeId);
-    setStatus(prev => prev ? { ...prev, participants: result.participants } : prev);
-  }, [nodeId]);
+    try {
+      const result = await leaveMeeting(executionId, nodeId, participantNodeId);
+      setStatus(prev => prev ? { ...prev, participants: result.participants } : prev);
+    } catch (cause) { setError((cause as Error).message); }
+  }, [executionId, nodeId]);
 
   const moveUp = useCallback(async (idx: number) => {
     if (!status || idx <= 0) return;
     const arr = [...status.participants];
     [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
-    const result = await reorderMeeting(nodeId, arr.map(p => p.nodeId));
-    setStatus(prev => prev ? { ...prev, participants: result.participants } : prev);
-  }, [nodeId, status]);
+    try {
+      const result = await reorderMeeting(executionId, nodeId, arr.map(p => p.nodeId));
+      setStatus(prev => prev ? { ...prev, participants: result.participants } : prev);
+    } catch (cause) { setError((cause as Error).message); }
+  }, [executionId, nodeId, status]);
 
   const moveDown = useCallback(async (idx: number) => {
     if (!status || idx >= status.participants.length - 1) return;
     const arr = [...status.participants];
     [arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]];
-    const result = await reorderMeeting(nodeId, arr.map(p => p.nodeId));
-    setStatus(prev => prev ? { ...prev, participants: result.participants } : prev);
-  }, [nodeId, status]);
+    try {
+      const result = await reorderMeeting(executionId, nodeId, arr.map(p => p.nodeId));
+      setStatus(prev => prev ? { ...prev, participants: result.participants } : prev);
+    } catch (cause) { setError((cause as Error).message); }
+  }, [executionId, nodeId, status]);
 
   // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
   useEffect(() => {
@@ -507,11 +585,18 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     const chair = chairContainerRef.current;
     if (pub) pub.scrollTop = pub.scrollHeight;
     if (chair) chair.scrollTop = chair.scrollHeight;
+    const usageVersion = usageVersionRef.current;
     // 自愈：面板持久挂载，事件若因 race 丢失会一直缺失。切回面板时用服务端权威态
     // 全量同步 publicMessages/chairMessages/phase/busy，纠正任何累积偏差。
-    getStatus(nodeId)
+    getStatus(nodeId, { workflowId, executionId })
       .then(s => {
+        if (!acceptsStatus(s)) return;
+        setError(null);
+        roundIdRef.current = s.runId ?? null;
         setStatus(s);
+        if (usageVersion === usageVersionRef.current) {
+          setLatestUsage(latestProviderUsage(s.tokenUsage));
+        }
         if (s.publicMessages) setPublicMsgs(s.publicMessages);
         if (s.chairMessages) setChairMsgs(s.chairMessages);
         if (!s.busy) {
@@ -520,8 +605,8 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
           setWaitingLabel('');
         }
       })
-      .catch(() => {});
-  }, [visible, nodeId]);
+      .catch(reportStatusError);
+  }, [visible, nodeId, workflowId, executionId, acceptsStatus, reportStatusError]);
 
   // 公共发言（fire-and-forget，事件通过 /events 流返回）
   const handleSpeak = useCallback(async () => {
@@ -531,30 +616,23 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     setError(null);
     setWaitingSince(Date.now());
     setWaitingLabel('');
+    setBusy(true);
 
     setPublicMsgs(prev => [...prev, { speaker: '人类', content: text, timestamp: Date.now() }]);
 
-    const abort = new AbortController();
-    abortRef.current = abort;
-
     let result: { ok: boolean; error?: string };
     try {
-      result = await sendSpeak(nodeId, text, abort.signal);
+      result = await sendSpeak(executionId, nodeId, text);
     } catch (e) {
-      if ((e as Error).name === 'AbortError') {
-        result = { ok: false };
-      } else {
-        result = { ok: false, error: (e as Error).message };
-      }
+      result = { ok: false, error: (e as Error).message };
     }
-    abortRef.current = null;
     if (!result.ok) {
       setError(result.error || t('tradewind.meeting.sendPublicFailed'));
       setBusy(false);
       setWaitingSince(null);
     }
     // 成功时不设 busy=false——等 round-done 事件
-  }, [publicInput, busy, nodeId, t]);
+  }, [executionId, publicInput, busy, nodeId, t]);
 
   // 会议助理私聊（fire-and-forget，事件通过 /events 流返回）
   const handleChair = useCallback(async () => {
@@ -571,7 +649,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
 
     let result: { ok: boolean; error?: string };
     try {
-      result = await sendChair(nodeId, text);
+      result = await sendChair(executionId, nodeId, text);
     } catch (cause) {
       result = { ok: false, error: (cause as Error).message };
     }
@@ -580,7 +658,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
       setError(result.error || t('tradewind.meeting.sendChairFailed'));
       setChairMsgs(prev => prev.filter(m => m.role !== 'assistant' || m.content));
     }
-  }, [chairBusy, chairInput, nodeId, t]);
+  }, [chairBusy, chairInput, executionId, nodeId, t]);
 
   // 结束会议（不关面板，切为 ended 状态）
   const handleEnd = useCallback(async () => {
@@ -588,7 +666,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     setEndingRequested(true);
     setError(null);
     try {
-      await endMeeting(nodeId);
+      await endMeeting(executionId, nodeId);
       // 不 onClose——保持面板打开，phase-change 'ended' 事件会自动切换 UI
     } catch (e) {
       setError((e as Error).message);
@@ -596,7 +674,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
       setBusy(false);
       setEndingRequested(false);
     }
-  }, [nodeId]);
+  }, [executionId, nodeId]);
 
   const publicKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); }
@@ -605,10 +683,12 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); }
   };
 
-  const handleAbortRound = useCallback(() => {
-    abortRef.current?.abort();
-    fetch(`/api/tradewind/meeting/${nodeId}/abort-round`, { method: 'POST' }).catch(() => {});
-  }, [nodeId]);
+  const handleAbortRound = useCallback(async () => {
+    if (!roundIdRef.current) return;
+    try {
+      await abortMeetingRound(nodeId, roundIdRef.current);
+    } catch (cause) { setError((cause as Error).message); }
+  }, [executionId, nodeId]);
 
   const isOpening = phase === 'opening';
   const isEnded = phase === 'ended';
@@ -632,6 +712,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
       activeView={activeView}
       setActiveView={setActiveView}
       status={status}
+      latestUsage={latestUsage}
       publicMsgs={publicMsgs}
       chairMsgs={chairMsgs}
       publicInput={publicInput}
@@ -641,6 +722,7 @@ export function MeetingPanel({ nodeId, nodeLabel, onClose, visible = true }: Mee
       busy={busy}
       chairBusy={chairBusy}
       error={error}
+      compactionNotice={compactionNotice}
       isOpening={isOpening}
       isEnded={isEnded}
       publicStateLabel={publicStateLabel}

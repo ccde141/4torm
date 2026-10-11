@@ -1,11 +1,7 @@
 import { useState, useEffect } from 'react';
 import { updateAgentConfig, createAgent, updateAgent } from '../../store/agent';
 import { getAllModels } from '../../llm';
-import { buildToolsPrompt } from '../../store/tools';
-import { getLabels, addLabel, getPresetColors } from '../../store/statuses';
 import type { Agent, AgentConfig } from '../../types';
-import type { UserLabel } from '../../store/statuses';
-import { getEffectiveLocalTools } from './agent-tool-selection';
 import AgentConfigTabs, { type AgentConfigTab } from './AgentConfigTabs';
 import AgentPermissionField from './AgentPermissionField';
 import AgentAvatarField from './AgentAvatarField';
@@ -13,87 +9,81 @@ import { removeAgentAvatar, uploadAgentAvatar } from './agent-avatar-client';
 import { normalizeAgentPermission } from './agent-permission';
 import { useSkillSelection, useToolSelection } from './useAgentCapabilitySelection';
 import { useLocale } from '../../i18n/LocaleContext';
+import AgentToolCapabilities, { type McpToolItem } from './AgentToolCapabilities';
 import '../../styles/components/config-modal.css';
+import '../../styles/components/agent-permission.css';
 
-interface McpToolItem { name: string; fullName: string; description: string; }
 interface McpToolGroups { groups: Record<string, McpToolItem[]>; }
 
 interface CreateMode { mode: 'create'; onClose: () => void; onSave: () => void; }
-interface EditMode { mode: 'edit'; agent: Agent; onClose: () => void; onSave: () => void; }
-type Props = CreateMode | EditMode;
+interface EmbeddedMode { mode: 'embedded'; agent: Agent; tab: AgentConfigTab;
+  onClose: () => void; onSave: () => void; }
+type Props = CreateMode | EmbeddedMode;
 
 export default function AgentConfigModal(props: Props) {
   const { t } = useLocale();
   const { onClose } = props;
   const isCreate = props.mode === 'create';
+  const embedded = props.mode === 'embedded';
   const agent = isCreate ? null : props.agent;
 
-  const [tab, setTab] = useState<AgentConfigTab>('basic');
+  const [ownTab, setTab] = useState<AgentConfigTab>('basic');
+  const tab = embedded ? props.tab : ownTab;
   const [name, setName] = useState(agent?.name ?? '');
   const [role, setRole] = useState(agent?.role ?? '');
   const [description, setDescription] = useState(agent?.description ?? '');
   const [rolePrompt, setRolePrompt] = useState(agent?.config?.rolePrompt ?? (isCreate ? t('config.exampleRole') : ''));
-  const [temperature, setTemperature] = useState(agent?.config?.temperature ?? 0.7);
+  const [compactionPrompt, setCompactionPrompt] = useState(agent?.config?.compactionPrompt ?? '');
   const [workspace, setWorkspace] = useState(agent?.config?.workspace ?? (isCreate ? '' : `data/agents/${(agent as Agent).id}/.workspace/`));
   const [sandboxLevel, setSandboxLevel] = useState(() => normalizeAgentPermission(agent?.config?.sandboxLevel));
   const [model, setModel] = useState(agent?.model ?? '');
-  const [label, setLabel] = useState(agent?.label ?? '');
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [avatarDraft, setAvatarDraft] = useState<string | null>(null);
   const [avatarRemoved, setAvatarRemoved] = useState(false);
   const [avatarError, setAvatarError] = useState('');
   const [allModels, setAllModels] = useState<{ key: string; label: string }[]>([]);
-  const { allTools, checkedTools, setCheckedTools } = useToolSelection(agent?.config, isCreate);
+  const { allTools, checkedTools, setCheckedTools, catalogError } = useToolSelection(agent?.config, isCreate, tab === 'tools');
   const { allSkills, checkedSkills, setCheckedSkills, skillPreviews } = useSkillSelection(agent?.config, isCreate);
-  const [allLabels, setAllLabels] = useState<UserLabel[]>([]);
-  const [newLabelName, setNewLabelName] = useState('');
-  const [newLabelColor, setNewLabelColor] = useState('#a78bfa');
-  const [showAddLabel, setShowAddLabel] = useState(false);
   const [mcpGroups, setMcpGroups] = useState<Record<string, McpToolItem[]>>({});
-  const [mcpExpanded, setMcpExpanded] = useState<Set<string>>(new Set());
-  const effectiveLocalTools = getEffectiveLocalTools(allTools, checkedTools);
 
   useEffect(() => {
     getAllModels().then(setAllModels);
-    getLabels().then(setAllLabels);
     fetch('/api/mcp/tools').then(r => r.json()).then((d: McpToolGroups) => setMcpGroups(d.groups || {})).catch(() => {});
   }, []);
-
-  const handleAddLabel = async () => {
-    if (!newLabelName.trim()) return;
-    const def = await addLabel(newLabelName.trim(), newLabelColor);
-    setAllLabels(prev => [...prev, def]);
-    setLabel(def.id);
-    setNewLabelName('');
-    setShowAddLabel(false);
-  };
 
   const close = () => onClose();
 
   useEffect(() => {
+    if (embedded) return;
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  }, [embedded, onClose]);
 
   const handleSave = async () => {
     if (saving || saved) return;
-    const config: AgentConfig = { masterPrompt: '', rolePrompt, temperature: temperature || undefined, tools: [...checkedTools], toolMode: 'selected', skills: [...checkedSkills], workspace: workspace || undefined, sandboxLevel };
+    const config: AgentConfig = { masterPrompt: '', rolePrompt, compactionPrompt,
+      temperature: agent?.config?.temperature, tools: [...checkedTools],
+      toolMode: 'selected', skills: [...checkedSkills],
+      workspace: workspace || undefined, sandboxLevel };
+    setSaveError('');
     setSaving(true);
     let savedAgent: Agent;
     let avatarFailed = false;
     try {
       if (isCreate) {
-        savedAgent = await createAgent({ name: name || t('config.defaultName'), role, description, model, config, label: label || undefined });
+        savedAgent = await createAgent({ name: name || t('config.defaultName'), role, description, model, config });
       } else {
         const a = agent as Agent;
         await updateAgentConfig(a.id, config, model, {
-          name, role, description, label: label || undefined,
+          name, role, description,
         });
-        savedAgent = { ...a, name, role, description, label: label || undefined, model, config };
+        savedAgent = { ...a, name, role, description, model, config };
       }
-    } catch {
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Agent 保存失败');
       setSaving(false);   // 失败：恢复，允许重试
       return;
     }
@@ -111,22 +101,15 @@ export default function AgentConfigModal(props: Props) {
     }
     setSaved(true);       // 成功：转「✓ 已保存」并在关闭前保持禁用
     props.onSave();
-    setTimeout(props.onClose, avatarFailed ? 1800 : 600);
+    if (embedded) {
+      setSaving(false);
+      if (!avatarFailed) { setAvatarDraft(null); setAvatarRemoved(false); }
+      window.setTimeout(() => setSaved(false), 1200);
+    } else setTimeout(props.onClose, avatarFailed ? 1800 : 600);
   };
 
-  return (
-    <div className="config-modal-overlay" onClick={close}>
-      <div className="config-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh' }}>
-        <div className="config-modal-header">
-          <div>
-            <h3>{isCreate ? t('config.createTitle') : t('config.editTitle', { agent: agent?.name ?? '' })}</h3>
-            <p className="config-modal-subtitle">{isCreate ? t('config.stepByStep') : `${agent?.role} · ${agent?.id}`}</p>
-          </div>
-          <button className="config-modal-close" onClick={close} aria-label={t('config.close')}>✕</button>
-        </div>
-
-        <AgentConfigTabs active={tab} onChange={setTab} />
-
+  const content = (
+    <>
         <div className="config-modal-body" style={{ overflowY: 'auto' }}>
           {tab === 'basic' && (
             <>
@@ -144,31 +127,9 @@ export default function AgentConfigModal(props: Props) {
                   <input type="text" className="config-input config-input-full" value={role} onChange={e => setRole(e.target.value)} placeholder={t('config.rolePlaceholder')} />
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 'var(--space-4)', marginBottom: 'var(--space-4)' }}>
-                <div className="config-field" style={{ flex: 2 }}>
-                  <label className="config-label">{t('config.description')}</label>
-                  <input type="text" className="config-input config-input-full" value={description} onChange={e => setDescription(e.target.value)} placeholder={t('config.descriptionPlaceholder')} />
-                </div>
-                <div className="config-field" style={{ flex: 1 }}>
-                  <label className="config-label">{t('config.category')}</label>
-                  <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
-                    <select className="config-input config-input-full" value={label} onChange={e => setLabel(e.target.value)}>
-                      <option value="">{t('config.noLabel')}</option>
-                      {allLabels.map(l => (<option key={l.id} value={l.id}>{l.label}</option>))}
-                    </select>
-                    <button onClick={() => setShowAddLabel(!showAddLabel)} title={t('config.newLabel')} aria-label={t('config.newLabel')} className="icon-add-btn icon-add-btn--sm">+</button>
-                  </div>
-                  {showAddLabel && (
-                    <div style={{ marginTop: 'var(--space-2)', padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-                      <input value={newLabelName} onChange={e => setNewLabelName(e.target.value)} placeholder={t('config.labelName')} style={{ ...inputStyle, flex: 1, fontSize: 'var(--text-xs)' }} />
-                      <div style={{ display: 'flex', gap: '2px' }}>{getPresetColors().slice(0, 5).map(c => (
-                        <button key={c} onClick={() => setNewLabelColor(c)} aria-label={t('config.labelColor', { color: c })} style={{ width: 16, height: 16, borderRadius: '50%', background: c, border: newLabelColor === c ? '2px solid #fff' : '1px solid transparent' }} />
-                      ))}</div>
-                      <input value={newLabelColor} onChange={e => setNewLabelColor(e.target.value)} style={{ ...inputStyle, width: '65px', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' }} />
-                      <button onClick={handleAddLabel} style={{ ...miniBtn, background: 'var(--color-accent)', color: 'var(--color-on-accent)', border: 'none' }}>{t('config.add')}</button>
-                    </div>
-                  )}
-                </div>
+              <div className="config-field" style={{ marginBottom: 'var(--space-4)' }}>
+                <label className="config-label">{t('config.description')}</label>
+                <input type="text" className="config-input config-input-full" value={description} onChange={e => setDescription(e.target.value)} placeholder={t('config.descriptionPlaceholder')} />
               </div>
               <div className="config-field" style={{ marginBottom: 'var(--space-4)' }}>
                 <label className="config-label">{t('config.model')}</label>
@@ -184,11 +145,6 @@ export default function AgentConfigModal(props: Props) {
                   placeholder={`data/agents/${agent?.id || '{id}'}/.workspace/`} />
               </div>
               <AgentPermissionField value={sandboxLevel} onChange={setSandboxLevel} />
-              <div className="config-field">
-                <label className="config-label">Temperature<span className="config-value-display">{temperature}</span></label>
-                <input type="range" className="config-slider" min={0} max={2} step={0.1} value={temperature} onChange={e => setTemperature(Number(e.target.value))} />
-                <div className="config-slider-labels"><span>{t('config.precise')}</span><span>{t('config.creative')}</span></div>
-              </div>
             </>
           )}
 
@@ -233,86 +189,50 @@ export default function AgentConfigModal(props: Props) {
           )}
 
           {tab === 'prompt' && (
-            <>
+            <div className="config-field" style={{ marginTop: 'var(--space-4)' }}>
+              <label className="config-label">{t('config.rolePrompt')}<span className="config-hint">{t('config.rolePromptHint')}</span></label>
+              <textarea className="config-textarea" value={rolePrompt}
+                onChange={e => setRolePrompt(e.target.value)} rows={5}
+                placeholder={t('config.exampleRole')} />
+              <label className="config-label" style={{ marginTop: 'var(--space-4)' }}>{t('config.compactionPrompt')}</label>
+              <textarea className="config-textarea" value={compactionPrompt}
+                onChange={event => setCompactionPrompt(event.target.value)} rows={3}
+                placeholder={t('config.compactionPromptHint')} />
+            </div>
+          )}
 
-              <div className="config-field" style={{ marginTop: 'var(--space-4)' }}>
-                <label className="config-label">{t('config.tools')}<span className="config-hint">{t('config.toolsHint')}</span></label>
-
-                {/* 本地工具 */}
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: 'var(--space-3)' }}>
-                  {allTools.length === 0 && Object.keys(mcpGroups).length === 0 && <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{t('config.noTools')}</span>}
-                  {allTools.map(t => {
-                    const on = checkedTools.has(t.name);
-                    return (
-                      <button key={t.name} onClick={() => { const next = new Set(checkedTools); if (on) next.delete(t.name); else next.add(t.name); setCheckedTools(next); }}
-                        title={t.description || t.name}
-                        style={{ ...toolTagStyle, background: on ? 'var(--color-accent)' : 'var(--color-bg)', color: on ? 'var(--color-on-accent)' : 'var(--color-text)', border: `1px solid ${on ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer' }}>
-                        {on ? '✓ ' : ''}{t.name}{t.dangerous && <span style={{ fontSize: '10px', marginLeft: '2px' }}>⚠</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* MCP 工具（按 server 分组折叠） */}
-                {Object.entries(mcpGroups).map(([serverName, tools]) => {
-                  const expanded = mcpExpanded.has(serverName);
-                  const allSelected = tools.every(t => checkedTools.has(t.fullName));
-                  const someSelected = tools.some(t => checkedTools.has(t.fullName));
-                  return (
-                    <div key={serverName} style={{ marginBottom: '8px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', background: 'var(--color-bg)', cursor: 'pointer', userSelect: 'none' }}
-                        onClick={() => { const next = new Set(mcpExpanded); if (expanded) next.delete(serverName); else next.add(serverName); setMcpExpanded(next); }}>
-                        <span style={{ fontSize: '11px', width: '14px' }}>{expanded ? '▼' : '▶'}</span>
-                        <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600 }}>MCP: {serverName}</span>
-                        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginLeft: 'auto' }}>{t('config.toolCount', { count: tools.length })}</span>
-                        <button onClick={(e) => { e.stopPropagation(); const next = new Set(checkedTools); if (allSelected) { tools.forEach(t => next.delete(t.fullName)); } else { tools.forEach(t => next.add(t.fullName)); } setCheckedTools(next); }}
-                          style={{ ...toolTagStyle, background: allSelected ? 'var(--color-accent)' : 'var(--color-bg)', color: allSelected ? 'var(--color-on-accent)' : 'var(--color-text-tertiary)', border: `1px solid ${someSelected ? 'var(--color-accent)' : 'var(--border-color)'}`, cursor: 'pointer', fontSize: '10px' }}>
-                          {t(allSelected ? 'config.allSelected' : 'config.selectAll')}
-                        </button>
-                      </div>
-                      {expanded && (
-                        <div style={{ padding: '4px 10px 8px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                          {tools.map(t => {
-                            const on = checkedTools.has(t.fullName);
-                            return (
-                              <label key={t.fullName} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', cursor: 'pointer', padding: '3px 0', fontSize: 'var(--text-xs)' }}>
-                                <input type="checkbox" checked={on} onChange={() => { const next = new Set(checkedTools); if (on) next.delete(t.fullName); else next.add(t.fullName); setCheckedTools(next); }}
-                                  style={{ marginTop: '2px', accentColor: 'var(--color-accent)' }} />
-                                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 500, flexShrink: 0 }}>{t.name}</span>
-                                <span style={{ color: 'var(--color-text-tertiary)', lineHeight: 1.3 }}>{t.description}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-
-                {effectiveLocalTools.length > 0 && (
-                  <div style={{ maxHeight: '120px', overflowY: 'auto', padding: 'var(--space-3)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', opacity: 0.65, userSelect: 'none', marginBottom: 'var(--space-3)' }}>
-                    {buildToolsPrompt(effectiveLocalTools)}
-                  </div>
-                )}
-              </div>
-
-              <div className="config-field" style={{ marginBottom: 'var(--space-4)' }}>
-                <label className="config-label">{t('config.rolePrompt')}<span className="config-hint">{t('config.rolePromptHint')}</span></label>
-                <textarea className="config-textarea" value={rolePrompt} onChange={e => setRolePrompt(e.target.value)} rows={5} placeholder={t('config.exampleRole')} />
-              </div>
-            </>
+          {tab === 'tools' && (
+            <div className="config-field" style={{ marginTop: 'var(--space-4)' }}>
+              <label className="config-label">{t('config.tools')}<span className="config-hint">{t('config.toolsHint')}</span></label>
+              {catalogError && <div className="agent-avatar-field__error" role="alert">
+                {t('config.toolCatalogFailed', { error: catalogError })}
+              </div>}
+              <AgentToolCapabilities allTools={allTools} checkedTools={checkedTools}
+                mcpGroups={mcpGroups} onChange={setCheckedTools} />
+            </div>
           )}
         </div>
 
+        {saveError && <div className="agent-avatar-field__error" role="alert">{saveError}</div>}
         <div className="config-modal-footer">
-          <button className="config-btn config-btn-cancel" onClick={close} disabled={saving}>{t('common.cancel')}</button>
+          <button className="config-btn config-btn-cancel" onClick={close} disabled={saving}>
+            {embedded ? t('dashboard.detail.backOverview') : t('common.cancel')}</button>
           <button className={`config-btn config-btn-save ${saved ? 'config-btn-done' : ''}`} onClick={handleSave} disabled={saving || saved}>{saved ? t('config.saved') : saving ? t('config.saving') : isCreate ? t('config.createTitle') : t('config.save')}</button>
         </div>
-      </div>
-    </div>
+    </>
   );
+  if (embedded) return content;
+  return <div className="config-modal-overlay" onClick={close}>
+    <div className="config-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh' }}>
+      <div className="config-modal-header">
+        <div><h3>{t('config.createTitle')}</h3>
+          <p className="config-modal-subtitle">{t('config.stepByStep')}</p></div>
+        <button className="config-modal-close" onClick={close} aria-label={t('config.close')}>✕</button>
+      </div>
+      <AgentConfigTabs active={tab} onChange={setTab} />
+      {content}
+    </div>
+  </div>;
 }
 
 const toolTagStyle: React.CSSProperties = { padding: '3px var(--space-2)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', borderRadius: 'var(--radius-sm)' };
-const miniBtn: React.CSSProperties = { padding: 'var(--space-1) var(--space-2)', background: 'var(--color-surface)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--color-text-secondary)', cursor: 'pointer', fontSize: 'var(--text-sm)' };
-const inputStyle: React.CSSProperties = { padding: 'var(--space-1) var(--space-2)', background: 'var(--color-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--color-text)', fontFamily: 'inherit', boxSizing: 'border-box' };

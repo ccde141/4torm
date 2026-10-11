@@ -1,88 +1,252 @@
-/**
- * 气旋工作室容器 store —— 工作室级 CRUD
- *
- * 只 import shared/ 与本模块自身（paths/types），零交叉代码。
- */
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { atomicWriteFile } from '../shared/atomic-io.js';
+import { frameworkError } from '../shared/framework-error.js';
+import { cycloneRoot } from '../../services/data-paths.js';
+import type { WorkshopData, WorkshopSummary } from './types.js';
 
-import type { WorkshopData, WorkshopSummary } from './types';
-import {
-  workshopDir, workshopIndexFile, workshopMetaFile, workshopWorkspace, seatsDir,
-  readJsonSafe, ensureDir, atomicWrite, removeStrict, genId,
-} from './paths';
+const indexQueues = new Map<string, Promise<void>>();
+const workshopQueues = new Map<string, Promise<void>>();
+const loadedSnapshots = new WeakMap<WorkshopData, WorkshopData>();
 
-/** 创建工作室（建目录骨架 + 写 meta + 维护索引） */
+export function workshopDir(dataDir: string, id: string): string {
+  return cycloneRoot(dataDir, id);
+}
+
+export function workshopIndexFile(dataDir: string): string {
+  return path.join(cycloneRoot(dataDir), '_index.json');
+}
+
+export function workshopMetaFile(dataDir: string, id: string): string {
+  return path.join(workshopDir(dataDir, id), 'meta.json');
+}
+
+export function workshopWorkspace(dataDir: string, id: string): string {
+  return path.join(workshopDir(dataDir, id), 'workspace');
+}
+
 export async function createWorkshop(
   dataDir: string,
-  opts: { title?: string; chairAgentId?: string } = {},
+  options: { title?: string; chairAgentId?: string } = {},
 ): Promise<WorkshopData> {
-  const id = genId('cyc');
+  const workshop = await createWorkshopDraft(dataDir, options);
+  try {
+    await publishWorkshop(dataDir, workshop.id);
+    return track(workshop);
+  } catch (error) {
+    await fs.rm(workshopDir(dataDir, workshop.id), { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+export async function createWorkshopDraft(
+  dataDir: string,
+  options: { title?: string; chairAgentId?: string } = {},
+): Promise<WorkshopData> {
+  const id = nextId();
   const now = new Date().toISOString();
   const workshop: WorkshopData = {
     id,
-    title: opts.title || `工作室 ${new Date().toLocaleString('zh-CN', { hour12: false })}`,
-    chairAgentId: opts.chairAgentId,
-    seatIds: [],
-    roomIds: [],
-    createdAt: now,
-    updatedAt: now,
+    title: options.title || `工作室 ${new Date().toLocaleString('zh-CN', { hour12: false })}`,
+    chairAgentId: options.chairAgentId,
+    seatIds: [], roomIds: [], createdAt: now, updatedAt: now,
   };
-  // 先建目录骨架，再落 meta，最后才进索引——保证索引里的 id 一定可加载
-  await ensureDir(workshopWorkspace(dataDir, id));
-  await ensureDir(seatsDir(dataDir, id));
-  await atomicWrite(workshopMetaFile(dataDir, id), JSON.stringify(workshop, null, 2));
-  const index = (await readJsonSafe<string[]>(workshopIndexFile(dataDir))) || [];
-  index.push(id);
-  await atomicWrite(workshopIndexFile(dataDir), JSON.stringify(index));
+  const directory = workshopDir(dataDir, id);
+  try {
+    await fs.mkdir(workshopWorkspace(dataDir, id), { recursive: true });
+    await fs.mkdir(path.join(directory, 'seats'), { recursive: true });
+    await atomicWriteFile(workshopMetaFile(dataDir, id), JSON.stringify(workshop, null, 2));
+    return track(workshop);
+  } catch (error) {
+    await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+export async function publishWorkshop(dataDir: string, id: string): Promise<void> {
+  await enqueue(workshopQueues, workshopMetaFile(dataDir, id), async () => {
+    if (!await loadWorkshop(dataDir, id)) {
+      throw storeError('CYCLONE_WORKSHOP_DRAFT_NOT_FOUND', '待发布工作室不存在');
+    }
+    await mutateIndex(dataDir, index => index.includes(id) ? index : [...index, id]);
+  });
+}
+
+export async function loadWorkshop(dataDir: string, id: string): Promise<WorkshopData | null> {
+  const workshop = await readJson(workshopMetaFile(dataDir, id), isWorkshop);
+  return workshop ? track(workshop) : null;
+}
+
+export async function saveWorkshop(dataDir: string, workshop: WorkshopData): Promise<void> {
+  const desired = structuredClone(workshop);
+  const snapshot = loadedSnapshots.get(workshop);
+  const saved = await mutateWorkshop(dataDir, workshop.id, current => {
+    if (snapshot) mergeChanges(current, snapshot, desired);
+    else Object.assign(current, desired);
+  });
+  if (!saved) throw frameworkError({
+    code: 'CYCLONE_WORKSHOP_NOT_FOUND', kind: 'not_found', message: '工作室不存在',
+    source: 'cyclone.store', retryable: false,
+  });
+  Object.assign(workshop, saved);
+  track(workshop);
+}
+
+export async function mutateWorkshop(
+  dataDir: string,
+  id: string,
+  mutate: (workshop: WorkshopData) => void,
+): Promise<WorkshopData | null> {
+  let result: WorkshopData | null = null;
+  const file = workshopMetaFile(dataDir, id);
+  await enqueue(workshopQueues, file, async () => {
+    const current = await readJson(file, isWorkshop);
+    if (!current) return;
+    mutate(current);
+    current.updatedAt = new Date().toISOString();
+    await atomicWriteFile(file, JSON.stringify(current, null, 2));
+    result = track(current);
+  });
+  return result;
+}
+
+export async function listWorkshops(dataDir: string): Promise<WorkshopSummary[]> {
+  const summaries: WorkshopSummary[] = [];
+  for (const id of await readIndex(dataDir)) {
+    const workshop = await loadWorkshop(dataDir, id);
+    if (!workshop) continue;
+    summaries.push({
+      id: workshop.id, title: workshop.title,
+      seatCount: workshop.seatIds.length, roomCount: workshop.roomIds.length,
+      createdAt: workshop.createdAt, updatedAt: workshop.updatedAt,
+    });
+  }
+  return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export async function deleteWorkshop(dataDir: string, id: string): Promise<void> {
+  await enqueue(workshopQueues, workshopMetaFile(dataDir, id), async () => {
+    await readIndex(dataDir);
+    await fs.rm(workshopDir(dataDir, id), { recursive: true, force: true });
+    await mutateIndex(dataDir, index => index.filter(item => item !== id));
+  });
+}
+
+export async function renameWorkshop(dataDir: string, id: string, title: string): Promise<void> {
+  await mutateWorkshop(dataDir, id, workshop => { workshop.title = title; });
+}
+
+export async function setChair(
+  dataDir: string,
+  id: string,
+  chairAgentId: string,
+): Promise<WorkshopData | null> {
+  return mutateWorkshop(dataDir, id, workshop => {
+    workshop.chairAgentId = chairAgentId || undefined;
+  });
+}
+
+async function readIndex(dataDir: string): Promise<string[]> {
+  const value = await readJson(workshopIndexFile(dataDir), isStringArray);
+  return value ?? [];
+}
+
+async function mutateIndex(dataDir: string, mutate: (index: string[]) => string[]): Promise<void> {
+  const file = workshopIndexFile(dataDir);
+  await enqueue(indexQueues, file, async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await atomicWriteFile(file, JSON.stringify(mutate(await readIndex(dataDir))));
+  });
+}
+
+async function readJson<T>(file: string, validate: (value: unknown) => value is T): Promise<T | null> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      await assertNoLegacyQuarantine(file);
+      return null;
+    }
+    throw error;
+  }
+  try {
+    const value: unknown = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
+    if (!validate(value)) throw new Error('schema mismatch');
+    return value;
+  } catch (cause) {
+    throw storeError('CYCLONE_STORE_CORRUPT', '气旋持久化数据已损坏', cause);
+  }
+}
+
+async function assertNoLegacyQuarantine(file: string): Promise<void> {
+  let names: string[];
+  try {
+    names = await fs.readdir(path.dirname(file));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if (names.some(name => name.startsWith(`${path.basename(file)}.corrupt-`))) {
+    throw storeError('CYCLONE_STORE_CORRUPT', '气旋持久化数据已损坏并隔离');
+  }
+}
+
+async function enqueue(
+  queues: Map<string, Promise<void>>,
+  key: string,
+  operation: () => Promise<void>,
+): Promise<void> {
+  const previous = queues.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  queues.set(key, current);
+  try { await current; } finally { if (queues.get(key) === current) queues.delete(key); }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(item => typeof item === 'string');
+}
+
+function isWorkshop(value: unknown): value is WorkshopData {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.id === 'string' && typeof item.title === 'string'
+    && isStringArray(item.seatIds) && isStringArray(item.roomIds)
+    && typeof item.createdAt === 'string' && typeof item.updatedAt === 'string'
+    && (item.chairAgentId === undefined || typeof item.chairAgentId === 'string');
+}
+
+function track(workshop: WorkshopData): WorkshopData {
+  loadedSnapshots.set(workshop, structuredClone(workshop));
   return workshop;
 }
 
-/** 加载工作室 meta（不存在返回 null） */
-export async function loadWorkshop(dataDir: string, id: string): Promise<WorkshopData | null> {
-  return readJsonSafe<WorkshopData>(workshopMetaFile(dataDir, id));
+function mergeChanges(current: WorkshopData, before: WorkshopData, after: WorkshopData): void {
+  if (after.title !== before.title) current.title = after.title;
+  if (after.chairAgentId !== before.chairAgentId) current.chairAgentId = after.chairAgentId;
+  if (after.createdAt !== before.createdAt) current.createdAt = after.createdAt;
+  current.seatIds = mergeIds(current.seatIds, before.seatIds, after.seatIds);
+  current.roomIds = mergeIds(current.roomIds, before.roomIds, after.roomIds);
 }
 
-/** 保存工作室 meta（刷新 updatedAt） */
-export async function saveWorkshop(dataDir: string, w: WorkshopData): Promise<void> {
-  w.updatedAt = new Date().toISOString();
-  await atomicWrite(workshopMetaFile(dataDir, w.id), JSON.stringify(w, null, 2));
-}
-
-/** 列出所有工作室摘要（按 updatedAt 降序） */
-export async function listWorkshops(dataDir: string): Promise<WorkshopSummary[]> {
-  const index = (await readJsonSafe<string[]>(workshopIndexFile(dataDir))) || [];
-  const out: WorkshopSummary[] = [];
-  for (const id of index) {
-    const w = await loadWorkshop(dataDir, id);
-    if (!w) continue; // 索引脏（目录被手删）时跳过，不崩
-    out.push({
-      id: w.id, title: w.title,
-      seatCount: w.seatIds.length, roomCount: w.roomIds.length,
-      createdAt: w.createdAt, updatedAt: w.updatedAt,
-    });
+function mergeIds(current: string[], before: string[], after: string[]): string[] {
+  const original = new Set(before);
+  const desired = new Set(after);
+  const merged = current.filter(id => !original.has(id) || desired.has(id));
+  const present = new Set(merged);
+  for (const id of after) {
+    if (original.has(id) || present.has(id)) continue;
+    merged.push(id);
+    present.add(id);
   }
-  return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return merged;
 }
 
-/** 删除工作室（清整个目录 + 摘出索引） */
-export async function deleteWorkshop(dataDir: string, id: string): Promise<void> {
-  await removeStrict(workshopDir(dataDir, id), { recursive: true });
-  const index = (await readJsonSafe<string[]>(workshopIndexFile(dataDir))) || [];
-  await atomicWrite(workshopIndexFile(dataDir), JSON.stringify(index.filter(x => x !== id)));
+function nextId(): string {
+  return `cyc-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** 重命名工作室 */
-export async function renameWorkshop(dataDir: string, id: string, title: string): Promise<void> {
-  const w = await loadWorkshop(dataDir, id);
-  if (!w) return;
-  w.title = title;
-  await saveWorkshop(dataDir, w);
-}
-
-/** 设置工作室会长 agent（空串 = 取消会长） */
-export async function setChair(dataDir: string, id: string, chairAgentId: string): Promise<WorkshopData | null> {
-  const w = await loadWorkshop(dataDir, id);
-  if (!w) return null;
-  w.chairAgentId = chairAgentId || undefined;
-  await saveWorkshop(dataDir, w);
-  return w;
+function storeError(code: string, message: string, cause?: unknown) {
+  return frameworkError({ code, kind: 'io', message, source: 'cyclone.store', retryable: false },
+    cause === undefined ? undefined : { cause });
 }

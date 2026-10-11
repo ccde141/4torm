@@ -1,0 +1,159 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { defaultCompactionPolicy, saveCompactionPolicy } from '../../../engine/shared/compaction/index.js';
+import { createSession, loadSession, saveSession, sessionWorkspace } from '../infrastructure/session-store.js';
+import { handleSpeak } from './public-round.js';
+import { handleChair } from './chair-round.js';
+
+async function fixture(t: test.TestContext) {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-convection-compact-owner-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await fs.mkdir(path.join(dataDir, 'agents'), { recursive: true });
+  await fs.mkdir(path.join(dataDir, 'tools'), { recursive: true });
+  await fs.writeFile(path.join(dataDir, 'tools', 'registry.json'), '[]');
+  await fs.writeFile(path.join(dataDir, 'agents', 'registry.json'), JSON.stringify({
+    chair: { name: 'Chair', model: 'p:chair', config: { compactionPrompt: '保留会议任务编号' } },
+    member: { name: 'Member', model: 'p:member', config: { tools: [], toolMode: 'selected' } },
+  }));
+  await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [
+    { id: 'p', baseUrl: 'https://compact.test/v1', models: ['chair', 'member'], nativeMode: 'text' },
+  ] }));
+  const session = await createSession(dataDir, { chairAgentId: 'chair', participantAgentIds: ['member'], topic: '计划' });
+  session.publicMessages = [
+    { speaker: '人类', content: '第一轮'.repeat(1_000), timestamp: 1 },
+    { speaker: 'Member', content: '已验证 task-1'.repeat(500), timestamp: 2 },
+    { speaker: '人类', content: '第二轮'.repeat(500), timestamp: 3 },
+    { speaker: 'Member', content: '待确认下一步', timestamp: 4 },
+  ];
+  session.tokenUsage = { promptTokens: 2_000, completionTokens: 10, totalTokens: 2_010 };
+  await saveSession(dataDir, session);
+  const policy = defaultCompactionPolicy(); policy.enabled = true; policy.thresholds.convection = 1_000;
+  await saveCompactionPolicy(dataDir, policy);
+  return { dataDir, session };
+}
+
+function isCompactionRequest(body: { messages: Array<{ role: string; content: string }> }): boolean {
+  return body.messages.some(message => message.role === 'user'
+    && message.content.startsWith('[归档资料 JSON]\n'));
+}
+
+function summarySse(content: string): Response {
+  return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}`
+    + '\n\ndata: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } });
+}
+
+test('公共会议同一入口在下一轮压缩，先归档再调用会长模型，成员收到保留最近轮次的上下文', async t => {
+  const { dataDir, session } = await fixture(t);
+  const previous = globalThis.fetch; const calls: string[] = [];
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body)); calls.push(body.model);
+    if (isCompactionRequest(body)) {
+      assert.equal(body.model, 'chair');
+      assert.match(JSON.stringify(body.messages), /保留会议任务编号/);
+      assert.equal((await fs.readdir(path.join(sessionWorkspace(dataDir, session.id), 'bak'))).length, 1);
+      return summarySse('task-1 已验证，继续确认计划。');
+    }
+    assert.match(JSON.stringify(body.messages), /历史压缩记录/);
+    assert.match(JSON.stringify(body.messages), /继续工作/);
+    const stream = 'data: {"choices":[{"delta":{"content":"<answer>新意见</answer>"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
+    return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } });
+  };
+  t.after(() => { globalThis.fetch = previous; });
+  const events: string[] = [];
+  await handleSpeak(dataDir, session, '继续工作', event => events.push(event.type));
+  assert.deepEqual(calls, ['chair', 'member']);
+  assert.ok(events.includes('compact-start')); assert.ok(events.includes('compact-done'));
+  const saved = await loadSession(dataDir, session.id);
+  assert.equal(saved?.publicMessages[0].speaker, '系统');
+  assert.match(saved?.publicMessages.at(-1)?.content || '', /新意见/);
+});
+
+test('压缩模型失效保留旧会议与已接受输入，失败通知落盘而不伪装完成', async t => {
+  const { dataDir, session } = await fixture(t);
+  const original = structuredClone(session.publicMessages);
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => new Response('{"error":{"message":"offline"}}', { status: 503 });
+  t.after(() => { globalThis.fetch = previous; });
+  const failures: string[] = [];
+  await handleSpeak(dataDir, session, '保留这个问题', event => {
+    if (event.type === 'agent-failed') failures.push(event.message);
+  });
+  assert.equal(failures.length, 1);
+  const saved = await loadSession(dataDir, session.id);
+  assert.deepEqual(saved?.publicMessages.slice(0, original.length), original);
+  assert.equal(saved?.publicMessages.at(-1)?.content, '保留这个问题');
+  assert.match(saved?.compactionNotice?.message || '', /原始记录已保留/);
+  assert.equal((await fs.readdir(path.join(sessionWorkspace(dataDir, session.id), 'bak'))).length, 1);
+});
+
+test('助理压缩公共快照后保留两类原文，后续私聊只追加新记录且不重复历史', async t => {
+  const { dataDir, session } = await fixture(t);
+  session.chairMessages = [{ role: 'user', content: '先前私聊' }, { role: 'assistant', content: '私人判断' }];
+  await saveSession(dataDir, session);
+  const publicBefore = structuredClone(session.publicMessages);
+  const previous = globalThis.fetch; let calls = 0;
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body)); calls++;
+    assert.equal(body.model, 'chair');
+    if (isCompactionRequest(body)) {
+      assert.match(JSON.stringify(body.messages), /保留会议任务编号/);
+      assert.match(JSON.stringify(body.messages), /第一轮/);
+      const files = await fs.readdir(path.join(sessionWorkspace(dataDir, session.id), 'bak'));
+      const archive = JSON.parse(await fs.readFile(path.join(sessionWorkspace(dataDir, session.id), 'bak', files[0]), 'utf8'));
+      assert.deepEqual(archive.publicMessages, publicBefore);
+      assert.equal(archive.chairMessages[0].content, '先前私聊');
+      return summarySse('task-1 的公共讨论已验证；私人判断保留。');
+    }
+    assert.doesNotMatch(body.messages[0].content, /第一轮/);
+    assert.match(JSON.stringify(body.messages), /历史压缩记录/);
+    assert.doesNotMatch(JSON.stringify(body.messages), /第一轮第一轮/);
+    if (calls === 3) {
+      assert.equal(body.messages.filter((message: { content: string }) => message.content === '私人答复').length, 1);
+      assert.equal(body.messages.filter((message: { content: string }) => message.content.includes('新增公共答复')).length, 1);
+    }
+    const stream = 'data: {"choices":[{"delta":{"content":"私人答复"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
+    return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } });
+  };
+  t.after(() => { globalThis.fetch = previous; });
+  await handleChair(dataDir, session, '帮我分析');
+  assert.deepEqual(session.publicMessages, publicBefore);
+  assert.deepEqual(session.chairMessages.slice(0, 2), [{ role: 'user', content: '先前私聊' }, { role: 'assistant', content: '私人判断' }]);
+  const policy = defaultCompactionPolicy(); await saveCompactionPolicy(dataDir, policy);
+  session.publicMessages.push({ speaker: 'Member', content: '新增公共答复', timestamp: 5 });
+  await saveSession(dataDir, session);
+  await handleChair(dataDir, session, '继续分析');
+  assert.equal(calls, 3);
+  const saved = await loadSession(dataDir, session.id);
+  assert.equal(saved?.chairMessages.length, 6);
+  assert.equal(saved?.publicMessages.at(-1)?.content, '新增公共答复');
+});
+
+test('两次助理私聊之间新增的公共记录计入下一次真实阈值比较', async t => {
+  const { dataDir, session } = await fixture(t);
+  session.publicMessages = [{ speaker: '人类', content: '简短目标', timestamp: 1 }];
+  const policy = defaultCompactionPolicy(); await saveCompactionPolicy(dataDir, policy);
+  await saveSession(dataDir, session);
+  const previous = globalThis.fetch; let summaries = 0;
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (isCompactionRequest(body)) {
+      summaries++;
+      return summarySse('新增公共证据已核验。');
+    }
+    const stream = 'data: {"choices":[{"delta":{"content":"分析结果"},"finish_reason":"stop"}],"usage":{"prompt_tokens":500,"completion_tokens":4,"total_tokens":504}}\n\ndata: [DONE]\n\n';
+    return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } });
+  };
+  t.after(() => { globalThis.fetch = previous; });
+  await handleChair(dataDir, session, '先分析');
+  assert.equal(session.chairTokenUsage?.promptTokens, 500);
+  session.publicMessages.push({ speaker: '人类', content: '新增公共需求'.repeat(1000), timestamp: 2 },
+    { speaker: 'Member', content: '新增公共证据'.repeat(1000), timestamp: 3 });
+  await saveSession(dataDir, session);
+  policy.enabled = true; policy.thresholds.convection = 1000; await saveCompactionPolicy(dataDir, policy);
+  await handleChair(dataDir, session, '再分析');
+  assert.ok(summaries >= 1);
+  assert.equal((await fs.readdir(path.join(sessionWorkspace(dataDir, session.id), 'bak'))).length, 1);
+});

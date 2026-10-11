@@ -1,12 +1,17 @@
-import { useState } from 'react';
 import { useLocale } from '../../i18n/LocaleContext';
+
+const statusKeys = {
+  checking: 'chat.ask.checking', waiting: 'chat.ask.waiting',
+  submitting: 'chat.ask.submitting', accepted: 'chat.ask.accepted',
+  failed: 'chat.ask.failed', unknown: 'chat.ask.unknown', expired: 'chat.ask.expired',
+} as const;
 
 /**
  * AskCard — Agent 反问卡片
  *
  * 视觉特征：
  * - 左侧紫色竖条标识（区别于 delegate 绿/工具调用灰）
- * - 问题文本 + 可选预设按钮 + 自由输入框
+ * - 问题文本 + 可选预设按钮 + 对话框回答提示
  * - answered=true 后变为静态已回复状态
  */
 export interface AskCardProps {
@@ -14,29 +19,21 @@ export interface AskCardProps {
   options?: string[];
   answered: boolean;
   reply?: string;
+  status?: 'checking' | 'waiting' | 'submitting' | 'accepted' | 'failed' | 'unknown' | 'expired';
+  statusDetail?: string;
+  onCheck?: () => void;
   onReply: (answer: string) => void;
 }
 
-export default function AskCard({ question, options, answered, reply, onReply }: AskCardProps) {
-  const [customInput, setCustomInput] = useState('');
+export default function AskCard({ question, options, answered, reply, status, statusDetail,
+  onCheck, onReply }: AskCardProps) {
   const { t } = useLocale();
+  const blocked = status === 'checking' || status === 'submitting'
+    || status === 'unknown' || status === 'expired' || status === 'accepted';
 
   const handleOptionClick = (opt: string) => {
-    if (answered) return;
+    if (answered || blocked) return;
     onReply(opt);
-  };
-
-  const handleSubmit = () => {
-    if (answered || !customInput.trim()) return;
-    onReply(customInput.trim());
-    setCustomInput('');
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit();
-    }
   };
 
   return (
@@ -67,13 +64,23 @@ export default function AskCard({ question, options, answered, reply, onReply }:
         ) : (
           /* 待回复状态 */
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {status && <div role={status === 'failed' ? 'alert' : 'status'} aria-live="polite"
+              style={{ fontSize: 'var(--text-xs)', color: status === 'failed'
+                ? 'var(--color-error)' : 'var(--color-text-secondary)' }}>
+              {t(statusKeys[status])}{statusDetail ? `：${statusDetail}` : ''}
+              {(status === 'unknown' || status === 'checking' || status === 'failed') && onCheck
+                && <button type="button" onClick={onCheck}
+                style={{ marginLeft: 8 }}>{t('chat.ask.checkAgain')}</button>}
+            </div>}
             {/* 预设选项按钮 */}
             {options && options.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                 {options.map((opt, i) => (
                   <button
                     key={i}
+                    type="button"
                     onClick={() => handleOptionClick(opt)}
+                    disabled={blocked}
                     style={{
                       padding: '4px 12px',
                       borderRadius: '14px',
@@ -93,40 +100,8 @@ export default function AskCard({ question, options, answered, reply, onReply }:
               </div>
             )}
 
-            {/* 自由输入 */}
-            <div style={{ display: 'flex', gap: '6px' }}>
-              <input
-                type="text"
-                value={customInput}
-                onChange={e => setCustomInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={t('chat.ask.placeholder')}
-                style={{
-                  flex: 1,
-                  padding: '4px 8px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--color-border)',
-                  background: 'var(--glass-bg)',
-                  color: 'var(--color-text-primary)',
-                  fontSize: 'var(--text-sm)',
-                  outline: 'none',
-                }}
-              />
-              <button
-                onClick={handleSubmit}
-                disabled={!customInput.trim()}
-                style={{
-                  padding: '4px 10px',
-                  borderRadius: '6px',
-                  border: 'none',
-                  background: customInput.trim() ? 'var(--color-accent)' : 'var(--color-border)',
-                  color: customInput.trim() ? 'var(--color-on-accent)' : 'var(--color-text-tertiary)',
-                  fontSize: 'var(--text-sm)',
-                  cursor: customInput.trim() ? 'pointer' : 'default',
-                }}
-              >
-                {t('chat.ask.reply')}
-              </button>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
+              {t('chat.ask.composerHint')}
             </div>
           </div>
         )}

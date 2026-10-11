@@ -6,6 +6,7 @@ import type { ContextMessage } from './types.js';
 import {
   runReActLoopNative,
   type LLMCaller,
+  type ToolCallOutcome,
   type ToolCaller,
 } from './react/native-loop.js';
 
@@ -100,7 +101,7 @@ async function executeRuntimeTool(
   runtime: Runtime,
   tool: string,
   args: Record<string, string>,
-): Promise<string> {
+): Promise<string | ToolCallOutcome> {
   if (tool === 'done') {
     runtime.doneSummary = args.summary || '';
     runtime.doneController.abort();
@@ -111,17 +112,19 @@ async function executeRuntimeTool(
   runtime.toolRounds++;
   runtime.params.emitEvent({ type: 'tool_call', data: { tool, args } });
   try {
-    const { executeTool } = await import('../../services/tool-executor.js');
-    const result = await executeTool(
+    const { executeToolOutcome } = await import('../../services/tool-executor.js');
+    const outcome = await executeToolOutcome(
       runtime.params.dataDir, tool, args, runtime.params.agent.id, undefined,
       runtime.params.parentSandboxLevel, undefined, runtime.mainAbort.signal,
     );
-    runtime.params.emitEvent({ type: 'tool_result', data: { tool, result, ok: true } });
-    return result;
+    runtime.params.emitEvent({ type: 'tool_result', data: {
+      tool, result: outcome.result, ok: outcome.ok,
+    } });
+    return outcome;
   } catch (cause) {
     const result = (cause as Error)?.message ?? String(cause);
     runtime.params.emitEvent({ type: 'tool_result', data: { tool, result, ok: false } });
-    return `工具执行失败：${result}`;
+    return { result: `工具执行失败：${result}`, ok: false };
   }
 }
 

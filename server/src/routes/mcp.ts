@@ -35,6 +35,13 @@ async function reconnectEnabled(dataDir: string, config: McpServerConfig, reply:
   }
 }
 
+async function connectionError(dataDir: string, config: McpServerConfig): Promise<string | undefined> {
+  if (!config.enabled) return undefined;
+  try { await reconnectServer(dataDir, config.name); }
+  catch (error) { return `MCP 连接失败：${(error as Error).message}`; }
+  return undefined;
+}
+
 export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   const { dataDir } = getAppContext(app);
 
@@ -56,8 +63,7 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(409).send({ error: `名称已存在：${config.name}` });
     }
     await writeMcpConfigs(dataDir, [...configs, config]);
-    if (!await reconnectEnabled(dataDir, config, reply)) return;
-    return reply.send({ ok: true, config });
+    return reply.send({ ok: true, config, connectionError: await connectionError(dataDir, config) });
   });
 
   app.post('/update', async (req, reply) => {
@@ -70,8 +76,7 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
     if (!config) return;
     configs[index] = config;
     await writeMcpConfigs(dataDir, configs);
-    if (!await reconnectEnabled(dataDir, config, reply)) return;
-    return reply.send({ ok: true, config });
+    return reply.send({ ok: true, config, connectionError: await connectionError(dataDir, config) });
   });
 
   app.post('/import', async (req, reply) => {
@@ -91,12 +96,10 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
     await writeMcpConfigs(dataDir, [...configs, ...imported]);
     const failures: string[] = [];
     for (const config of imported) {
-      if (!config.enabled) continue;
-      try { await reconnectServer(dataDir, config.name); }
-      catch (error) { failures.push(`${config.name}: ${(error as Error).message}`); }
+      const error = await connectionError(dataDir, config);
+      if (error) failures.push(`${config.name}: ${error}`);
     }
-    if (failures.length) return reply.status(502).send({ error: failures.join('\n'), imported: imported.length });
-    return reply.send({ ok: true, imported: imported.length });
+    return reply.send({ ok: true, imported: imported.length, connectionError: failures.join('\n') || undefined });
   });
 
   app.post('/remove', async (req, reply) => {

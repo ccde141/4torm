@@ -14,6 +14,7 @@ export interface LoadedAgent {
   name: string;
   model: string;            // 形如 "pvd_xxx:model-name"
   rolePrompt: string;       // 来自 .workspace/role-prompt.md，可能为空
+  compactionPrompt?: string;
   temperature: number;
   tools: string[];
   toolMode: 'all' | 'selected';
@@ -31,6 +32,7 @@ interface RegistryEntry {
   status?: string;
   config?: {
     rolePrompt?: string;
+    compactionPrompt?: string;
     temperature?: number;
     tools?: unknown;
     toolMode?: string;
@@ -65,6 +67,7 @@ export async function loadAgent(dataDir: string, agentId: string): Promise<Loade
   );
   if (!registry) return null;
 
+  if (!Object.hasOwn(registry, agentId)) return null;
   const entry = registry[agentId];
   if (!entry || typeof entry !== 'object') return null;
 
@@ -85,6 +88,7 @@ export async function loadAgent(dataDir: string, agentId: string): Promise<Loade
     name: typeof entry.name === 'string' ? entry.name : agentId,
     model: typeof entry.model === 'string' ? entry.model : '',
     rolePrompt,
+    ...(typeof cfg.compactionPrompt === 'string' ? { compactionPrompt: cfg.compactionPrompt } : {}),
     temperature: typeof cfg.temperature === 'number' ? cfg.temperature : 0.7,
     tools,
     toolMode,

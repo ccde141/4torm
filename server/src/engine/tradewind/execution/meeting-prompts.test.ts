@@ -64,6 +64,7 @@ assert.match(textPrompt, /最终自然语言回答会被公开/);
 assert.match(textPrompt, /平等的协作者/);
 assert.match(textPrompt, /独立判断/);
 assert.match(textPrompt, /不以迎合代替讨论/);
+assert.equal(textPrompt.match(/## 4torm 框架导航/g)?.length, 1);
 assertNoLegacyXml(textPrompt);
 
 const nativePrompt = buildMeetingAgentPrompt(
@@ -79,6 +80,21 @@ const nativePrompt = buildMeetingAgentPrompt(
   true,
 );
 assert.doesNotMatch(nativePrompt, /"type":"tool_call"/);
+assert.equal(nativePrompt.match(/## 4torm 框架导航/g)?.length, 1);
 assertNoLegacyXml(nativePrompt);
+
+const noToolNativePrompt = buildMeetingAgentPrompt(
+  agent,
+  labels,
+  session,
+  [],
+  'data/workspace',
+  '分析员',
+  '评审会',
+  'data',
+  [],
+  true,
+);
+assert.doesNotMatch(noToolNativePrompt, /## 4torm 框架导航/);
 
 console.log('meeting prompts ok');

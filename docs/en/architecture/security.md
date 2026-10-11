@@ -1,7 +1,5 @@
 # Security and Isolation
 
-4torm runs locally but retains file boundaries, dangerous-tool restrictions, and sensitive-data isolation to reduce accidental damage and configuration leaks.
-
 ## Execution Permissions
 
 An agent has **Project** or **Unrestricted** permission, applied automatically to built-in file tools in every workspace.

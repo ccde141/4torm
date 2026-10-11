@@ -59,7 +59,9 @@ export default defineConfig({
     },
   },
   server: {
-    host: '0.0.0.0',
+    host: 'localhost',
+    port: 5173,
+    strictPort: true,
     // 前端 dev 只需监听项目本体（src/ + public/ + index.html + 根级配置）。
     // chokidar 默认扫描整个项目根，下面把所有【非前端源】的重目录排除掉，
     // 等效于把监听收窄到必要代码：
@@ -83,8 +85,9 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: 'https://localhost:3001',
         changeOrigin: true,
+        secure: false, // 仅开发代理：本地自签证书；浏览器直连仍需信任证书
         configure: (proxy) => {
           // SSE 长连接支持：禁用代理缓冲，防止 SSE 流被提前关闭
           proxy.on('proxyReq', (proxyReq, req) => {
@@ -102,13 +105,15 @@ export default defineConfig({
         },
       },
       '/skin': {
-        target: 'http://localhost:3001',
+        target: 'https://localhost:3001',
         changeOrigin: true,
+        secure: false,
       },
       // 文档站由 Fastify 自托管在 /docs/;开发态经此代理,使应用内「文档」按钮在 dev/prod 都指向 /docs/
       '/docs': {
-        target: 'http://localhost:3001',
+        target: 'https://localhost:3001',
         changeOrigin: true,
+        secure: false,
       },
     },
   },

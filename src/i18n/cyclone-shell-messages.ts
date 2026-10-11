@@ -51,6 +51,7 @@ export const cycloneShellZh = {
   'cyclone.org.seat': '工位',
   'cyclone.org.running': '运行中',
   'cyclone.org.waiting': '等待回答',
+  'cyclone.org.unknown': '状态待核实',
   'cyclone.org.failed': '执行失败',
   'cyclone.org.unread': '有未读结果',
   'cyclone.org.idle': '空闲',
@@ -84,6 +85,7 @@ export const cycloneShellZh = {
   'cyclone.tabs.close': '关闭标签：{title}',
   'cyclone.tabs.running': '运行中',
   'cyclone.tabs.waiting': '等待人类',
+  'cyclone.tabs.unknown': '状态待核实',
   'cyclone.tabs.failed': '执行失败',
   'cyclone.tabs.unread': '有未读结果',
 } as const;
@@ -141,6 +143,7 @@ export const cycloneShellEn: Record<keyof typeof cycloneShellZh, string> = {
   'cyclone.org.seat': 'Seat',
   'cyclone.org.running': 'Running',
   'cyclone.org.waiting': 'Waiting for answer',
+  'cyclone.org.unknown': 'Status unavailable',
   'cyclone.org.failed': 'Failed',
   'cyclone.org.unread': 'Unread result',
   'cyclone.org.idle': 'Idle',
@@ -174,6 +177,7 @@ export const cycloneShellEn: Record<keyof typeof cycloneShellZh, string> = {
   'cyclone.tabs.close': 'Close tab: {title}',
   'cyclone.tabs.running': 'Running',
   'cyclone.tabs.waiting': 'Waiting for human',
+  'cyclone.tabs.unknown': 'Status unavailable',
   'cyclone.tabs.failed': 'Failed',
   'cyclone.tabs.unread': 'Unread result',
 };

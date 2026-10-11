@@ -15,6 +15,19 @@ export function openWorkspaceTab(tabs: WorkspaceTab[], next: WorkspaceTab): Work
   return tabs.map((tab, index) => index === existing ? next : tab);
 }
 
+/** Follow the authoritative workshop structure when another actor edits it. */
+export function reconcileWorkspaceTabs(tabs: WorkspaceTab[], available: WorkspaceTab[]): WorkspaceTab[] {
+  const byKey = new Map(available.map(tab => [tabKey(tab), tab]));
+  let changed = false;
+  const next = tabs.flatMap(tab => {
+    const entity = byKey.get(tabKey(tab));
+    if (!entity) { changed = true; return []; }
+    if (entity.title !== tab.title) { changed = true; return [entity]; }
+    return [tab];
+  });
+  return changed ? next : tabs;
+}
+
 export function closeWorkspaceTab(
   tabs: WorkspaceTab[], activeKey: string | null, closingKey: string,
 ): { tabs: WorkspaceTab[]; activeKey: string | null } {

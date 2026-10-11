@@ -5,7 +5,7 @@ type Pending = NonNullable<ToolCall['pendingAutomation']>;
 
 /**
  * 潮汐任务信息卡（纯展示，无按钮）。
- * AI 只能建/改「未启用」的任务；启用/暂停一律由用户在潮汐页操作。
+ * 创建或修改后的任务事实快照；后续启停以潮汐实时状态为准。
  * 摘要字段全部来自服务端真实任务（非 AI 转述）；永续 / 自循环 / 可写文件强标提醒。
  */
 export default function AutomationDraftCard({ pending, timestamp }: { pending: Pending; timestamp?: string }) {

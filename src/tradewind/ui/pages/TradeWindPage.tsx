@@ -2,7 +2,7 @@
  * 信风主页 — 画布编辑器 + 节点面板 + 工具栏 + 配置面板 + 工作流列表
  */
 
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { TradeWindCanvas } from '../canvas/TradeWindCanvas';
 import { NodePalette } from '../panels/NodePalette';
@@ -16,24 +16,24 @@ import { HumanGatePanel } from '../chat/HumanGatePanel';
 import { WorkflowInfoPanel } from '../panels/WorkflowInfoPanel';
 import { useWorkflowStore } from '../hooks/useWorkflowStore';
 import { useExecution } from '../hooks/useExecution';
-import { scheduleAutoSave } from '../hooks/auto-save';
-import { deleteWorkflow, openWorkflowWorkspace } from '../workflow-client';
+import { useWorkflowPageSync } from '../hooks/useWorkflowPageSync';
+import { deleteWorkflow } from '../workflow-client';
 import { validateGraph } from '../workflow-validation';
 import type { WorkflowMode } from '../../types';
 import type { ExecutionPhase } from '../hooks/execution-phase';
 import { useLocale } from '../../../i18n/LocaleContext';
-import {
-  forgetPersistedWorkflow,
-  readPersistedWorkflow,
-  rememberPersistedWorkflow,
-} from '../workflow-recovery';
+import { forgetPersistedWorkflow, rememberPersistedWorkflow } from '../workflow-recovery';
 
 export default function TradeWindPage() {
   const { t } = useLocale();
-  const tRef = useRef(t);
-  tRef.current = t;
   const store = useWorkflowStore();
-  const execution = useExecution();
+  const execution = useExecution(store.workflowId);
+  const editorRunning = execution.running && execution.workflowId === store.workflowId;
+  const editorExecutionId = execution.workflowId === store.workflowId ? execution.executionId : null;
+  const {
+    saveTime, saveError, setSaveError, listRefreshKey, conflictText,
+    handleSave, handleOpenWorkspace, handleReload, handleSaveCopy, reloadLabel, copyLabel,
+  } = useWorkflowPageSync(store);
   const [listVisible, setListVisible] = useState(false);
   const [profileVisible, setProfileVisible] = useState(false);
   const [chatTarget, setChatTarget] = useState<{ nodeId: string; label: string } | null>(null);
@@ -42,9 +42,15 @@ export default function TradeWindPage() {
   // 持久化挂载：曾打开过的面板不卸载，只隐藏
   const openedChatsRef = useRef<Map<string, { nodeId: string; label: string }>>(new Map());
   const openedMeetingsRef = useRef<Map<string, { nodeId: string; label: string }>>(new Map());
+  const lastEditorExecutionRef = useRef<{ workflowId: string; executionId: string } | null>(null);
+  useEffect(() => {
+    if (editorExecutionId) lastEditorExecutionRef.current = { workflowId: store.workflowId, executionId: editorExecutionId };
+  }, [editorExecutionId, store.workflowId]);
+  const panelExecutionId = editorExecutionId || (
+    lastEditorExecutionRef.current?.workflowId === store.workflowId
+      ? lastEditorExecutionRef.current.executionId : null
+  );
   const [, forceUpdate] = useState(0); // 触发重渲染
-  const [saveTime, setSaveTime] = useState<number | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
 
   // 本次工作流是否已结束（结束后面板/侧板转只读"封存"，内容保留不清）
   const [sessionEnded, setSessionEnded] = useState(false);
@@ -62,36 +68,17 @@ export default function TradeWindPage() {
   //   结束（running→stopped）：不再清面板，内容保留、转只读封存（sessionEnded=true）。
   //   开始新一轮（stopped→running）：此刻才清掉上一轮的封存面板并解除封存。
   //   关软件 / 切换工作流另行清（见 handleNew / onLoad）。
-  const prevRunningRef = useRef(false);
+  const prevRunningRef = useRef<{ workflowId: string; running: boolean }>({ workflowId: '', running: false });
   useEffect(() => {
-    if (!prevRunningRef.current && execution.running) {
+    const previous = prevRunningRef.current;
+    if (!previous.running && editorRunning) {
       clearPanels();
       setSessionEnded(false);
-    } else if (prevRunningRef.current && !execution.running) {
+    } else if (previous.workflowId === store.workflowId && previous.running && !editorRunning) {
       setSessionEnded(true);
     }
-    prevRunningRef.current = execution.running;
-  }, [execution.running, clearPanels]);
-
-  // 页面加载时恢复上次打开的工作流，失败则自动新建
-  useEffect(() => {
-    const init = async () => {
-      const lastId = readPersistedWorkflow(localStorage);
-      if (lastId) {
-        const res = await fetch(`/api/tradewind/workflow/load/${lastId}`);
-        if (res.ok) {
-          const data = await res.json() as { workflowId: string; name?: string; graph: import('../../types').WorkflowGraph };
-          store.loadGraph(data.graph, data.workflowId, data.name);
-          return;
-        }
-        forgetPersistedWorkflow(localStorage, lastId);
-      }
-      // 没有可恢复的工作流，开一张空白画布（仅内存，不落盘；加了节点保存/运行时才创建目录）
-      const newId = `wf-${Date.now().toString(36)}`;
-      store.loadGraph({ nodes: [], edges: [] }, newId, tRef.current('tradewind.untitled'));
-    };
-    init();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    prevRunningRef.current = { workflowId: store.workflowId, running: editorRunning };
+  }, [editorRunning, store.workflowId, clearPanels]);
 
   // 监听 Agent 节点"交流"按钮事件
   useEffect(() => {
@@ -129,25 +116,8 @@ export default function TradeWindPage() {
 
   // 同步运行状态到全局标记（节点组件读取）
   useEffect(() => {
-    (window as any).__tw_running = execution.running;
-  }, [execution.running]);
-
-  // 5 分钟自动保存
-  const runAutoSave = useEffectEvent(async () => {
-    if (await store.save()) {
-      rememberPersistedWorkflow(localStorage, store.workflowId);
-      setSaveError(null);
-      setSaveTime(Date.now());
-    }
-  });
-  const reportAutoSaveError = useEffectEvent((error: unknown) => {
-    setSaveError((error as Error).message || t('tradewind.autoSaveFailed'));
-  });
-
-  useEffect(() => {
-    if (store.workflowId === 'untitled') return;
-    return scheduleAutoSave(runAutoSave, () => {}, reportAutoSaveError);
-  }, [store.workflowId]);
+    (window as any).__tw_running = editorRunning;
+  }, [editorRunning]);
 
   const handleRun = useCallback(async (mode: WorkflowMode = 'manual', profileId?: string) => {
     const graph = store.getGraph();
@@ -164,7 +134,7 @@ export default function TradeWindPage() {
       }
       rememberPersistedWorkflow(localStorage, store.workflowId);
       setSaveError(null);
-      execution.start(graph, store.workflowId, undefined, mode, profileId);
+      execution.start(store.workflowId, undefined, mode, profileId);
     } catch (error) {
       setSaveError((error as Error).message || t('tradewind.saveFailed'));
     }
@@ -174,28 +144,6 @@ export default function TradeWindPage() {
     execution.stop();
   }, [execution]);
 
-  const handleSave = useCallback(async () => {
-    try {
-      if (await store.save()) {
-        rememberPersistedWorkflow(localStorage, store.workflowId);
-        setSaveTime(Date.now());
-      }
-      setSaveError(null);
-    } catch (error) {
-      setSaveError((error as Error).message || t('tradewind.saveFailed'));
-    }
-  }, [store, t]);
-
-  const handleOpenWorkspace = useCallback(async () => {
-    try {
-      if (await store.save()) rememberPersistedWorkflow(localStorage, store.workflowId);
-      await openWorkflowWorkspace(store.workflowId, t('tradewind.openWorkspaceFailed'));
-      setSaveError(null);
-    } catch (error) {
-      setSaveError((error as Error).message || t('tradewind.openWorkspaceFailed'));
-    }
-  }, [store, t]);
-
   const handleNew = useCallback(() => {
     clearPanels();
     setSessionEnded(false);
@@ -204,11 +152,11 @@ export default function TradeWindPage() {
     // 不立即落盘：空工作流无内容，等加了节点保存/运行时才创建目录（避免 0 节点幽灵 + 列表噪声）
   }, [store, clearPanels, t]);
 
-  const handleDelete = useCallback(async (id: string) => {
+  const handleDelete = useCallback(async (id: string, expectedRevision: string) => {
     if (execution.running && id === store.workflowId) {
       throw new Error(t('tradewind.deleteRunning'));
     }
-    await deleteWorkflow(id, t('tradewind.workflowList.deleteFailed'));
+    await deleteWorkflow(id, expectedRevision, t('tradewind.workflowList.deleteFailed'));
     if (id === store.workflowId) {
       forgetPersistedWorkflow(localStorage, id);
       handleNew();
@@ -240,6 +188,7 @@ export default function TradeWindPage() {
       <Toolbar
         workflowId={store.workflowId}
         workflowName={store.workflowName}
+        activeWorkflowId={execution.running ? execution.workflowId : null}
         running={execution.running}
         phase={toolbarPhase}
         saveTime={saveTime}
@@ -255,12 +204,20 @@ export default function TradeWindPage() {
         <NodePalette />
         <WorkflowListPanel
           visible={listVisible}
+          refreshKey={listRefreshKey}
           currentId={store.workflowId}
           onClose={() => setListVisible(false)}
           onLoad={async (id) => {
-            clearPanels();
-            setSessionEnded(false);
-            if (await store.load(id)) rememberPersistedWorkflow(localStorage, id);
+            try {
+              if (await store.load(id)) {
+                clearPanels();
+                setSessionEnded(false);
+                rememberPersistedWorkflow(localStorage, id);
+                setSaveError(null);
+              }
+            } catch (error) {
+              setSaveError(error instanceof Error ? error.message : t('tradewind.workflowList.loadFailed'));
+            }
           }}
           onNew={handleNew}
           onDelete={handleDelete}
@@ -285,7 +242,9 @@ export default function TradeWindPage() {
         <WorkflowInfoPanel
           nodes={agentNodes}
           outputSourceId={outputSourceId}
-          running={execution.running}
+          workflowId={store.workflowId}
+          executionId={editorExecutionId}
+          running={editorRunning}
           sessionEnded={sessionEnded}
           lap={execution.lap}
         />
@@ -293,30 +252,41 @@ export default function TradeWindPage() {
       {(execution.error || saveError) && (
         <div className="tw-page__error">{execution.error || saveError}</div>
       )}
+      {store.revisionState.conflict && (
+        <div className="tw-page__error" role="alert">
+          <span>{conflictText} </span>
+          <button type="button" onClick={() => void handleReload()}>{reloadLabel}</button>
+          <button type="button" onClick={() => void handleSaveCopy()}>{copyLabel}</button>
+        </div>
+      )}
       {/* Agent 聊天面板：曾打开过的持久挂载，只隐藏不卸载 */}
       {[...openedChatsRef.current.values()].map(({ nodeId, label }) => (
         <AgentChatWindow
           key={nodeId}
           nodeId={nodeId}
           nodeLabel={label}
-          executionId={execution.executionId}
+          workflowId={store.workflowId}
+          executionId={panelExecutionId}
           onClose={() => setChatTarget(null)}
           visible={chatTarget?.nodeId === nodeId}
           sealed={sessionEnded}
         />
       ))}
       {/* 会议室面板：同上 */}
-      {[...openedMeetingsRef.current.values()].map(({ nodeId, label }) => (
+      {panelExecutionId && [...openedMeetingsRef.current.values()].map(({ nodeId, label }) => (
         <MeetingPanel
           key={nodeId}
           nodeId={nodeId}
           nodeLabel={label}
+          workflowId={store.workflowId}
+          executionId={panelExecutionId}
           onClose={() => setMeetingTarget(null)}
           visible={meetingTarget?.nodeId === nodeId}
         />
       ))}
-      {gateTarget && (
+      {gateTarget && panelExecutionId && (
         <HumanGatePanel
+          executionId={panelExecutionId}
           nodeId={gateTarget.nodeId}
           nodeLabel={gateTarget.label}
           envelopeContent={gateTarget.envelopeContent}

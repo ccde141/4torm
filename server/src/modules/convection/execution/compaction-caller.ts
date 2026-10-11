@@ -1,0 +1,85 @@
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { atomicWriteFile } from '../../../engine/shared/atomic-io.js';
+import { callLLM } from '../../../engine/shared/llm-bridge.js';
+import { createCompactionCaller, estimateCompactionTokens, type CompactionCommit, type CompactionNotice } from '../../../engine/shared/compaction/index.js';
+import type { ContextMessage } from '../../../engine/shared/types.js';
+import type { LoadedAgent } from '../../../engine/shared/agent-loader.js';
+import type { LLMCaller } from '../../../engine/shared/react/native-loop.js';
+import { saveSession, sessionWorkspace, type ConvectionSessionData } from '../infrastructure/session-store.js';
+import { convectionRoundBoundaries } from './compaction-context.js';
+import type { ConvectionEventSink } from './stream-events.js';
+import { rememberChairContextBoundary, clearConvectionChairContext, convectionChairBoundaries } from './chair-context.js';
+
+interface CallerOptions {
+  dataDir: string;
+  session: ConvectionSessionData;
+  agent: LoadedAgent;
+  chair: LoadedAgent;
+  kind: 'public' | 'chair';
+  emit?: ConvectionEventSink;
+  initialPromptTokens?: number;
+  messages: ContextMessage[];
+}
+
+/** Called under the existing session lease: manual, threshold and overflow share one owner. */
+export function createConvectionCompactionCaller(options: CallerOptions): LLMCaller {
+  const { dataDir, session, agent, chair, kind, emit } = options;
+  const llm: LLMCaller = { call: (messages, callOptions, onChunk, signal, tools, onReasoning, onToolProgress) =>
+    callLLM({ dataDir, fullModelKey: agent.model, messages, options: { temperature: agent.temperature, ...callOptions },
+      onChunk, signal, tools, onReasoning, onToolProgress }) };
+  return createCompactionCaller({ llm, dataDir, area: 'convection', model: agent.model,
+    kind: 'meeting', chairModel: chair.model,
+    prompt: chair.compactionPrompt, protectedPrefixCount: 1,
+    scopeKey: `convection:${session.id}:${kind}`,
+    initialPromptTokens: options.initialPromptTokens
+      ?? (kind === 'public' ? session.tokenUsage : session.chairTokenUsage)?.promptTokens,
+    initialEstimateTokens: kind === 'chair' ? session.chairRequestEstimate
+      ?? estimateCompactionTokens(options.messages.slice(0, -1))
+      : estimateCompactionTokens(options.messages.slice(0, session.publicMessages.length
+        - [...session.publicMessages].reverse().findIndex(record => record.speaker === '人类'))),
+    boundaries: context => kind === 'public' ? convectionRoundBoundaries(context, session.publicMessages)
+      : convectionChairBoundaries(context),
+    archive: async (before, reason) => {
+      emit?.({ type: 'compact-start' });
+      const file = path.join(sessionWorkspace(dataDir, session.id), 'bak',
+        `${Date.now()}-${randomUUID()}-${kind}-compact.json`);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await atomicWriteFile(file, JSON.stringify({ reason, publicMessages: session.publicMessages,
+        chairMessages: kind === 'chair' ? session.chairMessages : [], modelMessages: before }));
+    },
+    commit: plan => commitCompaction(options, plan),
+    onNotice: async notice => recordNotice(options, notice),
+    onCompacted: plan => emit?.({ type: 'compact-done', archivedCycles: plan.prefix.length, summaryLength: plan.summary.length }),
+  });
+}
+
+async function commitCompaction(options: CallerOptions, plan: CompactionCommit): Promise<void> {
+  const { dataDir, session, kind } = options;
+  const next: ConvectionSessionData = { ...session };
+  if (kind === 'chair') {
+    next.chairActiveContext = structuredClone(plan.messages.slice(1));
+    rememberChairContextBoundary(next);
+    next.chairTokenUsage = undefined;
+  } else {
+    const consumed = Math.min(plan.prefix.length, session.publicMessages.length);
+    next.publicMessages = [{ speaker: '系统', content: `[对话历史摘要]\n${plan.summary}`, timestamp: Date.now() },
+      ...session.publicMessages.slice(consumed)];
+    next.tokenUsage = undefined;
+    next.publicLatestTokenUsage = undefined;
+    next.publicUsageIncomplete = undefined;
+    clearConvectionChairContext(next);
+    next.chairTokenUsage = undefined;
+  }
+  await saveSession(dataDir, next);
+  Object.assign(session, next);
+}
+
+async function recordNotice(options: CallerOptions, notice: CompactionNotice): Promise<void> {
+  const next = { ...options.session, ...(options.kind === 'chair'
+    ? { chairCompactionNotice: notice } : { compactionNotice: notice }) };
+  await saveSession(options.dataDir, next);
+  Object.assign(options.session, next);
+  options.emit?.(notice);
+}

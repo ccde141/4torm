@@ -18,10 +18,11 @@
 import type { ContextMessage } from '../../shared/types';
 import type { MeetingSessionData, MeetingMessage } from './meeting-session';
 import path from 'node:path';
-import { callLLM, resolveNativeMode } from '../../shared/llm-bridge';
+import { callLLM, resolveNativeMode, type TokenUsage } from '../../shared/llm-bridge';
 import { loadAgent, type LoadedAgent } from '../../shared/agent-loader';
 import { loadAgentToolDefs, type ToolDef } from '../../shared/tool-defs-loader';
 import { buildSystemPrompt } from '../../shared/prompt';
+import { buildFrameworkNavigationSection } from '../../shared/framework-navigation.js';
 import { buildSandboxSection } from '../../shared/sandbox-prompt';
 import {
   runReActLoop,
@@ -30,13 +31,21 @@ import {
 } from './tradewind-react-adapter';
 import { activeNodeRunners } from '../nodes/agent';
 import { runTradewindReActNative } from './native-adapter';
+import { emitMeetingUsage, recordMeetingUsage, TokenUsageRecordError } from './meeting-usage.js';
+import type { TokenUsageProgress } from './token-usage.js';
+import { captureTokenUsage } from './token-usage.js';
+import { meetingContextMessages } from './meeting-compaction-context.js';
+import { meetingCompactionTransform, meetingOpeningCaller } from './meeting-context-compaction.js';
+import { buildChairContext, chairCompactionCaller, finishChairContext } from './chair-context-compaction.js';
 import { buildVirtualToolDefs } from './virtual-tools';
 import { appendMeetingReasoning, createChairAssistantMessage } from './meeting-reasoning';
 import { createMeetingIdleGuard, MEETING_IDLE_TIMEOUT_MS } from './meeting-idle-guard';
 import { resolveTradewindTermination } from './tradewind-outcome.js';
 import { FrameworkError } from '../../shared/framework-error.js';
 import type { ReActTermination } from '../../shared/react/outcome.js';
+import type { ToolCallOutcome } from '../../shared/react/native-loop.js';
 import type { FrameworkErrorKind } from '../../shared/framework-error.js';
+import type { NodeRunner } from './node-runner.js';
 import {
   buildTradewindChairMeta,
   buildTradewindMeetingMeta,
@@ -54,8 +63,9 @@ export type MeetingStreamEvent =
   | { type: 'agent-start'; label: string }
   | { type: 'token'; label: string; chunk: string }
   | { type: 'reasoning'; label: string; chunk: string }
+  | { type: 'usage'; usage: TokenUsage | null; tokenUsage: TokenUsageProgress; label?: string }
   | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; label: string; tool: string; result: string; meta?: unknown }
+  | { type: 'tool-result'; label: string; tool: string; result: string; ok?: boolean; meta?: unknown }
   | { type: 'heartbeat'; label: string; phase: string; elapsed: number }
   | { type: 'contact-start'; label: string; target: string }
   | { type: 'contact-done'; label: string; target: string; result: string; ok: boolean }
@@ -82,38 +92,46 @@ async function execTool(
   workspace: string,
   signal?: AbortSignal,
   onMeta?: (meta: unknown) => void,
-): Promise<string> {
-  const { execToolUnified } = await import('../../shared/exec-tool');
-  return execToolUnified({ tool, args, agentId, workspaceDir: workspace, signal, onMeta });
+): Promise<ToolCallOutcome> {
+  const { execToolUnifiedOutcome } = await import('../../shared/exec-tool');
+  return execToolUnifiedOutcome({ tool, args, agentId, workspaceDir: workspace, signal, onMeta });
 }
 
 /**
  * 会议室内 contact：联络 agent 节点。
  * 标头格式：[系统信息：来自会议室「xxx」- 协作者「yyy」的联络]
  */
-async function execMeetingContact(
+export async function execMeetingContact(
   args: Record<string, string>,
   senderLabel: string,
   meetingLabel: string,
   signal?: AbortSignal,
-): Promise<string> {
-  const { findRunnerByLabel, tryRegisterWait, clearWait } = await import('./contact-registry');
+): Promise<ToolCallOutcome> {
+  const { findRunnerByLabel, tryRegisterWait } = await import('./contact-registry');
 
   const target = args.target || '';
   const message = args.message || '';
 
   const found = findRunnerByLabel(target);
   if (!found) {
-    return `联络失败：找不到名为「${target}」的协作者。请检查可联络的节点名称。`;
+    return { result: `联络失败：找不到名为「${target}」的协作者。请检查可联络的节点名称。`, ok: false };
   }
 
   // 死锁检测（用会议室 nodeId 占位——这里无 nodeId，用 meetingLabel 做 key）
   const sourceKey = `meeting:${meetingLabel}:${senderLabel}`;
   const canWait = tryRegisterWait(sourceKey, found.nodeId);
   if (!canWait) {
-    return `联络被系统拒绝：「${target}」当前正在等待你的回复，反向联络会造成死锁。`;
+    return { result: `联络被系统拒绝：「${target}」当前正在等待你的回复，反向联络会造成死锁。`, ok: false };
   }
 
+  return completeMeetingContact(found.runner, target, message, senderLabel, meetingLabel, sourceKey, signal);
+}
+
+async function completeMeetingContact(
+  runner: NodeRunner, target: string, message: string,
+  senderLabel: string, meetingLabel: string, sourceKey: string, signal?: AbortSignal,
+): Promise<ToolCallOutcome> {
+  const { clearWait } = await import('./contact-registry');
   try {
     const contactContent = `[系统信息：来自会议室「${meetingLabel}」- 协作者「${senderLabel}」的联络]\n\n${message}`;
 
@@ -122,7 +140,7 @@ async function execMeetingContact(
         reject(new Error('contact 超时（20 分钟未响应）'));
       }, 20 * 60 * 1000);
 
-      found.runner.push({
+      runner.push({
         source: 'contact',
         content: contactContent,
         onComplete: (output) => {
@@ -141,9 +159,9 @@ async function execMeetingContact(
       }, { once: true });
     });
 
-    return `[来自「${target}」的回复]\n\n${answer}`;
+    return { result: `[来自「${target}」的回复]\n\n${answer}`, ok: true };
   } catch (e) {
-    return `联络「${target}」失败：${(e as Error).message}`;
+    return { result: `联络「${target}」失败：${(e as Error).message}`, ok: false };
   } finally {
     clearWait(sourceKey);
   }
@@ -160,6 +178,12 @@ export interface HandleSpeakOpts {
   onEvent?: (ev: MeetingStreamEvent) => void;
   /** 工作流团队名册（用于 contact 工具说明） */
   teamRoster?: Array<{ label: string; role: string }>;
+}
+
+export function shouldAttachMeetingToolCaller(
+  toolDefs: ToolDef[], native: boolean, contactTargets: readonly string[],
+): boolean {
+  return native || toolDefs.length > 0 || contactTargets.length > 0;
 }
 
 /**
@@ -197,6 +221,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       const contactTargetsForPrompt = session.participants
         .filter(p => p.label !== label)
         .map(p => ({ label: p.label, role: '会议参与者' }));
+      const contactTargets = contactTargetsForPrompt.map(target => target.label);
 
       const systemText = buildMeetingAgentPrompt(
         agent,
@@ -210,11 +235,11 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         contactTargetsForPrompt,
         nativeDecision.native,
       );
-      const history = formatPublicContext(session);
       const messages: ContextMessage[] = [
         { role: 'system', content: systemText },
-        { role: 'user', content: history },
+        ...meetingContextMessages(session.publicMessages),
       ];
+      const llmTransform = await meetingCompactionTransform(dataDir, session, agent.model);
 
       // toolCaller：双路径共用，contact 路由不变
       //
@@ -224,32 +249,34 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       //
       // 为避免 text 路径下重复事件，emitToolEvents 仅在 native 路径下为 true。
       const emitToolEvents = nativeDecision.native;
-      const toolCaller: ToolCaller | undefined = toolDefs.length > 0 || nativeDecision.native ? {
+      const toolCaller: ToolCaller | undefined = shouldAttachMeetingToolCaller(
+        toolDefs, nativeDecision.native, contactTargets,
+      ) ? {
         async call(tool, args, onMeta) {
           // contact 假工具：联络 agent 节点（自带 contact-start/contact-done 事件，不发 tool-* 事件）
           if (tool === 'contact') {
             const target = args.target || '';
             onEvent?.({ type: 'contact-start', label, target });
-            const result = await execMeetingContact(args, label, session.meetingLabel, idleGuard.signal);
+            const outcome = await execMeetingContact(args, label, session.meetingLabel, idleGuard.signal);
             idleGuard.touch();
-            const ok = !result.startsWith('联络失败') && !result.startsWith('联络被系统拒绝') && !result.includes('失败');
-            onEvent?.({ type: 'contact-done', label, target, result, ok });
-            return result;
+            onEvent?.({ type: 'contact-done', label, target, result: outcome.result, ok: outcome.ok });
+            return outcome;
           }
           // 普通工具
           if (emitToolEvents) onEvent?.({ type: 'tool-call', label, tool, args });
           try {
             let meta: unknown;
-            const result = await execTool(tool, args, participant.agentId, workspace, idleGuard.signal, (m) => {
+            const outcome = await execTool(tool, args, participant.agentId, workspace, idleGuard.signal, (m) => {
               meta = m;
               onMeta?.(m);
             });
-            if (emitToolEvents) onEvent?.({ type: 'tool-result', label, tool, result, meta });
-            return result;
+            if (emitToolEvents) onEvent?.({ type: 'tool-result', label, tool,
+              result: outcome.result, ok: outcome.ok, meta });
+            return outcome;
           } catch (e) {
             const err = `错误：${(e as Error).message}`;
-            if (emitToolEvents) onEvent?.({ type: 'tool-result', label, tool, result: err });
-            return err;
+            if (emitToolEvents) onEvent?.({ type: 'tool-result', label, tool, result: err, ok: false });
+            return { result: err, ok: false };
           }
         },
       } : undefined;
@@ -267,7 +294,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         // 虚拟工具 schema 注入（contact 必备；meeting 不允许 delegate）
         const virtualDefs = buildVirtualToolDefs({
           allowDelegate: false,
-          contactTargets: session.participants.filter(p => p.label !== label).map(p => p.label),
+          contactTargets,
         });
         const allToolDefs = [...toolDefs, ...virtualDefs];
 
@@ -276,8 +303,10 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           model: agent.model,
           temperature: agent.temperature ?? 0.7,
           messages,
+          llmTransform,
           toolDefs: allToolDefs,
           toolCaller: toolCaller!,
+          onUsageResolved: usage => recordMeetingUsage(session, usage),
           // 事件翻译：NodeRunnerEvent → MeetingStreamEvent（补 label）
           // 注意：tool-call/tool-result 由 toolCaller 内部 emit（contact-* 事件），
           // adapter 自身只 emit token / error，这里只翻译这两类
@@ -292,6 +321,8 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
               onEvent?.({ type: 'reasoning', label, chunk: ev.content });
             } else if (ev.type === 'error') {
               onEvent?.({ type: 'error', message: ev.message });
+            } else if (ev.type === 'usage') {
+              emitMeetingUsage(session, ev.usage, onEvent, label);
             }
           },
           signal: idleGuard.signal,
@@ -308,7 +339,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         // ── text 路径（原有逻辑）──
         const llm: LLMCaller = {
           async call(msgs, _opts, onChunk, sig, onReasoning) {
-            return callLLM({
+            return captureTokenUsage(() => callLLM({
               dataDir,
               fullModelKey: agent.model,
               messages: msgs,
@@ -316,19 +347,20 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
               onChunk,
               signal: sig,
               onReasoning,
-            });
+            }), usage => recordMeetingUsage(session, usage));
           },
         };
 
         const textResult = await runReActLoop({
           messages,
           llm,
+          llmTransform,
           tools: toolCaller,
           allowedTools: [
             ...toolDefs,
             ...buildVirtualToolDefs({
               allowDelegate: false,
-              contactTargets: session.participants.filter(p => p.label !== label).map(p => p.label),
+              contactTargets,
             }),
           ].map(tool => tool.name),
           maxTurns: 100,
@@ -343,9 +375,10 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
               if (session.streamingCurrent) appendMeetingReasoning(session.streamingCurrent, ev.chunk);
               onEvent?.({ type: 'reasoning', label, chunk: ev.chunk });
             }
+            if (ev.type === 'usage') emitMeetingUsage(session, ev.usage, onEvent, label);
             if (ev.type === 'heartbeat') onEvent?.({ type: 'heartbeat', label, phase: ev.phase, elapsed: ev.elapsed });
             if (ev.type === 'tool-call') onEvent?.({ type: 'tool-call', label, tool: ev.tool, args: ev.args });
-            if (ev.type === 'tool-result') onEvent?.({ type: 'tool-result', label, tool: ev.tool, result: ev.result, meta: ev.meta });
+            if (ev.type === 'tool-result') onEvent?.({ type: 'tool-result', label, tool: ev.tool, result: ev.result, ok: ev.ok, meta: ev.meta });
           },
           signal: idleGuard.signal,
         });
@@ -435,7 +468,6 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
     });
   }
 
-  const snapshot = formatPublicContext(session);
   const system: ContextMessage = {
     role: 'system',
     content: [
@@ -450,13 +482,11 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
       ``,
       `话题：${session.topic}`,
       ``,
-      `--- 当前公共对话记录 ---`,
-      snapshot,
-      `--- 记录结束 ---`,
+      `下面包含当前公共会议快照与私聊记录，请区分两种来源。`,
     ].join('\n'),
   };
 
-  const msgs: ContextMessage[] = [system, ...session.chairMessages];
+  const msgs = buildChairContext(system, session);
 
   const onChunk = onEvent
     ? (chunk: string) => { onEvent({ type: 'chair-token', chunk }); }
@@ -465,17 +495,18 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
     ? (chunk: string) => { onEvent({ type: 'chair-reasoning', chunk }); }
     : undefined;
   const idleGuard = createMeetingIdleGuard(signal);
+  const caller = chairCompactionCaller({ call: (messages, _options, chunk, callSignal, _tools, reasoning) => callLLM({
+    dataDir, fullModelKey: agent.model, messages, onChunk: chunk, signal: callSignal, onReasoning: reasoning,
+  }) }, dataDir, session, agent);
 
   try {
-    const r = await callLLM({
-      dataDir,
-      fullModelKey: agent.model,
-      messages: msgs,
-      onChunk: onChunk ? (chunk) => { idleGuard.touch(); onChunk(chunk); } : undefined,
-      onReasoning: onReasoning ? (chunk) => { idleGuard.touch(); onReasoning(chunk); } : undefined,
-      signal: idleGuard.signal,
-    });
+    const r = await captureTokenUsage(() => caller.call(msgs, undefined,
+      onChunk ? chunk => { idleGuard.touch(); onChunk(chunk); } : undefined,
+      idleGuard.signal, undefined,
+      onReasoning ? chunk => { idleGuard.touch(); onReasoning(chunk); } : undefined),
+    usage => recordMeetingUsage(session, usage, onEvent, 'chair'));
     session.chairMessages.push(createChairAssistantMessage(r.content, r.reasoningContent));
+    finishChairContext(session, msgs, createChairAssistantMessage(r.content, r.reasoningContent));
     onEvent?.({ type: 'chair-done', content: r.content, reasoningContent: r.reasoningContent });
   } catch (e) {
     if (signal?.aborted) return;
@@ -541,15 +572,16 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
     // 读取该参与者 NodeRunner 当下的上下文快照（剔除 system）
     const runner = activeNodeRunners.get(participant.nodeId);
     const history = runner
-      ? runner.getMessages().filter(m => m.role !== 'system')
+      ? runner.getMessages().slice(1)
       : [];
 
     const systemText = history.length > 0
-      ? buildOpeningPromptWithHistory(agent.name, agent.rolePrompt, label, session, participantLabels, history)
+      ? buildOpeningPromptWithHistory(agent.name, agent.rolePrompt, label, session, participantLabels, [])
       : buildOpeningPromptNoHistory(agent.name, agent.rolePrompt, label, session, participantLabels);
 
     const messages: ContextMessage[] = [
       { role: 'system', content: systemText },
+      ...history,
       { role: 'user', content: '请按上述要求给出你的入会发言。' },
     ];
 
@@ -567,26 +599,23 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
 
     try {
       let streamRaw = '';
-      const r = await callLLM({
-        dataDir,
-        fullModelKey: agent.model,
-        messages,
-        onChunk: (chunk) => {
-          idleGuard.touch();
-          streamRaw += chunk;
-          // 实时更新占位消息；供应商 reasoning 通过独立事件写入 reasoning 字段。
+      const caller = await meetingOpeningCaller({ call: (context, _options, chunk, callSignal, _tools, reasoning) => callLLM({
+        dataDir, fullModelKey: agent.model, messages: context, onChunk: chunk,
+        signal: callSignal, onReasoning: reasoning,
+      }) }, dataDir, session, agent.model, participant);
+      const r = await captureTokenUsage(() => caller.call(messages, undefined,
+        (chunk) => {
+          idleGuard.touch(); streamRaw += chunk;
           const slot = session.publicMessages[placeholderIdx];
           if (slot) slot.content = streamRaw;
           onEvent?.({ type: 'token', label, chunk });
-        },
-        onReasoning: (chunk) => {
+        }, idleGuard.signal, undefined,
+        (chunk) => {
           idleGuard.touch();
           const slot = session.publicMessages[placeholderIdx];
           if (slot) appendMeetingReasoning(slot, chunk);
           onEvent?.({ type: 'reasoning', label, chunk });
-        },
-        signal: idleGuard.signal,
-      });
+        }), usage => recordMeetingUsage(session, usage, onEvent, label));
       const answer = r.content.trim();
       const finalContent = answer || `（${label} 未给出有效入会发言）`;
       // 定稿：content 替换为 answer，rawContent 保留完整流，streaming=false
@@ -599,6 +628,7 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
       }
       onEvent?.({ type: 'agent-done', label, content: finalContent, rawContent: r.content, reasoning: slot?.reasoning });
     } catch (e) {
+      if (e instanceof TokenUsageRecordError) throw e;
       if ((e as Error).name === 'AbortError' && signal?.aborted) return;
       const reason = idleGuard.timedOut() ? `静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s）` : (e as Error).message;
       const errText = `（${label} 入会摘要生成失败：${reason}）`;
@@ -774,10 +804,7 @@ export async function handleEnd(opts: HandleEndOpts): Promise<MeetingEndResult> 
       `- 总发言数：${session.publicMessages.length}`,
       rosterSection,
       ``,
-      `## 完整对话记录`,
-      `---`,
-      transcript,
-      `---`,
+      `完整对话记录见下方消息。`,
       ``,
       `## 纪要写作要求`,
       ``,
@@ -805,17 +832,26 @@ export async function handleEnd(opts: HandleEndOpts): Promise<MeetingEndResult> 
     ].join('\n'),
   };
 
-  const msgs: ContextMessage[] = [system, { role: 'user', content: '请按上述要求生成会议纪要。' }];
+  const msgs: ContextMessage[] = [system, ...meetingContextMessages(session.publicMessages),
+    { role: 'user', content: '请按上述要求生成会议纪要。' }];
+  const transform = await meetingCompactionTransform(dataDir, session, agent.model, false);
+  const caller = transform({ call: (messages, _options, chunk, callSignal) => callLLM({
+    dataDir, fullModelKey: agent.model, messages, onChunk: chunk, signal: callSignal,
+  }) });
 
   const onChunk = onEvent
     ? (chunk: string) => { onEvent({ type: 'chair-token', chunk }); }
     : undefined;
 
   try {
-    const r = await callLLM({ dataDir, fullModelKey: agent.model, messages: msgs, onChunk, signal });
+    const r = await captureTokenUsage(
+      () => caller.call(msgs, undefined, onChunk, signal),
+      usage => recordMeetingUsage(session, usage, onEvent, 'minutes'),
+    );
     onEvent?.({ type: 'minutes-done', content: r.content });
     return { minutes: r.content, transcript };
   } catch (e) {
+    if (e instanceof TokenUsageRecordError) throw e;
     if ((e as Error).name === 'AbortError') {
       return { minutes: '[会议纪要生成被中止]', transcript };
     }
@@ -888,8 +924,11 @@ export function buildMeetingAgentPrompt(
   const textToolDefs = contactTargets?.length
     ? [...toolDefs, buildMeetingContactToolDef(contactTargets)]
     : toolDefs;
-  if (textToolDefs.length > 0 && !native) {
-    sections.push(buildSystemPrompt(textToolDefs));
+  if (textToolDefs.length > 0) {
+    sections.push(buildFrameworkNavigationSection());
+    if (!native) {
+      sections.push(buildSystemPrompt(textToolDefs, { includeNavigation: false }));
+    }
   }
 
   // §4 「基地 + 沙箱」段

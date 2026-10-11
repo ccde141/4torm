@@ -1,162 +1,45 @@
 # Tradewind · Workflows
 
-Tradewind arranges agents, meetings, and human actions into visual workflows that can be saved and run repeatedly. Place different node types on a canvas, then connect them to control how tasks, context, and results move forward.
+Tradewind divides work into ordered nodes and passes each step's result to the next. It suits work that needs several Agents to take turns, a fixed review point, or a structure you want to run again later.
 
-Each workflow has a separate shared workspace. Agent nodes retain their own execution histories while continuing work from upstream envelopes and reading or writing the same directory.
-
-Built-in file tools apply the bound agent's execution permissions, with the workflow directory always included as the current workspace.
-
-The same workflow can run manually or automatically. Manual runs allow human conversation, meetings, and decisions at pause nodes. Automatic runs are unattended and may repeat through loop profiles.
-
-![Envelopes and node status in a running Tradewind workflow](/images/tradewind/runtime-envelope-flow.webp)
+For example, to prepare a launch proposal: the Entry supplies the goal; a Research Agent gathers facts; a Writer Agent drafts the proposal from that research; a Pause node lets you review it; and the Exit collects the final result. During the run, you can see which node is active and open its content when you need to step in.
 
 ## Build a Workflow
 
-Build directly on the canvas, or describe the goal, roles, and human intervention points to a Monsoon agent. The resulting workflow is saved in Tradewind and remains editable on the canvas or through Monsoon.
+Drag nodes from the left palette onto the canvas, then connect them in handoff order. Click a node to configure its role and content on the right. You can also describe the goal, responsibilities, and human review points in Monsoon and ask an Agent to create or edit a Tradewind workflow. You can still return to the canvas to adjust it afterward.
 
-Discussing or modifying a workflow in Monsoon does not run it. The agent hands work to the saved workflow only after an explicit request or confirmation.
+![Parallel branches and merged output on a code audit workflow canvas](/images/tradewind/workflow-canvas.webp)
 
-### Node Types
+The common nodes have distinct jobs: **Entry** supplies the initial task; **Agent** binds an existing Agent to do work; **Pause** waits for your review before passing content on; and **Exit** collects results. Add a **Meeting Room** when several Agents should discuss a topic. Use a **Note** to give an Agent continuing guidance. A Note only supplies instructions; it does not run as a work step.
 
-Tradewind provides six node types. Nodes perform stages of work; ordinary edges determine how envelopes move between them.
+When a node finishes, it sends a prepared handoff along its ordinary connections. This handoff is called an “envelope”: it tells the next node what has been done and what to do next, rather than copying the previous node's entire conversation. If a node depends on several upstream branches, it waits for all their envelopes before starting. Nodes can also use the same workflow workspace files.
 
-| Node | Purpose | Run modes |
-|------|---------|-----------|
-| **Entry** | Supplies the initial task or background to downstream nodes. At least one is required. | Manual, automatic |
-| **Agent** | Binds a persistent Console agent and uses its model, tools, and skills on incoming envelopes. | Manual, automatic |
-| **Meeting Room** | Lets selected agent nodes discuss, then uses a meeting assistant to produce downstream minutes. | Manual only |
-| **Pause** | Waits for human inspection or editing before forwarding an envelope. | Manual only |
-| **Note** | Injects durable guidance into connected agent nodes without running or forwarding results. | Manual, automatic |
-| **Exit** | Collects final envelopes, ends the run, and creates output and conversation archives. Only one is allowed. | Manual, automatic |
+## Choose How to Run It
 
-An agent node references a persistent Console agent rather than copying it. It can add a responsibility and delivery delay. Notes connect only to agents; an unconnected Note remains a visual annotation with no runtime effect.
+**Manual run** suits work you want to join as it proceeds. The workflow starts at the Entry. You can inspect Agent nodes, join a Meeting Room, or review and edit an envelope at a Pause node. When a meeting ends, its assistant prepares minutes before handing those minutes to the next node.
 
-### Canvas Operations
+**Automatic run** suits a workflow that needs no intervention during execution. Run it once, or create a loop profile with a number of rounds, a wait between rounds, and a rule for passing one round's result into the next. Automatic runs cannot contain Meeting Room or Pause nodes.
 
-Drag nodes from the left panel or right-click empty canvas space. Nodes can move and resize; use the minimap and zoom controls for larger graphs.
+Before either run starts, the current canvas is saved and checked. If its configuration or connections are invalid, the interface shows what needs fixing and the workflow does not start.
 
-Selecting a node opens its configuration. Every node supports a display name and human note, with additional settings by type. Human notes are canvas metadata and never enter agent prompts.
+## Let an Agent Advance the Workflow
 
-Drag from a node's right connector to another node's left connector. Right-click nodes to edit, clone, or delete them and edges to delete them. Deleting a node also removes its edges.
+In Monsoon, describe the task goal, node responsibilities, and handoff requirements, and ask an Agent to create or adjust a Tradewind workflow and start it. It can also read and use an existing workflow.
 
-### Envelope Flow
+After starting the run, the Agent can check progress, read node conversations and meeting records, and send additional requirements to Agent nodes. At a meeting node, it can join the discussion, chat privately with the meeting assistant, adjust attendance and speaking order among configured members, and end the meeting so its minutes pass downstream. You review and release Pause nodes on the Tradewind page.
 
-Tradewind has two edge types:
+For example:
 
-- **Ordinary edges** forward a work envelope to every directly connected downstream node after the current task completes.
-- **Note edges** are dashed prompt-injection links from Notes to agents. They neither carry results nor trigger execution.
+> Build a workflow to review the usage guide: check facts and wording in two parallel branches, then have a consolidation node collect revision suggestions and output a checklist. Once it is ready, start an automatic run, follow each node's results, and give me the checklist when it finishes.
 
-A node with several ordinary incoming edges waits for every upstream envelope in the current round. Ordinary edges cannot form cycles; Entry has no upstream edge and Exit has no downstream edge.
+Open the corresponding Tradewind workflow to see the run on the canvas and progress panel, or open a node to inspect its work.
 
-An envelope is a handoff containing organized results, necessary background, and next-step instructions—not the upstream agent's full conversation. Full history remains in the originating node; downstream nodes receive only the prepared handoff.
+## Follow Execution and Results
 
-Several downstream nodes may receive the same envelope. Each keeps separate conversation context while sharing files through the workflow workspace.
+During a run, the canvas and **Workflow Progress** panel show node states and envelope handoffs. Click an Agent node to inspect its conversation, tool activity, and current work. Click a Pause node to confirm or edit its envelope before letting that branch continue. The Exit does not finish the run when the first result arrives; it waits for every envelope expected in that run.
 
-## Save and Manage Workflows
+Use **Stop Workflow** at the top to end the entire run. Unfinished content will not be passed downstream. Completed node output and the run record remain available for review. The workflow definition and shared files remain in place so you can run it again later.
 
-Use the top save button. The page also autosaves every five minutes, and always saves immediately before a run so execution uses the latest canvas.
+## Organize Conversation Records
 
-Double-click the display name to rename it. The ID beneath it is stable and continues to own the same directory, workspace, loop profiles, and run history after a rename.
-
-The left list creates, loads, and deletes workflows. Deletion removes the graph, shared workspace, loop profiles, and run history. A running workflow must be stopped first.
-
-Global tool registration is unavailable during Tradewind execution. Nodes use only the tools and skills configured at startup. Create and confirm required tools beforehand in Monsoon or a Cyclone seat conversation.
-
-## Run Modes
-
-Manual and automatic runs share the graph but differ in human intervention, supported node types, and model requirements. Only one Tradewind workflow can run at a time.
-
-### Manual Run
-
-**Manual Run** executes once from Entry. Open any agent node to watch its conversation and, while idle, send messages without waiting for an envelope.
-
-Agent nodes process incoming envelopes in sequence. Humans can enter meeting and pause panels to participate, add information, or choose when to continue.
-
-After Exit receives its first result, it waits for the complete envelope handoff. The run ends and produces final output only after every envelope expected in the current round arrives.
-
-### Automatic Run
-
-**Automatic Run** opens the loop-profile panel. **No Loop · Single Automatic Run** executes once unattended; a loop profile can run the same workflow through multiple cycles.
-
-A profile sets delay between cycles, cycle count, notes, and how one cycle feeds the next:
-
-- **Accumulate** passes the complete previous output forward.
-- **Reset** restarts from the initial task and loop notes.
-- **Summarize** compresses the previous output and passes its summary.
-
-Every cycle creates a distinct execution record and node conversations while reusing the same shared workspace. Delay begins after the prior cycle completes. An infinite loop continues until manually stopped or a cycle fails.
-
-Meeting Room and Pause nodes are not supported in automatic runs.
-
-### Startup Validation
-
-Before running, Tradewind saves the canvas and validates node settings and connections. Invalid workflows do not start; the page lists required corrections. Automatic runs also verify that agent models support native tool calling.
-
-## Observe and Intervene
-
-The canvas reflects live state. Blue pulses mean a node is processing; an amber outer halo means it is handling an upstream envelope. Successful agent completion shows green for about 15 seconds. Stops and errors remain red instead, and Pause nodes have their own waiting pulse.
-
-The **Workflow · Progress** sidebar summarizes every agent node's state, current envelope, and handoff. Completed, stopped, and failed results remain distinct. After the workflow ends it becomes a read-only run record; loops also show the current cycle.
-
-### Agent Nodes
-
-Select **Chat** on an agent node to open a floating conversation card with generated text, reasoning, tools, SubAgent delegation, and execution state.
-
-Send messages while the node is idle. While it processes an envelope or message, execution remains visible but further messages wait.
-
-A human-initiated reply may be stopped directly. Work on an envelope or `contact` has a downstream delivery obligation and cannot simply be discarded. Use **Pause** to preserve undelivered envelopes for later continuation, or **Stop Workflow** to end the run.
-
-### Meeting Room Nodes
-
-A meeting starts when its node receives an envelope. Its floating card opens on the public meeting and switches independently to assistant chat without mixing either history or stream state.
-
-The public view shows ordered speakers, reasoning, tools, and current state and accepts human additions. Assistant chat reviews the current meeting snapshot privately.
-
-After **End Meeting**, public discussion locks while the assistant produces minutes. Only completed minutes become the downstream envelope.
-
-### Pause Nodes
-
-An arrived envelope puts the node in an amber human-waiting state. **Edit** inspects or changes it; **Continue** forwards the confirmed content.
-
-A Pause blocks only its dependency chain. Other branches keep running, and unconfirmed content is never delivered early.
-
-## Stop a Workflow
-
-The top button becomes **■ Stop** during a run. Stopping:
-
-- cancels active LLM and tool execution;
-- prevents incomplete envelopes from moving downstream while retaining completed handoffs;
-- leaves interrupted and failed nodes red and preserves successful output; and
-- retains the progress sidebar as a read-only terminal record.
-
-A stopped run cannot resume in the middle; start a new run instead.
-
-Stopping one agent reply differs from stopping the workflow. A human-started reply can be stopped alone. Envelope or `contact` work must be paused to preserve its handoff, or ended through **Stop Workflow**.
-
-## Data Layout
-
-Definitions, the persistent shared workspace, and per-run archives are separate. The workflow ID is the directory name and does not change when the display name changes.
-
-```text
-data/tradewind/
-├── workflows/
-│   └── {id}/
-│       ├── graph.json
-│       ├── meta.json
-│       ├── profiles.json
-│       └── workspace/
-└── runs/
-    └── {wfId}/{execId}/
-        ├── meta.json
-        ├── graph-snapshot.json
-        ├── events.jsonl
-        ├── output.json
-        ├── meetings/
-        └── nodes/{nodeId}/messages.json
-```
-
-`workflows/{id}/workspace/` persists across runs. Deleting the workflow removes its definition, workspace, loop profiles, and associated run history.
-
-`runs/{wfId}/{execId}/` represents one execution. `meta.json` may be `running`, `done`, `error`, `stopped`, or `crashed`. On restart, leftover `running` records become `crashed`. Some files appear only after their corresponding features execute.
-
-These local runtime directories are excluded from Git. Git exclusion is not a backup; preserve `data/tradewind/` separately when moving workflows, shared files, or history.
+Agent nodes, meeting public composers, and meeting assistant chats support `/compact` to summarize the current conversation. A meeting's public composer also supports `/reset` to archive and clear both that meeting's public discussion and assistant chat.

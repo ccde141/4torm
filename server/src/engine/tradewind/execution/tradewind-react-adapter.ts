@@ -4,9 +4,11 @@ import type { ContextMessage, LLMOptions } from '../../shared/types.js';
 import {
   type ReActStreamEvent,
   type ToolCallRecord,
+  type ToolCallOutcome,
 } from '../../shared/react/native-loop.js';
 import { runReActLoop as runSharedTextLoop } from '../../shared/react/text-loop.js';
 import type { ReActTermination } from '../../shared/react/outcome.js';
+import type { LLMCaller as SharedLLMCaller } from '../../shared/react/native-loop.js';
 
 export type { ToolCallRecord };
 
@@ -29,7 +31,7 @@ export interface ToolCaller {
     tool: string,
     args: Record<string, string>,
     onMeta?: (meta: unknown) => void,
-  ): Promise<string>;
+  ): Promise<string | ToolCallOutcome>;
 }
 
 export interface ReActLoopParams {
@@ -40,6 +42,7 @@ export interface ReActLoopParams {
   maxTurns?: number;
   onEvent?: (event: ReActStreamEvent) => void;
   signal?: AbortSignal;
+  llmTransform?: (llm: SharedLLMCaller) => SharedLLMCaller;
 }
 
 export interface ReActLoopResult {
@@ -53,13 +56,14 @@ export interface ReActLoopResult {
 }
 
 export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopResult> {
-  const result = await runSharedTextLoop({
-    ...params,
-    llm: {
+  const caller: SharedLLMCaller = {
       call(messages, options, onChunk, signal, _tools, onReasoning) {
         return params.llm.call(messages, options, onChunk, signal, onReasoning);
       },
-    },
+  };
+  const result = await runSharedTextLoop({
+    ...params,
+    llm: params.llmTransform?.(caller) ?? caller,
   });
 
   return {

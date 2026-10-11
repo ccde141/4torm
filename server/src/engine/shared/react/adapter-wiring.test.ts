@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 const convectionNative = fs.readFileSync(
-  new URL('../../convection/native-adapter.ts', import.meta.url),
+  new URL('../../../modules/convection/execution/native-adapter.ts', import.meta.url),
   'utf8',
 );
 const tradewindNode = fs.readFileSync(
@@ -16,9 +16,10 @@ const tradewindMeeting = fs.readFileSync(
 );
 
 test('feature adapters preserve reasoning callbacks on native and text paths', () => {
-  assert.match(convectionNative, /async call\(msgs, _opts, onChunk, sig, tools, onReasoning\)/);
-  assert.match(convectionNative, /onReasoning,/);
-  assert.match(convectionNative, /ev\.type === 'reasoning'/);
+  assert.match(convectionNative, /callModel: \(msgs, opts, onChunk, sig, tools, onReasoning\)/);
+  assert.match(convectionNative, /params\.llm\.call\(msgs, opts, onChunk, sig, tools, onReasoning\)/);
+  assert.match(convectionNative, /callLLM\([\s\S]*onReasoning,/);
+  assert.match(convectionNative, /onEvent\(\{ \.\.\.ev, label \}\)/);
 
   assert.match(tradewindNode, /async call\(msgs, _options, onChunk, sig, onReasoning\)/);
   assert.match(tradewindNode, /onReasoning,/);

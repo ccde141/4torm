@@ -1,7 +1,6 @@
 /**
  * LLM Proxy 路由 — 反向代理到本地 LLM 服务
  *
- * 迁移自 vite.config.ts 的 llm-proxy 中间件。
  * URL 格式：/api/llm/{port}/{targetPath...}
  */
 

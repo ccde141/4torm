@@ -1,7 +1,6 @@
 /**
  * Skills 路由 — 技能列表
  *
- * 迁移自 vite.config.ts 的 skills-api
  */
 
 import type { FastifyInstance } from 'fastify';

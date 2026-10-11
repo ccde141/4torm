@@ -1,32 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  buildToolTransportFingerprint,
-  readToolTransport,
   readModelCapability,
   retainProviderCapabilities,
   writeModelCapability,
   type CapabilityProbe,
 } from './model-capabilities.js';
-
-test('tool transport cache is scoped to endpoint protocol model profile and probe version', () => {
-  const identity = {
-    providerId: 'pvd_test', baseUrl: 'https://example.test/v1/',
-    protocol: 'openai-chat-completions', model: 'demo', profile: 'auto',
-  };
-  const fingerprint = buildToolTransportFingerprint(identity);
-  const provider = {
-    toolTransports: {
-      demo: { status: 'native-confirmed' as const, checkedAt: 'now', fingerprint },
-    },
-  };
-
-  assert.equal(readToolTransport(provider, identity)?.status, 'native-confirmed');
-  assert.equal(readToolTransport(provider, { ...identity, baseUrl: 'https://other.test/v1' }), undefined);
-  assert.equal(readToolTransport(provider, { ...identity, protocol: 'anthropic-messages' }), undefined);
-  assert.equal(readToolTransport(provider, { ...identity, model: 'other' }), undefined);
-  assert.equal(readToolTransport(provider, { ...identity, profile: 'kimi' }), undefined);
-});
 
 test('legacy native probe remains readable as tool capability', () => {
   const provider = {

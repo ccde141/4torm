@@ -4,8 +4,8 @@ import { TeamRuntime } from './runtime.js';
 import { createTeamHandoff } from './handoff.js';
 
 export const TEAM_GUIDANCE = `## 会话工作队 / Session team
-需要持续协作时，可自主创建成员并编写其 mission、rolePrompt、taskContext、constraints。
-team_create 创建后，用 team_dispatch 分配任务。派工返回仅表示启动，不表示完成。
+有一个可独立交付或复核的责任单元时，可以用 team_start 一步创建成员并派工；task 要包含执行所需的背景、路径和操作边界。
+需要先建立持续角色时，仍可 team_create 创建，再用 team_dispatch 派工。派工返回仅表示启动，不表示完成。
 成员独立异步工作并保留上下文；用 team_read 检查状态与回执，用 team_wait 等待当前任务。
 处理结果后用 team_ack 确认回执；不再需要的空闲成员用 team_dismiss 解散，解散不可复活。
 成员不会直接回答人类；当前主轮次在安全节点接收回报，收尾时等待运行中的成员。停止或断线后不自动激活你。协作文件要明确分工，避免并发覆盖。
@@ -14,6 +14,16 @@ team_create 创建后，用 team_dispatch 分配任务。派工返回仅表示�
 export function teamToolDefs(): ToolDef[] {
   const string = { type: 'string' };
   return [
+    { name: 'team_start', description: '一步创建本会话成员并立即异步派工。中等任务只要有一块可独立调查、实现或复核的工作即可使用；你可继续主线，随后核验回报。返回运行 ID，不代表完成。',
+      parameters: { type: 'object', properties: {
+        name: { type: 'string', description: '成员名称，体现本次责任。' },
+        task: { type: 'string', description: '自包含任务：目标、必要背景与路径、操作边界、可验收的回报。成员看不到主会话完整历史。' },
+        requestId: { type: 'string', description: '本次启动唯一标识：1–160 字，只用 ASCII 字母、数字、下划线或连字符。结果不确定时复用同一标识和参数；新工作使用新标识。' },
+        mission: { type: 'string', description: '可选：成员后续持续承担的职责；默认使用成员名称。' },
+        rolePrompt: { type: 'string', description: '可选：专业视角与质量标准。' },
+        taskContext: { type: 'string', description: '可选：后续派工仍需保留的背景。' },
+        constraints: { type: 'string', description: '可选：持续的资源边界和禁止事项，不改变继承权限。' },
+      }, required: ['name', 'task', 'requestId'] } },
     { name: 'team_create', description: '创建本会话持续存在的工作队成员。权限继承当前主 Agent；不属于全局 Agent 池。',
       parameters: { type: 'object', properties: {
         name: { type: 'string', description: '成员名称，体现职责，便于识别。' },
@@ -24,7 +34,7 @@ export function teamToolDefs(): ToolDef[] {
       }, required: ['name', 'mission', 'rolePrompt', 'taskContext', 'constraints'] } },
     { name: 'team_dispatch', description: '向空闲成员异步分配任务。立即返回运行 ID；结果需 team_read 或 team_wait 获取。',
       parameters: { type: 'object', properties: { memberId: string, task: string,
-        requestId: { type: 'string', description: '本次派工唯一标识（字母、数字、下划线或连字符，最多160字）。结果不确定时必须复用同一标识与参数；真正的新派工使用新标识。' },
+        requestId: { type: 'string', description: '本次派工唯一标识：1–160 字，只用 ASCII 字母、数字、下划线或连字符。结果不确定时复用同一标识与参数；新派工使用新标识。' },
       }, required: ['memberId', 'task', 'requestId'] } },
     { name: 'team_read', description: '读取成员状态和未确认的结果回执，不自动消费结果。', parameters: { type: 'object', properties: {}, required: [] } },
     { name: 'team_wait', description: '等待当前工作队任务，最多30秒后返回最新状态和结果；running 表示尚未完成。可被人类停止。', parameters: { type: 'object', properties: {}, required: [] } },
@@ -42,6 +52,12 @@ export function teamExtension(runtime: TeamRuntime, policy: TeamPermissions) {
   return { definitions: teamToolDefs(), createHandoff: () => createTeamHandoff(runtime), call: async (name: string, args: Record<string, string>, signal?: AbortSignal): Promise<string> => {
     if (signal?.aborted) throw new Error('TEAM_CALL_ABORTED');
     switch (name) {
+      case 'team_start': {
+        const definition = { name: args.name, mission: args.mission ?? args.name,
+          rolePrompt: args.rolePrompt ?? '', taskContext: args.taskContext ?? '',
+          constraints: args.constraints ?? '', permissions: policy };
+        return JSON.stringify(await runtime.startNew(definition, args.task, policy, args.requestId));
+      }
       case 'team_create': {
         const member = await runtime.store.create({ ...args, permissions: policy }, policy);
         return JSON.stringify({ memberId: member.id, name: member.name });

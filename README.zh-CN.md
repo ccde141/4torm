@@ -37,6 +37,8 @@
 
 五种功能区使用的是同一套 Agent。变化的是协作方式，不是重新创建一批临时角色
 
+在季风中交代目标后，Agent 可以调用已启用的框架协作工具，自主创建会议或工作室、搭建并启动工作流、安排定时任务，并跟进执行结果。你也可以进入对应功能区，查看进度和记录，或直接参与协作。
+
 ## 工具、技能与 MCP
 
 4torm 通过三种方式扩展 Agent 能力：
@@ -53,7 +55,7 @@
 
 ### 环境要求
 
-- Node.js 20+
+- Node.js 20.19+（20.x）或 22.12+
 - npm 9+
 
 ### 安装依赖
@@ -65,6 +67,8 @@ cd 4torm
 npm install
 npm --prefix server install
 ```
+
+Windows PowerShell 如禁止执行 `npm.ps1`，可将命令中的 `npm` 改为 `npm.cmd`。
 
 ### 启动
 
@@ -89,7 +93,9 @@ npm run build
 npm run start:prod
 ```
 
-打开 `http://localhost:3001`
+打开 `https://localhost:3001`
+
+构建完成后，也可以运行 `npm run electron:prod` 打开桌面窗口。
 
 ### 首次使用
 
@@ -106,7 +112,7 @@ npm run start:prod
 
 | 内容 | 文档 |
 |------|------|
-| 安装与首次配置 | [快速开始](./docs/guide/getting-started.md) |
+| 首次配置 | [快速开始](./docs/guide/getting-started.md) |
 | Agent、会话与工作区 | [核心概念](./docs/guide/concepts.md) |
 | Agent 创建与配置 | [Agent 管理](./docs/guide/agents.md) |
 | 五种功能区 | [季风](./docs/modes/chat.md) · [对流](./docs/modes/convection.md) · [气旋](./docs/modes/cyclone.md) · [信风](./docs/modes/tradewind.md) · [潮汐](./docs/modes/tide.md) |

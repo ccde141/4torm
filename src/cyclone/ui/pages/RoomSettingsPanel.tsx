@@ -1,11 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
 import { inviteSeatToRoom, type JoinBehavior } from './room-invite';
-import { readRoomError, type RoomData } from './room-messages';
+import type { RoomData } from './room-messages';
 import { roomSeatName } from './room-seat-name';
 import '../../../styles/components/cyclone-room-settings.css';
 import { useLocale } from '../../../i18n/LocaleContext';
 import type { MessageKey } from '../../../i18n/locale';
+import {
+  joinCycloneRoom,
+  leaveCycloneRoom,
+  renameCycloneRoom,
+  reorderCycloneRoom,
+  setCycloneRoomMode,
+  setCycloneRoomTopic,
+} from './cyclone-control-client';
 
 interface SeatLite { id: string; title: string; }
 
@@ -15,9 +23,13 @@ const BEHAVIOR_KEY: Record<JoinBehavior, MessageKey> = {
   none: 'cyclone.room.behaviorNone',
 };
 
-export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChanged }: {
+export default function RoomSettingsPanel({
+  room, seats, workshopId, roomId, roomUrl, locked, onChanged,
+}: {
   room: RoomData;
   seats: SeatLite[];
+  workshopId: string;
+  roomId: string;
   roomUrl: string;
   locked: boolean;
   onChanged: () => Promise<void>;
@@ -43,20 +55,17 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
   const seatName = (id: string) => roomSeatName(id, seats, room.publicMessages, t('cyclone.settings.deletedSeat'));
   const writeLocked = locked || busy;
 
-  async function mutate(action: string, body: Record<string, unknown>, fallback: string): Promise<boolean> {
+  async function mutate(action: () => Promise<unknown>, fallback: string): Promise<boolean> {
     if (writeLocked) return false;
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      const response = await fetch(`${roomUrl}/${action}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      });
-      if (!response.ok) throw new Error(await readRoomError(response, fallback));
+      await action();
       await onChanged();
       return true;
     } catch (cause) {
-      setError((cause as Error).message);
+      setError(`${fallback}: ${(cause as Error).message}`);
       return false;
     } finally {
       setBusy(false);
@@ -66,13 +75,19 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
   async function saveTitle() {
     const next = title.trim();
     if (!next || next === room.title) return;
-    if (await mutate('rename', { title: next }, t('cyclone.settings.saveNameFailed'))) setNotice(t('cyclone.settings.nameSaved'));
+    if (await mutate(
+      () => renameCycloneRoom(workshopId, roomId, next),
+      t('cyclone.settings.saveNameFailed'),
+    )) setNotice(t('cyclone.settings.nameSaved'));
   }
 
   async function saveTopic() {
     const next = topic.trim();
     if (!next || next === room.topic) return;
-    if (await mutate('set-topic', { topic: next }, t('cyclone.settings.saveTopicFailed'))) setNotice(t('cyclone.settings.topicSaved'));
+    if (await mutate(
+      () => setCycloneRoomTopic(workshopId, roomId, next),
+      t('cyclone.settings.saveTopicFailed'),
+    )) setNotice(t('cyclone.settings.topicSaved'));
   }
 
   async function moveSeat(index: number, direction: -1 | 1) {
@@ -80,7 +95,10 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
     if (target < 0 || target >= room.participantSeatIds.length) return;
     const seatIds = [...room.participantSeatIds];
     [seatIds[index], seatIds[target]] = [seatIds[target], seatIds[index]];
-    await mutate('reorder', { seatIds }, t('cyclone.settings.reorderFailed'));
+    await mutate(
+      () => reorderCycloneRoom(workshopId, roomId, seatIds),
+      t('cyclone.settings.reorderFailed'),
+    );
   }
 
   async function leaveSeat(id: string) {
@@ -91,7 +109,10 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
       confirmText: t('cyclone.settings.leave'), danger: true,
     });
     if (!approved) return;
-    await mutate('leave', { seatId: id }, t('cyclone.settings.leaveFailed'));
+    await mutate(
+      () => leaveCycloneRoom(workshopId, roomId, id),
+      t('cyclone.settings.leaveFailed'),
+    );
   }
 
   async function inviteSeat() {
@@ -100,12 +121,14 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
     setError(null);
     setNotice(null);
     try {
-      const result = await inviteSeatToRoom(fetch, roomUrl, seatId, behavior, {
+      const result = await inviteSeatToRoom({
+        join: () => joinCycloneRoom(workshopId, roomId, seatId),
+        fetcher: fetch, introUrl: `${roomUrl}/intro`, seatId, behavior, messages: {
         joinFailed: t('cyclone.roomInvite.joinFailed'),
         introFailed: t('cyclone.roomInvite.introFailed'),
         missingStream: t('cyclone.roomInvite.missingStream'),
         disconnected: t('cyclone.roomInvite.disconnected'),
-      });
+      } });
       await onChanged();
       setSeatId('');
       if (result.introError) setError(t('cyclone.settings.introFailed', { error: result.introError }));
@@ -157,7 +180,10 @@ export default function RoomSettingsPanel({ room, seats, roomUrl, locked, onChan
               <div className="cyclone-settings-mode" aria-label={t('cyclone.settings.mode')}>
                 {(['build', 'plan'] as const).map(mode => (
                   <button key={mode} className={room.mode === mode ? 'is-active' : ''} disabled={locked || busy}
-                    onClick={() => mutate('set-mode', { mode }, t('cyclone.settings.modeFailed'))}>
+                    onClick={() => mutate(
+                      () => setCycloneRoomMode(workshopId, roomId, mode),
+                      t('cyclone.settings.modeFailed'),
+                    )}>
                     <strong>{mode}</strong><span>{t(mode === 'build' ? 'cyclone.settings.build' : 'cyclone.settings.plan')}</span>
                   </button>
                 ))}

@@ -10,15 +10,16 @@
  * 生成的发言落进 room.publicMessages（与正常群聊发言同构），不回写工位私聊会话。
  * 流式吐字经 onChunk 回调（路由层转 SSE）。
  *
- * 只 import shared/ 与本目录模块，零交叉代码。
+ * 依赖 shared/ 与本目录模块。
  */
 
 import type { ContextMessage } from '../shared/types';
-import { callLLM } from '../shared/llm-bridge';
+import { callLLM, type TokenUsage } from '../shared/llm-bridge';
 import { loadAgent } from '../shared/agent-loader';
 import { loadSeat } from './seat-store';
 import { saveRoom } from './room-store';
 import type { RoomData, SeatData, JoinBehavior } from './types';
+import { recordRoomLatestUsage } from './room-token-usage.js';
 
 /** 把工位私聊历史拍平成可读文本（仅 user/assistant 文本，剥工具消息） */
 function formatSeatHistory(seat: SeatData): string {
@@ -65,6 +66,7 @@ export async function generateJoinSpeech(
   behavior: JoinBehavior,
   onChunk?: (chunk: string) => void,
   signal?: AbortSignal,
+  onUsage?: (usage: TokenUsage | null) => void,
 ): Promise<string | null> {
   if (behavior === 'none') return null;
 
@@ -96,19 +98,21 @@ export async function generateJoinSpeech(
     { role: 'user', content: userContent },
   ];
 
-  const result = await callLLM({
-    dataDir,
-    fullModelKey: agent.model,
-    messages,
-    options: { temperature: agent.temperature, maxTokens: 800 },
-    onChunk,
-    signal,
-  });
+  let result: Awaited<ReturnType<typeof callLLM>>;
+  try {
+    result = await callLLM({ dataDir, fullModelKey: agent.model, messages,
+      options: { temperature: agent.temperature, maxTokens: 800 }, onChunk, signal });
+  } catch (error) {
+    recordRoomLatestUsage(room, null);
+    await saveRoom(dataDir, workshopId, room);
+    onUsage?.(null);
+    throw error;
+  }
+  recordRoomLatestUsage(room, result.usage ?? null);
 
   const speech = (result.content || '').trim();
-  if (!speech) return null;
-
-  room.publicMessages.push({ speaker: seat.title, content: speech, timestamp: Date.now() });
+  if (speech) room.publicMessages.push({ speaker: seat.title, content: speech, timestamp: Date.now() });
   await saveRoom(dataDir, workshopId, room);
-  return speech;
+  onUsage?.(room.publicLatestTokenUsage ?? null);
+  return speech || null;
 }

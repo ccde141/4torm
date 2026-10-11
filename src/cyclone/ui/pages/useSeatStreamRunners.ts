@@ -12,28 +12,12 @@
 import { useRef, useCallback, useMemo } from 'react';
 import { streamUrl } from '../../../lib/apiBase';
 import type { DisplayMessage } from './messageDisplay';
-import type { TaskBoard } from '../../../utils/taskboard';
 import { readCycloneSSE } from './cyclone-sse';
 import { errorFromResponse } from '../../../api/error-contract';
-import { normalizeDelegateProgressAtToolBoundary } from '../../../engine/chat/delegate-progress';
-import { formatStreamStatus, getToolTarget } from '../../../components/chat/stream-status';
 import type { Locale } from '../../../i18n/locale';
-import {
-  appendReplyBlock,
-  appendReplyText,
-  findReplyBlock,
-  reconcileReplyAnswer,
-  type CycloneReplySegment,
-} from './cyclone-reply-sequence';
-export interface Live {
-  segments: CycloneReplySegment[];
-  /** 原生思考流（流式当轮显示；不进上下文，故重载不保留） */
-  reasoning?: string;
-  phase: string;
-  activityTarget?: string;
-  /** task_board 假工具通过 meta 侧通道回传的最新任务板（undefined=本轮未更新，null=已清空） */
-  taskboard?: TaskBoard | null;
-}
+import { appendReplyText } from './cyclone-reply-sequence';
+import { abortCycloneExecution } from './cyclone-execution-client';
+import { applySeatEvent, emptyLive, type Live } from './seat-stream-events';
 export type SeatRunnerOutcome = 'running' | 'completed' | 'failed' | 'aborted';
 
 /** 单条工位流的运行态。归属 seatId，不归属当前界面。 */
@@ -52,94 +36,12 @@ interface SeatRunner {
   userStopped: boolean;
   /** 转入后台的时刻；0 = 前台正在看，永不淘汰 */
   backgroundedAt: number;
+  operationId?: string;
+  runId?: string;
+  abortRequested: boolean;
+  abortInFlight: boolean;
 }
 const MAX_BG = 3;
-export function emptyLive(locale: Locale = 'zh-CN'): Live {
-  return { segments: [], phase: formatStreamStatus('llm-waiting', 0, undefined, undefined, locale) };
-}
-
-/** 把一个 SeatEvent 应用到 Live 累积态（流式 + 重载共用的卡片块构建逻辑）。 */
-export function applyEvent(ev: any, ls: Live, locale: Locale = 'zh-CN'): void {
-  switch (ev.type) {
-    case 'token':
-      appendReplyText(ls.segments, ev.content); ls.phase = formatStreamStatus('model-output', 0, undefined, undefined, locale); ls.activityTarget = undefined; break;
-    case 'reasoning':
-      ls.reasoning = (ls.reasoning || '') + ev.content; ls.phase = formatStreamStatus('model-output', 0, undefined, undefined, locale); ls.activityTarget = undefined; break;
-    case 'tool-progress':
-      ls.phase = formatStreamStatus('tool-preparing', Math.round((ev.elapsed || 0) / 1000), ev.tool, ev.argumentChars, locale);
-      ls.activityTarget = undefined; break;
-    case 'tool-call':
-      appendReplyBlock(ls.segments, { kind: 'tool', tool: ev.tool, args: ev.args, status: 'running' });
-      ls.phase = formatStreamStatus('tool-exec', 0, ev.tool, undefined, locale);
-      ls.activityTarget = getToolTarget(ev.args); break;
-    case 'tool-result': {
-      // task_board 侧通道：结构化任务板即时刷新抽屉（不进 LLM 上下文）
-      if (ev.meta && 'taskboard' in ev.meta) ls.taskboard = ev.meta.taskboard;
-      const block = findReplyBlock(ls.segments, item => item.kind === 'tool' && item.status === 'running');
-      if (block?.kind === 'tool') { block.result = ev.result; block.status = ev.ok ? 'success' : 'error'; }
-      ls.phase = formatStreamStatus('llm-waiting', 0, undefined, undefined, locale); ls.activityTarget = undefined; break;
-    }
-    case 'heartbeat': {
-      const tool = findReplyBlock(ls.segments, item => item.kind === 'tool' && item.status === 'running');
-      ls.phase = formatStreamStatus(
-        ev.phase === 'tool-exec' ? 'tool-exec' : 'llm-waiting',
-        Math.round((ev.elapsed || 0) / 1000),
-        tool?.kind === 'tool' ? tool.tool : undefined,
-        undefined,
-        locale,
-      );
-      ls.activityTarget = tool?.kind === 'tool' ? getToolTarget(tool.args) : undefined;
-      break;
-    }
-    case 'delegate-start':
-      appendReplyBlock(ls.segments, { kind: 'delegate', id: ev.delegateId, task: ev.task, steps: [], status: 'running' });
-      ls.phase = locale === 'en-US' ? 'Subtask running...' : '子任务执行中...'; break;
-    case 'delegate-token': {
-      const b = findReplyBlock(ls.segments, item => item.kind === 'delegate' && item.id === ev.delegateId);
-      if (b && b.kind === 'delegate') b.content = (b.content || '') + ev.content; break;
-    }
-    case 'delegate-tool-call': {
-      const b = findReplyBlock(ls.segments, item => item.kind === 'delegate' && item.id === ev.delegateId);
-      if (b && b.kind === 'delegate') {
-        b.content = normalizeDelegateProgressAtToolBoundary(b.content || '');
-        b.steps.push({ type: 'tool', tool: ev.tool, args: ev.args });
-      }
-      break;
-    }
-    case 'delegate-tool-result': {
-      const b = findReplyBlock(ls.segments, item => item.kind === 'delegate' && item.id === ev.delegateId);
-      if (b && b.kind === 'delegate') {
-        for (let i = b.steps.length - 1; i >= 0; i--) {
-          if (b.steps[i].tool === ev.tool && b.steps[i].result === undefined) { b.steps[i].result = ev.result; b.steps[i].ok = ev.ok; break; }
-        }
-      }
-      break;
-    }
-    case 'delegate-done': {
-      const b = findReplyBlock(ls.segments, item => item.kind === 'delegate' && item.id === ev.delegateId);
-      if (b && b.kind === 'delegate') {
-        b.content = normalizeDelegateProgressAtToolBoundary(b.content || '');
-        b.summary = ev.summary;
-        b.status = ev.status === 'error' ? 'error' : 'success';
-      }
-      ls.phase = ''; break;
-    }
-    case 'contact-start':
-      appendReplyBlock(ls.segments, { kind: 'contact', id: ev.contactId, target: ev.target, message: ev.message, status: 'running' });
-      ls.phase = locale === 'en-US' ? `Contacting ${ev.target}...` : `联络 ${ev.target}...`; break;
-    case 'contact-done': {
-      const b = findReplyBlock(ls.segments, item => item.kind === 'contact' && item.id === ev.contactId);
-      if (b && b.kind === 'contact') { b.reply = ev.reply; b.status = ev.ok ? 'success' : 'error'; }
-      ls.phase = ''; break;
-    }
-    case 'answer':
-      reconcileReplyAnswer(ls.segments, ev.content); ls.phase = ''; break;
-    case 'ask':
-      appendReplyBlock(ls.segments, { kind: 'ask', question: ev.question, options: ev.options, answered: false }); ls.phase = ''; break;
-    case 'error':
-      appendReplyText(ls.segments, `\n[${locale === 'en-US' ? 'Error' : '错误'}] ${ev.message}`); ls.phase = ''; break;
-  }
-}
 
 async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal: AbortSignal, locale: Locale): Promise<void> {
   const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
@@ -233,13 +135,35 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
     if (text) drafts.current.set(seatId, text); else drafts.current.delete(seatId);
   }, []);
 
-  /** 后台流超额淘汰最老的（abort 触发服务端落库）。 */
+  const requestAbort = useCallback((seatId: string, runner: SeatRunner) => {
+    if (!runner.operationId || !runner.runId || runner.abortInFlight) return;
+    runner.abortInFlight = true;
+    void abortCycloneExecution(runner.operationId!, runner.runId!)
+      .then(() => {
+        runner.outcome = 'aborted';
+        runner.ctrl.abort();
+      })
+      .catch(error => {
+        runner.abortInFlight = false;
+        runner.abortRequested = false;
+        runner.userStopped = false;
+        appendReplyText(runner.live.segments,
+          `\n[${localeRef.current === 'en-US' ? 'Stop failed' : '停止失败'}] ${(error as Error).message}`);
+        notify(seatId);
+      });
+  }, [notify]);
+
+  /** 后台流超额时通过中心门控中止最老的执行。 */
   const evictIfNeeded = useCallback(() => {
-    const bg = [...runners.current.values()]
-      .filter(r => r.streaming && r.backgroundedAt > 0)
-      .sort((a, b) => a.backgroundedAt - b.backgroundedAt);
-    for (let i = 0; i < bg.length - MAX_BG; i++) bg[i].ctrl.abort();
-  }, []);
+    const bg = [...runners.current.entries()]
+      .filter(([, r]) => r.streaming && r.backgroundedAt > 0)
+      .sort(([, a], [, b]) => a.backgroundedAt - b.backgroundedAt);
+    for (let i = 0; i < bg.length - MAX_BG; i++) {
+      const [seatId, runner] = bg[i];
+      runner.abortRequested = true;
+      requestAbort(seatId, runner);
+    }
+  }, [requestAbort]);
 
   /** 切走某工位 → 转后台并触发超额淘汰。流继续在 runner 里跑。 */
   const background = useCallback((seatId: string) => {
@@ -254,22 +178,22 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
   }, []);
 
   /** 手动停止：abort 本地流 + 通知服务端 abort。 */
-  const abortSeat = useCallback((workshopId: string, seatId: string, pathOverride?: string) => {
+  const abortSeat = useCallback((seatId: string) => {
     const r = runners.current.get(seatId);
-    if (r) { r.userStopped = true; r.outcome = 'aborted'; r.ctrl.abort(); }
-    fetch(streamUrl(pathOverride ?? `/api/cyclone/workshop/${workshopId}/seat/${seatId}/abort`), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-    }).catch(() => {});
-  }, []);
+    if (!r) return;
+    r.userStopped = true;
+    r.abortRequested = true;
+    requestAbort(seatId, r);
+  }, [requestAbort]);
 
   /** 删工位：标弃用 + 掐流 + 通知服务端 abort。 */
-  const kill = useCallback((workshopId: string, seatId: string) => {
+  const kill = useCallback((seatId: string) => {
     const r = runners.current.get(seatId);
     queues.current.delete(seatId);   // 删工位连带清掉其排队 / 草稿
     drafts.current.delete(seatId);
     if (!r) return;
     r.abandoned = true;
-    abortSeat(workshopId, seatId);
+    abortSeat(seatId);
   }, [abortSeat]);
 
   /** SeatChat reload /status 完成后清出已结束的 runner（释放 live 缓冲）。 */
@@ -294,6 +218,8 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
       abandoned: false,
       userStopped: false,
       backgroundedAt: 0,
+      abortRequested: false,
+      abortInFlight: false,
     };
     runners.current.set(seatId, runner);
     notify(seatId);
@@ -318,7 +244,15 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
         await streamSSE(
           path,
           { [payloadKey]: text },
-          (ev) => { applyEvent(ev, runner.live, localeRef.current); if (HIGH_FREQ.has(ev.type)) scheduleNotify(); else flushNotify(); },
+          (ev) => {
+            if (ev.type === 'execution-start') {
+              runner.operationId = ev.operationId;
+              runner.runId = ev.runId;
+              if (runner.abortRequested) requestAbort(seatId, runner);
+            }
+            applySeatEvent(ev, runner.live, localeRef.current);
+            if (HIGH_FREQ.has(ev.type)) scheduleNotify(); else flushNotify();
+          },
           ctrl.signal,
           localeRef.current,
         );
@@ -337,7 +271,7 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
         onSeatFinished(seatId);  // 刷新侧栏（即使 SeatChat 未挂载也生效）
       }
     })();
-  }, [notify, onSeatFinished]);
+  }, [notify, onSeatFinished, requestAbort]);
 
   return useMemo(() => ({
     subscribe, getRunner, startStream, background, foreground, abortSeat, kill, clearIfDone,

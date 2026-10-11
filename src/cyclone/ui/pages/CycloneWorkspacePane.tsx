@@ -18,6 +18,7 @@ import type { SeatStreamRunners } from './useSeatStreamRunners';
 import type { WorkshopDispatches } from './useWorkshopDispatches';
 import type { CycloneView, RoomSummary, SeatSummary, WorkshopSummary } from './cyclone-page-model';
 import type { WorkspaceStatusProjection } from './cyclone-workspace-status';
+import type { ExternalRoomView } from './useRoomExternalActivity';
 
 interface Props {
   active: boolean;
@@ -36,6 +37,7 @@ interface Props {
   chairOpen: boolean;
   seatRunners: SeatStreamRunners;
   roomRunners: RoomStreamRunners;
+  externalRoom: ExternalRoomView;
   dispatchAction: WorkshopDispatches['act'];
   setView: Dispatch<SetStateAction<CycloneView>>;
   onCreateWorkshop(config: { title: string; chairAgentId?: string }): Promise<void>;
@@ -49,7 +51,7 @@ interface Props {
   onOpenSeat(id: string): void;
   onWorkshopReload(): void;
   onWorkshopsReload(): void;
-  onBulletinSaved(entries: BulletinEntry[]): void;
+  onBulletinSaved(workshopId: string, entries: BulletinEntry[]): void;
   onChairToggle(): void;
   onSetChair(agentId: string): void;
 }
@@ -81,12 +83,12 @@ export function CycloneWorkspacePane(props: Props) {
       {props.view?.kind === 'create-workshop' && <CreateWorkshopPanel agents={props.agents}
         onCreate={props.onCreateWorkshop} onCancel={() => props.setView(null)} />}
       {props.view?.kind === 'create-seat' && props.activeWid && <SeatPanel key="create-seat" mode="create"
-        agents={props.agents} workshopId={props.activeWid} onSubmit={props.onCreateSeat} onCancel={() => props.setView(null)} />}
+        agents={props.agents} onSubmit={props.onCreateSeat} onCancel={() => props.setView(null)} />}
       {loadingSeat && <SeatEditorLoading key={`loading-seat-${loadingSeat.id}`}
         error={loadingSeat.error} onRetry={() => props.onRetrySeat(loadingSeat.id)}
         onCancel={() => props.setView({ kind: 'seat', id: loadingSeat.id })} />}
       {editingSeat && props.activeWid && <SeatPanel key={`edit-seat-${editingSeat.id}`} mode="edit"
-        agents={props.agents} workshopId={props.activeWid} initial={editingSeat.draft}
+        agents={props.agents} initial={editingSeat.draft}
         onSubmit={draft => props.onEditSeat(editingSeat.id, draft)} onCancel={() => props.setView({ kind: 'seat', id: editingSeat.id })} />}
       {props.view?.kind === 'create-room' && props.activeWid && <CreateRoomPanel
         seats={props.seats.map(seat => ({ id: seat.id, title: seat.title }))} initialSeatIds={props.view.seatIds}
@@ -98,7 +100,8 @@ export function CycloneWorkspacePane(props: Props) {
             title={props.workshops.find(workshop => workshop.id === props.activeWid)?.title} seats={props.seats}
             bulletin={props.bulletin} dispatches={props.dispatches} runners={props.seatRunners}
             seatStatuses={props.status.seats} panel={organizationPanel} active={props.active && organizationVisible}
-            onBulletinSaved={props.onBulletinSaved} onRenamed={props.onWorkshopsReload} onOpenSeat={props.onOpenSeat}
+            onBulletinSaved={entries => props.onBulletinSaved(props.activeWid!, entries)}
+            onRenamed={props.onWorkshopsReload} onOpenSeat={props.onOpenSeat}
           />
         </div>
         {props.tabs.map(tab => <MountedWorkspace key={tabKey(tab)} tab={tab} visible={activeTabKey === tabKey(tab)} props={props} />)}
@@ -122,6 +125,7 @@ function MountedWorkspace({ tab, visible, props }: { tab: WorkspaceTab; visible:
   const room = props.rooms.find(item => item.id === tab.id);
   return room ? <div style={mountedStyle(visible)}><RoomPanel workshopId={props.activeWid} roomId={room.id}
     seats={props.seats.map(seat => ({ id: seat.id, title: seat.title }))} runners={props.roomRunners}
+    externalRoom={props.externalRoom}
     dispatches={props.dispatches} onDispatchAction={props.dispatchAction}
     settingsLocked={!!props.seatRunners.getRunner(chairStreamKey(room.id))?.streaming
       || props.dispatches.some(item => item.sourceRoomId === room.id && ['queued', 'running', 'awaiting_human'].includes(item.status))}

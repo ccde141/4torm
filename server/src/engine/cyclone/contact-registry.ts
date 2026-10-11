@@ -1,12 +1,10 @@
 /**
  * 气旋 Contact 注册表 —— 工位间横向联络的寻址 + 死锁防护
  *
- * 算法层忠实复刻信风 contact-registry（经强压测）：waitGraph 环检测、寻址索引。
- * 与信风的唯一差异：
- * - 信风全局单例（一进程一工作流）；气旋多工作室并发，按 workshopId 隔离 waitGraph。
- * - 信风 label→nodeId→内存 runner；气旋 title→seatId（runner 不常驻，由执行器按需加载会话）。
+ * 使用 waitGraph 环检测；按 workshopId 隔离等待关系。
+ * 按 title 查找 seatId，执行器按需加载工位会话。
  *
- * 只 import 本目录模块，零交叉代码。
+ * 依赖本目录模块。
  */
 
 import { listAuthorizedTargets } from './organization/organization-authorization.js';

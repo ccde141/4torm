@@ -157,6 +157,36 @@ async function main() {
     assert.equal(r.rawContent, 'Intermediate finding.\n\nFinal sentence.');
   });
 
+  await run('结构化工具结果在原生历史中仍是纯字符串', async () => {
+    const msgs: ContextMessage[] = [{ role: 'user', content: 'Read.' }];
+    const { llm } = fakeLLM([
+      { toolCalls: [tc('read_file')] },
+      { content: 'Done.' },
+    ]);
+    const result = await runReActLoopNative({
+      messages: msgs, llm,
+      tools: { call: async () => ({ result: '读取失败', ok: false }) },
+      toolDefs: [{ name: 'read_file', description: 'Read', parameters: {} }],
+    });
+    assert.equal(msgs.find(message => message.role === 'tool')?.content, '读取失败');
+    assert.equal((msgs.find(message => message.role === 'tool') as ContextMessage &
+      { toolOk?: boolean })?.toolOk, false);
+    assert.equal(result.toolCalls[0]?.result, '读取失败');
+  });
+
+  await run('结构化终结结果仍交付字符串正文', async () => {
+    const { llm } = fakeLLM([{ toolCalls: [tc('complete_task')] }]);
+    const messages: ContextMessage[] = [{ role: 'system', content: 's' }];
+    const result = await runReActLoopNative({
+      messages, llm,
+      tools: { call: async () => ({ result: 'SEALED', ok: true }) },
+      toolDefs: [], completion: { tool: 'complete_task' },
+    });
+    assert.equal(result.content, 'SEALED');
+    assert.equal((messages.find(message => message.role === 'tool') as ContextMessage &
+      { toolOk?: boolean })?.toolOk, true);
+  });
+
   console.log('ok');
 }
 

@@ -18,3 +18,11 @@ test('workflow node human memo survives save and reload', () => {
   assert.equal((reloaded.data as { memo?: string }).memo, '只供人类识别');
   assert.equal(reloaded.height, 160);
 });
+
+test('a workflow node without memo remains valid after loading and saving again', () => {
+  const loaded = deserializeWorkflowNode({
+    id: 'entry-1', type: 'entry', label: '入口', position: { x: 0, y: 0 }, config: {},
+  });
+  const saved = serializeWorkflowNode(loaded);
+  assert.equal(Object.hasOwn(saved, 'memo'), false);
+});

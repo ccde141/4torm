@@ -79,6 +79,28 @@ test('冷启动并行加载时等待当前工作室摘要就绪后再合并协�
   assert.match(page, /loadedWorkshopId === activeWid/);
 });
 
+test('协作结构接收当前工作室变更与重连信号，并在重新进入图页时校正', async () => {
+  const workspace = await fs.readFile(new URL('./OrganizationWorkspace.tsx', import.meta.url), 'utf8');
+  assert.match(workspace, /subscribeCycloneChanges\(event =>/);
+  assert.match(workspace, /event\.type === 'sync'/);
+  assert.match(workspace, /event\.workshopId === props\.workshopId && event\.scope === 'workshop'/);
+  assert.match(workspace, /unsubscribe\(\)/);
+  assert.match(workspace, /requestGuard\.current\.cancel\(\)/);
+  assert.match(workspace, /subscribedWorkshopRef\.current === props\.workshopId/);
+});
+
+test('远端组织版本仅替换干净草稿，保存和乱序请求不能覆盖当前编辑', async () => {
+  const workspace = await fs.readFile(new URL('./OrganizationWorkspace.tsx', import.meta.url), 'utf8');
+  assert.match(workspace, /request\.isCurrent\(\)/);
+  assert.match(workspace, /state\.organization\?\.revision === savedDraftRef\.current\.baseRevision/);
+  assert.match(workspace, /!current \|\| current === previousSaved \? authoritative : current/);
+  assert.match(workspace, /savingRef\.current/);
+  assert.match(workspace, /deferredChangeRef\.current/);
+  assert.match(workspace, /if \(!succeeded \|\| deferredChangeRef\.current\) void reload\(\)/);
+  assert.match(workspace, /current === submittedDraft/);
+  assert.match(workspace, /if \(selectedWorkshopRef\.current !== props\.workshopId\) return;/);
+});
+
 test('气旋普通拖动平移画布且只在按住 Shift 时框选工位', async () => {
   const canvas = await fs.readFile(new URL('./CycloneOrganizationCanvas.tsx', import.meta.url), 'utf8');
   assert.match(canvas, /panOnDrag/);

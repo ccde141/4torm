@@ -1,6 +1,7 @@
 import { useLocale } from '../../../i18n/LocaleContext';
 import type { CycloneView, RoomSummary, SeatSummary, WorkshopSummary } from './cyclone-page-model';
 import type { WorkspaceEntityStatus, WorkspaceStatusProjection } from './cyclone-workspace-status';
+import { PresenceItems } from '../../../components/common/PresenceItems';
 
 interface Props {
   workshops: WorkshopSummary[];
@@ -26,19 +27,22 @@ export function CycloneSidebar(props: Props) {
   const { t } = useLocale();
   return <aside style={leftPanelStyle}>
     <SectionHead label={t('cyclone.shell.workshops')} addLabel={t('cyclone.shell.createWorkshop')} onAdd={props.onCreateWorkshop} />
-    {props.workshops.map(workshop => <div key={workshop.id} style={itemRow(workshop.id === props.activeWid)}>
+    <PresenceItems items={props.workshops} getKey={workshop => workshop.id}
+      scope="workshops" render={workshop => <div style={itemRow(workshop.id === props.activeWid)}>
       <button type="button" onClick={() => props.onSelectWorkshop(workshop.id)} style={itemMainStyle}>
         <Ellipsis>{workshop.title} <span style={{ opacity: .5 }}>({workshop.seatCount})</span></Ellipsis>
       </button>
       <DeleteButton title={t('cyclone.shell.deleteWorkshop')} label={t('cyclone.shell.deleteWorkshopLabel', { title: workshop.title })}
         onClick={() => props.onDeleteWorkshop(workshop.id, workshop.title)} />
-    </div>)}
+    </div>} />
     {props.activeWid && <button type="button" onClick={props.onOpenWorkspace} className="cyclone__workspace-btn" title={t('cyclone.shell.openWorkspace')}>
       <span className="cyclone__workspace-btn-icon">↗</span><span>{t('cyclone.shell.workspace')}</span>
     </button>}
     {props.activeWid && <>
       <SectionHead label={t('cyclone.shell.seats')} addLabel={t('cyclone.shell.addSeat')} onAdd={props.onCreateSeat} />
-      {props.seats.map(seat => <div key={seat.id} style={itemRow(props.view?.kind === 'seat' && props.view.id === seat.id)}>
+      <PresenceItems key={`seats:${props.activeWid}`} items={props.seats}
+        getKey={seat => seat.id} scope="seats" render={seat =>
+        <div style={itemRow(props.view?.kind === 'seat' && props.view.id === seat.id)}>
         <button type="button" onClick={() => props.onOpenSeat(seat)} style={itemMainStyle}>
           <Ellipsis>{seat.title}</Ellipsis>
         </button>
@@ -47,9 +51,11 @@ export function CycloneSidebar(props: Props) {
           aria-label={t('cyclone.shell.seatSettingsLabel', { title: seat.title })}>⚙</button>
         <DeleteButton title={t('cyclone.shell.deleteSeat')} label={t('cyclone.shell.deleteSeatLabel', { title: seat.title })}
           onClick={() => props.onDeleteSeat(seat.id, seat.title)} />
-      </div>)}
+      </div>} />
       <SectionHead label={t('cyclone.shell.rooms')} addLabel={t('cyclone.shell.createRoom')} onAdd={props.onCreateRoom} />
-      {props.rooms.map(room => <RoomRow key={room.id} room={room} props={props} />)}
+      <PresenceItems key={`rooms:${props.activeWid}`} items={props.rooms}
+        getKey={room => room.id} scope="rooms" render={room =>
+          <RoomRow room={room} props={props} />} />
     </>}
   </aside>;
 }
@@ -57,7 +63,7 @@ export function CycloneSidebar(props: Props) {
 function RoomRow({ room, props }: { room: RoomSummary; props: Props }) {
   const { t } = useLocale();
   const status = props.status.rooms.get(room.id) ?? 'idle';
-  const running = status === 'running' || status === 'waiting';
+  const running = status === 'running' || status === 'waiting' || status === 'unknown';
   return <div style={{ ...itemRow(props.view?.kind === 'room' && props.view.id === room.id), gap: 8 }}>
     <button type="button" onClick={() => props.onOpenRoom(room)} style={itemMainStyle}><Ellipsis># {room.title}</Ellipsis></button>
     <StatusMark status={status} />
@@ -69,9 +75,10 @@ function RoomRow({ room, props }: { room: RoomSummary; props: Props }) {
 function StatusMark({ status }: { status?: WorkspaceEntityStatus }) {
   const { t } = useLocale();
   if (!status || status === 'idle') return null;
-  const glyph = status === 'waiting' ? '?' : status === 'failed' ? '!' : '•';
+  const glyph = status === 'waiting' || status === 'unknown' ? '?' : status === 'failed' ? '!' : '•';
   const label = { running: t('cyclone.tabs.running'), waiting: t('cyclone.tabs.waiting'),
-    failed: t('cyclone.tabs.failed'), unread: t('cyclone.tabs.unread') }[status];
+    unknown: t('cyclone.tabs.unknown'), failed: t('cyclone.tabs.failed'),
+    unread: t('cyclone.tabs.unread') }[status];
   return <span className={`cyclone-sidebar-status cyclone-sidebar-status--${status}`}
     title={label} aria-label={label}>{glyph}</span>;
 }

@@ -56,7 +56,7 @@ test('cyclone bulletin localizes chrome while preserving incremental operations'
   const source = read('BulletinBoard.tsx');
   assert.match(source, /cyclone\.bulletin\.title/);
   assert.match(source, /cyclone\.bulletin\.changeUpdate/);
-  assert.match(source, /JSON\.stringify\(\{ ops \}\)/);
+  assert.match(source, /mutateCycloneBulletin\(workshopId, ops\)/);
   assert.match(source, /author: '人类'/);
 });
 
@@ -73,7 +73,7 @@ test('cyclone room panel localizes actions without changing reset protocol', () 
   assert.match(source, /cyclone\.roomPanel\.deleteTitle/);
   assert.match(source, /cyclone\.roomPanel\.resetTitle/);
   assert.match(source, /text === '\/reset all summary'/);
-  assert.match(source, /\{ mode, scope \}/);
+  assert.match(source, /resetRoomContextThroughCenter\(workshopId, roomId, mode, scope\)/);
 });
 
 test('cyclone seat chat localizes controls without changing chat and resume actions', () => {
@@ -85,7 +85,10 @@ test('cyclone seat chat localizes controls without changing chat and resume acti
 });
 
 test('cyclone stream runners project locale without changing event protocol', () => {
-  const source = [read('useSeatStreamRunners.ts'), read('useRoomStreamRunners.ts')].join('\n');
+  const source = [
+    read('useSeatStreamRunners.ts'), read('useRoomStreamRunners.ts'),
+    read('seat-stream-events.ts'), read('room-stream-events.ts'),
+  ].join('\n');
   assert.match(source, /localeRef\.current/);
   assert.match(source, /formatStreamStatus\([^;]*locale/s);
   assert.match(source, /case 'contact-start'/);

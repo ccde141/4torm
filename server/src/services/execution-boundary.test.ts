@@ -19,7 +19,7 @@ test('execution observation contracts stay independent from browser implementati
 
 test('browser execution producer names the capability rather than one driver', () => {
   const producer = read('browser-execution-producer.ts');
-  const routes = read('../routes/tools.ts');
+  const routes = read('../routes/tool-observation-routes.ts');
 
   assert.match(producer, /class BrowserExecutionProducer/);
   assert.doesNotMatch(producer, /PlaywrightBrowserProducer|playwrightBrowserProducer/);
@@ -28,7 +28,7 @@ test('browser execution producer names the capability rather than one driver', (
 });
 
 test('tool and surface routes depend on the capability registry instead of browser branches', () => {
-  const routes = read('../routes/tools.ts');
+  const routes = read('../routes/tools.ts') + read('../routes/tool-observation-routes.ts');
   const builtins = read('builtin-execution-capabilities.ts');
 
   assert.match(routes, /executionCapabilities\.findTool/);

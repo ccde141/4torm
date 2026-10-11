@@ -15,3 +15,10 @@ test('旧单实例被再次唤醒时先恢复后端再聚焦窗口', () => {
   assert.equal(handler.includes('webContents.reload()'), true);
   assert.ok(handler.indexOf('ensureServerReady()') < handler.indexOf('focusMainWindow()'));
 });
+
+test('托管后端意外退出时恢复服务，应用退出时停止恢复', () => {
+  const exit = main.slice(main.indexOf("serverProc.on('exit'"), main.indexOf('async function ensureServerReady'));
+  const quitting = main.slice(main.indexOf("app.on('before-quit'"));
+  assert.match(exit, /serverProc = null;[\s\S]*serverRecovery\.handleExit\(\)/);
+  assert.match(quitting, /serverRecovery\.stop\(\)/);
+});

@@ -1,4 +1,5 @@
 import { errorFromResponse } from '../../../api/error-contract.js';
+import { invokeFeature } from '../../../api/collaboration.js';
 import type { EditableOrganization, WorkshopOrganization, WorkshopOrganizationState } from './organization-types.js';
 
 function endpoint(workshopId: string): string {
@@ -16,16 +17,11 @@ export async function loadOrganization(
 export async function saveOrganization(
   workshopId: string, draft: EditableOrganization,
 ): Promise<WorkshopOrganization> {
-  const response = await fetch(endpoint(workshopId), {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      expectedRevision: draft.baseRevision,
-      groups: draft.groups,
-      externalRelations: draft.externalRelations,
-      seatPositions: draft.seatPositions,
-    }),
+  return invokeFeature('cyclone', 'saveWorkshopOrganization', {
+    workshopId,
+    expectedRevision: draft.baseRevision,
+    groups: draft.groups,
+    externalRelations: draft.externalRelations,
+    seatPositions: draft.seatPositions,
   });
-  if (!response.ok) throw await errorFromResponse(response, '保存工作室组织图失败');
-  return response.json();
 }

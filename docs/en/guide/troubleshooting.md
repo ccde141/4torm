@@ -1,22 +1,22 @@
 # Troubleshooting
 
-4torm preserves the HTTP status and error body returned by the framework or model provider whenever possible. Use the status to identify the failure category, then treat the complete error body as the more specific explanation.
+When an error appears, read its full message before relying on the HTTP status. 4torm maps some model-service failures to framework errors. For example, the outer interface or API may show `502` while the message says the upstream service returned `HTTP 503`. In that case, investigate the upstream service indicated by the message instead of treating the outer status as the whole explanation.
 
-## HTTP Status Codes
+## Find Where the Failure Occurred
 
-| Status | Common causes | Check first |
+- **The interface cannot reach 4torm:** Check that the backend is running. In browser production mode, also check whether the browser trusts the local HTTPS certificate.
+- **The interface opens, but a model request fails:** Check the provider type, API URL, key, exact model ID, and per-model parameters. Fetching a model list successfully does not prove that the service accepts the parameters used for a full conversation.
+- **A file or attachment operation fails:** Read that operation's message, then check format, size, and the Agent's execution permissions.
+
+## Check the Error Details
+
+| Status or message | Common cause | Check first |
 |---|---|---|
-| `400` | Invalid request or configuration; missing fields; the model rejects current parameters, messages, tools, or images; context exceeds the model limit | Provider type, model ID, provider parameters, context, and the error body |
-| `401` | Missing, invalid, or expired API key | API key and authentication method |
-| `403` | The key cannot access the model or resource; a local file tool rejects an out-of-scope path | Provider permissions, model access, and agent execution permission |
-| `404` | The API URL, model, agent, conversation, task, or another target does not exist | Whether the address and object still exist, and whether the model ID is exact |
-| `409` | The operation conflicts with current state, such as an active run, pending question, duplicate name, or task that cannot yet be deleted | Finish the active operation or resolve the pending state shown in the UI |
-| `413` | The request body, image, or attachment exceeds the service limit | File size and server request limits |
-| `415` | Unsupported file or request media type | File format and Content-Type |
-| `429` | Provider rate, concurrency, or quota limit | Account quota, concurrency, and request rate |
-| `500` | Internal processing, storage, or parsing failure in 4torm or the target service | Complete error body and backend log |
-| `502` | The proxy cannot reach a local inference service, MCP Server, or upstream API, or the upstream response is invalid | Running service, API URL, port, proxy, and network |
-| `503` | The model service is temporarily unavailable, loading, or overloaded | Inference-service state and current load |
-| `504` | The upstream service or gateway did not finish the request in time | Whether the model is still running, network state, and gateway timeout |
-
-The agent execution path reports `429`, `502`, and `503` failures immediately and does not retry them implicitly. Resolve the rate limit or service fault, then rerun the operation explicitly.
+| `400`, `422` | The model rejects request content or parameters, or required fields are missing | Provider type, model ID, per-model configuration, and error message |
+| `401`, `403` | An invalid key or insufficient account or model access; `403` may also mean a local file path was denied | Determine whether the error came from the model service or a local tool, then check that permission |
+| `404` | The URL, model, or target object does not exist | API URL, model ID, and current object |
+| `409` | An action conflicts with current state, such as a task still running | Inspect the active run or pending state before acting again |
+| `413`, `415` | A file is too large or its media type is unsupported | File size, format, and endpoint limits |
+| `429` | The model service reached a rate, concurrency, or quota limit | Provider quota and concurrency limits |
+| `500` | Internal processing or storage failed in 4torm | Keep the error message and inspect the backend log |
+| `502`, `503`, `504` | An upstream service cannot be reached, is unavailable, or timed out; the status may also be a framework mapping | Read any upstream status in the message, then check the service, URL, network, and load |

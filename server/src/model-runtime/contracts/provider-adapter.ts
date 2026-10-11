@@ -25,11 +25,21 @@ export interface ProviderRuntimeCapabilities {
 
 export type ProviderRuntimeFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
+/** Model limits describe capacities, not the user's ordinary generation defaults. */
+export interface ProviderGenerationLimits {
+  contextWindowTokens?: number;
+  maxOutputTokens?: number;
+  reasoning?: boolean;
+}
+
 export interface ProviderAdapter {
   id: string;
   matches(identity: ProviderModelIdentity): boolean;
   capabilities: ProviderModelCapabilities;
+  generationLimits?(identity: ProviderModelIdentity): ProviderGenerationLimits;
   normalizeRequest?(body: Record<string, unknown>, identity: ProviderModelIdentity): void;
+  /** Optional verified provider control for a body-only finalization request. */
+  disableThinking?(body: Record<string, unknown>, identity: ProviderModelIdentity): boolean;
   discoverRuntimeCapabilities?(
     identity: ProviderModelIdentity,
     fetchImpl: ProviderRuntimeFetch,

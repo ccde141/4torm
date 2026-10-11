@@ -36,6 +36,7 @@ function TeamDialog({ agentId, sessionId, mainName, mainBusy, onClose, team, ini
     <header><div><strong>{w.title}</strong><small>{error ? w.unavailable : !data ? w.loading : `${counts.running} ${w.running} · ${counts.pending} ${w.pending} · ${w.main} ${mainBusy ? w.running : w.idle}`}</small></div>
       <button onClick={reload}>{w.refresh}</button><button onClick={onClose}>{w.close} ×</button></header>
     {error && <p role="alert" className="session-team-error">{error}</p>}
+    {data?.truncated && <p role="status" className="session-team-error">{w.partial}</p>}
     <div className="session-team-body">
       <section className="session-team-map" aria-label={w.title}>
         <div className="session-team-canvas" ref={canvas}>

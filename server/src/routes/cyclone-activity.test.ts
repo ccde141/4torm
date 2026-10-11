@@ -7,6 +7,8 @@ import Fastify from 'fastify';
 import { beginExternalSeatActivity, clearExternalSeatActivities } from '../engine/cyclone/seat-activity.js';
 import { listLockedSeatIds, tryAcquireSeatLock } from '../engine/cyclone/seat-store.js';
 import { cycloneActivityRoutes } from './cyclone-activity.js';
+import { createCycloneFeature } from '../modules/cyclone/public.js';
+import { CollaborationRouter } from '../engine/collaboration/router.js';
 
 test('工作室活动接口一次返回所有运行中工位', async (t) => {
   clearExternalSeatActivities();
@@ -15,7 +17,10 @@ test('工作室活动接口一次返回所有运行中工位', async (t) => {
   const app = Fastify();
   app.decorate('dataDir', dataDir);
   app.decorate('projectRoot', path.dirname(dataDir));
-  await app.register(cycloneActivityRoutes, { prefix: '/api/cyclone' });
+  const feature = createCycloneFeature({ dataDir });
+  await app.register(cycloneActivityRoutes, {
+    prefix: '/api/cyclone', feature, router: new CollaborationRouter([feature.module]),
+  });
   t.after(() => app.close());
   const workshopId = 'workshop-a';
   beginExternalSeatActivity(workshopId, 'seat-b', 'contact', '联络中', 'seat-a');

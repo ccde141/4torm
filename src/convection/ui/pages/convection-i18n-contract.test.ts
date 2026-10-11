@@ -26,3 +26,11 @@ test('a participant failure closes only that streaming bubble', () => {
   assert.match(page, /convection\.page\.participantFailed/);
   assert.match(page, /streaming: false/);
 });
+
+test('compaction failures identify compaction and preserve the original meeting', () => {
+  const page = read('ConvectionPage.tsx');
+  const messages = fs.readFileSync('src/i18n/convection-messages.ts', 'utf8');
+  assert.match(page, /mode === 'summary' \? 'convection\.page\.compactFailed'/);
+  assert.match(messages, /摘要生成失败，原始记录已保留/);
+  assert.doesNotMatch(messages, /摘要生成失败，已按「归档清空」处理/);
+});

@@ -8,8 +8,29 @@ import {
   expireDispatchDecisions,
   listRoomDispatches,
   listWorkshopDispatches,
+  subscribeDispatchChanges,
   updateDispatch,
 } from './dispatch-store.js';
+
+test('派发创建和终态提交后通知，重复创建与活动进度不通知', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-dispatch-notify-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const seen: string[] = [];
+  subscribeDispatchChanges(dataDir, () => { throw new Error('SSE 已断开'); });
+  const stop = subscribeDispatchChanges(dataDir, item => seen.push(`${item.id}:${item.status}`));
+  t.after(stop);
+  const input = { workshopId: 'work-a', sourceRoomId: 'room-a', sourceSeatId: 'seat-a',
+    sourceSeatTitle: '架构', sourceTurnId: 'turn-1', sourceRoundSeq: 2,
+    dispatchOrder: 0, targetSeatId: 'seat-b', targetSeatTitle: '后端', task: '实现接口' };
+  const created = await createDispatch(dataDir, input);
+  await createDispatch(dataDir, input);
+  await updateDispatch(dataDir, 'work-a', created.id, { activity: { phase: 'llm-waiting' } });
+  await updateDispatch(dataDir, 'work-a', created.id, { status: 'completed', response: '完成' });
+  assert.deepEqual(seen, [`${created.id}:queued`, `${created.id}:completed`]);
+  stop();
+  await updateDispatch(dataDir, 'work-a', created.id, { decisionState: 'included' });
+  assert.equal(seen.length, 2);
+});
 
 test('派发记录独立落盘并按来源房间读取', async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-dispatch-'));

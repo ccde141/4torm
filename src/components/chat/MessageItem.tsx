@@ -1,13 +1,4 @@
-/**
- * 单条消息项（memo 化）
- *
- * 从 ChatPage 的消息 map 内联渲染抽出，配合自定义比较器：
- * 流式刷新时只有最后一条消息换新引用，历史消息引用不变 → 直接跳过重渲，
- * 不再每 80ms 把所有历史长消息重新 parse + markdown 渲染（卡顿根因）。
- *
- * 比较器故意忽略回调身份：回调在单次流式轮次内闭包稳定；
- * 切会话时整个 messages 数组替换，所有项 msg 引用变化自然全部重渲，无 stale 风险。
- */
+/** 历史消息按引用跳过流式重渲；切会话时消息引用会更新。 */
 
 import { memo } from 'react';
 import StructuredMessage from './StructuredMessage';
@@ -19,7 +10,7 @@ import DelegateCard from './DelegateCard';
 import AskCard from './AskCard';
 import AutomationDraftCard from './AutomationDraftCard';
 import WorkflowExecutionCard from './WorkflowExecutionCard';
-import { renderTextWithCode } from '../../engine/markdown';
+import BoundedMessageText from './BoundedMessageText';
 import { formatTimestamp } from '../../utils/time';
 import type { ChatMessage, ToolStep } from '../../types';
 import { formatStreamStatus } from './stream-status';
@@ -28,12 +19,10 @@ import { MessageImages } from './MessageImages';
 import AgentAvatar from '../agents/AgentAvatar';
 import type { Agent } from '../../types';
 import { useLocale } from '../../i18n/LocaleContext';
+import type { AskStatus } from '../../engine/chat/ask-status';
+import { CompactionNotice } from '../common/CompactionNotice';
 
-/**
- * 渲染单个工具步骤：delegate 步 → DelegateCard（含子步骤/思考流/汇总），
- * 其余 → ToolCallMessage。两处渲染路径（流式中 / 落定后）共用，保证 sub-agent
- * 卡片按调用顺序 inline 落在工具列里，而非浮在整条消息之上。
- */
+/** 流式与落定后的工具步骤共用渲染，保持原有顺序。 */
 function renderToolStep(step: ToolStep, key: string, timestamp: string, stopped?: boolean) {
   const d = step.delegate;
   if (d) {
@@ -88,11 +77,15 @@ export interface MessageItemProps {
   onStartEdit: (msg: ChatMessage) => void;
   onDeleteMessage: (id: string) => void;
   onAskReply: (msgId: string, answer: string) => void;
+  askStatus?: AskStatus;
+  askStatusDetail?: string;
+  onAskCheck?: () => void;
 }
 
 function MessageItemInner({
   msg, agent, sessionId, isStreaming, isEditing, editContent, setEditContent,
   onSaveEdit, onCancelEdit, onStartEdit, onDeleteMessage, onAskReply,
+  askStatus, askStatusDetail, onAskCheck,
 }: MessageItemProps) {
   const { locale, t } = useLocale();
   if (isEditing) {
@@ -118,6 +111,7 @@ function MessageItemInner({
   if ((msg as any).type === 'compact-marker') {
     return (
       <div className="chat__compact-marker">
+        <CompactionNotice message={msg.compactionNotice ?? ''} />
         <span className="chat__compact-marker-line" />
         <button
           className="chat__compact-marker-toggle"
@@ -172,6 +166,9 @@ function MessageItemInner({
         answered={msg.ask.answered}
         reply={msg.ask.reply}
         onReply={(answer) => onAskReply(msg.id, answer)}
+        status={askStatus}
+        statusDetail={askStatusDetail}
+        onCheck={onAskCheck}
       />
     );
   }
@@ -193,6 +190,7 @@ function MessageItemInner({
 
       return (
         <>
+          <CompactionNotice message={msg.compactionNotice ?? ''} />
           {/* 原生思考流（流式中默认展开） */}
           <TurnProcess kind="reasoning" present={!!msg.reasoningContent} followLatest>
           {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} breaks={msg.reasoningBreaks} isStreaming />}
@@ -221,6 +219,7 @@ function MessageItemInner({
     if (answer || toolSteps.length > 0) {
       return (
         <>
+          <CompactionNotice message={msg.compactionNotice ?? ''} />
           {/* 原生思考流（落定后默认折叠） */}
           <TurnProcess kind="reasoning" present={!!msg.reasoningContent}>
           {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} breaks={msg.reasoningBreaks} isStreaming={false} />}
@@ -230,7 +229,7 @@ function MessageItemInner({
           {renderToolSteps(toolSteps, msg.id, msg.timestamp, msg.streamStopped)}
           </TurnProcess>
           <StructuredMessage
-            tools={[]} agent={agent} answer={answer}
+            tools={[]} agent={agent} answer={answer} bounded
             msgId={msg.id}
             timestamp={msg.timestamp}
             actions={
@@ -245,6 +244,7 @@ function MessageItemInner({
     }
     return (
       <>
+        <CompactionNotice message={msg.compactionNotice ?? ''} />
         {/* 原生思考流（落定后默认折叠） */}
         <TurnProcess kind="reasoning" present={!!msg.reasoningContent} stopped={msg.streamStopped}>
         {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} breaks={msg.reasoningBreaks} isStreaming={false} />}
@@ -252,7 +252,7 @@ function MessageItemInner({
         <div className={`chat__message chat__message--assistant`}>
           <AgentAvatar agent={agent} className="chat__avatar" fallback="AI" />
           <div className="chat__bubble">
-            <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>
+            <div className="md-bubble"><BoundedMessageText text={msg.content} id={msg.id} /></div>
             {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
             <div className="chat__bubble-actions">
               <button className="chat__msg-action-btn" title={t('common.edit')} aria-label={t('chat.editMessage')} onClick={() => onStartEdit(msg)}>✏</button>
@@ -269,10 +269,11 @@ function MessageItemInner({
     <div className={`chat__message chat__message--${msg.role}`}>
       <div className="chat__avatar">{msg.role === 'user' ? t('chat.you') : 'S'}</div>
       <div className="chat__bubble">
+        <CompactionNotice message={msg.compactionNotice ?? ''} />
         {msg.role === 'user' && msg.images?.length && msg.agentId && (
           <MessageImages images={msg.images} agentId={msg.agentId} sessionId={sessionId} />
         )}
-        {msg.content && <div className="md-bubble">{renderTextWithCode(msg.content, msg.id)}</div>}
+        {msg.content && <div className="md-bubble"><BoundedMessageText text={msg.content} id={msg.id} /></div>}
         {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
         <div className="chat__bubble-actions">
           <button className="chat__msg-action-btn" title={t('common.edit')} aria-label={t('chat.editMessage')} onClick={() => onStartEdit(msg)}>✏</button>
@@ -291,6 +292,7 @@ function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
   if (prev.msg !== next.msg) return false;
   if (prev.isStreaming !== next.isStreaming) return false;
   if (prev.isEditing !== next.isEditing) return false;
+  if (prev.askStatus !== next.askStatus || prev.askStatusDetail !== next.askStatusDetail) return false;
   if (prev.agent?.id !== next.agent?.id || prev.agent?.name !== next.agent?.name) return false;
   if (prev.agent?.avatar?.version !== next.agent?.avatar?.version) return false;
   if (next.isEditing && prev.editContent !== next.editContent) return false;

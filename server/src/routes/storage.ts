@@ -1,8 +1,6 @@
 /**
  * Storage API 路由 — 文件 CRUD
  *
- * 迁移自 vite.config.ts 的 storage-api 中间件。
- * 保持接口完全兼容，前端无需改动。
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -30,14 +28,14 @@ function mimeFromExt(filePath: string): string {
 }
 
 export async function storageRoutes(app: FastifyInstance): Promise<void> {
-  // 注：HTTP 请求载荷在进入业务逻辑前统一转换为运行时值。
-  // HTTP / 装饰器边界的**有意转型**——请求载荷在校验前没有静态类型。安全性不靠类型，而靠
-  // resolveSafePath 统一做路径越界防护（见每个 handler）。非"类型随意"。
+  // 各文件操作在处理路径前调用 resolveSafePath，检查字面相对路径。
   const { dataDir } = getAppContext(app);
 
   // GET /api/storage/read?path=xxx
   app.get('/read', async (req, reply) => {
     const filePath = (req.query as any).path || '';
+    const ownership = ownershipError(filePath);
+    if (ownership) return reply.status(403).send({ error: ownership });
     try {
       const resolved = resolveSafePath(dataDir, filePath);
       const raw = await fs.readFile(resolved, 'utf-8');
@@ -60,6 +58,8 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
   // 与 /read 区别：返回 Buffer 不做 utf-8 解码，按扩展名设 Content-Type
   app.get('/file', async (req, reply) => {
     const filePath = (req.query as any).path || '';
+    const ownership = ownershipError(filePath);
+    if (ownership) return reply.status(403).send({ error: ownership });
     try {
       const resolved = resolveSafePath(dataDir, filePath);
       const buf = await fs.readFile(resolved);
@@ -74,6 +74,8 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
   // PUT /api/storage/write?path=xxx
   app.put('/write', async (req, reply) => {
     const filePath = (req.query as any).path || '';
+    const ownership = ownershipError(filePath);
+    if (ownership) return reply.status(403).send({ error: ownership });
     const resolved = resolveSafePath(dataDir, filePath);
     await fs.mkdir(path.dirname(resolved), { recursive: true });
     // Fastify 自动解析 JSON body 为对象，需要 stringify 回 string
@@ -90,6 +92,8 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
   // PUT /api/storage/upload?path=xxx (base64 binary)
   app.put('/upload', async (req, reply) => {
     const filePath = (req.query as any).path || '';
+    const ownership = ownershipError(filePath);
+    if (ownership) return reply.status(403).send({ error: ownership });
     const resolved = resolveSafePath(dataDir, filePath);
     await fs.mkdir(path.dirname(resolved), { recursive: true });
     const body = req.body as string || '';
@@ -103,6 +107,8 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
   // DELETE /api/storage/delete?path=xxx
   app.delete('/delete', async (req, reply) => {
     const filePath = (req.query as any).path || '';
+    const ownership = ownershipError(filePath);
+    if (ownership) return reply.status(403).send({ error: ownership });
     try {
       const resolved = resolveSafePath(dataDir, filePath);
       await fs.rm(resolved, { recursive: true, force: true });
@@ -115,8 +121,29 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
   // POST /api/storage/mkdir?path=xxx
   app.post('/mkdir', async (req, reply) => {
     const filePath = (req.query as any).path || '';
+    const ownership = ownershipError(filePath);
+    if (ownership) return reply.status(403).send({ error: ownership });
     const resolved = resolveSafePath(dataDir, filePath);
     await fs.mkdir(resolved, { recursive: true });
     return reply.send({ ok: true });
   });
+}
+
+function ownershipError(filePath: string): string | undefined {
+  if (isMonsoonOwnedPath(filePath)) return '季风数据只能通过会话接口访问';
+  if (isAgentOwnedPath(filePath)) return 'Agent 数据只能通过 Agent 实体接口访问';
+  return undefined;
+}
+
+function isMonsoonOwnedPath(filePath: string): boolean {
+  const normalized = filePath.replaceAll('\\', '/');
+  return /^agents\/[^/]+\/sessions\/(?:_index\.json|[^/]+\.json|[^/]+\.runs(?:\/.*)?)$/
+    .test(normalized)
+    && !normalized.endsWith('.taskboard.json');
+}
+
+function isAgentOwnedPath(filePath: string): boolean {
+  const normalized = filePath.replaceAll('\\', '/');
+  return normalized === 'agents/registry.json'
+    || /^agents\/[^/]+\/\.workspace\/(?:config\.json|role-prompt\.md|MEMORY\.md)$/.test(normalized);
 }

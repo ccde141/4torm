@@ -17,7 +17,10 @@ import type { SeatEvent } from './seat-runner';
 import { loadWorkshop } from './workshop-store';
 import { loadRoom, saveRoom, tryAcquireRoomLock } from './room-store';
 import { withAgentActivity } from '../shared/agent-activity.js';
-import { normalizeSystemMessages } from '../shared/system-messages.js';
+import { createChairCompactionCaller } from './chair-compaction-caller.js';
+import type { LLMCaller } from '../shared/react/native-loop.js';
+import { buildCycloneChairContext, finishCycloneChairContext } from './chair-context.js';
+import { estimateCompactionTokens } from '../shared/compaction/index.js';
 
 /**
  * 人类给某场会议的会长发消息 → 会长纯文本响应（流式）。
@@ -35,7 +38,24 @@ export async function chatChair(
   const release = tryAcquireRoomLock(workshopId, roomId);
   if (!release) throw new Error('该群聊正在处理中，请稍后再试');
   try {
-    const w = await loadWorkshop(dataDir, workshopId);
+    return await chatChairWithinExecution(
+      dataDir, workshopId, roomId, humanMessage, onEvent, signal,
+    );
+  } finally {
+    release();
+  }
+}
+
+/** 已由上层执行目录持有群聊锁时运行会长私聊。 */
+export async function chatChairWithinExecution(
+  dataDir: string,
+  workshopId: string,
+  roomId: string,
+  humanMessage: string,
+  onEvent: (ev: SeatEvent) => void,
+  signal?: AbortSignal,
+): Promise<{ content: string; rawContent: string }> {
+  const w = await loadWorkshop(dataDir, workshopId);
     if (!w) throw new Error('工作室不存在');
     if (!w.chairAgentId) throw new Error('该工作室未指定会长');
     const room = await loadRoom(dataDir, workshopId, roomId);
@@ -46,8 +66,20 @@ export async function chatChair(
     if (!room.chairMessages) room.chairMessages = [];
     const { systemMessage } = await buildChairPrompt(dataDir, workshopId, room, w, agent);
 
+    const previousPromptTokens = room.chairTokenUsage?.promptTokens;
     room.chairMessages.push({ role: 'user', content: humanMessage });
-    const messages = normalizeSystemMessages([systemMessage, ...room.chairMessages]);
+    room.chairTokenUsage = undefined;
+    room.chairCompactionNotice = undefined;
+    await saveRoom(dataDir, workshopId, room);
+    onEvent({ type: 'input-accepted' });
+    onEvent({ type: 'usage', usage: null });
+    const messages = buildCycloneChairContext(room, systemMessage);
+    const raw: LLMCaller = { call: (context, _options, onChunk, callSignal) => callLLM({
+      dataDir, fullModelKey: agent.model, messages: context,
+      options: { temperature: agent.temperature }, onChunk, signal: callSignal,
+    }) };
+    const llm = createChairCompactionCaller({ dataDir, workshopId, room, agent, messages, llm: raw,
+      initialPromptTokens: previousPromptTokens, onNotice: onEvent });
 
     // 纯文本流式：累积 buffer，abort 时仍可保住已产出的内容
     let buf = '';
@@ -55,32 +87,24 @@ export async function chatChair(
 
     let content = '';
     try {
-      const r = await withAgentActivity(agent.id, 'cyclone', () => callLLM({
-        dataDir, fullModelKey: agent.model, messages,
-        options: { temperature: agent.temperature }, onChunk, signal,
-      }));
+      const r = await withAgentActivity(agent.id, 'cyclone', () => llm.call(messages, undefined, onChunk, signal));
       content = r.content;
-      if (r.usage) {
-        room.chairTokenUsage = {
-          promptTokens: r.usage.promptTokens,
-          completionTokens: r.usage.completionTokens,
-          totalTokens: r.usage.totalTokens,
-        };
-        onEvent({ type: 'usage', usage: r.usage });
-      }
+      room.chairTokenUsage = r.usage ? { ...r.usage } : undefined;
+      room.chairRequestEstimate = estimateCompactionTokens(messages);
     } catch (e) {
       // abort：保住已流式产出的片段；其他错误向上抛由路由 emit error
       if (signal?.aborted) content = buf;
       else throw e;
     }
 
-    if (content) room.chairMessages.push({ role: 'assistant', content });
+    if (content) {
+      room.chairMessages.push({ role: 'assistant', content });
+      finishCycloneChairContext(room, messages, { role: 'assistant', content });
+    }
     await saveRoom(dataDir, workshopId, room);
+    onEvent({ type: 'usage', usage: room.chairTokenUsage ?? null });
 
     onEvent({ type: 'answer', content, rawContent: content });
     onEvent({ type: 'done' });
-    return { content, rawContent: content };
-  } finally {
-    release();
-  }
+  return { content, rawContent: content };
 }

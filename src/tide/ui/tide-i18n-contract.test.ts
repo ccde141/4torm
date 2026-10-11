@@ -6,7 +6,8 @@ import { formatSchedule } from './tide-styles';
 test('tide task cards localize chrome without changing task payloads', () => {
   const source = fs.readFileSync('src/tide/ui/TideTaskItem.tsx', 'utf8');
   assert.match(source, /useLocale/);
-  assert.match(source, /tide\.task\.status\.running/);
+  assert.match(source, /tide\.task\.status\.scheduled/);
+  assert.match(source, /resolveTideRuntime/);
   assert.match(source, /tide\.task\.runNow/);
   assert.match(source, /\{task\.name\}/);
   assert.match(source, /\{r\.error\.slice/);
@@ -33,11 +34,13 @@ test('tide create form localizes guidance without changing scheduler values', ()
 
 test('tide session rendering is separated from page polling', () => {
   const page = fs.readFileSync('src/tide/ui/TidePage.tsx', 'utf8');
+  const main = fs.readFileSync('src/tide/ui/TidePageMain.tsx', 'utf8');
+  const entities = fs.readFileSync('src/tide/ui/use-tide-entities.ts', 'utf8');
   const view = fs.readFileSync('src/tide/ui/TideSessionView.tsx', 'utf8');
-  assert.match(page, /import TideSessionView/);
+  assert.match(main, /import TideSessionView/);
   assert.match(page, /setInterval/);
-  assert.match(page, /createLatestRequestGuard/);
-  assert.match(view, /session\.messages\.filter/);
+  assert.match(entities, /createLatestRequestGuard/);
+  assert.match(view, /visibleTideMessages\(session\)/);
   assert.match(view, /renderTextWithCode|StructuredMessage/);
   assert.match(view, /JSON\.stringify\(parsed\.args/);
   assert.match(view, /parsed\.result\.slice/);
@@ -58,10 +61,12 @@ test('tide session view localizes chrome without translating conversation conten
 
 test('tide task detail is separated without moving page polling or request guards', () => {
   const page = fs.readFileSync('src/tide/ui/TidePage.tsx', 'utf8');
+  const main = fs.readFileSync('src/tide/ui/TidePageMain.tsx', 'utf8');
+  const entities = fs.readFileSync('src/tide/ui/use-tide-entities.ts', 'utf8');
   const detail = fs.readFileSync('src/tide/ui/TideTaskDetail.tsx', 'utf8');
-  assert.match(page, /import TideTaskDetail/);
+  assert.match(main, /import TideTaskDetail/);
   assert.match(page, /setInterval/);
-  assert.match(page, /createLatestRequestGuard/);
+  assert.match(entities, /createLatestRequestGuard/);
   assert.match(page, /handleDeleteSession/);
   assert.match(detail, /updateTask/);
   assert.match(detail, /\[task\.id\]/);
@@ -85,12 +90,25 @@ test('tide task detail localizes chrome while preserving task and run payloads',
 
 test('tide page localizes shell without translating entity names or changing polling', () => {
   const page = fs.readFileSync('src/tide/ui/TidePage.tsx', 'utf8');
-  assert.match(page, /useLocale/);
-  assert.match(page, /tide\.page\.agentFilter/);
-  assert.match(page, /tide\.page\.sessions/);
-  assert.match(page, /formatRelative\(s\.updatedAt, locale\)/);
-  assert.match(page, /\{a\.name\}/);
-  assert.match(page, /\{s\.title\}/);
+  const sidebar = fs.readFileSync('src/tide/ui/TidePageSidebar.tsx', 'utf8');
+  const entities = fs.readFileSync('src/tide/ui/use-tide-entities.ts', 'utf8');
+  assert.match(sidebar, /useLocale/);
+  assert.match(sidebar, /tide\.page\.agentFilter/);
+  assert.match(sidebar, /tide\.page\.sessions/);
+  assert.match(sidebar, /formatRelative\(session\.updatedAt, locale\)/);
+  assert.match(sidebar, /\{agent\.name\}/);
+  assert.match(sidebar, /\{session\.title\}/);
   assert.match(page, /setInterval/);
-  assert.match(page, /\[refresh, refreshAgents, refreshSessions, active\]/);
+  assert.match(entities, /useTideOverview\(identity\.agentId \?\? undefined, active\)/);
+  assert.match(entities, /refreshAgents\(\)/);
+  assert.match(entities, /refreshSessions\(\)/);
+});
+
+test('tide overview consumes router probes with stale-request protection', () => {
+  const source = fs.readFileSync('src/tide/ui/use-tide-overview.ts', 'utf8');
+  assert.match(source, /observeAllFeature\('tide'/);
+  assert.match(source, /Promise\.all/);
+  assert.match(source, /createLatestRequestGuard/);
+  assert.match(source, /if \(!request\.isCurrent\(\)\) return/);
+  assert.match(source, /if \(!active\)/);
 });

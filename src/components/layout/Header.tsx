@@ -5,6 +5,7 @@ import { getAllSessions } from '../../store/chat';
 import SkinPanel from './SkinPanel';
 import { useLocale } from '../../i18n/LocaleContext';
 import '../../styles/components/header.css';
+import { listWorkflows } from '../../tradewind/ui/workflow-client';
 
 interface HeaderProps {
   title: string;
@@ -67,7 +68,7 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
       getAgents(),
       getAllSessions(),
       getJson('/api/cyclone/list'),
-      getJson('/api/tradewind/workflow/list'),
+      listWorkflows().catch(() => []),
       getJson('/api/tide/tasks'),
       getJson('/api/convection/list'),
     ]);
@@ -88,8 +89,7 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
       .filter((w: any) => hit(w.title))
       .map((w: any) => ({ type: 'cyclone', id: w.id, label: w.title || '未命名工作室', sublabel: `${w.seatCount ?? 0} 工位 · ${w.roomCount ?? 0} 群聊` }));
 
-    // 工作流（信风）：{ workflows: [{ workflowId, name, nodeCount }] }
-    const tradewindResults: SearchResult[] = (Array.isArray(tradewinds?.workflows) ? tradewinds.workflows : [])
+    const tradewindResults: SearchResult[] = (Array.isArray(tradewinds) ? tradewinds : [])
       .filter((w: any) => hit(w.name))
       .map((w: any) => ({ type: 'tradewind', id: w.workflowId, label: w.name || '未命名工作流', sublabel: `${w.nodeCount ?? 0} 节点` }));
 

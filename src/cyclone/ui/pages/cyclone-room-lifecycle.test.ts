@@ -15,7 +15,7 @@ test('气旋群聊列表提供带确认的删除入口', () => {
 
 test('服务端确认删除后才清理双会话运行态与对应标签', () => {
   const handler = page.slice(page.indexOf('async function deleteRoom('), page.indexOf('async function createRoom('));
-  const request = handler.indexOf('/room/${roomId}/delete');
+  const request = handler.indexOf('deleteCycloneRoom(workshopId, roomId)');
   assert.ok(request >= 0);
   assert.ok(handler.indexOf('roomRunners.kill', request) > request);
   assert.ok(handler.indexOf('seatRunners.kill', request) > request);

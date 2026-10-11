@@ -19,7 +19,6 @@ function productionFiles(dir: string): string[] {
 
 test('model runtime starts from explicit provider and transport contracts', () => {
   for (const relative of [
-    'README.md',
     'contracts/provider-config.ts',
     'contracts/capabilities.ts',
     'contracts/verification.ts',
@@ -41,6 +40,11 @@ test('model runtime contracts never depend on feature or runtime implementations
     return [...source.matchAll(forbidden)].map(match => `${path.relative(runtimeDir, file)}: ${match[0]}`);
   });
   assert.deepEqual(violations, []);
+});
+
+test('model runtime route delegates provider persistence and transport identity', () => {
+  const route = fs.readFileSync(path.join(serverSrc, 'routes/model-runtime.ts'), 'utf8');
+  assert.doesNotMatch(route, /node:fs|services\/data-paths|engine\/shared/);
 });
 
 test('feature islands do not bypass the model runtime through provider internals', () => {

@@ -7,6 +7,26 @@ import test from 'node:test';
 import { callLLM, resolveModelPromptBudget } from './llm-bridge.js';
 import { FrameworkError } from './framework-error.js';
 
+test('an explicit framework budget survives Anthropic custom output defaults', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-output-budget-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [{
+    id: 'p', baseUrl: 'https://example.test/v1', models: ['claude'],
+    providerType: 'anthropic', transport: 'anthropic-messages',
+    customRequestParameters: { max_tokens: 512 },
+  }] }));
+  const received: number[] = [];
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    received.push(JSON.parse(String(init?.body)).max_tokens);
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: '完成。' }], stop_reason: 'end_turn' }));
+  });
+  await callLLM({ dataDir, fullModelKey: 'p:claude', messages: [{ role: 'user', content: '压缩记录。' }],
+    options: { maxTokens: 52_000 }, outputTokenBudget: 52_000 });
+  await callLLM({ dataDir, fullModelKey: 'p:claude', messages: [{ role: 'user', content: '普通对话。' }],
+    options: { maxTokens: 52_000 } });
+  assert.deepEqual(received, [52_000, 512]);
+});
+
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(resolvePromise => {

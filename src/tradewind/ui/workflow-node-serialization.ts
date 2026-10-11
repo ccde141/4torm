@@ -11,7 +11,7 @@ export function serializeWorkflowNode(node: Node): WorkflowNode {
     width: node.width ?? node.measured?.width,
     height: node.height ?? node.measured?.height,
     config: (data.config ?? {}) as Record<string, unknown>,
-    memo: typeof data.memo === 'string' ? data.memo : undefined,
+    ...(typeof data.memo === 'string' && data.memo.trim() ? { memo: data.memo } : {}),
   };
 }
 

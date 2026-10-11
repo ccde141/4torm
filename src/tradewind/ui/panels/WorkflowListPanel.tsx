@@ -4,54 +4,60 @@
  * 由 Toolbar ☰ 按钮触发显示，画布内同级面板（左侧滑出）。
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { listWorkflows, type WorkflowSummary } from '../workflow-client';
+import { PresenceItems } from '../../../components/common/PresenceItems';
+import { WorkflowLoadGate } from '../hooks/workflow-load-gate';
 
-interface WorkflowItem {
-  workflowId: string;
-  name: string;
-  nodeCount: number;
-  updatedAt: string;
-}
+type WorkflowItem = WorkflowSummary;
 
 interface WorkflowListPanelProps {
   visible: boolean;
+  refreshKey: number;
   currentId: string;
   onClose: () => void;
   onLoad: (workflowId: string) => void;
   onNew: () => void;
-  onDelete: (workflowId: string) => Promise<void>;
+  onDelete: (workflowId: string, expectedRevision: string) => Promise<void>;
 }
 
 export function WorkflowListPanel({
-  visible, currentId, onClose, onLoad, onNew, onDelete,
+  visible, refreshKey, currentId, onClose, onLoad, onNew, onDelete,
 }: WorkflowListPanelProps) {
   const { t, locale } = useLocale();
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const gateRef = useRef(new WorkflowLoadGate());
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
 
   const refresh = useCallback(async () => {
+    if (!visibleRef.current) return;
+    const request = gateRef.current.next();
     setLoading(true);
     try {
-      const res = await fetch('/api/tradewind/workflow/list');
-      if (res.ok) {
-        const data = await res.json() as { workflows: WorkflowItem[] };
-        // 只列有内容的工作流：0 节点的（新建未编辑、历史遗留的 untitled 等）不展示，
-        // 避免目录里堆一堆空幽灵。文件不删，仅不显示。
-        setWorkflows(data.workflows.filter(wf => wf.nodeCount > 0));
+      const items = await listWorkflows(t('tradewind.workflowList.loadFailed'));
+      if (gateRef.current.isCurrent(request) && visibleRef.current) {
+        setWorkflows(items.filter(wf => wf.nodeCount > 0));
+        setError(null);
+      }
+    } catch (cause) {
+      if (gateRef.current.isCurrent(request) && visibleRef.current) {
+        setError((cause as Error).message || t('tradewind.workflowList.loadFailed'));
       }
     } finally {
-      setLoading(false);
+      if (gateRef.current.isCurrent(request)) setLoading(false);
     }
-  }, []);
+  }, [t]);
 
-  const deleteItem = async (workflowId: string) => {
+  const deleteItem = async (workflowId: string, revision: string) => {
     setConfirmingDeleteId(null);
     setError(null);
     try {
-      await onDelete(workflowId);
+      await onDelete(workflowId, revision);
       await refresh();
     } catch (cause) {
       setError((cause as Error).message || t('tradewind.workflowList.deleteFailed'));
@@ -59,8 +65,10 @@ export function WorkflowListPanel({
   };
 
   useEffect(() => {
-    if (visible) refresh();
-  }, [visible, refresh]);
+    if (visible) void refresh();
+    else { gateRef.current.invalidate(); setLoading(false); }
+    return () => gateRef.current.invalidate();
+  }, [visible, refreshKey, refresh]);
 
   if (!visible) return null;
 
@@ -79,9 +87,9 @@ export function WorkflowListPanel({
         {!loading && workflows.length === 0 && (
           <div className="tw-wflist__hint">{t('tradewind.workflowList.empty')}</div>
         )}
-        {workflows.map((wf) => (
+        <PresenceItems items={workflows} getKey={wf => wf.workflowId}
+          scope="workflows" render={wf => (
           <div
-            key={wf.workflowId}
             className={`tw-wflist__item ${wf.workflowId === currentId ? 'tw-wflist__item--active' : ''}`}
           >
             <div
@@ -98,7 +106,7 @@ export function WorkflowListPanel({
               <button
                 className="tw-wflist__item-del"
                 style={{ color: '#fff', background: '#ef4444', borderRadius: '4px', fontSize: '11px', padding: '1px 6px' }}
-                onClick={(e) => { e.stopPropagation(); void deleteItem(wf.workflowId); }}
+                onClick={(e) => { e.stopPropagation(); void deleteItem(wf.workflowId, wf.revision); }}
                 title={t('tradewind.workflowList.deleteWarning')}
               >{t('tradewind.workflowList.confirm')}</button>
             ) : (
@@ -109,7 +117,7 @@ export function WorkflowListPanel({
               >✕</button>
             )}
           </div>
-        ))}
+        )} />
       </div>
     </div>
   );

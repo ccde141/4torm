@@ -1,0 +1,22 @@
+/* One visual transition for authoritative entity lists across feature islands. */
+.entity-presence { min-width: 0; display: grid; grid-template-rows: 1fr;
+  transition: grid-template-rows var(--motion-exit-duration) var(--motion-exit-ease),
+    opacity var(--motion-exit-duration) var(--motion-exit-ease),
+    transform var(--motion-exit-duration) var(--motion-exit-ease); }
+.entity-presence__body { min-width: 0; min-height: 0; }
+.entity-presence--entering {
+  animation: entity-presence-enter var(--motion-enter-duration) var(--motion-enter-ease) both;
+}
+.entity-presence--leaving {
+  pointer-events: none; grid-template-rows: 0fr; opacity: 0;
+  transform: translateY(-8px) scale(.98);
+}
+.entity-presence--leaving .entity-presence__body { overflow: hidden; }
+@keyframes entity-presence-enter {
+  from { opacity: 0; transform: translateY(12px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .entity-presence { transition: none; }
+  .entity-presence--entering { animation: none; }
+}

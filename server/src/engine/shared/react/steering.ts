@@ -30,7 +30,8 @@ export function skipNativeTools(
   params: ReActLoopParams, calls: readonly NativeToolCall[], records: ToolCallRecord[],
 ): void {
   for (const call of calls) {
-    params.messages.push({ role: 'tool', toolCallId: call.id, content: STEERING_SKIP_REASON });
+    params.messages.push({ role: 'tool', toolCallId: call.id,
+      content: STEERING_SKIP_REASON, toolOk: false });
     recordSkippedTool(params, records, call.name);
   }
 }

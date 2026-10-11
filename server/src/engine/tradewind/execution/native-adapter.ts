@@ -21,6 +21,7 @@ import {
 import type { ToolCallRecord } from './tradewind-react-adapter';
 import type { NodeRunnerEvent } from './node-runner';
 import type { ReActTermination } from '../../shared/react/outcome.js';
+import { captureTokenUsage } from './token-usage.js';
 
 export interface NativeAdapterParams {
   dataDir: string;
@@ -31,6 +32,9 @@ export interface NativeAdapterParams {
   /** 工具执行器（由 NodeRunner 注入，已包含 delegate/contact 路由） */
   toolCaller: ToolCaller;
   onEvent?: (ev: NodeRunnerEvent) => void;
+  /** Persist resolved provider usage before shared ReAct publishes its usage event. */
+  onUsageResolved?: (usage: TokenUsage | null) => Promise<void>;
+  llmTransform?: (llm: LLMCaller) => LLMCaller;
   signal?: AbortSignal;
   /** 自动模式：显式终结工具门（传入则启用 shared native loop 的 completion 语义） */
   completion?: { tool: string };
@@ -46,11 +50,14 @@ export async function runTradewindReActNative(
   usage?: TokenUsage; lastPromptTokens?: number; autoOutcome?: 'completed' | 'anomaly';
   termination: ReActTermination;
 }> {
-  const { dataDir, model, temperature, messages, toolDefs, toolCaller, onEvent, signal, completion } = params;
+  const { dataDir, model, temperature, messages, toolDefs, toolCaller, onEvent, onUsageResolved, signal, completion } = params;
 
   const llm: LLMCaller = {
     async call(msgs, _opts, onChunk, sig, tools, onReasoning) {
-      return callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools, onReasoning });
+      return captureTokenUsage(
+        () => callLLM({ dataDir, fullModelKey: model, messages: msgs, options: { temperature }, onChunk, signal: sig, tools, onReasoning }),
+        usage => onUsageResolved?.(usage) ?? Promise.resolve(),
+      );
     },
   };
 
@@ -64,7 +71,7 @@ export async function runTradewindReActNative(
 
   const result: ReActLoopResult = await runReActLoopNative({
     messages,
-    llm,
+    llm: params.llmTransform?.(llm) ?? llm,
     tools: toolDefs.length > 0 ? toolCaller : undefined,
     toolDefs,
     onEvent: onLoopEvent,
@@ -89,10 +96,12 @@ interface NativeLoopEvent {
   type: string;
   chunk?: string;
   message?: string;
+  usage?: TokenUsage | null;
 }
 
 export function translateNativeLoopEvent(event: NativeLoopEvent): NodeRunnerEvent | undefined {
   if (event.type === 'token') return { type: 'token', content: event.chunk ?? '' };
   if (event.type === 'reasoning') return { type: 'reasoning', content: event.chunk ?? '' };
+  if (event.type === 'usage') return { type: 'usage', usage: event.usage ?? null };
   return undefined;
 }

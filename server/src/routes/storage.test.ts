@@ -17,7 +17,7 @@ test('concurrent storage writes serialize replacement of the same file', async (
     await fs.rm(dataDir, { recursive: true, force: true });
   });
 
-  const target = 'agents/agent-test/sessions/_index.json';
+  const target = 'runtime/storage-race.json';
   const payloads = Array.from({ length: 40 }, (_, index) => [{ id: `session-${index}` }]);
   const responses = await Promise.all(payloads.map(payload => app.inject({
     method: 'PUT',
@@ -28,8 +28,57 @@ test('concurrent storage writes serialize replacement of the same file', async (
   assert.deepEqual(responses.map(response => response.statusCode), Array(40).fill(200));
   const saved = JSON.parse(await fs.readFile(path.join(dataDir, target), 'utf8'));
   assert.ok(payloads.some(payload => JSON.stringify(payload) === JSON.stringify(saved)));
-  const files = await fs.readdir(path.join(dataDir, 'agents', 'agent-test', 'sessions'));
+  const files = await fs.readdir(path.join(dataDir, 'runtime'));
   assert.equal(files.filter(file => file.endsWith('.tmp')).length, 0);
+});
+
+test('generic storage cannot read, overwrite or delete Monsoon session ownership files', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-storage-boundary-'));
+  const app = Fastify();
+  app.decorate('dataDir', dataDir);
+  app.decorate('projectRoot', path.dirname(dataDir));
+  await app.register(storageRoutes, { prefix: '/api/storage' });
+  t.after(async () => { await app.close(); await fs.rm(dataDir, { recursive: true, force: true }); });
+
+  for (const target of [
+    'agents/agent-a/sessions/_index.json',
+    'agents/agent-a/sessions/session-a.json',
+    'agents/agent-a/sessions/session-a.runs/run-a.ndjson',
+  ]) {
+    const encoded = encodeURIComponent(target);
+    assert.equal((await app.inject(`/api/storage/read?path=${encoded}`)).statusCode, 403);
+    assert.equal((await app.inject(`/api/storage/read?path=${encoded}`)).statusCode, 403);
+    assert.equal((await app.inject({ method: 'PUT', url: `/api/storage/write?path=${encoded}`,
+      payload: {} })).statusCode, 403);
+    assert.equal((await app.inject({ method: 'DELETE', url: `/api/storage/delete?path=${encoded}` }))
+      .statusCode, 403);
+  }
+
+  const taskboard = encodeURIComponent('agents/agent-a/sessions/session-a.taskboard.json');
+  assert.equal((await app.inject({ method: 'PUT', url: `/api/storage/write?path=${taskboard}`,
+    payload: {} })).statusCode, 200);
+});
+
+test('generic storage cannot mutate Agent entity ownership files', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-agent-boundary-'));
+  const app = Fastify();
+  app.decorate('dataDir', dataDir);
+  app.decorate('projectRoot', path.dirname(dataDir));
+  await app.register(storageRoutes, { prefix: '/api/storage' });
+  t.after(async () => { await app.close(); await fs.rm(dataDir, { recursive: true, force: true }); });
+
+  for (const target of [
+    'agents/registry.json',
+    'agents/agent-a/.workspace/config.json',
+    'agents/agent-a/.workspace/role-prompt.md',
+    'agents/agent-a/.workspace/MEMORY.md',
+  ]) {
+    const encoded = encodeURIComponent(target);
+    assert.equal((await app.inject({ method: 'PUT', url: `/api/storage/write?path=${encoded}`,
+      payload: {} })).statusCode, 403);
+    assert.equal((await app.inject({ method: 'DELETE', url: `/api/storage/delete?path=${encoded}` }))
+      .statusCode, 403);
+  }
 });
 
 test('skin config storage migrates legacy video background into an independent texture layer', async t => {

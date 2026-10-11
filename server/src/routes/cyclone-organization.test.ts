@@ -7,6 +7,9 @@ import Fastify from 'fastify';
 import { createWorkshop } from '../engine/cyclone/workshop-store.js';
 import { installFrameworkErrorHandler } from './error-handler.js';
 import { cycloneOrganizationRoutes } from './cyclone-organization.js';
+import { createCycloneFeature } from '../modules/cyclone/public.js';
+import { CollaborationRouter } from '../engine/collaboration/router.js';
+import { collaborationRoutes } from './collaboration.js';
 
 async function fixture(t: test.TestContext) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-cyclone-org-route-'));
@@ -15,7 +18,10 @@ async function fixture(t: test.TestContext) {
   app.decorate('dataDir', dataDir);
   app.decorate('projectRoot', path.dirname(dataDir));
   installFrameworkErrorHandler(app);
-  await app.register(cycloneOrganizationRoutes, { prefix: '/api/cyclone' });
+  const feature = createCycloneFeature({ dataDir });
+  const router = new CollaborationRouter([feature.module]);
+  await app.register(cycloneOrganizationRoutes, { prefix: '/api/cyclone', feature, router });
+  await app.register(collaborationRoutes, { prefix: '/api/collaboration', router });
   t.after(() => app.close());
   const workshop = await createWorkshop(dataDir, { title: '组织测试' });
   workshop.seatIds = ['seat-a', 'seat-b'];
@@ -23,6 +29,13 @@ async function fixture(t: test.TestContext) {
     path.join(dataDir, 'cyclone', workshop.id, 'meta.json'), JSON.stringify(workshop),
   );
   return { app, dataDir, workshop };
+}
+
+function saveCall(workshopId: string, body = organizationBody()) {
+  return { method: 'POST' as const, url: '/api/collaboration/invoke', payload: {
+    feature: 'cyclone', method: 'saveWorkshopOrganization',
+    input: { workshopId, ...body },
+  } };
 }
 
 function organizationBody(expectedRevision = 0) {
@@ -47,7 +60,7 @@ function organizationBody(expectedRevision = 0) {
   };
 }
 
-test('组织接口读取旧版模式并保存显式组织', async (t) => {
+test('组织读取保留资源接口且保存只经过中心', async (t) => {
   const { app, workshop } = await fixture(t);
   const url = `/api/cyclone/workshop/${workshop.id}/organization`;
 
@@ -55,7 +68,8 @@ test('组织接口读取旧版模式并保存显式组织', async (t) => {
   assert.equal(legacy.statusCode, 200);
   assert.deepEqual(legacy.json(), { mode: 'legacy-full-mesh', organization: null });
 
-  const saved = await app.inject({ method: 'PUT', url, payload: organizationBody() });
+  assert.equal((await app.inject({ method: 'PUT', url, payload: organizationBody() })).statusCode, 404);
+  const saved = await app.inject(saveCall(workshop.id));
   assert.equal(saved.statusCode, 200);
   assert.equal(saved.json().revision, 1);
 
@@ -68,9 +82,9 @@ test('组织接口读取旧版模式并保存显式组织', async (t) => {
 test('组织接口用统一错误契约报告版本冲突', async (t) => {
   const { app, workshop } = await fixture(t);
   const url = `/api/cyclone/workshop/${workshop.id}/organization`;
-  assert.equal((await app.inject({ method: 'PUT', url, payload: organizationBody() })).statusCode, 200);
+  assert.equal((await app.inject(saveCall(workshop.id))).statusCode, 200);
 
-  const conflict = await app.inject({ method: 'PUT', url, payload: organizationBody() });
+  const conflict = await app.inject(saveCall(workshop.id));
 
   assert.equal(conflict.statusCode, 409);
   assert.deepEqual(conflict.json(), {
@@ -83,9 +97,9 @@ test('组织接口用统一错误契约报告版本冲突', async (t) => {
 test('组织接口拒绝非数字 revision 且不写文件', async (t) => {
   const { app, workshop } = await fixture(t);
   const url = `/api/cyclone/workshop/${workshop.id}/organization`;
-  const response = await app.inject({
-    method: 'PUT', url, payload: organizationBody('0' as unknown as number),
-  });
+  const response = await app.inject(saveCall(
+    workshop.id, organizationBody('0' as unknown as number),
+  ));
 
   assert.equal(response.statusCode, 400);
   assert.equal(response.json().errorCode, 'CYCLONE_ORGANIZATION_INVALID');

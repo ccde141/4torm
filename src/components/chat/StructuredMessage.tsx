@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { renderTextWithCode } from '../../engine/markdown';
+import BoundedMessageText from './BoundedMessageText';
 import { formatTimestamp } from '../../utils/time';
 import type { Agent, ToolStep } from '../../types';
 import ReasoningBlock from './ReasoningBlock';
@@ -15,9 +16,10 @@ interface Props {
   timestamp?: string;
   reasoning?: string;
   actions?: ReactNode;
+  bounded?: boolean;
 }
 
-export default function StructuredMessage({ tools, agent, answer, msgId, timestamp, reasoning, actions }: Props) {
+export default function StructuredMessage({ tools, agent, answer, msgId, timestamp, reasoning, actions, bounded }: Props) {
   const { t: translate } = useLocale();
   // 完成态默认折叠，运行中默认展开
   const [showTool, setShowTool] = useState<Record<number, boolean>>(() =>
@@ -61,7 +63,9 @@ export default function StructuredMessage({ tools, agent, answer, msgId, timesta
         )} />
 
         {answer && (
-          <div className="stmsg-answer">{renderTextWithCode(answer, msgId)}</div>
+          <div className="stmsg-answer">{bounded
+            ? <BoundedMessageText text={answer} id={msgId} />
+            : renderTextWithCode(answer, msgId)}</div>
         )}
         {timestamp && <div className="chat__timestamp" title={formatTimestamp(timestamp, true)}>{formatTimestamp(timestamp)}</div>}
         {actions && <div className="chat__bubble-actions">{actions}</div>}

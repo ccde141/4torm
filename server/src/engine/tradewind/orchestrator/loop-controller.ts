@@ -1,13 +1,11 @@
 /**
  * LoopController —— 信风常驻循环蹦床
  *
- * 把「单圈 Orchestrator」串成常驻循环：
- * - 每圈拉一队全新 Orchestrator（新 executionId / 干净上下文），无注意力衰减
+ * 把单圈 Orchestrator 串成循环：
+ * - 每圈创建新 Orchestrator（新 executionId、独立上下文）
  * - Output 到达 = 本圈 settled('done')，读 output.json → 按 carryOver 备下圈输入
- * - relative 节拍：本圈跑完 abortableSleep(gapSec) 再起下圈（天然不叠）
+ * - relative 节拍：本圈跑完 abortableSleep(gapSec) 再起下圈
  * - lapBound 到顶 / stop() / 本圈 error|stopped → 循环结束
- *
- * 本刀只做 relative 单档；absolute + 潮汐目标是后续刀。
  */
 
 import path from 'node:path';
@@ -17,7 +15,7 @@ import { Orchestrator } from './orchestrator';
 import { abortableSleep } from '../execution/delivery-delay';
 import { summarizeLap } from './lap-summarizer';
 
-/** 循环配置（本刀仅 relative） */
+/** relative 循环配置 */
 export interface LoopConfig {
   cadence: { kind: 'relative'; gapSec: number };
   lapBound: number | null;              // null=永续
@@ -59,15 +57,16 @@ export class LoopController {
   async start(): Promise<void> {
     if (this.running) throw new Error('LoopController already running');
     this.running = true;
-    void this.runLoop();
+    // 每圈的失败事实由 Orchestrator 保留；后台循环不得产生未处理拒绝。
+    void this.runLoop().catch(error => console.error('[tradewind:loop] 循环结束失败：', error));
   }
 
   /** 停止整个循环：中断 gap 等待 + 停当前圈 */
   async stop(): Promise<void> {
     this.stopped = true;
     this.gapAbort.abort();
-    if (this.current) await this.current.stop();
-    this.running = false;
+    try { if (this.current) await this.current.stop(); }
+    finally { this.running = false; }
   }
 
   // ── 内部：循环体 ──────────────────────────────────────────────

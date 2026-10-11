@@ -1,13 +1,8 @@
 /**
  * 信封草稿（EnvelopeDraft）—— 自动模式下 Agent 多轮累积的交接内容
  *
- * 背景（决策报告 §三）：自动模式的信封不再是"边上预声明的类型化槽"，而是 Agent 在
- * 多轮 react 里自己维护的一组**纯文本条目**（不带键），最终由 complete_task 封口 +
- * 附一段自由备注，序列化成 Envelope.content 丢给下游。
- *
- * 复用气旋公告板（cyclone/bulletin.ts）的「条目 + 增量操作 + summarize」心智模型，
- * 但**刻意砍掉**其文件落盘 / 审计时间轴 / 撤回 / 并发防护 —— 信封草稿是单 Agent、
- * 单次 run、内存级、单写者，那套并发/审计机器在这里是过度设计。
+ * 单次运行内由 Agent 累积纯文本条目，complete_task 将条目和备注
+ * 序列化为下游 Envelope.content；草稿只保存在内存中。
  *
  * id 用自增计数器（e1/e2/…）而非时间戳随机串：单写者下足够唯一，且可确定性测试。
  */
@@ -86,7 +81,7 @@ export class EnvelopeDraft {
 
 // ── 工具执行 ──────────────────────────────────────────────────────
 
-/** 终结工具名：native 循环识别到此工具调用即封口交接、结束本节点本轮（决策报告 §一）。 */
+/** 终结工具名：native 循环识别到此调用后封口交接，结束本节点本轮。 */
 export const COMPLETE_TASK_TOOL = 'complete_task';
 
 /** 自动模式全部信封工具名（node-runner 的 toolCaller 按名拦截路由到本执行器）。 */
@@ -100,7 +95,7 @@ export const ENVELOPE_TOOL_NAMES = ['envelope_add', 'envelope_remove', 'envelope
  * - envelope（上游工作信封）：主工作轮，可攒信封 + complete_task 封口投递下游。
  * - human（人类聊天）/ contact（横向被联络）：纯对话，不挂工具、不挂门、不投递。
  *
- * 且仅 native 成立：text 循环无可靠终结信号，保持"一轮→最后文本下发"现状（零回归）。
+ * 且仅 native 成立：text 循环无可靠终结信号，保持"一轮→最后文本下发"现状。
  * 自动模式 vs 手动模式在此层无差异——差异退到编排层（native-only、有无会议室/暂停点）。
  */
 export function isEnvelopeRound(source: string, native: boolean | undefined): boolean {
@@ -115,7 +110,7 @@ export type RoundInterrupt =
   | 'silent';     // 纯对话轮（human）被中断：无投递承诺，静默收尾
 
 /**
- * 判定一轮 react 被异常中断后如何处置——这是"永不投垃圾下游"的关键闸。
+ * 判定一轮 react 被中断后的信封处置方式。
  *
  * @param isAbort      异常是否为 AbortError（中止而非真错误）
  * @param pausing      是否由 pause() 主动触发（区分"暂停" vs "全局停止"）
@@ -150,23 +145,32 @@ export function execEnvelopeTool(
   tool: string,
   args: Record<string, string>,
 ): string {
+  return execEnvelopeToolOutcome(draft, tool, args).result;
+}
+
+export function execEnvelopeToolOutcome(
+  draft: EnvelopeDraft,
+  tool: string,
+  args: Record<string, string>,
+): { result: string; ok: boolean } {
   switch (tool) {
     case 'envelope_add': {
       const e = draft.add(args.text ?? '');
-      if (!e) return `envelope_add 失败：text 为空或已达条目上限。\n当前信封：\n${draft.summarize()}`;
-      return `已添加条目 [${e.id}]。\n当前信封：\n${draft.summarize()}`;
+      if (!e) return { result: `envelope_add 失败：text 为空或已达条目上限。\n当前信封：\n${draft.summarize()}`, ok: false };
+      return { result: `已添加条目 [${e.id}]。\n当前信封：\n${draft.summarize()}`, ok: true };
     }
     case 'envelope_remove': {
       const ok = draft.remove(args.id ?? '');
-      return ok
+      const result = ok
         ? `已删除 [${args.id}]。\n当前信封：\n${draft.summarize()}`
         : `未找到条目 ${args.id}。\n当前信封：\n${draft.summarize()}`;
+      return { result, ok };
     }
     case 'envelope_list':
-      return `当前信封：\n${draft.summarize()}`;
+      return { result: `当前信封：\n${draft.summarize()}`, ok: true };
     case COMPLETE_TASK_TOOL:
-      return draft.seal(args.note);
+      return { result: draft.seal(args.note), ok: true };
     default:
-      return `未知信封工具：${tool}`;
+      return { result: `未知信封工具：${tool}`, ok: false };
   }
 }

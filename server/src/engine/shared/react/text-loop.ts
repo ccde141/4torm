@@ -13,6 +13,7 @@ import {
   MAX_CONTINUATIONS,
   MAX_TURNS,
   SuspendSignal,
+  normalizeToolCallResult,
   type ReActLoopParams,
   type ReActLoopResult,
   type ToolCallRecord,
@@ -104,13 +105,13 @@ async function completeTruncatedResponse(
 async function executeTool(
   params: ReActLoopParams,
   call: { name: string; arguments: Record<string, unknown> },
-): Promise<{ result?: string; meta?: unknown; suspended?: ReActLoopResult['suspended'] }> {
+): Promise<{ result?: string; ok?: boolean; meta?: unknown; suspended?: ReActLoopResult['suspended'] }> {
   if (!params.tools) throw new Error(`Text tool call cannot run because tools are disabled: ${call.name}`);
   if (params.allowedTools && !params.allowedTools.includes(call.name)) {
     const result = `Error: tool is not authorized for this turn: ${call.name}`;
     params.onEvent?.({ type: 'tool-call', tool: call.name, args: asToolArgs(call.arguments) });
-    params.onEvent?.({ type: 'tool-result', tool: call.name, result });
-    return { result };
+    params.onEvent?.({ type: 'tool-result', tool: call.name, result, ok: false });
+    return { result, ok: false };
   }
   const args = asToolArgs(call.arguments);
   params.onEvent?.({ type: 'tool-call', tool: call.name, args });
@@ -120,17 +121,20 @@ async function executeTool(
   }, HEARTBEAT_INTERVAL_MS) : undefined;
 
   try {
-    let meta: unknown;
-    const result = await params.tools.call(call.name, args, value => { meta = value; });
-    params.onEvent?.({ type: 'tool-result', tool: call.name, result, meta });
-    return { result, meta };
+    let callbackMeta: unknown;
+    const output = normalizeToolCallResult(await params.tools.call(
+      call.name, args, value => { callbackMeta = value; },
+    ));
+    const meta = output.meta === undefined ? callbackMeta : output.meta;
+    params.onEvent?.({ type: 'tool-result', tool: call.name, result: output.result, ok: output.ok, meta });
+    return { result: output.result, ok: output.ok, meta };
   } catch (error) {
     if (error instanceof SuspendSignal) {
       return { suspended: { question: error.question, options: error.options } };
     }
     const result = `Error: ${(error as Error).message}`;
-    params.onEvent?.({ type: 'tool-result', tool: call.name, result });
-    return { result };
+    params.onEvent?.({ type: 'tool-result', tool: call.name, result, ok: false });
+    return { result, ok: false };
   } finally {
     if (heartbeat) clearInterval(heartbeat);
   }
@@ -140,7 +144,10 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
   const toolCalls: ToolCallRecord[] = [];
   const maxTurns = params.maxTurns ?? MAX_TURNS;
   let usage: TokenUsage | undefined;
-  const recordUsage = (next: TokenUsage | undefined) => { if (next) usage = next; };
+  const recordUsage = (next: TokenUsage | undefined) => {
+    usage = next;
+    params.onEvent?.({ type: 'usage', usage: next ?? null });
+  };
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (params.signal?.aborted) {
@@ -156,6 +163,7 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
         ? await completeTruncatedResponse(params, response.content, recordUsage, tokenGate)
         : response.content;
     } catch (error) {
+      recordUsage(undefined);
       if (params.signal?.aborted) {
         return { content: '[Interrupted]', rawContent: '', toolCalls, turns: turn, usage, termination: abortedTermination() };
       }
@@ -231,7 +239,7 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
     });
     params.messages.push({
       role: 'user',
-      content: formatTextToolResult(parsed.name, trimToolResult(result), !result.startsWith('Error: ')),
+      content: formatTextToolResult(parsed.name, trimToolResult(result), execution.ok ?? true),
     });
   }
 

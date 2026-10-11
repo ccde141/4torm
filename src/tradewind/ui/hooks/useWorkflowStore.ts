@@ -5,13 +5,17 @@
  * 不引入 zustand/jotai，保持项目一致性。
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import type { Node, Edge, OnNodesChange, OnEdgesChange, OnConnect, Connection } from '@xyflow/react';
 import { applyNodeChanges, applyEdgeChanges, addEdge } from '@xyflow/react';
 import type { WorkflowGraph, WorkflowNode, WorkflowEdge, EdgeKind } from '../../types';
-import { saveWorkflow } from '../workflow-client';
+import { loadWorkflow, saveWorkflow, type WorkflowChangeEvent, type SaveWorkflowInput } from '../workflow-client';
 import { deserializeWorkflowNode, serializeWorkflowNode } from '../workflow-node-serialization';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { WorkflowRevisionTracker, type WorkflowRevisionState } from './workflow-revision';
+import { WorkflowLoadGate } from './workflow-load-gate';
+import { reconcileWorkflowRemote } from './workflow-remote-sync';
+import { getDefaultConfig, getDefaultLabel, nextId } from './workflow-editor-defaults';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -21,6 +25,7 @@ export interface WorkflowStoreState {
   selectedNodeId: string | null;
   workflowId: string;
   workflowName: string;
+  revisionState: WorkflowRevisionState;
 }
 
 export interface WorkflowStoreActions {
@@ -36,17 +41,12 @@ export interface WorkflowStoreActions {
   updateNodeData: (nodeId: string, data: Record<string, unknown>) => void;
   syncReworkEdge: (gateNodeId: string, targetNodeId: string | null) => void;
   getGraph: () => WorkflowGraph;
-  loadGraph: (graph: WorkflowGraph, workflowId: string, workflowName?: string) => void;
+  loadGraph: (graph: WorkflowGraph, workflowId: string, workflowName?: string, revision?: string | null) => void;
   save: (name?: string) => Promise<boolean>;
+  saveAsCopy: () => Promise<{ id: string; saved: boolean; adopted: boolean } | null>;
   load: (workflowId: string) => Promise<boolean>;
+  reconcileRemote: (change?: WorkflowChangeEvent) => Promise<void>;
   setWorkflowName: (name: string) => void;
-}
-
-// ── ID 生成 ───────────────────────────────────────────────────────
-
-let idCounter = 0;
-function nextId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}${(idCounter++).toString(36)}`;
 }
 
 // ── Hook ──────────────────────────────────────────────────────────
@@ -58,15 +58,29 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [workflowId, setWorkflowId] = useState('untitled');
   const [workflowName, setWorkflowName] = useState(() => t('tradewind.untitled'));
+  const [revisionState, setRevisionState] = useState<WorkflowRevisionState>({
+    workflowId: 'untitled', revision: null, dirty: false, saving: false, conflict: false,
+  });
+  const revisionRef = useRef<WorkflowRevisionTracker | null>(null);
+  if (!revisionRef.current) revisionRef.current = new WorkflowRevisionTracker(setRevisionState);
+  const draftRef = useRef<(name?: string) => Omit<SaveWorkflowInput, 'expectedRevision'> | null>(() => null);
+  const loadGateRef = useRef(new WorkflowLoadGate());
+  const markDirty = useCallback(() => revisionRef.current?.edit(), []);
 
   const onNodesChange: OnNodesChange = useCallback(
-    (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
-    [],
+    (changes) => {
+      if (changes.some(change => !['select', 'dimensions'].includes(change.type))) markDirty();
+      setNodes((nds) => applyNodeChanges(changes, nds));
+    },
+    [markDirty],
   );
 
   const onEdgesChange: OnEdgesChange = useCallback(
-    (changes) => setEdges((eds) => applyEdgeChanges(changes, eds)),
-    [],
+    (changes) => {
+      if (changes.some(change => change.type !== 'select')) markDirty();
+      setEdges((eds) => applyEdgeChanges(changes, eds));
+    },
+    [markDirty],
   );
 
   const onConnect: OnConnect = useCallback(
@@ -80,9 +94,10 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
         type: 'tradewind',
         data: { kind },
       } as Edge;
+      markDirty();
       setEdges((eds) => addEdge(edge, eds));
     },
-    [nodes],
+    [nodes, markDirty],
   );
 
   const selectNode = useCallback((id: string | null) => {
@@ -99,29 +114,35 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
         position,
         data: { label, config: config ?? getDefaultConfig(type) },
       };
+      markDirty();
       setNodes((nds) => [...nds, node]);
     },
-    [t],
+    [t, markDirty],
   );
 
   const removeSelected = useCallback(() => {
     if (!selectedNodeId) return;
+    markDirty();
     setNodes((nds) => nds.filter((n) => n.id !== selectedNodeId));
     setEdges((eds) => eds.filter((e) => e.source !== selectedNodeId && e.target !== selectedNodeId));
     setSelectedNodeId(null);
-  }, [selectedNodeId]);
+  }, [selectedNodeId, markDirty]);
 
   const deleteNode = useCallback((nodeId: string) => {
+    markDirty();
     setNodes((nds) => nds.filter((n) => n.id !== nodeId));
     setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
     if (selectedNodeId === nodeId) setSelectedNodeId(null);
-  }, [selectedNodeId]);
+  }, [selectedNodeId, markDirty]);
 
   const deleteEdge = useCallback((edgeId: string) => {
+    markDirty();
     setEdges((eds) => eds.filter((e) => e.id !== edgeId));
-  }, []);
+  }, [markDirty]);
 
   const cloneNode = useCallback((nodeId: string) => {
+    if (!nodes.some(node => node.id === nodeId)) return;
+    markDirty();
     setNodes((nds) => {
       const source = nds.find((n) => n.id === nodeId);
       if (!source) return nds;
@@ -135,14 +156,15 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
       };
       return [...nds, clone];
     });
-  }, []);
+  }, [nodes, markDirty]);
 
   const updateNodeData = useCallback((nodeId: string, data: Record<string, unknown>) => {
+    markDirty();
     setNodes((nds) => nds.map((n) => {
       if (n.id !== nodeId) return n;
       return { ...n, data: { ...(n.data as object), ...data } };
     }));
-  }, []);
+  }, [markDirty]);
 
   /**
    * 同步 Human Gate 节点的 rework 边
@@ -150,6 +172,7 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
    * - 如果指定了 targetNodeId，创建新的 rework 边（sourcePort=1, rework=true）
    */
   const syncReworkEdge = useCallback((gateNodeId: string, targetNodeId: string | null) => {
+    markDirty();
     setEdges((eds) => {
       // 删除该 gate 的旧 rework 出线
       const filtered = eds.filter(e => !(e.source === gateNodeId && (e.data as any)?.rework));
@@ -164,7 +187,7 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
       } as Edge;
       return [...filtered, newEdge];
     });
-  }, []);
+  }, [markDirty]);
 
   const getGraph = useCallback((): WorkflowGraph => {
     const wfNodes: WorkflowNode[] = nodes.map(serializeWorkflowNode);
@@ -183,7 +206,14 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
     return { nodes: wfNodes, edges: wfEdges };
   }, [nodes, edges]);
 
-  const loadGraph = useCallback((graph: WorkflowGraph, wfId: string, name?: string) => {
+  draftRef.current = (name?: string) => {
+    const graph = getGraph();
+    return graph.nodes.length ? { workflowId, graph, name: name?.trim() || workflowName } : null;
+  };
+
+  const loadGraph = useCallback((graph: WorkflowGraph, wfId: string, name?: string, revision: string | null = null) => {
+    loadGateRef.current.invalidate();
+    revisionRef.current?.load(wfId, revision);
     setWorkflowId(wfId);
     setWorkflowName(name?.trim() || wfId);
     setNodes(graph.nodes.map(deserializeWorkflowNode));
@@ -198,47 +228,50 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
   }, []);
 
   const save = useCallback(async (name?: string) => {
+    return revisionRef.current!.save(
+      () => draftRef.current(name),
+      input => saveWorkflow(input, t('tradewind.saveFailed')),
+    );
+  }, [t]);
+
+  const saveAsCopy = useCallback(async (): Promise<{ id: string; saved: boolean; adopted: boolean } | null> => {
     const graph = getGraph();
-    // 空工作流（0 节点）不落盘：新建/自动保存若把空图写盘，会在目录里堆出一堆 0 节点幽灵条目。
-    // 空工作流无内容可丢，等真正加了节点（运行/保存时）才创建目录。
-    if (graph.nodes.length === 0) return false;
-    await saveWorkflow({ workflowId, graph, name: name?.trim() || workflowName }, t('tradewind.saveFailed'));
-    return true;
-  }, [workflowId, workflowName, getGraph, t]);
+    if (graph.nodes.length === 0) return null;
+    const id = `wf-${crypto.randomUUID()}`;
+    const name = workflowName;
+    const result = await revisionRef.current!.saveCopy(
+      { workflowId: id, graph, name },
+      input => saveWorkflow(input, t('tradewind.saveFailed')),
+      revision => loadGraph(graph, id, name, revision),
+    );
+    return { id, ...result };
+  }, [getGraph, workflowName, loadGraph, t]);
 
   const load = useCallback(async (id: string) => {
-    const res = await fetch(`/api/tradewind/workflow/load/${id}`);
-    if (!res.ok) return false;
-    const data = await res.json() as { workflowId: string; name?: string; graph: WorkflowGraph };
-    loadGraph(data.graph, data.workflowId, data.name);
-    return true;
-  }, [loadGraph]);
+    return loadGateRef.current.run(
+      () => loadWorkflow(id, t('tradewind.workflowList.loadFailed')),
+      data => loadGraph(data.graph, data.workflowId, data.name, data.revision),
+    );
+  }, [loadGraph, t]);
+
+  const reconcileRemote = useCallback((change?: WorkflowChangeEvent) => reconcileWorkflowRemote(
+    revisionRef.current!, loadGateRef.current, change,
+    id => loadWorkflow(id, t('tradewind.workflowList.loadFailed')),
+    data => loadGraph(data.graph, data.workflowId, data.name, data.revision),
+    () => loadGraph({ nodes: [], edges: [] }, `wf-${crypto.randomUUID()}`, t('tradewind.untitled')),
+    localStorage,
+  ), [loadGraph, t]);
+
+  const renameWorkflow = useCallback((name: string) => {
+    if (name !== workflowName) markDirty();
+    setWorkflowName(name);
+  }, [workflowName, markDirty]);
 
   return {
-    nodes, edges, selectedNodeId, workflowId, workflowName,
+    nodes, edges, selectedNodeId, workflowId, workflowName, revisionState,
     onNodesChange, onEdgesChange, onConnect,
     selectNode, addNode, removeSelected, deleteNode, deleteEdge, cloneNode, updateNodeData,
     syncReworkEdge,
-    getGraph, loadGraph, save, load, setWorkflowName,
+    getGraph, loadGraph, save, saveAsCopy, load, reconcileRemote, setWorkflowName: renameWorkflow,
   };
-}
-
-// ── 默认值 ────────────────────────────────────────────────────────
-
-function getDefaultLabel(type: string, t: ReturnType<typeof useLocale>['t']): string {
-  const map: Record<string, Parameters<typeof t>[0]> = {
-    entry: 'tradewind.canvas.node.entry', output: 'tradewind.canvas.node.output',
-    agent: 'tradewind.canvas.node.agent', meeting: 'tradewind.canvas.node.meeting',
-    note: 'tradewind.canvas.node.note', 'human-gate': 'tradewind.canvas.node.gate',
-  };
-  return map[type] ? t(map[type]) : type;
-}
-
-function getDefaultConfig(type: string): Record<string, unknown> {
-  switch (type) {
-    case 'agent': return { agentId: '' };
-    case 'meeting': return { chairAgentId: '', participantNodeIds: [] };
-    case 'note': return { content: '' };
-    default: return {};
-  }
 }

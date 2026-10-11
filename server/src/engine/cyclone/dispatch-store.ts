@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { frameworkError } from '../shared/framework-error.js';
 import {
   atomicWrite,
   dispatchFile,
@@ -64,6 +65,28 @@ export type NewDispatch = Omit<
 >;
 
 const mutationQueues = new Map<string, Promise<unknown>>();
+type DispatchListener = (item: CycloneDispatch) => void;
+const changeListeners = new Map<string, Set<DispatchListener>>();
+
+export function subscribeDispatchChanges(dataDir: string, listener: DispatchListener): () => void {
+  const listeners = changeListeners.get(dataDir) ?? new Set<DispatchListener>();
+  listeners.add(listener);
+  changeListeners.set(dataDir, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) changeListeners.delete(dataDir);
+  };
+}
+
+function notifyDispatchChange(dataDir: string, item: CycloneDispatch): void {
+  const listeners = changeListeners.get(dataDir);
+  if (!listeners) return;
+  for (const listener of listeners) {
+    try { listener(item); }
+    catch { listeners.delete(listener); }
+  }
+  if (!listeners.size) changeListeners.delete(dataDir);
+}
 
 function mutationKey(dataDir: string, workshopId: string, dispatchId: string): string {
   return `${dataDir}/${workshopId}/${dispatchId}`;
@@ -93,7 +116,18 @@ function matchesDispatchInput(item: CycloneDispatch, input: NewDispatch): boolea
 
 async function listFiles(dir: string): Promise<string[]> {
   try {
-    return (await fs.readdir(dir)).filter(name => name.endsWith('.json'));
+    const names = await fs.readdir(dir);
+    const present = new Set(names);
+    if (names.some(name => {
+      const suffix = name.indexOf('.json.corrupt-');
+      return suffix >= 0 && !present.has(name.slice(0, suffix + 5));
+    })) {
+      throw frameworkError({
+        code: 'CYCLONE_STORE_CORRUPT', kind: 'io', message: '气旋派发记录已损坏并隔离',
+        source: 'cyclone.store', retryable: false,
+      });
+    }
+    return names.filter(name => name.endsWith('.json'));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
@@ -141,6 +175,7 @@ export async function createDispatch(dataDir: string, input: NewDispatch): Promi
       updatedAt: now,
     };
     await writeDispatch(dataDir, item);
+    notifyDispatchChange(dataDir, item);
     return item;
   });
 }
@@ -164,6 +199,11 @@ export async function updateDispatch(
     if (!current) return null;
     const updated = { ...current, ...patch, id: current.id, workshopId, updatedAt: new Date().toISOString() };
     await writeDispatch(dataDir, updated);
+    if (current.status !== updated.status || current.readState !== updated.readState
+      || current.decisionState !== updated.decisionState
+      || current.receiptState !== updated.receiptState) {
+      notifyDispatchChange(dataDir, updated);
+    }
     return updated;
   });
 }

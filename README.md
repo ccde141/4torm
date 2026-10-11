@@ -37,6 +37,8 @@ The same agent can be reused across different workspaces. Configure its model, p
 
 All five workspaces use the same agents. What changes is the form of collaboration—not the creation of another set of temporary roles.
 
+Describe your goal in Monsoon, and an agent can use enabled framework collaboration tools to create meetings or workshops, build and start workflows, schedule tasks, and follow their results. You can also open the corresponding workspace to inspect progress and records or take part in the work.
+
 ## Tools, Skills, and MCP
 
 4torm extends agent capabilities in three ways:
@@ -53,7 +55,7 @@ Agents in Monsoon and Cyclone can also create new tools or skills at a human's r
 
 ### Requirements
 
-- Node.js 20+
+- Node.js 20.19+ (20.x) or 22.12+
 - npm 9+
 
 ### Install Dependencies
@@ -65,6 +67,8 @@ cd 4torm
 npm install
 npm --prefix server install
 ```
+
+If Windows PowerShell blocks `npm.ps1`, use `npm.cmd` in place of `npm`.
 
 ### Start
 
@@ -89,7 +93,9 @@ npm run build
 npm run start:prod
 ```
 
-Open `http://localhost:3001`.
+Open `https://localhost:3001`.
+
+After building, you can also run `npm run electron:prod` to open the desktop window.
 
 ### First Use
 
@@ -106,7 +112,7 @@ Once the app is running, open the full documentation site from **Documentation**
 
 | Topic | Documentation |
 |-------|---------------|
-| Installation and initial setup | [Quick Start](./docs/en/guide/getting-started.md) |
+| Initial setup | [Quick Start](./docs/en/guide/getting-started.md) |
 | Agents, sessions, and workspaces | [Core Concepts](./docs/en/guide/concepts.md) |
 | Creating and configuring agents | [Agent Management](./docs/en/guide/agents.md) |
 | Five workspaces | [Monsoon](./docs/en/modes/chat.md) · [Convection](./docs/en/modes/convection.md) · [Cyclone](./docs/en/modes/cyclone.md) · [Tradewind](./docs/en/modes/tradewind.md) · [Tide](./docs/en/modes/tide.md) |

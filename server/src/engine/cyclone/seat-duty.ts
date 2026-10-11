@@ -4,7 +4,7 @@
  * 输入 agentId + 工位名 + 工位提示词，调一次 LLM 产出一句对外职责名片。
  * 不依赖已存工位（创建时工位还没 seatId），故独立于 seat-store。
  *
- * 只 import shared/ 与本目录模块，零交叉代码。
+ * 依赖 shared/ 与本目录模块。
  */
 
 import type { ContextMessage } from '../shared/types';

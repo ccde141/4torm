@@ -9,21 +9,21 @@ export interface TextToolResult {
   ok: boolean;
 }
 
-const TOOL_CALL_FENCE = /^```tool_call\s*\r?\n([\s\S]*?)\r?\n```$/;
+const TOOL_CALL_FENCE = /^```(tool_call|json)[ \t]*\r?\n([\s\S]*?)\r?\n```$/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function envelopeSource(content: string): { source: string; explicit: boolean } {
+function envelopeSource(content: string): { source: string; fence?: string } {
   const trimmed = content.trim();
   const fenced = TOOL_CALL_FENCE.exec(trimmed);
-  if (fenced) return { source: fenced[1].trim(), explicit: true };
-  return { source: trimmed, explicit: false };
+  if (fenced) return { source: fenced[2].trim(), fence: fenced[1].toLowerCase() };
+  return { source: trimmed };
 }
 
-function looksLikeToolCall(source: string, explicit: boolean): boolean {
-  return explicit || (
+function looksLikeToolCall(source: string, fence?: string): boolean {
+  return fence === 'tool_call' || (
     source.startsWith('{')
     && /["']type["']\s*:\s*["']tool_call["']/.test(source)
   );
@@ -31,13 +31,13 @@ function looksLikeToolCall(source: string, explicit: boolean): boolean {
 
 export function parseTextToolResponse(content: string): TextToolResponse {
   const trimmed = content.trim();
-  const { source, explicit } = envelopeSource(content);
+  const { source, fence } = envelopeSource(content);
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(source);
   } catch {
-    return looksLikeToolCall(source, explicit)
+    return looksLikeToolCall(source, fence)
       ? { kind: 'invalid', error: 'Tool-call envelope is not valid JSON.' }
       : { kind: 'final', content };
   }
@@ -45,7 +45,7 @@ export function parseTextToolResponse(content: string): TextToolResponse {
   if (!isRecord(parsed) || parsed.type !== 'tool_call') {
     return { kind: 'final', content };
   }
-  if (!explicit && source !== trimmed) return { kind: 'final', content };
+  if (!fence && source !== trimmed) return { kind: 'final', content };
   if (typeof parsed.name !== 'string' || !parsed.name.trim()) {
     return { kind: 'invalid', error: 'Tool-call name must be a non-empty string.' };
   }

@@ -7,12 +7,16 @@
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { getAgents } from '../../../store/agent';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
+import { CompactionNotice } from '../../../components/common/CompactionNotice';
+import { compactionFeedbackEvent, compactionFeedbackMessage } from '../../../components/common/compaction-feedback';
 import { renderTextWithCode } from '../../../engine/markdown';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { formatTimestamp } from '../../../utils/time';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
+import { streamUrl } from '../../../lib/apiBase';
 import { getConvectionCreateError } from './convection-guards';
+import { createConvectionCreateGate } from './convection-create-gate';
 import { shouldLoadConvectionSession } from './convection-session-guards';
 import { ConvectionHttpError, streamConvectionSSE } from './convection-sse';
 import { convectionReasoningProps, resolveConvectionAgent, restoreConvectionMessage } from './convection-message-map';
@@ -25,16 +29,36 @@ import {
 } from './convection-round-state';
 import { createLatestRequestGuard } from '../../../lib/latest-request';
 import { fetchConvectionRead } from './convection-load-retry';
+import { abortConvectionRound, readConvectionRound, readConvectionRoundStatus } from './convection-runtime';
+import { reconcileConvectionRound } from './convection-round-recovery';
+import {
+  createConvectionSession,
+  deleteConvectionMessage,
+  deleteConvectionSession,
+  editConvectionMessage,
+  joinConvectionSession,
+  leaveConvectionSession,
+  openConvectionWorkspace,
+  renameConvectionSession,
+  reorderConvectionSession,
+  resetConvectionContext,
+  compactConvectionContext,
+  compactConvectionChairContext,
+  resetConvectionChairContext,
+  setConvectionChair,
+} from './convection-control-client';
 import '../../../styles/components/convection.css';
 import type { Agent } from '../../../types';
 import AgentAvatar from '../../../components/agents/AgentAvatar';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { useConvectionConferenceFeed, type ConvectionRoomSummary } from './useConvectionConferenceFeed';
+import { applyConvectionUsage, formatConvectionUsage } from './convection-token-usage';
 
 type ConvMsg = ConvectionTurnMessage;
 type ToolStep = ConvectionToolStep;
 type WaitingInfo = NonNullable<ConvectionTurnMessage['waitingInfo']>;
 interface CMsg { role: string; content: string; streaming?: boolean; waitingInfo?: WaitingInfo; timestamp?: string; reasoning?: string }
-interface SessionSummary { id: string; title: string; chairAgentId: string; participantAgentIds: string[]; topic: string; messageCount: number; tokenEstimate: number; tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number }; updatedAt: string }
+type SessionSummary = ConvectionRoomSummary;
 
 const ACTIVE_SESSION_KEY = 'convection_active_id';
 
@@ -43,17 +67,27 @@ async function readErrorMessage(r: Response, fallback: string): Promise<string> 
   return e?.error || `${fallback} (HTTP ${r.status})`;
 }
 
-export default memo(function ConvectionPage({ active = true, onNavigate }: { active?: boolean; onNavigate?: (page: string) => void }) {
+export default memo(function ConvectionPage({ active = true, onNavigate,
+  preselectSession, onClearPreselect }: {
+  active?: boolean; onNavigate?: (page: string) => void;
+  preselectSession?: string | null; onClearPreselect?: () => void;
+}) {
   const confirm = useConfirm();
-  const { t: translate } = useLocale();
+  const { t: translate, locale } = useLocale();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const createGate = useRef(createConvectionCreateGate());
+  const [creating, setCreating] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const selectedSessionId = useRef(activeId); selectedSessionId.current = activeId;
   const [msgs, setMsgs] = useState<ConvMsg[]>([]);
   const [cMsgs, setCMsgs] = useState<CMsg[]>([]);
+  const [publicNotice, setPublicNotice] = useState('');
+  const [chairNotice, setChairNotice] = useState('');
   const [input, setInput] = useState('');
   const [cInput, setCInput] = useState('');
   const [activeRound, setActiveRound] = useState<ConvectionRound>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const busy = activeRound === 'public';
   const cBusy = activeRound === 'chair';
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
@@ -113,7 +147,20 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   const refreshSessions = useCallback(async () => {
     try { const r = await fetchConvectionRead('/api/convection/list'); if (r.ok) setSessions(await r.json()); else console.error(await readErrorMessage(r, translate('convection.page.loadListFailed'))); } catch (e) { console.error('[convection] load list failed', e); }
   }, [translate]);
-  useEffect(() => { refreshSessions(); }, [refreshSessions]);
+  useEffect(() => { if (active) void refreshSessions(); }, [active, refreshSessions]);
+  const feedDisconnected = useConvectionConferenceFeed({
+    active, sessionId: activeId, publicRequest: abortRef, chairRequest: cAbortRef,
+    setSessions, setActiveRound, setActiveRunId, setMessages: setMsgs,
+    setChairMessages: setCMsgs,
+    setPublicNotice, setChairNotice,
+    onMissingSession: id => {
+      if (activeId !== id) return;
+      localStorage.removeItem(ACTIVE_SESSION_KEY);
+      setActiveId(null); setMsgs([]); setCMsgs([]);
+      setPublicNotice(''); setChairNotice('');
+      setActiveRound(null); setActiveRunId(null);
+    },
+  });
 
   const activeSession = sessions.find(s => s.id === activeId);
   const getName = (id: string) => agents.find(a => a.id === id)?.name || id;
@@ -128,7 +175,9 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
     const request = sessionRequestGuard.current.begin();
     loadingSessionRef.current = id;
     setActiveId(id);
+    setPublicNotice(''); setChairNotice('');
     setActiveRound(null);
+    setActiveRunId(null);
     localStorage.setItem(ACTIVE_SESSION_KEY, id);
     try {
       const r = await fetchConvectionRead(`/api/convection/session/${id}/status`);
@@ -145,93 +194,138 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         return;
       }
       const d = await r.json();
+      const runtime = await readConvectionRound(id);
       if (!request.isCurrent()) return;
       setMsgs((d.publicMessages || []).map(restoreConvectionMessage));
       setCMsgs(d.chairMessages || []);
-      setActiveRound(normalizeConvectionRound(d.activeRound));
+      setPublicNotice(compactionFeedbackMessage(d.compactionNotice));
+      setChairNotice(compactionFeedbackMessage(d.chairCompactionNotice));
+      setActiveRound(runtime?.round ?? null);
+      setActiveRunId(runtime?.runId ?? null);
     } catch (e) { if (request.isCurrent()) { console.error('[convection] load session failed', e); alert(`${translate('convection.page.loadSessionFailed')}: ${(e as Error).message}`); } }
     finally { if (loadingSessionRef.current === id) loadingSessionRef.current = null; }
   }, [activeId, translate]);
 
-  // 刷新或跨窗口进入正在运行的会议时，没有本地 SSE 可接管；轮询权威状态直到落定。
+  // 中心状态可纠正断流或缺少终止帧造成的本地忙碌残留。
   useEffect(() => {
-    if (!active || !activeId || !activeRound || abortRef.current || cAbortRef.current) return;
+    if (!active || !activeId || !activeRound) return;
+    if ((abortRef.current || cAbortRef.current) && !activeRunId) return;
     let cancelled = false;
     const sync = async () => {
       try {
-        const r = await fetch(`/api/convection/session/${activeId}/status`);
-        if (!r.ok || cancelled) return;
-        const d = await r.json();
+        const result = await reconcileConvectionRound({
+          readRound: () => readConvectionRoundStatus(activeId),
+          loadMessages: async () => {
+            const r = await fetch(`/api/convection/session/${activeId}/status`);
+            if (!r.ok) throw new Error(await readErrorMessage(r, translate('convection.page.reloadFailed')));
+            return r.json();
+          },
+          settle: (data, terminal) => {
+            if (cancelled) return;
+            abortRef.current?.abort();
+            cAbortRef.current?.abort();
+            const restored = (data.publicMessages || []).map(restoreConvectionMessage);
+            if (terminal.status === 'failed' || terminal.status === 'crashed') {
+              restored.push({ speaker: '系统', content: terminal.errorMessage || '对流轮次失败',
+                timestamp: new Date().toISOString() });
+            }
+            setMsgs(restored);
+            setCMsgs(data.chairMessages || []);
+            setPublicNotice(compactionFeedbackMessage(data.compactionNotice));
+            setChairNotice(compactionFeedbackMessage(data.chairCompactionNotice));
+            setActiveRound(null);
+            setActiveRunId(null);
+            refreshSessions();
+          },
+        });
         if (cancelled) return;
-        const next = normalizeConvectionRound(d.activeRound);
-        setActiveRound(next);
-        if (!next) {
-          setMsgs((d.publicMessages || []).map(restoreConvectionMessage));
-          setCMsgs(d.chairMessages || []);
-          refreshSessions();
+        if (result.status === 'running') {
+          setActiveRound(result.runtime.round);
+          setActiveRunId(result.runtime.runId);
         }
       } catch (e) {
         if (!cancelled) console.error('[convection] 同步运行状态失败', e);
       }
     };
-    const timer = setInterval(sync, 1000);
-    sync();
+    const timer = setInterval(sync, 2000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [active, activeId, activeRound, refreshSessions]);
+  }, [active, activeId, activeRound, activeRunId, refreshSessions, translate]);
 
-  // 恢复上次活跃会话
+  const requestRoundAbort = useCallback(async (
+    controller: AbortController | null,
+    returnQueuedMessages: boolean,
+  ) => {
+    if (!activeId) return;
+    try {
+      await abortConvectionRound(activeId, activeRunId ?? undefined);
+      if (returnQueuedMessages) stoppedRef.current = true;
+      controller?.abort();
+    } catch (error) {
+      alert(`${translate('convection.page.requestFailed', {
+        detail: (error as Error).message || translate('convection.page.unknownError'),
+      })}`);
+    }
+  }, [activeId, activeRunId, translate]);
+
+  // 明确导航目标优先于本地恢复；运行中的轮次先收口再切换。
   useEffect(() => {
-    const saved = localStorage.getItem(ACTIVE_SESSION_KEY);
-    if (saved) loadSession(saved);
-  }, [loadSession]);
+    if (!active || (preselectSession && activeRound)) return;
+    const target = preselectSession ?? localStorage.getItem(ACTIVE_SESSION_KEY);
+    if (!target) return;
+    void loadSession(target).then(() => {
+      if (preselectSession) onClearPreselect?.();
+    });
+  }, [active, activeRound, loadSession, onClearPreselect, preselectSession]);
 
   // 创建会话
-  const handleNew = async () => {
-    const createError = getConvectionCreateError(agents.length, translate('convection.page.needAgents'));
-    if (createError) {
-      const goToAgents = await confirm({
-        title: translate('convection.page.cannotCreate'),
-        message: createError,
-        cancelText: translate('common.cancel'),
-        confirmText: translate('convection.page.manageAgents'),
-      });
-      if (goToAgents) onNavigate?.('agent');
-      return;
-    }
-    const chair = agents[0];
-    const participants = agents.slice(1, 3);
+  const handleNew = () => createGate.current.run(async () => {
+    setCreating(true);
     try {
-      const r = await fetch('/api/convection/create', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chairAgentId: chair.id, participantAgentIds: participants.map(a => a.id) }),
+      const createError = getConvectionCreateError(agents.length, translate('convection.page.needAgents'));
+      if (createError) {
+        const goToAgents = await confirm({
+          title: translate('convection.page.cannotCreate'), message: createError,
+          cancelText: translate('common.cancel'),
+          confirmText: translate('convection.page.manageAgents'),
+        });
+        if (goToAgents) onNavigate?.('agent');
+        return;
+      }
+      const chair = agents[0];
+      const participants = agents.slice(1, 3);
+      const d = await createConvectionSession({
+        chairAgentId: chair.id, participantAgentIds: participants.map(a => a.id),
       });
-      if (!r.ok) { alert(await readErrorMessage(r, translate('convection.page.createFailed'))); return; }
-      const d = await r.json();
       await refreshSessions();
-      loadSession(d.id);
+      await loadSession(d.id);
     } catch (e) { console.error('[convection] create failed', e); alert(`${translate('convection.page.createFailed')}: ${(e as Error).message}`); }
-  };
+    finally { setCreating(false); }
+  });
 
-  async function postSessionAction(id: string, action: string, body: Record<string, unknown> | null, fallback: string): Promise<boolean> {
-    const r = await fetch(`/api/convection/session/${id}/${action}`, {
-      method: 'POST',
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!r.ok) { alert(await readErrorMessage(r, fallback)); return false; }
-    return true;
+  async function controlAction(action: () => Promise<unknown>, fallback: string): Promise<boolean> {
+    try {
+      await action();
+      return true;
+    } catch (error) {
+      alert(`${fallback}: ${(error as Error).message}`);
+      return false;
+    }
   }
 
   // 重命名
   const handleRename = async (id: string, title: string) => {
     setEditingTitle(null);
     if (!title.trim()) return;
-    if (await postSessionAction(id, 'rename', { title }, translate('convection.page.renameFailed'))) refreshSessions();
+    if (await controlAction(
+      () => renameConvectionSession(id, title), translate('convection.page.renameFailed'),
+    )) refreshSessions();
   };
 
   // 删除
   const handleDelete = async (id: string) => {
-    if (!(await postSessionAction(id, 'delete', null, translate('convection.page.deleteFailed')))) return;
+    if (!(await controlAction(
+      () => deleteConvectionSession(id), translate('convection.page.deleteFailed'),
+    ))) return;
     if (activeId === id) { setActiveId(null); setMsgs([]); setCMsgs([]); }
     refreshSessions();
   };
@@ -239,27 +333,37 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   // Agent 热配置
   const handleJoin = async (agentId: string) => {
     if (!activeId) return;
-    if (await postSessionAction(activeId, 'join', { agentId }, translate('convection.page.joinFailed'))) refreshSessions();
+    if (await controlAction(
+      () => joinConvectionSession(activeId, agentId), translate('convection.page.joinFailed'),
+    )) refreshSessions();
   };
   const handleLeave = async (agentId: string) => {
     if (!activeId) return;
-    if (await postSessionAction(activeId, 'leave', { agentId }, translate('convection.page.leaveFailed'))) refreshSessions();
+    if (await controlAction(
+      () => leaveConvectionSession(activeId, agentId), translate('convection.page.leaveFailed'),
+    )) refreshSessions();
   };
   const handleSetChair = async (agentId: string) => {
     if (!activeId) return;
-    if (await postSessionAction(activeId, 'set-chair', { agentId }, translate('convection.page.setChairFailed'))) refreshSessions();
+    if (await controlAction(
+      () => setConvectionChair(activeId, agentId), translate('convection.page.setChairFailed'),
+    )) refreshSessions();
   };
   const handleReorder = async (fromIdx: number, toIdx: number) => {
     if (!activeSession) return;
     const arr = [...activeSession.participantAgentIds];
     const [item] = arr.splice(fromIdx, 1);
     arr.splice(toIdx, 0, item);
-    if (await postSessionAction(activeSession.id, 'reorder', { participantAgentIds: arr }, translate('convection.page.reorderFailed'))) refreshSessions();
+    if (await controlAction(
+      () => reorderConvectionSession(activeSession.id, arr), translate('convection.page.reorderFailed'),
+    )) refreshSessions();
   };
 
   const handleOpenWorkspace = async () => {
     if (!activeId) return;
-    if (await postSessionAction(activeId, 'open-workspace', null, translate('convection.page.workspaceFailed'))) return;
+    await controlAction(
+      () => openConvectionWorkspace(activeId), translate('convection.page.workspaceFailed'),
+    );
   };
 
   // 消息编辑
@@ -269,16 +373,13 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   };
   const handleSaveEdit = async () => {
     if (editingMsgIdx === null || !activeId) return;
-    const r = await fetch(`/api/convection/session/${activeId}/edit-message`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ index: editingMsgIdx, content: editMsgContent }),
-    });
-    if (r.ok) {
+    if (await controlAction(
+      () => editConvectionMessage(activeId, editingMsgIdx, editMsgContent),
+      translate('convection.page.editMessageFailed'),
+    )) {
       setMsgs(p => p.map((m, i) => i === editingMsgIdx ? { ...m, content: editMsgContent, rawContent: undefined } : m));
       setEditingMsgIdx(null);
       setEditMsgContent('');
-    } else {
-      alert(await readErrorMessage(r, translate('convection.page.editMessageFailed')));
     }
   };
   const handleCancelEdit = () => { setEditingMsgIdx(null); setEditMsgContent(''); };
@@ -286,14 +387,10 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
   // 消息删除
   const handleDeleteMsg = async (idx: number) => {
     if (!activeId) return;
-    const r = await fetch(`/api/convection/session/${activeId}/delete-message`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ index: idx }),
-    });
-    if (r.ok) {
+    if (await controlAction(
+      () => deleteConvectionMessage(activeId, idx), translate('convection.page.deleteMessageFailed'),
+    )) {
       setMsgs(p => p.filter((_, i) => i !== idx));
-    } else {
-      alert(await readErrorMessage(r, translate('convection.page.deleteMessageFailed')));
     }
   };
 
@@ -310,6 +407,19 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
     }
   }, [cMsgs]);
 
+  const reloadCommittedContext = useCallback(async (sessionId: string) => {
+    try {
+      const response = await fetchConvectionRead(`/api/convection/session/${sessionId}/status`);
+      if (!response.ok) throw new Error(await readErrorMessage(response, translate('convection.page.reloadFailed')));
+      const data = await response.json();
+      if (selectedSessionId.current !== sessionId) return;
+      setMsgs((data.publicMessages ?? []).map(restoreConvectionMessage));
+      setCMsgs(data.chairMessages ?? []);
+      setPublicNotice(compactionFeedbackMessage(data.compactionNotice));
+      setChairNotice(compactionFeedbackMessage(data.chairCompactionNotice));
+    } catch (error) { console.error('[convection] committed context sync failed', error); }
+  }, [translate]);
+
   const handleSpeak = useCallback(async (textArg?: string) => {
     const fromQueue = typeof textArg === 'string';   // 出队续发：文本显式传入，不读输入框
     const msg = (textArg ?? input).trim();
@@ -322,44 +432,37 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
     if (!fromQueue) setInput('');
 
     // 指令拦截
-    if (msg === '/reset' || msg === '/reset summary') {
-      const mode = msg === '/reset summary' ? 'summary' : 'clean';
+    if (msg === '/reset' || msg === '/compact' || msg === '/reset summary') {
+      const mode = msg === '/reset' ? 'clean' : 'summary';
       setActiveRound('public');
+      setActiveRunId(null);
       try {
-        const resetResp = await fetch(`/api/convection/session/${activeId}/reset-context`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode }),
-        });
-        if (!resetResp.ok) { alert(await readErrorMessage(resetResp, translate('convection.page.resetFailed'))); return; }
-        const resetData = await resetResp.json().catch(() => ({}));
+        const resetData = mode === 'summary' ? await compactConvectionContext(activeId)
+          : await resetConvectionContext(activeId, mode);
         if (mode === 'summary' && resetData?.summaryFailed) {
           alert(translate('convection.page.summaryFailed'));
         }
         refreshSessions();
-        const r = await fetch(`/api/convection/session/${activeId}/status`);
-        if (r.ok) {
-          const fresh = await r.json();
-          setMsgs(fresh.publicMessages?.map(restoreConvectionMessage) || []);
-        } else {
-          alert(await readErrorMessage(r, translate('convection.page.reloadFailed')));
-        }
       } catch (e) {
-        console.error('[convection] reset failed', e);
-        alert(`${translate('convection.page.resetFailed')}: ${(e as Error).message}`);
+        console.error('[convection] context operation failed', e);
+        const errorKey = mode === 'summary' ? 'convection.page.compactFailed' : 'convection.page.resetFailed';
+        alert(`${translate(errorKey)}: ${(e as Error).message}`);
       } finally {
-        setActiveRound(null);
+        await reloadCommittedContext(activeId);
+        if (selectedSessionId.current === activeId) { setActiveRound(null); setActiveRunId(null); }
       }
       return;
     }
 
     setActiveRound('public');
+    setActiveRunId(null);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     const now = new Date().toISOString();
     setMsgs(prev => [...prev, { speaker: '人类', content: msg, timestamp: now }]);
     console.log(`[${now}] 人类发言 → 对流: ${msg.slice(0, 80)}`);
     let preserveServerRound = false;
+    let executionError: string | null = null;
     try {
       let currentLabel = '';
       let streamContent = '';
@@ -381,8 +484,15 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         if (wait <= 0) doFlush(); else flushTimer = setTimeout(doFlush, wait);
       };
       const cancelFlush = () => { if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; } };
-      await streamConvectionSSE(`/api/convection/session/${activeId}/speak`, { message: msg }, (ev: any) => {
-        if (ev.type === 'agent-start') {
+      await streamConvectionSSE(streamUrl(`/api/convection/session/${activeId}/speak`), { message: msg }, (ev: any) => {
+        const feedback = compactionFeedbackEvent(ev);
+        if (feedback !== undefined) setPublicNotice(feedback ?? '');
+        if (ev.type === 'round-start') {
+          setActiveRound(normalizeConvectionRound(ev.round));
+          setActiveRunId(typeof ev.runId === 'string' ? ev.runId : null);
+        } else if (ev.type === 'usage') {
+          setSessions(current => applyConvectionUsage(current, activeId, 'public', ev.usage));
+        } else if (ev.type === 'agent-start') {
           currentLabel = ev.label;
           streamContent = '';
           reasoningContent = '';
@@ -443,30 +553,31 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         preserveServerRound = true;
         setMsgs(p => p.filter(m => !(m.speaker === '人类' && m.timestamp === now)));
         setActiveRound(null);
-        const status = await fetch(`/api/convection/session/${activeId}/status`).catch(() => null);
-        if (status?.ok) {
-          const d = await status.json();
-          setActiveRound(normalizeConvectionRound(d.activeRound));
-        }
+        setActiveRunId(null);
+        const runtime = await readConvectionRound(activeId);
+        setActiveRound(runtime?.round ?? null);
+        setActiveRunId(runtime?.runId ?? null);
         return;
       }
       setMsgs(p => p.map((m, i) => i === p.length - 1 && m.streaming
         ? { ...m, streaming: false, waitingInfo: undefined }
         : m));
       if (e.name !== 'AbortError') {
-        setMsgs(p => [...p, {
-          speaker: '系统',
-          content: translate('convection.page.connectionInterrupted', { detail: e.message || translate('convection.page.unknownError') }),
-          toolCalls: [],
-          timestamp: new Date().toISOString(),
-        }]);
+        executionError = translate('convection.page.connectionInterrupted', { detail: e.message || translate('convection.page.unknownError') });
       }
     } finally {
       abortRef.current = null;
-      if (!preserveServerRound) setActiveRound(null);
+      if (!preserveServerRound) {
+        await reloadCommittedContext(activeId);
+        if (selectedSessionId.current === activeId) {
+          if (executionError) setMsgs(current => [...current, { speaker: '系统', content: executionError!,
+            timestamp: new Date().toISOString() }]);
+          setActiveRound(null); setActiveRunId(null);
+        }
+      }
       refreshSessions();
     }
-  }, [input, busy, cBusy, activeId, refreshSessions, translate]);
+  }, [input, busy, cBusy, activeId, refreshSessions, reloadCommittedContext, translate]);
 
   // 始终持有最新 handleSpeak，供 busy 落定 effect 调用（避开闭包里过期的 busy）
   speakRef.current = handleSpeak;
@@ -494,19 +605,36 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
 
   const handleChair = useCallback(async () => {
     if (!cInput.trim() || activeRound !== null || !activeId) return;
-    const msg = cInput.trim(); setCInput(''); setActiveRound('chair');
+    const msg = cInput.trim(); setCInput(''); setActiveRound('chair'); setActiveRunId(null);
+    if (msg === '/compact' || msg === '/reset' || msg === '/reset summary') {
+      try {
+        if (msg === '/reset') await resetConvectionChairContext(activeId);
+        else await compactConvectionChairContext(activeId);
+      } catch (error) { alert((error as Error).message); }
+      finally { await reloadCommittedContext(activeId);
+        if (selectedSessionId.current === activeId) setActiveRound(null); }
+      return;
+    }
     const ctrl = new AbortController();
     cAbortRef.current = ctrl;
     const now = new Date().toISOString();
     setCMsgs(prev => [...prev, { role: 'user', content: msg, timestamp: now }]);
     const assistantTimestamp = new Date().toISOString();
     let preserveServerRound = false;
+    let executionError: string | null = null;
     try {
       let acc = '';
       let cReasoning = '';
       setCMsgs(prev => [...prev, { role: 'assistant', content: '', streaming: true, timestamp: assistantTimestamp }]);
-      await streamConvectionSSE(`/api/convection/session/${activeId}/chair`, { message: msg }, (ev: any) => {
-        if (ev.type === 'heartbeat') {
+      await streamConvectionSSE(streamUrl(`/api/convection/session/${activeId}/chair`), { message: msg }, (ev: any) => {
+        const feedback = compactionFeedbackEvent(ev);
+        if (feedback !== undefined) setChairNotice(feedback ?? '');
+        if (ev.type === 'round-start') {
+          setActiveRound(normalizeConvectionRound(ev.round));
+          setActiveRunId(typeof ev.runId === 'string' ? ev.runId : null);
+        } else if (ev.type === 'usage') {
+          setSessions(current => applyConvectionUsage(current, activeId, 'chair', ev.usage));
+        } else if (ev.type === 'heartbeat') {
           const info: WaitingInfo = { phase: ev.phase, elapsed: ev.elapsed };
           setCMsgs(p => p.map((m, i) => i === p.length - 1 && (m as any).streaming ? { ...m, waitingInfo: info } : m));
         } else if (ev.type === 'chair-token') {
@@ -530,11 +658,10 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         preserveServerRound = true;
         setCMsgs(p => p.filter(m => m.timestamp !== now && m.timestamp !== assistantTimestamp));
         setActiveRound(null);
-        const status = await fetch(`/api/convection/session/${activeId}/status`).catch(() => null);
-        if (status?.ok) {
-          const d = await status.json();
-          setActiveRound(normalizeConvectionRound(d.activeRound));
-        }
+        setActiveRunId(null);
+        const runtime = await readConvectionRound(activeId);
+        setActiveRound(runtime?.round ?? null);
+        setActiveRunId(runtime?.runId ?? null);
         return;
       }
       setCMsgs(p => p.map((m, i) => i === p.length - 1 && (m as any).streaming
@@ -545,11 +672,20 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
             waitingInfo: undefined,
           }
         : m));
+      if (e.name !== 'AbortError') executionError = translate('convection.page.requestFailed', {
+        detail: e.message || translate('convection.page.unknownError') });
     } finally {
       cAbortRef.current = null;
-      if (!preserveServerRound) setActiveRound(null);
+      if (!preserveServerRound) {
+        await reloadCommittedContext(activeId);
+        if (selectedSessionId.current === activeId) {
+          if (executionError) setCMsgs(current => [...current, { role: 'assistant', content: executionError!,
+            timestamp: new Date().toISOString() }]);
+          setActiveRound(null); setActiveRunId(null);
+        }
+      }
     }
-  }, [cInput, activeRound, activeId, translate]);
+  }, [cInput, activeRound, activeId, reloadCommittedContext, translate]);
 
   return (
     <div className="conv" ref={convRef}>
@@ -557,8 +693,13 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
       <div className="conv__sidebar">
         <div className="conv__sidebar-header">
           <span className="conv__sidebar-title">{translate('convection.page.rooms')}</span>
+          {feedDisconnected && <span role="status" className="conv__feed-status">
+            {translate('convection.page.feedDisconnected')}
+          </span>}
           <button
-            onClick={handleNew}
+            onClick={() => { void handleNew(); }}
+            disabled={creating}
+            aria-busy={creating}
             className="icon-add-btn"
             title={agents.length < 2 ? translate('convection.page.needTwoAgents') : translate('convection.page.createRoom')}
             aria-label={translate('convection.page.createRoom')}
@@ -567,15 +708,14 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         </div>
         <div className="conv__sessions">
           {sessions.map(s => {
-            const tokens = s.tokenUsage ? s.tokenUsage.totalTokens : s.tokenEstimate;
-            const tokenLabel = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}K` : `${tokens}`;
+            const token = formatConvectionUsage(s.publicLatestTokenUsage, s.tokenEstimate, locale);
             return (
             <div key={s.id} className={`conv__session-card${activeId === s.id ? ' conv__session-card--active' : ''}`}>
               <button type="button" onClick={() => loadSession(s.id)} className="conv__session-card-main">
                 <span className="conv__session-card-title">{s.title}</span>
                 <span className="conv__session-card-meta">
                   <span className="conv__session-card-id">{s.id}</span>
-                  <span className="conv__session-card-tokens">{tokenLabel}</span>
+                  <span className="conv__session-card-tokens" title={token.title}>{token.label}</span>
                 </span>
               </button>
               {confirmingDeleteId === s.id ? (
@@ -605,7 +745,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                 <span className="conv__workspace-btn-icon" aria-hidden="true">↗</span>
                 <span>{translate('convection.page.workspace')}</span>
               </button>
-              <span className="conv__header-tokens">{(() => { const t = activeSession.tokenUsage ? activeSession.tokenUsage.totalTokens : activeSession.tokenEstimate; return t >= 1000 ? `${(t / 1000).toFixed(1)}K` : t; })()} tokens</span>
+              <span className="conv__header-tokens" title={formatConvectionUsage(activeSession.publicLatestTokenUsage, activeSession.tokenEstimate, locale).title}>{formatConvectionUsage(activeSession.publicLatestTokenUsage, activeSession.tokenEstimate, locale).label}</span>
             </div>
             {/* Config bar */}
             <div className="conv__config">
@@ -629,6 +769,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
             </div>
             {/* Messages */}
             <div ref={ref} className="chat__messages conv__messages">
+              <CompactionNotice message={publicNotice} />
               {msgs.map((m, i) => {
                 // 编辑态
                 if (editingMsgIdx === i) {
@@ -683,9 +824,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
                     </button>
                     <button className="chat__stop-btn" onClick={() => {
-                      stoppedRef.current = true;
-                      abortRef.current?.abort();
-                      if (activeId) fetch(`/api/convection/session/${activeId}/abort`, { method: 'POST' }).catch(() => {});
+                      void requestRoundAbort(abortRef.current, true);
                     }} title={translate('convection.page.stop')}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                     </button>
@@ -698,7 +837,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
               </div>
               <div className="chat__command-hints">
                 <span>{translate('convection.page.resetHint')}</span>
-                <span>{translate('convection.page.resetSummaryHint')}</span>
+                <span>{translate('convection.page.resetSummaryHint').replace('/reset summary', '/compact')}</span>
               </div>
             </div>
           </>
@@ -717,10 +856,12 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
         <div aria-hidden={!chairOpen} className="conv__chair-panel" style={{ ...chairPanelStyle, opacity: chairOpen ? 1 : 0, transform: chairOpen ? 'translateX(0) scale(1)' : 'translateX(30px) scale(0.985)', pointerEvents: chairOpen ? 'auto' : 'none' }}>
         <div className="conv__chair-header">
           <span className="conv__chair-name">{translate('convection.page.chairPrivate')}</span>
+          {activeSession && <span title={formatConvectionUsage(activeSession.chairTokenUsage, 0, locale).title}>{formatConvectionUsage(activeSession.chairTokenUsage, 0, locale).label}</span>}
           <div style={{ flex: 1 }} />
           <button onClick={toggleChair} title={translate('convection.page.collapse')} aria-label={translate('convection.page.collapseChair')} style={chairCollapseBtnStyle}>×</button>
         </div>
         <div ref={cRef} className="conv__chair-messages">
+          <CompactionNotice message={chairNotice} />
           {cMsgs.map((m, i) => (
             <div key={i} className={`conv__chair-msg conv__chair-msg--${m.role === 'user' ? 'user' : 'assistant'}`}>
               <div className={`conv__chair-bubble conv__chair-bubble--${m.role === 'user' ? 'user' : 'assistant'}`}>
@@ -745,8 +886,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate }: { act
             <textarea ref={cInputRef} className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={!activeId ? '' : chairComposerMode === 'blocked' ? translate('convection.page.publicRunning') : translate('convection.page.chairPlaceholder')} disabled={!activeId} rows={1} />
             {cBusy ? (
               <button className="chat__stop-btn" onClick={() => {
-                cAbortRef.current?.abort();
-                if (activeId) fetch(`/api/convection/session/${activeId}/abort`, { method: 'POST' }).catch(() => {});
+                void requestRoundAbort(cAbortRef.current, false);
               }} title={translate('convection.page.stop')}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
               </button>

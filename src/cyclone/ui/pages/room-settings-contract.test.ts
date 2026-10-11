@@ -14,9 +14,9 @@ test('群聊使用正式会议设置入口而非常驻在场配置栏', () => {
 });
 
 test('会议设置覆盖元信息、模式、顺序与邀请方式', () => {
-  assert.match(panel, /set-topic/);
-  assert.match(panel, /set-mode/);
-  assert.match(panel, /reorder/);
+  assert.match(panel, /setCycloneRoomTopic/);
+  assert.match(panel, /setCycloneRoomMode/);
+  assert.match(panel, /reorderCycloneRoom/);
   assert.match(panel, /cyclone\.room\.behaviorSummary/);
   assert.match(panel, /cyclone\.room\.behaviorIntro/);
   assert.match(panel, /cyclone\.room\.behaviorNone/);

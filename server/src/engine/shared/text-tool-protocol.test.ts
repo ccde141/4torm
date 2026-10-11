@@ -24,6 +24,25 @@ test('parses an exact tool_call fenced envelope', () => {
   assert.equal(parseTextToolResponse(response).kind, 'tool-call');
 });
 
+test('parses an exact json fenced tool-call envelope from the prompt example', () => {
+  const response = '```json\n{"type":"tool_call","name":"ping","arguments":{}}\n```';
+  assert.deepEqual(parseTextToolResponse(response), {
+    kind: 'tool-call', name: 'ping', arguments: {},
+  });
+});
+
+test('reports malformed exact json fenced tool calls without executing prose examples', () => {
+  const malformed = '```json\n{"type":"tool_call","name":"ping","arguments":\n```';
+  assert.equal(parseTextToolResponse(malformed).kind, 'invalid');
+  const example = `Example:\n${malformed}`;
+  assert.deepEqual(parseTextToolResponse(example), { kind: 'final', content: example });
+});
+
+test('keeps an exact fenced ordinary JSON answer as final content', () => {
+  const answer = '```json\n{"status":"ok"}\n```';
+  assert.deepEqual(parseTextToolResponse(answer), { kind: 'final', content: answer });
+});
+
 test('treats ordinary prose and quoted JSON as a final answer', () => {
   const response = 'Example:\n```json\n{"type":"tool_call","name":"ping","arguments":{}}\n```';
   assert.deepEqual(parseTextToolResponse(response), { kind: 'final', content: response });

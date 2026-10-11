@@ -9,12 +9,16 @@
 import type { ServerResponse } from 'node:http';
 import type { FrameworkErrorKind } from '../../shared/framework-error.js';
 import { pushUnified } from './unified-stream';
+import type { TokenUsage } from '../../shared/llm-bridge.js';
+import type { TokenUsageProgress } from '../execution/token-usage.js';
 
 export type MeetingBroadcastEvent =
-  | { type: 'connected'; phase: string; round: number; messages: unknown[]; chairMessages: unknown[]; participants: unknown[]; configuredParticipants: unknown[] }
+  | { type: 'connected'; phase: string; round: number; runId?: string; messages: unknown[]; chairMessages: unknown[]; participants: unknown[]; configuredParticipants: unknown[]; tokenUsage?: TokenUsageProgress; compactionNotice?: string }
+  | { type: 'round-start'; runId: string; startedAt: string }
   | { type: 'agent-start'; label: string }
   | { type: 'token'; label: string; chunk: string }
   | { type: 'reasoning'; label: string; chunk: string }
+  | { type: 'usage'; usage: TokenUsage | null; tokenUsage: TokenUsageProgress; label?: string }
   | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; label: string; tool: string; result: string; meta?: unknown }
   | { type: 'heartbeat'; label: string; phase?: string; elapsed?: number }
@@ -32,10 +36,36 @@ export type MeetingBroadcastEvent =
   | { type: 'compact-start' }
   | { type: 'compact-done'; archivedRounds?: number; summaryLength?: number }
   | { type: 'compact-warn'; message: string }
+  | { type: 'compaction-notice'; message: string }
+  | { type: 'compaction-notice-clear' }
+  | { type: 'history-updated'; messages: unknown[]; chairMessages: unknown[] }
   | { type: 'done'; messages: unknown[] }
   | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind };
 
 const clients = new Map<string, Set<ServerResponse>>();
+const listeners = new Map<string, Set<(event: MeetingBroadcastEvent) => void>>();
+const identities = new Map<string, { workflowId: string; executionId: string }>();
+
+export function setMeetingIdentity(nodeId: string, workflowId: string, executionId: string): void {
+  identities.set(nodeId, { workflowId, executionId });
+}
+
+export function clearMeetingIdentity(nodeId: string, executionId?: string): void {
+  if (executionId && identities.get(nodeId)?.executionId !== executionId) return;
+  identities.delete(nodeId);
+}
+
+export function subscribeMeeting(
+  nodeId: string, listener: (event: MeetingBroadcastEvent) => void,
+): () => void {
+  const set = listeners.get(nodeId) ?? new Set();
+  set.add(listener);
+  listeners.set(nodeId, set);
+  return () => {
+    set.delete(listener);
+    if (!set.size) listeners.delete(nodeId);
+  };
+}
 
 export function addClient(nodeId: string, res: ServerResponse): void {
   let set = clients.get(nodeId);
@@ -52,11 +82,15 @@ export function removeClient(nodeId: string, res: ServerResponse): void {
 
 export function clearClients(nodeId: string): void {
   clients.delete(nodeId);
+  listeners.delete(nodeId);
 }
 
 export function broadcastToMeeting(nodeId: string, event: MeetingBroadcastEvent): void {
   // 推送到统一 SSE 流
-  pushUnified('meeting', nodeId, event as unknown as Record<string, unknown>);
+  pushUnified('meeting', nodeId, { ...event, ...identities.get(nodeId) });
+  for (const listener of listeners.get(nodeId) ?? []) {
+    try { listener(event); } catch { listeners.get(nodeId)?.delete(listener); }
+  }
   // 推送到 per-node 客户端（兼容旧端点）
   const set = clients.get(nodeId);
   if (!set || set.size === 0) return;

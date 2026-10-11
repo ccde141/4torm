@@ -65,6 +65,16 @@ export async function uploadImageDraft(
   return response.json();
 }
 
+export async function deleteConversationAttachment(
+  agentId: string,
+  sessionId: string,
+  attachmentId: string,
+  request: typeof fetch = fetch,
+): Promise<void> {
+  const response = await request(attachmentUrl(agentId, sessionId, attachmentId), { method: 'DELETE' });
+  if (!response.ok) throw new Error(`附件清理失败（HTTP ${response.status}）`);
+}
+
 export function attachmentUrl(agentId: string, sessionId: string, attachmentId: string): string {
   return `/api/conversation/attachments/${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}/${encodeURIComponent(attachmentId)}`;
 }

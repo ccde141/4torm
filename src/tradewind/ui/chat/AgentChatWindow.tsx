@@ -19,10 +19,21 @@ import type { ChatMessage } from '../../../types';
 import { appendToolStep, finishLatestToolStep } from '../../../engine/chat/tool-step-events';
 import AgentChatView, { type AgentChatActivity } from './AgentChatView';
 import type { FrameworkErrorKind } from '../../../api/error-contract';
+import {
+  createDelegateFrameBuffer, createSnapshotGate, createStatusRequestGate,
+  mergeDelegateChunks, readNodeSnapshot, readNodeStatus, roundSourceFromSnapshot, shouldReplaySnapshotRound,
+  type NodeSnapshot,
+} from './agent-chat-runtime';
+import {
+  abortNodeRound, pauseNodeRound, requestStop, resumeNodeRound, sendNodeMessage,
+} from '../execution-client';
+import { acceptsPanelEvent } from '../stream/panel-identity';
+import { latestProviderUsage, type ProviderUsage } from '../token-usage';
 
 interface AgentChatWindowProps {
   nodeId: string;
   nodeLabel: string;
+  workflowId: string;
   /** 当前圈执行 ID：循环模式每圈全新，变化即触发会话面板硬重置（清屏 + 重拉快照） */
   executionId?: string | null;
   onClose: () => void;
@@ -36,8 +47,12 @@ interface AgentChatWindowProps {
 
 type StreamEvent =
   | { type: 'connected'; busy: boolean }
+  | { type: 'transport-disconnected'; message: string }
+  | { type: 'transport-reconnected' }
+  | { type: 'round-start'; runId: string; source: 'human' | 'envelope' | 'contact'; startedAt: string }
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
+  | { type: 'usage'; usage: ProviderUsage | null }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: { before?: string } }
   | { type: 'delegate-start'; task: string; delegateId: string }
@@ -51,29 +66,35 @@ type StreamEvent =
   | { type: 'answer'; content: string; rawContent: string }
   | { type: 'paused' }
   | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind }
-  | { type: 'done' };
+  | { type: 'done' }
+  | { type: 'compaction-notice'; message: string }
+  | { type: 'context-compacted'; messages: Array<{ role: string; content: string; reasoningContent?: string }> };
+
 
 // ── 组件 ──────────────────────────────────────────────────────────
 
-export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visible = true, sealed = false }: AgentChatWindowProps) {
+export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, onClose, visible = true, sealed = false }: AgentChatWindowProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [compactionNotice, setCompactionNotice] = useState<string | null>(null);
   // 当前轮来源：'human' 可自由停止；'envelope'/'contact' 只能暂停/续跑或停整个工作流
   const [roundSource, setRoundSource] = useState<'human' | 'envelope' | 'contact' | null>(null);
   // 已暂停（扣住信封、待续跑）
   const [paused, setPaused] = useState(false);
   const [activity, setActivity] = useState<AgentChatActivity>('idle');
+  const [latestUsage, setLatestUsage] = useState<ProviderUsage | null | undefined>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const msgIdRef = useRef(0);
   const streamRef = useRef<{ id: string; content: string; reasoningContent: string } | null>(null);
   const streamFrameRef = useRef<number | null>(null);
-  // 订阅对账：seq 去重 + 基线建立前缓冲
-  const lastSeqRef = useRef(0);
-  const bufferingRef = useRef(true);
-  const bufferRef = useRef<Array<StreamEvent & { seq?: number }>>([]);
+  const roundIdRef = useRef<string | null>(null);
+  const statusRequestGateRef = useRef(createStatusRequestGate());
+  const sealedRef = useRef(sealed);
+
+  useEffect(() => { sealedRef.current = sealed; }, [sealed]);
 
   const nextId = () => `msg-${Date.now().toString(36)}-${(msgIdRef.current++).toString(36)}`;
 
@@ -82,9 +103,11 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
   //   2. 拉 /snapshot：messages 渲染历史；busy 时回放 roundLog 显示进行中轮次
   //   3. 设 lastSeq，flush buffer 中 seq > lastSeq 的增量
   //   4. 之后实时应用，seq 去重防止重复
-  // 彻底消除"面板晚开 / loadMessages↔subscribe 竞态"导致的整轮事件丢失。
   useEffect(() => {
     let cancelled = false;
+    let snapshotController: AbortController | null = null;
+    let transportIssue = false;
+    const snapshotGate = createSnapshotGate<StreamEvent & { scope?: string; nodeId?: string; seq?: number }>();
     const flushStreamFrame = () => {
       if (streamFrameRef.current !== null) {
         window.cancelAnimationFrame(streamFrameRef.current);
@@ -111,27 +134,57 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
         } : message));
       });
     };
+    const delegateBuffer = createDelegateFrameBuffer(
+      chunks => setMessages(prev => mergeDelegateChunks(prev, chunks)),
+      callback => window.requestAnimationFrame(callback),
+      frame => window.cancelAnimationFrame(frame),
+    );
     // 重置对账状态
+    statusRequestGateRef.current.advanceEvent();
     streamRef.current = null;
-    lastSeqRef.current = 0;
-    bufferingRef.current = true;
-    bufferRef.current = [];
+    roundIdRef.current = null;
     // 硬重置会话视图：executionId 变化（循环换圈）时清空上一圈残留，
     // 随后 /snapshot 会拉到新圈全新 runner 的干净历史（仅 system prompt）。
     setMessages([]);
     setStreaming(false);
     setPaused(false);
     setRoundSource(null);
+    setLatestUsage(undefined);
     setError(null);
+    setCompactionNotice(null);
     setActivity('idle');
 
     // applyEvent：纯 reducer，回放与实时共用（不含 seq 去重）
     const applyEvent = (ev: StreamEvent & { scope?: string; nodeId?: string }) => {
       if (ev.scope && ev.nodeId && ev.nodeId !== nodeId) return;
+      if (ev.type !== 'connected') statusRequestGateRef.current.advanceEvent();
       switch (ev.type) {
         case 'connected':
           // 统一 stream 的 connected 仅表示 SSE 通道建立。
           // busy 态与进行中轮次由 /snapshot 对账负责，这里不再创建占位消息（避免重复）。
+          break;
+
+        case 'usage':
+          setLatestUsage(ev.usage);
+          break;
+
+        case 'round-start':
+          roundIdRef.current = ev.runId;
+          setRoundSource(ev.source);
+          if (ev.source === 'human') setCompactionNotice(null);
+          break;
+
+        case 'compaction-notice':
+          setCompactionNotice(ev.message);
+          break;
+
+        case 'context-compacted':
+          setMessages(ev.messages.filter(message => message.role !== 'tool').map(message => ({
+            id: nextId(), role: message.role === 'system' ? 'assistant' : message.role === 'user' ? 'user' : 'assistant',
+            content: message.content, reasoningContent: message.reasoningContent,
+            timestamp: new Date().toISOString(),
+          })));
+          streamRef.current = null;
           break;
 
         case 'user-message': {
@@ -222,19 +275,11 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           break;
 
         case 'delegate-token':
-          setMessages(prev => {
-            const msgs = [...prev];
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              if ((msgs[i] as any)._delegateId === ev.delegateId) {
-                msgs[i] = { ...msgs[i], content: (msgs[i].content || '') + ev.content };
-                break;
-              }
-            }
-            return msgs;
-          });
+          delegateBuffer.add(ev.delegateId, ev.content);
           break;
 
         case 'delegate-tool-call':
+          delegateBuffer.flush();
           setMessages(prev => {
             const msgs = [...prev];
             for (let i = msgs.length - 1; i >= 0; i--) {
@@ -254,6 +299,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           break;
 
         case 'delegate-tool-result':
+          delegateBuffer.flush();
           setMessages(prev => {
             const msgs = [...prev];
             for (let i = msgs.length - 1; i >= 0; i--) {
@@ -274,6 +320,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           break;
 
         case 'delegate-done':
+          delegateBuffer.flush();
           setActivity('waiting');
           setMessages(prev => {
             const msgs = [...prev];
@@ -327,6 +374,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           break;
 
         case 'answer':
+          delegateBuffer.flush();
           flushStreamFrame();
           setActivity('responding');
           setMessages(prev => prev.map(m =>
@@ -337,6 +385,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
           break;
 
         case 'error':
+          delegateBuffer.flush();
           flushStreamFrame();
           setError(ev.message);
           setActivity('failed');
@@ -344,20 +393,24 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
 
         case 'done':
           console.log('[AgentChat] SSE done');
+          delegateBuffer.flush();
           flushStreamFrame();
           streamRef.current = null;
           setStreaming(false);
           setRoundSource(null);
           setPaused(false);
           setActivity(current => current === 'failed' ? 'failed' : 'idle');
+          roundIdRef.current = null;
           break;
 
         case 'paused':
           // 信封轮暂停：react 已软中止，扣住信封待续跑。停 streaming 但保留 roundSource。
+          delegateBuffer.flush();
           streamRef.current = null;
           setStreaming(false);
           setPaused(true);
           setActivity('idle');
+          roundIdRef.current = null;
           break;
       }
     };
@@ -374,87 +427,89 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
       setMessages(loaded);
     };
 
-    // seq 去重包装：实时事件经此进入。基线未建立时缓冲，建立后按 seq 过滤。
+    const restoreSnapshot = (snap: NodeSnapshot<StreamEvent>) => {
+      statusRequestGateRef.current.advanceEvent();
+      if (streamFrameRef.current !== null) window.cancelAnimationFrame(streamFrameRef.current);
+      streamFrameRef.current = null;
+      streamRef.current = null;
+      delegateBuffer.dispose();
+      renderHistory(snap.messages);
+      setCompactionNotice(snap.compactionNotice ?? null);
+      setLatestUsage(latestProviderUsage(snap.tokenUsage));
+      setRoundSource(roundSourceFromSnapshot(snap));
+      const replay = shouldReplaySnapshotRound(snap);
+      roundIdRef.current = replay ? snap.runId ?? null : null;
+      setPaused(Boolean(snap.paused));
+      if (replay) {
+        setStreaming(true);
+        setActivity('waiting');
+        // user-message 已在 snapshot.messages；answer/done 后 assistant 也已提交。
+        for (const event of snap.roundLog) if (event.type !== 'user-message') applyEvent(event);
+      } else {
+        setStreaming(false);
+        setActivity('idle');
+      }
+    };
+    const loadSnapshot = () => {
+      snapshotController?.abort();
+      const controller = new AbortController();
+      snapshotController = controller;
+      const generation = snapshotGate.start();
+      void fetch(`/api/tradewind/chat/${nodeId}/snapshot`, { signal: controller.signal })
+        .then(response => readNodeSnapshot<StreamEvent>(response, { workflowId, executionId: executionId ?? null }))
+        .then(snap => {
+          if (cancelled) return;
+          const buffered = snapshotGate.finish(generation, snap.lastSeq);
+          if (!buffered) return;
+          if (transportIssue) { setError(null); transportIssue = false; }
+          restoreSnapshot(snap);
+          for (const event of buffered) applyEvent(event);
+        })
+        .catch(cause => {
+          if (cancelled || controller.signal.aborted) return;
+          const buffered = snapshotGate.fail(generation);
+          if (!buffered) return;
+          transportIssue = true;
+          setError(cause instanceof Error ? cause.message : String(cause));
+          for (const event of buffered) applyEvent(event);
+        })
+        .finally(() => { if (snapshotController === controller) snapshotController = null; });
+    };
+    // 传输事件不属于模型轮次；断线不清屏，也不伪造 done。
     const onStreamEvent = (ev: StreamEvent & { scope?: string; nodeId?: string; seq?: number }) => {
-      if (ev.scope && ev.nodeId && ev.nodeId !== nodeId) return;
-      if (bufferingRef.current) {
-        bufferRef.current.push(ev);
+      if (cancelled || sealedRef.current || !acceptsPanelEvent(ev, 'agent', { workflowId, executionId: executionId ?? null })) return;
+      if (ev.type === 'transport-disconnected') {
+        statusRequestGateRef.current.advanceEvent();
+        snapshotController?.abort();
+        for (const event of snapshotGate.disconnect()) applyEvent(event);
+        transportIssue = true;
+        setError(ev.message);
         return;
       }
-      if (typeof ev.seq === 'number') {
-        if (ev.seq <= lastSeqRef.current) return; // 已通过快照/历史看到，丢弃
-        lastSeqRef.current = ev.seq;
+      if (ev.type === 'transport-reconnected') {
+        statusRequestGateRef.current.advanceEvent();
+        loadSnapshot();
+        return;
       }
-      applyEvent(ev);
+      for (const event of snapshotGate.receive(ev)) applyEvent(event);
     };
 
-    subscribe(nodeId, onStreamEvent);
-
-    // 拉快照建立基线
-    fetch(`/api/tradewind/chat/${nodeId}/snapshot`)
-      .then(r => r.json())
-      .then((snap: {
-        messages: Array<{ role: string; content: string; reasoningContent?: string }>;
-        roundLog: Array<StreamEvent & { seq?: number }>;
-        busy: boolean;
-        roundSource?: 'human' | 'envelope' | 'contact' | null;
-        paused?: boolean;
-        lastSeq: number;
-      }) => {
-        if (cancelled) return;
-        renderHistory(snap.messages);
-        const replayedSource = snap.roundLog.find(event => event.type === 'user-message')?.source;
-        setRoundSource(snap.roundSource ?? (
-          replayedSource === 'human' || replayedSource === 'envelope' || replayedSource === 'contact'
-            ? replayedSource
-            : null
-        ));
-        // busy 时回放进行中轮次的事件日志（与实时共用 applyEvent）。
-        // 跳过 user-message：该轮 user 消息已同步进 snapshot.messages（handle 开头 push），
-        // 回放再加一次会重复（用户看到两条相同输入）。
-        if (snap.busy && snap.roundLog.length > 0) {
-          setStreaming(true);
-          setActivity('waiting');
-          for (const ev of snap.roundLog) {
-            if (ev.type === 'user-message') continue;
-            applyEvent(ev);
-          }
-        } else {
-          // 不 busy：当前轮已固化进 messages，忽略 roundLog，并确保收尾态
-          setStreaming(false);
-          flushStreamFrame();
-          streamRef.current = null;
-          setActivity('idle');
-        }
-        // 重连到已暂停的信封轮：恢复暂停态（roundLog 回放已含 user-message → roundSource 已置位）
-        if (snap.paused) setPaused(true);
-        lastSeqRef.current = snap.lastSeq;
-        // flush 缓冲：只应用快照之后产生的增量
-        bufferingRef.current = false;
-        for (const ev of bufferRef.current) {
-          if (typeof ev.seq === 'number') {
-            if (ev.seq <= lastSeqRef.current) continue;
-            lastSeqRef.current = ev.seq;
-          }
-          applyEvent(ev);
-        }
-        bufferRef.current = [];
-      })
-      .catch(() => {
-        // 快照失败（节点未激活等）：仍解除缓冲，避免事件永久积压
-        if (cancelled) return;
-        bufferingRef.current = false;
-      });
+    if (executionId) {
+      subscribe(nodeId, onStreamEvent);
+      loadSnapshot();
+    }
 
     return () => {
       cancelled = true;
+      snapshotController?.abort();
+      delegateBuffer.dispose();
       if (streamFrameRef.current !== null) {
         window.cancelAnimationFrame(streamFrameRef.current);
         streamFrameRef.current = null;
       }
-      unsubscribe(nodeId, onStreamEvent);
+      if (executionId) unsubscribe(nodeId, onStreamEvent);
     };
-  }, [nodeId, executionId]);
+  }, [nodeId, workflowId, executionId]);
 
   // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
   useEffect(() => {
@@ -467,49 +522,39 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
 
   // 面板从隐藏恢复可见时强制滚到底 + 用服务端 busy 校准 streaming（自愈卡死）
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || !executionId) return;
     const el = messagesContainerRef.current;
     if (el) el.scrollTop = el.scrollHeight;
     // 自愈：组件持久挂载，snapshot 仅挂载时拉一次。若 done 因任何 race 丢失导致
     // streaming 卡在 true（发送按钮卡红色"停止"），切回面板时用服务端权威 busy 纠正。
-    fetch(`/api/tradewind/chat/${nodeId}/status`)
-      .then(r => (r.ok ? r.json() : null))
-      .then((s: { busy: boolean } | null) => {
-        if (s && !s.busy) {
+    const gate = statusRequestGateRef.current;
+    const ticket = gate.begin();
+    const controller = new AbortController();
+    fetch(`/api/tradewind/chat/${nodeId}/status`, { signal: controller.signal })
+      .then(response => readNodeStatus(response, { workflowId, executionId }))
+      .then(s => {
+        if (gate.shouldClearStreaming(ticket, s)) {
           setStreaming(false);
           streamRef.current = null;
         }
       })
-      .catch(() => {});
-  }, [visible, nodeId]);
+      .catch(cause => {
+        if (controller.signal.aborted) return;
+        setError(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => { gate.cancel(ticket); controller.abort(); };
+  }, [visible, nodeId, workflowId, executionId]);
 
-  const send = useCallback(() => {
+  const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || streaming || sealed) return;
-    setInput('');
+    if (!text || streaming || sealed || !executionId) return;
     setError(null);
-
-    const userMsg: ChatMessage = { id: nextId(), role: 'user', content: text, timestamp: new Date().toISOString() };
-    setMessages(prev => [...prev, userMsg]);
-    // 人类发起的轮：可自由停止（无下发承诺）。envelope/contact 轮由 user-message 事件标记。
-    setRoundSource('human');
-    setPaused(false);
-    setActivity('waiting');
-
-    fetch(`/api/tradewind/chat/${nodeId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text }),
-    })
-      .then(r => {
-        if (!r.ok) {
-          r.text().then(t => {
-            try { setError(JSON.parse(t).error); } catch { setError(`HTTP ${r.status}`); }
-          });
-        }
-      })
-      .catch(() => {});
-  }, [input, streaming, nodeId, sealed]);
+    try {
+      await sendNodeMessage(executionId, nodeId, text);
+      setInput('');
+    }
+    catch (cause) { setError((cause as Error).message); }
+  }, [executionId, input, streaming, nodeId, sealed]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -519,30 +564,42 @@ export function AgentChatWindow({ nodeId, nodeLabel, executionId, onClose, visib
   };
 
   // human 轮：自由停止（无下发承诺）
-  const stop = () => {
-    fetch(`/api/tradewind/chat/${nodeId}/abort`, { method: 'POST' }).catch(() => {});
+  const stop = async () => {
+    if (sealed || !roundIdRef.current) return;
+    try { await abortNodeRound(nodeId, roundIdRef.current); }
+    catch (cause) { setError((cause as Error).message); }
   };
 
   // envelope 轮：暂停（软中止 + 扣住信封，不投递）
-  const pauseRound = () => {
-    fetch(`/api/tradewind/chat/${nodeId}/pause`, { method: 'POST' }).catch(() => {});
+  const pauseRound = async () => {
+    if (sealed || !roundIdRef.current) return;
+    try { await pauseNodeRound(nodeId, roundIdRef.current); }
+    catch (cause) { setError((cause as Error).message); }
   };
 
   // envelope 轮：续跑（重跑本轮，真封口才投递下游）
-  const resumeRound = () => {
-    setStreaming(true);
-    setPaused(false);
-    fetch(`/api/tradewind/chat/${nodeId}/resume`, { method: 'POST' }).catch(() => {});
+  const resumeRound = async () => {
+    if (sealed || !executionId) return;
+    try {
+      await resumeNodeRound(nodeId, executionId);
+      statusRequestGateRef.current.advanceEvent();
+      setStreaming(true);
+      setPaused(false);
+    } catch (cause) { setError((cause as Error).message); }
   };
 
   // envelope 轮：停整个工作流（唯一合法的"停止"出口）
-  const stopWorkflow = () => {
-    fetch(`/api/tradewind/stop`, { method: 'POST' }).catch(() => {});
+  const stopWorkflow = async () => {
+    if (sealed || !executionId) return;
+    try { await requestStop(executionId); }
+    catch (cause) { setError((cause as Error).message); }
   };
 
   const isEnvelopeRound = roundSource === 'envelope' || roundSource === 'contact';
   return <AgentChatView visible={visible} sealed={sealed} paused={paused} streaming={streaming}
     isEnvelopeRound={isEnvelopeRound} activity={activity} nodeLabel={nodeLabel} messages={messages}
+    latestUsage={latestUsage}
+    compactionNotice={compactionNotice}
     error={error} input={input} messagesContainerRef={messagesContainerRef} messagesEndRef={messagesEndRef}
     onClose={onClose} onInput={setInput} onKeyDown={handleKeyDown} onSend={send} onStop={stop}
     onPauseRound={pauseRound} onResumeRound={resumeRound} onStopWorkflow={stopWorkflow} />;

@@ -5,3 +5,31 @@ export function shouldApplySessionRefresh(
 ): boolean {
   return requestedAgentId === visibleAgentId;
 }
+
+export function createSessionListRefresher<T>(
+  load: (agentId: string) => Promise<T[]>,
+  visibleAgentId: () => string | null,
+  apply: (sessions: T[]) => void,
+): (agentId: string) => Promise<void> {
+  let sequence = 0;
+  return async agentId => {
+    if (!shouldApplySessionRefresh(agentId, visibleAgentId())) return;
+    const request = ++sequence;
+    const sessions = await load(agentId);
+    if (request === sequence && shouldApplySessionRefresh(agentId, visibleAgentId())) {
+      apply(sessions);
+    }
+  };
+}
+
+export function ensureSessionListRefresher<T>(
+  ref: { current: ((agentId: string) => Promise<void>) | null },
+  load: (agentId: string) => Promise<T[]>,
+  visibleAgentId: () => string | null,
+  apply: (sessions: T[]) => void,
+): (agentId: string) => Promise<void> {
+  if (typeof ref.current !== 'function') {
+    ref.current = createSessionListRefresher(load, visibleAgentId, apply);
+  }
+  return ref.current;
+}

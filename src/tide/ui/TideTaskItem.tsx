@@ -4,14 +4,19 @@
 
 import { useState, useEffect, useRef } from 'react';
 import type { TideTask, TideRunRecord } from '../../api/tide';
+import { tideRunIdentity } from './tide-run-identity';
+import type { CollaborationProbeItem } from '../../api/collaboration';
 import { itemStyle, actionBtnStyle, formatRelative, formatSchedule } from './tide-styles';
+import { resolveTideRuntime, visibleTideNextRun, type TideRuntimeKind } from './tide-runtime';
 import { useLocale } from '../../i18n/LocaleContext';
+import type { MessageKey } from '../../i18n/locale';
 
 interface TaskItemProps {
   task: TideTask;
   expanded: boolean;
   selected: boolean;
-  running?: boolean;
+  optimisticRun?: boolean;
+  probe?: CollaborationProbeItem;
   runs: TideRunRecord[];
   onToggle: () => void;
   onDelete: () => void;
@@ -19,7 +24,21 @@ interface TaskItemProps {
   onExpand: () => void;
 }
 
-export default function TaskItem({ task, expanded, selected, running, runs, onToggle, onDelete, onRunNow, onExpand }: TaskItemProps) {
+const STATUS_KEYS: Record<TideRuntimeKind, MessageKey> = {
+  scheduled: 'tide.task.status.scheduled', queued: 'tide.task.status.queued',
+  running: 'tide.task.status.executing', waiting: 'tide.task.status.waiting',
+  completed: 'tide.task.status.completed', paused: 'tide.task.status.paused',
+  aborted: 'tide.task.status.aborted', failed: 'tide.task.status.failed',
+  crashed: 'tide.task.status.crashed',
+};
+
+const STATUS_COLORS: Record<TideRuntimeKind, string> = {
+  scheduled: '#06b6d4', queued: 'var(--color-accent)', running: 'var(--color-accent)',
+  waiting: '#f59e0b', completed: 'var(--color-text-tertiary)', paused: '#f59e0b',
+  aborted: '#f59e0b', failed: '#ef4444', crashed: '#ef4444',
+};
+
+export default function TaskItem({ task, expanded, selected, optimisticRun, probe, runs, onToggle, onDelete, onRunNow, onExpand }: TaskItemProps) {
   const { t, locale } = useLocale();
   const [hovered, setHovered] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -32,16 +51,9 @@ export default function TaskItem({ task, expanded, selected, running, runs, onTo
       return () => { if (deleteTimer.current) clearTimeout(deleteTimer.current); };
     }
   }, [confirmingDelete]);
-  const statusLabel = running
-    ? t('tide.task.status.executing')
-    : task.repeatCount === 0
-      ? t('tide.task.status.completed')
-      : !task.enabled ? t('tide.task.status.paused') : t('tide.task.status.running');
-  const statusColor = running
-    ? 'var(--color-accent)'
-    : task.repeatCount === 0
-      ? 'var(--color-text-tertiary)'
-      : !task.enabled ? '#f59e0b' : '#06b6d4';
+  const runtime = resolveTideRuntime(task, probe, Boolean(optimisticRun));
+  const statusLabel = t(STATUS_KEYS[runtime.kind]);
+  const statusColor = STATUS_COLORS[runtime.kind];
 
   const cardStyle: React.CSSProperties = {
     ...itemStyle,
@@ -70,15 +82,21 @@ export default function TaskItem({ task, expanded, selected, running, runs, onTo
       </div>
 
       <div style={{ color: 'var(--color-text-tertiary)', marginBottom: '4px' }}>
-        {t('tide.task.lastNext', { last: formatRelative(task.lastRun, locale), next: formatRelative(task.nextRun, locale) })}
+        {t('tide.task.lastNext', { last: formatRelative(task.lastRun, locale), next: formatRelative(visibleTideNextRun(task), locale) })}
       </div>
+
+      {runtime.error && (
+        <div style={{ color: '#ef4444', marginBottom: '4px' }} title={runtime.error} className="text-truncate">
+          {runtime.error}
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }} onClick={e => e.stopPropagation()}>
         <button onClick={onToggle} style={actionBtnStyle}>
           {task.enabled ? t('tide.task.pause') : t('tide.task.enable')}
         </button>
-        <button onClick={onRunNow} disabled={running} style={actionBtnStyle}>
-          {running ? t('tide.task.running') : t('tide.task.runNow')}
+        <button onClick={onRunNow} disabled={runtime.active} style={actionBtnStyle}>
+          {runtime.active ? t('tide.task.running') : t('tide.task.runNow')}
         </button>
         {confirmingDelete ? (
           <button onClick={() => { setConfirmingDelete(false); onDelete(); }} style={{ ...actionBtnStyle, color: '#fff', background: '#ef4444', borderColor: '#ef4444' }}>
@@ -94,7 +112,7 @@ export default function TaskItem({ task, expanded, selected, running, runs, onTo
       {expanded && runs.length > 0 && (
         <div style={{ marginTop: '6px', borderTop: '1px solid var(--color-border)', paddingTop: '4px' }}>
           {runs.map(r => (
-            <div key={r.timestamp} style={{ marginBottom: '3px', color: 'var(--color-text-tertiary)' }}>
+            <div key={tideRunIdentity(r)} style={{ marginBottom: '3px', color: 'var(--color-text-tertiary)' }}>
               <span style={{ color: r.status === 'success' ? '#22c55e' : '#ef4444' }}>
                 {r.status === 'success' ? 'OK' : 'ERR'}
               </span>

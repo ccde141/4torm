@@ -1,42 +1,53 @@
 /**
  * Tools + Skills 路由
  *
- * 迁移自 vite.config.ts 的 tool-executor / skills-api。
  * 注：permissions 端点已移除（危险工具二次确认机制废弃）。
  */
 
 import type { FastifyInstance } from 'fastify';
 import { getAppContext } from '../services/app-context.js';
-import { executeTool, getToolExecutionMode, ToolPermissionError } from '../services/tool-executor.js';
+import { executeTool, executeToolOutcome, getToolExecutionMode, ToolPermissionError } from '../services/tool-executor.js';
 import type { ObservationScope } from '../services/execution-observation-contract.js';
 import { executionObserver } from '../services/execution-observer.js';
 import { executionLifecycle } from '../services/execution-lifecycle.js';
 import { backgroundExecutions, type BackgroundExecutionSnapshot } from '../services/background-execution.js';
-import { visualArtifactStore } from '../services/visual-artifact-store.js';
-import { browserExecutionProducer } from '../services/browser-execution-producer.js';
-import { normalizeBrowserEngine } from '../services/browser-engine.js';
 import { executionCapabilities } from '../services/builtin-execution-capabilities.js';
-import { listToolCatalog, replaceCustomTools } from '../tools/custom-registry.js';
+import { listToolCatalogWithDiagnostics, replaceCustomTools } from '../tools/custom-registry.js';
 import { toolErrorFromUnknown } from '../engine/shared/tool-error.js';
 import { frameworkErrorToHttp } from '../engine/shared/framework-error.js';
+import { readAgentCollaborationCatalog } from '../engine/collaboration/agent-gateway.js';
+import type { AgentToolDefinition } from '../engine/collaboration/contracts.js';
+import type { ToolDefinition } from '../tools/tool-definition.js';
+import { registerToolObservationRoutes } from './tool-observation-routes.js';
 
 export interface ToolRouteOptions {
   executeTool?: typeof executeTool;
   /** 测试可缩短；生产默认给短命令 3 秒同步完成窗口。 */
   backgroundGraceMs?: number;
+  collaborationTools?: () => AgentToolDefinition[];
 }
 
 export async function toolRoutes(app: FastifyInstance, options: ToolRouteOptions = {}): Promise<void> {
   const { dataDir } = getAppContext(app);
   const executeLocalTool = options.executeTool ?? executeTool;
+  const executeLocalToolOutcome = options.executeTool
+    ? async (...params: Parameters<typeof executeTool>) => ({
+      result: await options.executeTool!(...params), ok: true,
+    })
+    : executeToolOutcome;
+  const collaborationTools = options.collaborationTools ?? readAgentCollaborationCatalog;
 
   // 框架工具只读；data/tools/registry.json 仅承载用户自定义工具。
-  app.get('/catalog', async () => ({ tools: await listToolCatalog(dataDir) }));
+  app.get('/catalog', async () =>
+    listToolCatalogWithDiagnostics(dataDir, collaborationTools().map(tool => ({
+      ...tool, parameters: tool.parameters as ToolDefinition['parameters'],
+    }))));
 
   app.put('/custom', async (req, reply) => {
     try {
       const body = req.body as { tools?: unknown } | undefined;
-      const tools = await replaceCustomTools(dataDir, body?.tools);
+      const reserved = collaborationTools().map(tool => tool.name);
+      const tools = await replaceCustomTools(dataDir, body?.tools, reserved);
       return reply.send({ tools });
     } catch (error) {
       return reply.status(400).send({ error: (error as Error).message });
@@ -169,7 +180,7 @@ export async function toolRoutes(app: FastifyInstance, options: ToolRouteOptions
           executionId: trackedEntry.id,
         });
       }
-      const result = await executeLocalTool(
+      const outcome = await executeLocalToolOutcome(
         dataDir, tool, args || {}, agentId || '', workspaceDirOverride, sandboxLevelOverride,
         (m) => { meta = m; },
         controller.signal,
@@ -180,7 +191,9 @@ export async function toolRoutes(app: FastifyInstance, options: ToolRouteOptions
           error: 'execution cancelled', errorCode: 'TOOL_EXECUTION_CANCELLED', errorKind: 'cancelled',
         });
       }
-      return reply.send({ result, meta });
+      return reply.send({
+        result: outcome.result, ...(outcome.ok ? {} : { ok: false }), meta,
+      });
     } catch (e) {
       const permissionFailure = e instanceof ToolPermissionError;
       const commandFailure = isCommandExecutionError(e) ? e : undefined;
@@ -214,95 +227,7 @@ export async function toolRoutes(app: FastifyInstance, options: ToolRouteOptions
     }
   });
 
-  app.get('/observations', async (req, reply) => {
-    const query = req.query as { scope?: string; ownerId?: string };
-    if (!isObservationScope(query.scope) || !query.ownerId) return reply.status(400).send({ error: 'missing observation scope or ownerId' });
-    return reply.send({ items: executionObserver.list(query.scope, query.ownerId).map(toObservationSummary) });
-  });
-
-  app.get('/observations/:id', async (req, reply) => {
-    const query = req.query as { scope?: string; ownerId?: string };
-    const { id } = req.params as { id: string };
-    if (!isObservationScope(query.scope) || !query.ownerId) return reply.status(400).send({ error: 'missing observation scope or ownerId' });
-    const item = executionObserver.getForOwner(id, query.scope, query.ownerId);
-    if (!item) return reply.status(404).send({ error: 'observation not found' });
-    return reply.send({ item });
-  });
-
-  app.get('/observations/:id/frame', async (req, reply) => {
-    const query = req.query as { scope?: string; ownerId?: string };
-    const { id } = req.params as { id: string };
-    if (!isObservationScope(query.scope) || !query.ownerId) return reply.status(400).send({ error: 'missing observation scope or ownerId' });
-    if (!executionObserver.getForOwner(id, query.scope, query.ownerId)) return reply.status(404).send({ error: 'observation not found' });
-    const frame = visualArtifactStore.get(id);
-    if (!frame) return reply.status(404).send({ error: 'visual frame not available' });
-    return reply.type(frame.mimeType).send(frame.data);
-  });
-
-  app.post('/observations/browser', async (req, reply) => {
-    const body = req.body as { scope?: string; ownerId?: string; surfaceId?: string; url?: string; engine?: unknown };
-    if (!isObservationScope(body?.scope) || !body.ownerId || !body.url) return reply.status(400).send({ error: 'missing browser scope, ownerId or url' });
-    const engine = normalizeBrowserEngine(body.engine);
-    if (!engine) return reply.status(400).send({ error: 'unsupported browser engine' });
-    try { return reply.send({ id: await browserExecutionProducer.open({ scope: body.scope, ownerId: body.ownerId, surfaceId: body.surfaceId, url: body.url, engine }) }); }
-    catch (error) { return reply.status(500).send({ error: (error as Error).message }); }
-  });
-
-  app.post('/observations/:id/control', async (req, reply) => {
-    const query = req.query as { scope?: string; ownerId?: string };
-    const body = req.body as { control?: 'agent' | 'human' };
-    const { id } = req.params as { id: string };
-    if (!isObservationScope(query.scope) || !query.ownerId || !body?.control) return reply.status(400).send({ error: 'missing browser control context' });
-    try {
-      const surface = requireOwnedSurface(id, query.scope, query.ownerId);
-      if (!surface.control) return reply.status(409).send({ error: 'execution surface does not support control transfer' });
-      await surface.control({ id, scope: query.scope, ownerId: query.ownerId }, body.control);
-      return reply.status(204).send();
-    } catch (error) { return reply.status(404).send({ error: (error as Error).message }); }
-  });
-
-  app.post('/observations/:id/refresh', async (req, reply) => {
-    const query = req.query as { scope?: string; ownerId?: string };
-    const { id } = req.params as { id: string };
-    if (!isObservationScope(query.scope) || !query.ownerId) return reply.status(400).send({ error: 'missing browser refresh context' });
-    try {
-      const surface = requireOwnedSurface(id, query.scope, query.ownerId);
-      if (!surface.refresh) return reply.status(409).send({ error: 'execution surface does not support refresh' });
-      await surface.refresh({ id, scope: query.scope, ownerId: query.ownerId });
-      const item = executionObserver.getForOwner(id, query.scope, query.ownerId);
-      return reply.send({ item: item ? toObservationSummary(item) : undefined });
-    } catch (error) {
-      return reply.status(404).send({ error: (error as Error).message });
-    }
-  });
-
-  app.post('/observations/:id/close', async (req, reply) => {
-    const query = req.query as { scope?: string; ownerId?: string };
-    const { id } = req.params as { id: string };
-    if (!isObservationScope(query.scope) || !query.ownerId) return reply.status(400).send({ error: 'missing browser close context' });
-    try {
-      const surface = requireOwnedSurface(id, query.scope, query.ownerId);
-      if (!surface.close) return reply.status(409).send({ error: 'execution surface does not support close' });
-      await surface.close({ id, scope: query.scope, ownerId: query.ownerId });
-      return reply.status(204).send();
-    } catch (error) {
-      return reply.status(404).send({ error: (error as Error).message });
-    }
-  });
-
-  app.post('/observations/:id/terminate', async (req, reply) => {
-    const query = req.query as { scope?: string; ownerId?: string };
-    const { id } = req.params as { id: string };
-    if (!isObservationScope(query.scope) || !query.ownerId) return reply.status(400).send({ error: 'missing execution termination context' });
-    const item = executionObserver.get(id);
-    if (!item || item.scope !== query.scope || item.ownerId !== query.ownerId) return reply.status(404).send({ error: 'execution not found' });
-    if (item.status === 'cancelling') return reply.status(202).send({ status: 'cancelling' });
-    const terminated = await executionLifecycle.terminate(id, query.scope, query.ownerId)
-      || await backgroundExecutions.terminate(id, query.scope, query.ownerId);
-    if (!terminated) return reply.status(409).send({ error: 'execution can no longer be terminated' });
-    executionObserver.requestCancellation(id);
-    return reply.status(202).send({ status: 'cancelling' });
-  });
+  registerToolObservationRoutes(app);
 }
 
 function formatBackgroundResult(snapshot: BackgroundExecutionSnapshot): string {
@@ -322,30 +247,4 @@ function isCommandExecutionError(error: unknown): error is Error & { exitCode: n
 
 function isObservationScope(value: unknown): value is ObservationScope {
   return value === 'conversation' || value === 'cyclone';
-}
-
-function requireOwnedSurface(id: string, scope: ObservationScope, ownerId: string) {
-  const item = executionObserver.getForOwner(id, scope, ownerId);
-  if (!item) throw new Error('execution surface not found');
-  return executionCapabilities.requireSurface(item.viewer);
-}
-
-function toObservationSummary(item: ReturnType<typeof executionObserver.list>[number]) {
-  return {
-    id: item.id,
-    surfaceId: item.surfaceId,
-    kind: item.kind,
-    viewer: item.viewer,
-    command: item.command,
-    startedAt: item.startedAt,
-    finishedAt: item.finishedAt,
-    status: item.status,
-    exitCode: item.exitCode,
-    error: item.error,
-    errorCode: item.errorCode,
-    errorKind: item.errorKind,
-    progress: item.progress,
-    outputTruncated: item.outputTruncated,
-    presentation: item.viewerState?.presentation,
-  };
 }

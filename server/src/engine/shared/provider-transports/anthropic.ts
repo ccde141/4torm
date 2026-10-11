@@ -1,5 +1,12 @@
 import type { ContextMessage, ProviderReasoningEnvelope } from '../types.js';
 import type { ToolDef } from '../tool-defs-loader.js';
+import { mapAnthropicTools } from './anthropic-tools.js';
+import {
+  completeHistoricalToolNameMap,
+  downgradeIncompleteNativeToolHistory,
+  encodeNativeToolHistoryForText,
+  restoreTextToolHistory,
+} from '../model-request/tool-history.js';
 
 interface AnthropicRequestInput {
   baseUrl: string;
@@ -32,8 +39,17 @@ export interface AnthropicResult {
 }
 
 export function buildAnthropicRequest(input: AnthropicRequestInput): AnthropicRequest {
-  const { tools, nameMap, forwardMap } = mapTools(input.tools ?? []);
-  const { system, messages } = mapMessages(input.messages, forwardMap);
+  const { tools, nameMap, forwardMap } = mapAnthropicTools(input.tools ?? []);
+  const history = tools.length
+    ? restoreTextToolHistory(input.messages)
+    : encodeNativeToolHistoryForText(input.messages, forwardMap);
+  const historyNames = tools.length
+    ? completeHistoricalToolNameMap(history, forwardMap)
+    : forwardMap;
+  const safeHistory = tools.length
+    ? downgradeIncompleteNativeToolHistory(history, historyNames)
+    : history;
+  const { system, messages } = mapMessages(safeHistory, historyNames);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'anthropic-version': '2023-06-01',
@@ -63,38 +79,6 @@ function hasHeader(headers: Record<string, string>, target: string): boolean {
   return Object.keys(headers).some(name => name.toLowerCase() === target);
 }
 
-function mapTools(defs: ToolDef[]) {
-  const used = new Set<string>();
-  const nameMap = new Map<string, string>();
-  const forwardMap = new Map<string, string>();
-  const tools = defs.map(def => {
-    const name = safeToolName(def.name, used);
-    if (name !== def.name) {
-      nameMap.set(name, def.name);
-      forwardMap.set(def.name, name);
-    }
-    return {
-      name,
-      description: def.description ?? '',
-      input_schema: {
-        type: 'object',
-        properties: def.parameters?.properties ?? {},
-        required: Array.isArray(def.parameters?.required) ? def.parameters.required : [],
-      },
-    };
-  });
-  return { tools, nameMap, forwardMap };
-}
-
-function safeToolName(name: string, used: Set<string>): string {
-  const base = name.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'tool';
-  let candidate = base;
-  let suffix = 1;
-  while (used.has(candidate)) candidate = `${base}_${suffix++}`;
-  used.add(candidate);
-  return candidate;
-}
-
 function mapMessages(messages: ContextMessage[], forwardMap: Map<string, string>) {
   const system = messages.filter(message => message.role === 'system')
     .map(message => message.content).filter(Boolean).join('\n\n');
@@ -118,7 +102,10 @@ function mapMessage(
     if (!message.toolCallId) throw new Error('Anthropic 工具结果缺少 toolCallId');
     return {
       role: 'user',
-      content: [{ type: 'tool_result', tool_use_id: message.toolCallId, content: message.content }],
+      content: [{
+        type: 'tool_result', tool_use_id: message.toolCallId, content: message.content,
+        ...(message.toolOk === false ? { is_error: true } : {}),
+      }],
     };
   }
 

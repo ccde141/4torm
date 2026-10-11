@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 export function agentRegistryFile(dataDir: string): string {
@@ -6,6 +7,26 @@ export function agentRegistryFile(dataDir: string): string {
 
 export function agentWorkspaceDir(dataDir: string, agentId: string): string {
   return path.join(dataDir, 'agents', agentId, '.workspace');
+}
+
+export function resolveAgentWorkspaceDir(
+  dataDir: string, agentId: string, configured?: string,
+): string {
+  const normalized = configured?.replaceAll('\\', '/').replace(/\/+$/, '');
+  const defaultPath = `data/agents/${agentId}/.workspace`;
+  return !configured || normalized === defaultPath
+    ? path.resolve(agentWorkspaceDir(dataDir, agentId))
+    : path.resolve(dataDir, '..', configured);
+}
+
+export function agentWorkspaceDisplayPath(
+  projectRoot: string, dataDir: string, agentId: string, configured?: string,
+): string {
+  const workspace = resolveAgentWorkspaceDir(dataDir, agentId, configured);
+  const relative = path.relative(projectRoot, workspace);
+  const outside = relative === '..' || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative);
+  return outside ? workspace : relative ? `./${relative.replaceAll('\\', '/')}` : '.';
 }
 
 export function agentAvatarFile(dataDir: string, agentId: string): string {
@@ -84,6 +105,16 @@ export function convectionSessionWorkspace(dataDir: string, sessionId: string): 
   return path.join(convectionSessionDir(dataDir, sessionId), 'workspace');
 }
 
+export function convectionRunsDir(dataDir: string): string {
+  return path.join(dataDir, 'convection', 'runs');
+}
+
+export function convectionRunFile(dataDir: string, sessionId: string, runId?: string): string {
+  if (!runId) return path.join(convectionRunsDir(dataDir), `${sessionId}.json`);
+  const name = createHash('sha256').update(sessionId).update('\0').update(runId).digest('hex');
+  return path.join(convectionRunsDir(dataDir), `${name}.json`);
+}
+
 export function tideTasksFile(dataDir: string): string {
   return path.join(dataDir, 'tide', 'tasks.json');
 }
@@ -94,10 +125,22 @@ export function tideRunsDir(dataDir: string, taskId?: string): string {
     : path.join(dataDir, 'tide', 'runs');
 }
 
+export function tideRuntimeDir(dataDir: string): string {
+  return path.join(dataDir, 'tide', 'runtime');
+}
+
+export function monsoonRunsDir(dataDir: string): string {
+  return path.join(dataDir, 'monsoon', 'runs');
+}
+
 export function cycloneRoot(dataDir: string, workshopId?: string): string {
   return workshopId
     ? path.join(dataDir, 'cyclone', workshopId)
     : path.join(dataDir, 'cyclone');
+}
+
+export function cycloneRuntimeDir(dataDir: string): string {
+  return path.join(dataDir, 'cyclone', 'runtime');
 }
 
 export function tradewindWorkflowsDir(dataDir: string): string {

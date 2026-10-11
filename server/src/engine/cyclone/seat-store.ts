@@ -1,8 +1,7 @@
 /**
  * 气旋工位 store —— 工位 CRUD + per-seat 并发锁
  *
- * 只 import shared/ 与本模块自身，零交叉代码。
- * per-seat 锁：自写一份（按 seatId 互斥），不 import 对流的 tryAcquireSessionLock。
+ * per-seat 锁按 seatId 互斥，独立于对流的 tryAcquireSessionLock。
  */
 
 import type { ContextMessage, SeatData, WorkshopData } from './types';
@@ -18,7 +17,7 @@ export async function addSeat(
   const w = await loadWorkshop(dataDir, workshopId);
   if (!w) throw new Error(`工作室不存在：${workshopId}`);
   const title = opts.title || '工位';
-  // 工位 title 在工作室内唯一（contact 按 title 寻址，复刻信风 label 唯一约束）
+  // 工位 title 在工作室内唯一，供 contact 按 title 寻址。
   if (await titleExists(dataDir, workshopId, title)) {
     throw new Error(`工位名「${title}」已存在，请换一个（同工作室内工位名不能重复，否则无法 contact 寻址）`);
   }
@@ -81,7 +80,7 @@ export async function resetSeatContext(
   dataDir: string,
   workshopId: string,
   seatId: string,
-  opts: { summary?: string; forcePending?: boolean } = {},
+  opts: { summary?: string; forcePending?: boolean; preparedArchivePath?: string } = {},
 ): Promise<{ seat: SeatData | null; archivePath?: string; archivedCount?: number }> {
   const seat = await loadSeat(dataDir, workshopId, seatId);
   if (!seat) return { seat: null };
@@ -90,9 +89,9 @@ export async function resetSeatContext(
   const state = seat.compactState || { disabled: false, archiveSeq: 0 };
   const nextSeq = (state.archiveSeq || 0) + 1;
   const originalMessages = seat.messages || [];
-  const archivePath = cycloneArchiveFile(dataDir, workshopId, archiveName('seat', seatId, nextSeq));
-  await ensureDir(archivePath.replace(/[\\/][^\\/]+$/, ''));
-  await atomicWrite(archivePath, JSON.stringify({
+  const archivePath = opts.preparedArchivePath || cycloneArchiveFile(dataDir, workshopId, archiveName('seat', seatId, nextSeq));
+  if (!opts.preparedArchivePath) await ensureDir(archivePath.replace(/[\\/][^\\/]+$/, ''));
+  if (!opts.preparedArchivePath) await atomicWrite(archivePath, JSON.stringify({
     type: 'cyclone-seat-context-reset',
     version: 1,
     createdAt: new Date().toISOString(),
@@ -154,7 +153,7 @@ export async function updateSeatRole(
 }
 
 // ── per-seat 并发锁（按 seatId 互斥，非阻塞） ──────────────────
-// 自写一份；不复用对流的 tryAcquireSessionLock（零交叉代码）。
+// 工位锁独立于对流的 tryAcquireSessionLock。
 
 const seatLocks = new Set<string>();
 

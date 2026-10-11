@@ -28,6 +28,7 @@
 .cyclone-workspace-tab__status { padding:2px 5px; border-radius:var(--radius-full); font-size:10px; color:var(--color-text-secondary); background:var(--glass-bg-hover); }
 .cyclone-workspace-tab__status.running { color:#60a5fa; }
 .cyclone-workspace-tab__status.waiting { color:#f59e0b; }
+.cyclone-workspace-tab__status.unknown { color:#94a3b8; }
 .cyclone-workspace-tab__status.failed { color:#ef4444; }
 .cyclone-workspace-tab__status.unread { color:#22c55e; }
 .cyclone-org__toolbar { position: absolute; z-index: 8; top: 14px; left: 50%; transform: translateX(-50%); display: flex; align-items:center; gap: 8px; padding: 7px; white-space:nowrap; border: 1px solid var(--glass-border); border-radius: var(--border-radius-full); background: var(--glass-bg-strong); backdrop-filter: blur(16px); box-shadow: var(--shadow-md); }
@@ -58,6 +59,7 @@
 .cyclone-org-seat__status i { width:6px; height:6px; border-radius:50%; background:currentColor; }
 .cyclone-org-seat__status--running { color:#60a5fa; }
 .cyclone-org-seat__status--waiting { color:#f59e0b; }
+.cyclone-org-seat__status--unknown { color:#94a3b8; }
 .cyclone-org-seat__status--failed { color:#ef4444; }
 .cyclone-org-seat__status--unread { color:#22c55e; }
 .cyclone-org-seat button { margin-top: 3px; padding: 4px 9px; font-size: var(--text-xs); }

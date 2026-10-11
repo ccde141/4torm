@@ -17,15 +17,27 @@ export class TeamRuntime {
     const version = this.stopVersion;
     const run = await this.store.start(memberId, task, policy, requestId);
     if (run.replayed) return run;
+    this.launch(memberId, run.id, task, version);
+    return run;
+  }
+
+  async startNew(definition: unknown, task: string, policy: TeamPermissions, requestId: string) {
+    const version = this.stopVersion;
+    const run = await this.store.createAndStart(definition, task, policy, requestId);
+    if (run.replayed) return run;
+    this.launch(run.memberId, run.id, task, version);
+    return run;
+  }
+
+  private launch(memberId: string, runId: string, task: string, version: number): void {
     const controller = new AbortController();
     if (version !== this.stopVersion) controller.abort();
-    const done = this.perform(memberId, run.id, task, controller.signal, this.execute);
-    this.active.set(run.id, { controller, done });
+    const done = this.perform(memberId, runId, task, controller.signal, this.execute);
+    this.active.set(runId, { controller, done });
     void done.catch(error => {
       this.failures.push(error);
       console.error('[conversation.team] Failed to persist execution outcome', error);
-    }).finally(() => this.active.delete(run.id));
-    return run;
+    }).finally(() => this.active.delete(runId));
   }
 
   private async perform(memberId: string, runId: string, task: string, signal: AbortSignal, execute: MemberExecutor): Promise<void> {

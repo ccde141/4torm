@@ -1,10 +1,10 @@
 /**
  * 气旋工位虚拟工具 schema —— 原生工具调用模式专用
  *
- * 边界铁律：cyclone 各写各的，不 import 季风/对流的 virtual-tools。
+ * 依赖边界：cyclone 不 import 季风/对流的 virtual-tools。
  * 只 import shared/。
  *
- * 各场景的虚拟工具组合（经验源自信风成熟设计）：
+ * 各场景的虚拟工具组合：
  * - 私聊：ask + delegate + contact + dispatch（可同步联络，也可异步交办固定工位）
  * - 群聊：contact（讨论场，剥 ask/delegate 不阻塞串行循环，但保留联络）
  * - 被联络方一轮：delegate + contact（无人类在场，剥 ask，可继续嵌套联络）
@@ -18,6 +18,8 @@ import { buildRegisterToolDef } from '../shared/tool-registration.js';
 import type { ContactTarget } from './contact-registry';
 
 export interface SeatVirtualToolOpts {
+  /** 群聊副本不持有工位任务板；任务板只属于固定工位的执行上下文。 */
+  allowTaskBoard?: boolean;
   /** 是否注入 ask（向人类提问挂起）。群聊/被联络方=false */
   allowAsk?: boolean;
   /** 是否注入 delegate（拆子任务给 SubAgent）。群聊=false */
@@ -37,6 +39,7 @@ export interface SeatVirtualToolOpts {
  */
 export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDef[] {
   const {
+    allowTaskBoard = true,
     allowAsk = true,
     allowDelegate = true,
     allowDispatch = false,
@@ -44,8 +47,8 @@ export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDe
     contactTargets = [],
   } = opts;
   const dispatchTargets = opts.dispatchTargets ?? contactTargets;
-  const defs: ToolDef[] = [
-    {
+  const defs: ToolDef[] = [];
+  if (allowTaskBoard) defs.push({
       name: 'task_board',
       description: '维护本工位的任务板（用户可见的结构化进度清单）。多步骤任务先写出拆解，每当开始或完成一项就整块覆盖更新，让用户实时看到进度。单步问答不必建板。',
       parameters: {
@@ -58,21 +61,19 @@ export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDe
         },
         required: ['action'],
       },
-    },
-    {
+    });
+  defs.push({
       name: 'bulletin',
-      description: '读写工作室公告板（全体工位共享、所有工位可见的结构化看板）。按条目增量改：只在产生需要全体知晓的结论/目标/状态变化时写，别刷屏、别写私事。',
+      description: '读取工作室公告板或新增条目（全体工位共享、所有工位可见的结构化看板）。改写和删除仅人类可执行。全体要知晓的结论、目标、状态变化或记录索引保持简短，完整证据留在工位。',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', description: 'get=读取 / add=新增条目 / update=改写条目 / remove=删除条目' },
-          text: { type: 'string', description: '（add/update 时）条目内容，一句话结论或事项' },
-          id: { type: 'string', description: '（update/remove 时）目标条目 id（形如 b-xxxx，见公告板中列出的 id）' },
+          action: { type: 'string', description: 'get=读取 / add=新增条目' },
+          text: { type: 'string', description: '（add 时）条目内容，一句话结论或事项' },
         },
         required: ['action'],
       },
-    },
-  ];
+    });
 
   if (allowAsk) {
     defs.push({
@@ -92,7 +93,7 @@ export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDe
   if (allowDelegate) {
     defs.push({
       name: 'delegate',
-      description: '将子任务委托给独立 SubAgent 执行。SubAgent 在隔离上下文中完成任务后返回结果摘要。涉及阅读/探索/调查/对比、或需读取2个以上文件时优先使用。单个 SubAgent 工具调用上限约25轮，任务过大需拆分为多个 delegate。',
+      description: `将本工位职责内、无需长期岗位上下文的临时并行子任务委托给独立 SubAgent，完成后返回摘要。${allowDispatch ? '跨工位职责或需要持续岗位上下文时，优先 dispatch 给固定工位。' : '跨工位职责先联络相应工位。'}单个 SubAgent 工具调用上限约25轮，任务过大需拆分。`,
       parameters: {
         type: 'object',
         properties: {
@@ -142,4 +143,9 @@ export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDe
   }
 
   return defs;
+}
+
+/** 被联络轮次不持有独立任务板，也没有可回答 ask 的人类。 */
+export function buildContactVirtualToolDefs(contactTargets: ContactTarget[]): ToolDef[] {
+  return buildSeatVirtualToolDefs({ allowTaskBoard: false, allowAsk: false, contactTargets });
 }

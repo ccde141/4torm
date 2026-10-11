@@ -76,6 +76,17 @@ test('team tools use real member SessionRunner, preserve context and adopt a cha
   });
   assert.equal(JSON.parse(results[0]).members[0].lifecycle, 'dismissed');
   assert.deepEqual(errors, []);
+  const started = JSON.parse(await updated.call('team_start', {
+    name: 'Verifier', task: 'First one-off task', requestId: 'one-off',
+  }));
+  await updated.call('team_wait', {});
+  await updated.call('team_dispatch', {
+    memberId: started.memberId, task: 'Second distinct task', requestId: 'follow-up',
+  });
+  await updated.call('team_wait', {});
+  const laterSystem = requests.at(-1)?.messages.find(message => message.role === 'system')?.content ?? '';
+  assert.match(laterSystem, /Mission: Verifier/);
+  assert.doesNotMatch(laterSystem, /First one-off task/);
 });
 
 test('member execution rejects an aborted signal before making model requests', async t => {

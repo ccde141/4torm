@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -109,3 +110,37 @@ test('启动自愈阶段不在运行依赖就绪前消费排队派发', async (t
 
   assert.equal(recovered?.status, 'queued');
 });
+
+test('启动恢复将未完成的潮汐运行标记为 crashed', async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-startup-recovery-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await writeTideState(dataDir, 'task-running', 'running');
+  await writeTideState(dataDir, 'task-queued', 'queued');
+
+  const result = await recoverStartupState(dataDir);
+
+  assert.equal(result.crashedTideRuns, 2);
+  assert.equal((await readTideState(dataDir, 'task-running')).status, 'crashed');
+  assert.equal((await readTideState(dataDir, 'task-queued')).status, 'crashed');
+});
+
+async function writeTideState(
+  dataDir: string, taskId: string, status: 'queued' | 'running',
+): Promise<void> {
+  const file = tideStateFile(dataDir, taskId);
+  const now = new Date().toISOString();
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify({
+    schemaVersion: 1, taskId, runId: `run-${taskId}`, trigger: 'manual',
+    status, createdAt: now, updatedAt: now,
+  }), 'utf8');
+}
+
+async function readTideState(dataDir: string, taskId: string): Promise<{ status: string }> {
+  return JSON.parse(await fs.readFile(tideStateFile(dataDir, taskId), 'utf8'));
+}
+
+function tideStateFile(dataDir: string, taskId: string): string {
+  const name = createHash('sha256').update(taskId).digest('hex');
+  return path.join(dataDir, 'tide', 'runtime', `${name}.json`);
+}

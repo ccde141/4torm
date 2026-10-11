@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { deliverHumanInput, type InputSubmission } from '../../engine/chat/input-submission';
 import { InputOutbox, type PendingInput } from '../../engine/chat/input-outbox';
 import { continueInputTurn } from '../../engine/chat/input-continuation';
-import { buildConversationHistory } from '../../engine/chat/conversation-history';
-import { runStreamLoop } from '../../engine/chat/streamLoop';
+import { launchMonsoonTurn } from '../../engine/chat/turn-launcher';
 import { generateMessageId, getSession, saveSession, type ChatSession } from '../../store/chat';
 import type { Agent, ChatMessage } from '../../types';
 import type { TaskBoard } from '../../utils/taskboard';
@@ -80,27 +79,25 @@ export function useHumanInput(options: Options) {
   }
 
   function start(session: ChatSession, runId: string, agent: Agent) {
-    const controller = new AbortController();
-    options.runners.register(session.id, () => controller.abort(), session.messages);
-    options.runners.emit(session.id, session.messages);
-    // Reconnect also sets streaming, but must never move a background conversation onto the screen.
-    if (active.current === session.id) options.runners.reconnect(session.id);
-    else options.runners.background(session.id);
-    const marker = session.messages.findLastIndex(message => message.type === 'compact-marker');
-    let firstId = true;
-    void runStreamLoop({ session, allMessages: session.messages,
-      chatMessages: buildConversationHistory(marker >= 0 ? session.messages.slice(marker) : session.messages),
-      agent, selectedModel: options.model, modelId: '', toolDefs: [],
-      providerInfo: { baseUrl: '', apiKey: '', signal: controller.signal }, abortController: controller,
-      setMessages: messages => options.runners.emit(session.id, messages), saveSessionFn: saveSession,
-      refreshSessions: options.refresh, generateMessageIdFn: () => {
-        if (firstId) { firstId = false; return runId; }
-        return generateMessageId();
+    const launched = launchMonsoonTurn({
+      session, messages: session.messages, agent, model: options.model, firstRunId: runId,
+    }, {
+      hasRunner: id => options.runners.runners.current.has(id),
+      register: options.runners.register,
+      emit: options.runners.emit,
+      present: id => {
+        if (active.current === id) options.runners.reconnect(id);
+        else options.runners.background(id);
       },
-      isAbandoned: () => options.runners.runners.current.get(session.id)?.abandoned ?? false,
-      onTaskboard: board => options.onTaskboard(session.id, board),
-      onFinish: completed => { options.runners.finalize(session.id, completed); },
+      isAbandoned: id => options.runners.runners.current.get(id)?.abandoned ?? false,
+      finalize: options.runners.finalize,
+      saveSession,
+      refreshSessions: options.refresh,
+      generateMessageId,
+      applyTaskboard: options.onTaskboard,
+      reportError: error => console.error('[chat] 续接轮次启动失败', error),
     });
+    if (!launched) throw new Error('会话已有执行，消息已保留 / Conversation is already running');
   }
 
   async function execute(input: InputSubmission, checkOnly: boolean) {

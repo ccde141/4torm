@@ -17,6 +17,7 @@ export interface Task { id: string; title: string; status: TaskStatus; note?: st
 export interface TaskBoard { goal: string; tasks: Task[]; updatedAt: number; revision: number }
 export interface TaskBoardExecution {
   result: string;
+  ok: boolean;
   meta?: { taskboard: TaskBoard | null };
   conflict?: true;
 }
@@ -78,7 +79,7 @@ export async function execTaskBoard(
   args: Record<string, any>,
 ): Promise<TaskBoardExecution> {
   if (!boardFile) {
-    return { result: '任务板需要会话上下文（本次调用缺少会话定位），当前环境暂不支持任务板。' };
+    return { result: '任务板需要会话上下文（本次调用缺少会话定位），当前环境暂不支持任务板。', ok: false };
   }
   const previous = mutationQueues.get(boardFile) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(() => execTaskBoardMutation(boardFile, args));
@@ -98,16 +99,17 @@ function execTaskBoardMutation(
 
   if (action === 'get') {
     const board = readTaskboard(fp);
-    if (!board) return { result: '任务板为空。可用 task_board(action:"set", goal, tasks) 创建。' };
-    return { result: `revision=${board.revision}；${summarizeTaskboard(board)}`, meta: { taskboard: board } };
+    if (!board) return { result: '任务板为空。可用 task_board(action:"set", goal, tasks) 创建。', ok: true };
+    return { result: `revision=${board.revision}；${summarizeTaskboard(board)}`, ok: true, meta: { taskboard: board } };
   }
 
   if (action === 'clear') {
     const current = readTaskboard(fp);
     const conflict = revisionConflict(current, args.expectedRevision);
     if (conflict) return conflict;
-    try { fs.rmSync(fp, { force: true }); } catch { /* ignore */ }
-    return { result: '任务板已清空', meta: { taskboard: null } };
+    try { fs.rmSync(fp, { force: true }); }
+    catch (error) { return { result: `任务板清空失败：${String(error)}`, ok: false }; }
+    return { result: '任务板已清空', ok: true, meta: { taskboard: null } };
   }
 
   // set：整体覆盖写入
@@ -121,14 +123,14 @@ function execTaskBoardMutation(
     revision: (current?.revision ?? 0) + 1,
   };
   if (!board.tasks.length) {
-    return { result: '任务板未更新：tasks 为空或格式不对，请传入 [{ title, status }] 数组。' };
+    return { result: '任务板未更新：tasks 为空或格式不对，请传入 [{ title, status }] 数组。', ok: false };
   }
   fs.mkdirSync(path.dirname(fp), { recursive: true });
   // 原子写：先写 .tmp 再 renameSync 覆盖，防止进程中途被杀留下半截 JSON 损坏任务板。
   const tmp = taskboardTempFile(fp);
   fs.writeFileSync(tmp, JSON.stringify(board, null, 2), 'utf-8');
   fs.renameSync(tmp, fp);
-  return { result: `任务板已更新：${summarizeTaskboard(board)}`, meta: { taskboard: board } };
+  return { result: `任务板已更新：${summarizeTaskboard(board)}`, ok: true, meta: { taskboard: board } };
 }
 
 function revisionConflict(
@@ -140,6 +142,7 @@ function revisionConflict(
   if (normalizeExpectedRevision(expected) === actual) return null;
   return {
     result: `任务板版本冲突：当前 revision=${actual}，本次基于 revision=${String(expected ?? '未提供')}。请先 get 后合并再提交。`,
+    ok: false,
     meta: { taskboard: current },
     conflict: true,
   };

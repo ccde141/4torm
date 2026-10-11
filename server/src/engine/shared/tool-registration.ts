@@ -4,16 +4,9 @@ import { atomicWriteFile } from './atomic-io.js';
 import type { ToolDef } from './tool-defs-loader.js';
 import type { ToolExecutionMode } from '../../tools/tool-definition.js';
 import { toolExecutorDir, toolRegistryFile } from '../../services/data-paths.js';
-import { FRAMEWORK_TOOLS } from '../../tools/framework/catalog.js';
+import { assertToolNameAvailable, inspectToolNames } from '../../tools/tool-name-policy.js';
 
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
-const RESERVED_NAMES = new Set([
-  ...FRAMEWORK_TOOLS.map(tool => tool.name),
-  'ask', 'delegate', 'task_board', 'review_changes', 'register_tool',
-  'list_agents', 'create_workflow', 'list_workflows', 'update_workflow', 'start_workflow',
-  'create_automation', 'update_automation', 'list_automations',
-  'contact', 'dispatch', 'bulletin', 'complete_task',
-]);
 
 export interface RegisteredToolDefinition {
   name: string;
@@ -97,41 +90,30 @@ async function assertExecutorExists(dataDir: string, executorFile: string): Prom
   }
 }
 
-async function findSkillToolOwner(dataDir: string, toolName: string): Promise<string | null> {
-  let entries: Array<{ name: string; isDirectory(): boolean }>;
-  try {
-    entries = await fs.readdir(path.join(dataDir, 'skills'), { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    try {
-      const raw = await fs.readFile(path.join(dataDir, 'skills', entry.name, 'tools.json'), 'utf8');
-      const tools = JSON.parse(raw) as Array<{ name?: unknown }>;
-      if (Array.isArray(tools) && tools.some(tool => tool?.name === toolName)) return entry.name;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+async function assertSkillNameUnused(dataDir: string, name: string, extraNames: readonly string[]): Promise<void> {
+  const snapshot = await inspectToolNames(dataDir, extraNames);
+  const unreadable = snapshot.issues.find(issue => issue.source === 'skill' && !issue.name);
+  if (unreadable) throw new Error(`技能工具目录不可校验：${unreadable.reason}`);
+  for (const [skillId, tools] of snapshot.skills) {
+    if (tools.some(tool => tool.name === name)) {
+      throw new Error(`工具名称已由技能「${skillId}」提供：${name}`);
     }
   }
-  return null;
 }
 
 export async function prepareToolRegistration(
   dataDir: string,
   args: Record<string, unknown>,
+  extraNames: readonly string[] = [],
 ): Promise<ToolRegistrationProposal> {
   const name = requiredText(args.name, 'name', 64);
-  if (!TOOL_NAME.test(name)) throw new Error('工具名称只能使用小写字母、数字和下划线，并以字母开头');
-  if (RESERVED_NAMES.has(name)) throw new Error(`工具名称属于框架保留名称：${name}`);
+  assertToolNameAvailable(name, extraNames);
   const executorFile = requiredText(args.executorFile ?? name, 'executorFile', 64);
   if (!TOOL_NAME.test(executorFile)) throw new Error('executorFile 只能使用小写字母、数字和下划线');
 
   const registry = await readRegistry(dataDir);
   if (registry.some(tool => tool.name === name)) throw new Error(`工具已经注册：${name}`);
-  const skillOwner = await findSkillToolOwner(dataDir, name);
-  if (skillOwner) throw new Error(`工具名称已由技能「${skillOwner}」提供：${name}`);
+  await assertSkillNameUnused(dataDir, name, extraNames);
   await assertExecutorExists(dataDir, executorFile);
 
   return {
@@ -151,12 +133,13 @@ export async function prepareToolRegistration(
 export async function commitToolRegistration(
   dataDir: string,
   proposal: ToolRegistrationProposal,
+  extraNames: readonly string[] = [],
 ): Promise<string> {
   return enqueueMutation(async () => {
+    assertToolNameAvailable(proposal.tool.name, extraNames);
     await assertExecutorExists(dataDir, proposal.tool.executorFile);
     const registry = await readRegistry(dataDir);
-    const skillOwner = await findSkillToolOwner(dataDir, proposal.tool.name);
-    if (skillOwner) throw new Error(`工具名称已由技能「${skillOwner}」提供：${proposal.tool.name}`);
+    await assertSkillNameUnused(dataDir, proposal.tool.name, extraNames);
     const existing = registry.find(tool => tool.name === proposal.tool.name);
     if (existing && JSON.stringify(existing) === JSON.stringify(proposal.tool)) {
       return `工具「${proposal.tool.name}」已经注册，无需重复写入。`;
@@ -178,12 +161,13 @@ export async function resolveToolRegistration(
   dataDir: string,
   proposal: ToolRegistrationProposal,
   answer: string,
+  extraNames: readonly string[] = [],
 ): Promise<{ result: string; ok: boolean }> {
   if (!isToolRegistrationApproved(answer)) {
     return { result: `已取消注册工具「${proposal.tool.name}」。`, ok: true };
   }
   try {
-    return { result: await commitToolRegistration(dataDir, proposal), ok: true };
+    return { result: await commitToolRegistration(dataDir, proposal, extraNames), ok: true };
   } catch (error) {
     return { result: `工具注册失败：${(error as Error).message}`, ok: false };
   }

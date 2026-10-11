@@ -45,7 +45,9 @@ test('ReAct algorithms have one visible home without feature compatibility shell
   const nativeSource = fs.readFileSync(path.join(sharedDir, 'react/native-loop.ts'), 'utf8');
   assert.doesNotMatch(nativeSource, /export\s*\{\s*runReActLoop\s*\}\s*from\s*['"]\.\/text-loop/);
   assert.equal(fs.existsSync(path.join(sharedDir, 'react/text-loop.ts')), true);
-  assert.equal(fs.existsSync(path.join(engineDir, 'convection/convection-react-adapter.ts')), true);
+  assert.equal(fs.existsSync(path.join(
+    engineDir, '../modules/convection/execution/convection-react-adapter.ts',
+  )), true);
   assert.equal(fs.existsSync(path.join(engineDir, 'tradewind/execution/tradewind-react-adapter.ts')), true);
 });
 

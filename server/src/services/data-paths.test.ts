@@ -10,13 +10,16 @@ import {
   agentTaskboardFile,
   agentTideSessionsDir,
   agentWorkspaceDir,
+  resolveAgentWorkspaceDir,
   convectionSessionFile,
   convectionSessionDir,
   convectionSessionIndexFile,
   convectionSessionWorkspace,
   convectionSessionsDir,
+  cycloneRuntimeDir,
   cycloneRoot,
   mcpServersFile,
+  monsoonRunsDir,
   providersFile,
   skillDir,
   skillsDir,
@@ -36,6 +39,14 @@ test('data paths keep current control-plane layout', () => {
 
   assert.equal(agentRegistryFile(dataDir), path.join(dataDir, 'agents', 'registry.json'));
   assert.equal(agentWorkspaceDir(dataDir, 'agent-a'), path.join(dataDir, 'agents', 'agent-a', '.workspace'));
+  assert.equal(resolveAgentWorkspaceDir(dataDir, 'agent-a'),
+    path.resolve(dataDir, 'agents', 'agent-a', '.workspace'));
+  assert.equal(resolveAgentWorkspaceDir(dataDir, 'agent-a', 'data/agents/agent-a/.workspace/'),
+    path.resolve(dataDir, 'agents', 'agent-a', '.workspace'));
+  assert.equal(resolveAgentWorkspaceDir(dataDir, 'agent-a', 'shared/work'),
+    path.resolve(dataDir, '..', 'shared/work'));
+  const external = path.resolve(dataDir, '..', 'external');
+  assert.equal(resolveAgentWorkspaceDir(dataDir, 'agent-a', external), external);
   assert.equal(agentRolePromptFile(dataDir, 'agent-a'), path.join(dataDir, 'agents', 'agent-a', '.workspace', 'role-prompt.md'));
   assert.equal(toolRegistryFile(dataDir), path.join(dataDir, 'tools', 'registry.json'));
   assert.equal(toolExecutorDir(dataDir), path.join(dataDir, 'tools', 'executors'));
@@ -57,7 +68,9 @@ test('data paths keep current control-plane layout', () => {
   assert.equal(tideTasksFile(dataDir), path.join(dataDir, 'tide', 'tasks.json'));
   assert.equal(tideRunsDir(dataDir), path.join(dataDir, 'tide', 'runs'));
   assert.equal(tideRunsDir(dataDir, 'task-1'), path.join(dataDir, 'tide', 'runs', 'task-1'));
+  assert.equal(monsoonRunsDir(dataDir), path.join(dataDir, 'monsoon', 'runs'));
   assert.equal(cycloneRoot(dataDir, 'workshop-1'), path.join(dataDir, 'cyclone', 'workshop-1'));
+  assert.equal(cycloneRuntimeDir(dataDir), path.join(dataDir, 'cyclone', 'runtime'));
   assert.equal(tradewindWorkflowsDir(dataDir), path.join(dataDir, 'tradewind', 'workflows'));
   assert.equal(tradewindWorkflowDir(dataDir, 'wf-1'), path.join(dataDir, 'tradewind', 'workflows', 'wf-1'));
   assert.equal(tradewindRunsDir(dataDir), path.join(dataDir, 'tradewind', 'runs'));

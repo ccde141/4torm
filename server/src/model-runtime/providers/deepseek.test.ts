@@ -66,3 +66,13 @@ test('legacy DeepSeek model names keep their established auto-mode semantics', (
   assert.equal('thinking' in chat, false);
   assert.equal('temperature' in reasoner, false);
 });
+
+test('DeepSeek body-only finalization disables thinking after custom parameters are merged', () => {
+  const adapter = resolveProviderAdapter(baseIdentity);
+  const body = normalizeChatRequestBody({ ...baseIdentity,
+    customRequestParameters: { thinking: { type: 'enabled' }, reasoning_effort: 'max' },
+  }, { model: baseIdentity.model, messages: [], max_tokens: 20_000 });
+  assert.equal(adapter.disableThinking?.(body, baseIdentity), true);
+  assert.deepEqual(body.thinking, { type: 'disabled' });
+  assert.equal('reasoning_effort' in body, false);
+});

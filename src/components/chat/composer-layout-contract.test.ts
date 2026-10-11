@@ -12,7 +12,7 @@ test('taskboard drawer stays above the shared composer layer', () => {
 test('taskboard keeps its collapse control reachable at narrow drawer widths', () => {
   const drawer = read('src/components/chat/TaskBoardDrawer.tsx');
   const styles = read('src/styles/components/chat.css');
-  const chat = read('src/components/chat/ChatPage.tsx');
+  const chat = read('src/components/chat/MonsoonConversation.tsx');
   const cycloneSeat = read('src/cyclone/ui/pages/SeatChat.tsx');
 
   assert.match(drawer, /taskboard-header__primary/);
@@ -116,7 +116,7 @@ test('visual execution views share owner-safe polling and control semantics', ()
 
 test('conversation and cyclone composers reset height after a programmatic clear', () => {
   for (const file of [
-    'src/components/chat/ChatPage.tsx',
+    'src/components/chat/useMonsoonImages.ts',
     'src/cyclone/ui/pages/SeatChat.tsx',
     'src/cyclone/ui/pages/RoomComposer.tsx',
   ]) {

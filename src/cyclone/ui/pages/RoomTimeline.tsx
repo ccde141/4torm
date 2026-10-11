@@ -2,7 +2,7 @@ import DispatchCard from './DispatchCard';
 import RoomFeedRow from './RoomFeedRow';
 import { buildDispatchTimeline, type CycloneDispatch } from './dispatch-timeline';
 import type { DispatchAction } from './useWorkshopDispatches';
-import type { FeedMsg } from './useRoomStreamRunners';
+import type { FeedMsg } from './room-stream-events';
 
 interface TimelineEntry {
   key: string;

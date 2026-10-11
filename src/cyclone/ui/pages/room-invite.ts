@@ -25,24 +25,23 @@ const defaultMessages: RoomInviteMessages = {
 };
 
 export async function inviteSeatToRoom(
-  fetcher: Fetcher,
-  roomUrl: string,
-  seatId: string,
-  behavior: JoinBehavior,
-  messages: RoomInviteMessages = defaultMessages,
+  input: {
+    join: () => Promise<unknown>;
+    fetcher: Fetcher;
+    introUrl: string;
+    seatId: string;
+    behavior: JoinBehavior;
+    messages?: RoomInviteMessages;
+  },
 ): Promise<RoomInviteResult> {
-  const joinResponse = await fetcher(`${roomUrl}/join`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ seatId }),
-  });
-  if (!joinResponse.ok) throw new Error(await readRoomError(joinResponse, messages.joinFailed));
-  if (behavior === 'none') return { joined: true };
+  const messages = input.messages ?? defaultMessages;
+  await input.join();
+  if (input.behavior === 'none') return { joined: true };
 
-  const introResponse = await fetcher(`${roomUrl}/intro`, {
+  const introResponse = await input.fetcher(input.introUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ intros: [{ seatId, behavior }] }),
+    body: JSON.stringify({ intros: [{ seatId: input.seatId, behavior: input.behavior }] }),
   });
   if (!introResponse.ok) {
     return { joined: true, introError: await readRoomError(introResponse, messages.introFailed) };

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { callLLM } from './llm-bridge.js';
+import { isProviderContextOverflow } from './provider-request-error.js';
 
 async function withProvider(
   run: (dataDir: string) => Promise<void>,
@@ -15,6 +16,53 @@ async function withProvider(
   }] }));
   try { await run(dataDir); } finally { await fs.rm(dataDir, { recursive: true, force: true }); }
 }
+
+test('OpenAI output control cancels after a complete delta and preserves its accumulated content', async () => {
+  await withProvider(async dataDir => {
+    const originalFetch = globalThis.fetch;
+    for (const { body, thought } of [
+      { body: '', thought: '预算耗尽' }, { body: '正文', thought: '预算耗尽' }, { body: '正文', thought: '' },
+    ]) {
+      let canceled = false;
+      const chunks: string[] = [];
+      const thoughts: string[] = [];
+      let close: () => void = () => {};
+      const response = new Response(new ReadableStream<Uint8Array>({
+        start(controller) { close = () => { try { controller.close(); } catch {} };
+          controller.enqueue(new TextEncoder().encode([
+          `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: thought, content: body } }] })}`,
+          `data: ${JSON.stringify({ choices: [{ delta: { content: '不应消费' } }] })}`,
+        ].join('\n\n') + '\n\n')); },
+        cancel() { canceled = true; },
+      }));
+      globalThis.fetch = async () => response;
+      try {
+        const result = await expectPromptCompletion(callLLM({ dataDir, fullModelKey: 'pvd_test:test-model',
+          messages: [{ role: 'user', content: '压缩' }],
+          onChunk: chunk => chunks.push(chunk), onReasoning: chunk => thoughts.push(chunk),
+          outputControl: { shouldStop: () => thoughts.length > 0 || chunks.length > 0 },
+        }), close);
+        assert.equal(result.content, body);
+        assert.deepEqual(chunks, body ? [body] : []);
+        assert.equal(result.reasoningContent, thought || undefined);
+        assert.equal(result.finishReason, 'length');
+        assert.equal(canceled, true);
+      } finally { globalThis.fetch = originalFetch; }
+    }
+  });
+});
+
+test('OpenAI-compatible SSE error packet is not swallowed as an empty successful response', async () => {
+  await withProvider(async dataDir => {
+    const stream = openSseResponse(['data: {"error":{"code":"context_length_exceeded","message":"prompt is too long"}}']);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => stream.response;
+    try {
+      await assert.rejects(callLLM({ dataDir, fullModelKey: 'pvd_test:test-model',
+        messages: [{ role: 'user', content: 'test' }], onChunk: () => {} }), isProviderContextOverflow);
+    } finally { globalThis.fetch = originalFetch; stream.close(); }
+  });
+});
 
 test('MiniMax cumulative SSE values are emitted once and keep the latest reasoning envelope', async () => {
   await withProvider(async dataDir => {
@@ -198,5 +246,37 @@ test('structured request does not execute ordinary or unknown JSON', async () =>
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+test('stream usage accepts final top-level and legacy choice counts without inventing missing usage', async () => {
+  await withProvider(async dataDir => {
+    const originalFetch = globalThis.fetch;
+    const cases = [
+      { chunks: [
+        { choices: [{ delta: { content: 'A' }, finish_reason: 'stop', usage: {
+          prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 } }] },
+        { choices: [], usage: { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 } },
+      ], expected: { promptTokens: 8, completionTokens: 3, totalTokens: 11 } },
+      { chunks: [
+        { choices: [{ delta: { content: 'B' }, finish_reason: 'stop', usage: {
+          prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 } }] },
+        { choices: [], usage: { prompt_tokens: -1, completion_tokens: 1, total_tokens: 0 } },
+      ], expected: { promptTokens: 12, completionTokens: 4, totalTokens: 16 } },
+      { chunks: [{ choices: [{ delta: { content: 'C' }, finish_reason: 'stop' }] }], expected: undefined },
+    ];
+    try {
+      for (const { chunks, expected } of cases) {
+        globalThis.fetch = async (_input, init) => {
+          const body = JSON.parse(String(init?.body));
+          assert.deepEqual(body.stream_options, { include_usage: true });
+          return new Response(`${chunks.map(chunk => `data: ${JSON.stringify(chunk)}`).join('\n\n')}\n\ndata: [DONE]\n\n`,
+            { headers: { 'Content-Type': 'text/event-stream' } });
+        };
+        const result = await callLLM({ dataDir, fullModelKey: 'pvd_test:test-model',
+          messages: [{ role: 'user', content: 'test' }], onChunk: () => {} });
+        assert.deepEqual(result.usage, expected);
+      }
+    } finally { globalThis.fetch = originalFetch; }
   });
 });

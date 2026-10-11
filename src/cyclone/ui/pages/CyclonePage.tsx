@@ -1,71 +1,56 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
 import { useLocale } from '../../../i18n/LocaleContext';
-import { createLatestRequestGuard } from '../../../lib/latest-request';
-import { getAgents } from '../../../store/agent';
-import type { Agent } from '../../../types';
-import { closeWorkspaceTab, openWorkspaceTab, tabKey, type WorkspaceTab } from '../organization/workspace-tabs';
-import type { BulletinEntry } from './BulletinBoard';
+import { closeWorkspaceTab, openWorkspaceTab, reconcileWorkspaceTabs,
+  tabKey, type WorkspaceTab } from '../organization/workspace-tabs';
 import { chairStreamKey } from './ChairDrawer';
 import { CycloneSidebar } from './CycloneSidebar';
 import { CycloneWorkspacePane } from './CycloneWorkspacePane';
-import { readCycloneError, type CycloneView, type RoomSummary, type SeatSummary, type WorkshopSummary } from './cyclone-page-model';
+import { readCycloneError, type CycloneView } from './cyclone-page-model';
 import { projectWorkspaceStatus } from './cyclone-workspace-status';
 import { resolveLoadedSeatEditor } from './seat-editor-state';
 import type { SeatDraft } from './SeatPanel';
 import { useRoomStreamRunners } from './useRoomStreamRunners';
 import { useSeatStreamRunners } from './useSeatStreamRunners';
 import { useWorkshopDispatches } from './useWorkshopDispatches';
+import { useRoomExternalActivity } from './useRoomExternalActivity';
+import { useCycloneCatalog } from './useCycloneCatalog';
+import { useWorkshopSummary } from './useWorkshopSummary';
+import { useWorkshopOperationStatus } from './useWorkshopOperationStatus';
+import {
+  addCycloneSeat,
+  createCycloneRoom,
+  createCycloneWorkshop,
+  deleteCycloneRoom,
+  deleteCycloneSeat,
+  deleteCycloneWorkshop,
+  openCycloneWorkspace,
+  setCycloneChair,
+  updateCycloneSeat,
+} from './cyclone-control-client';
 import '../../../styles/components/cyclone.css';
-
-export default function CyclonePage({ active }: { active?: boolean }) {
+import { useCycloneActivityNavigation } from './useCycloneActivityNavigation';
+export default function CyclonePage({ active, preselectOperation, onClearPreselect }: {
+  active?: boolean; preselectOperation?: string | null;
+  onClearPreselect?: () => void;
+}) {
   const { t, locale } = useLocale();
-  const tRef = useRef(t); tRef.current = t;
   const confirm = useConfirm();
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [workshops, setWorkshops] = useState<WorkshopSummary[]>([]);
+  const { agents, workshops, workshopsLoaded, refreshWorkshops } = useCycloneCatalog(active);
   const [activeWid, setActiveWid] = useState<string | null>(null);
-  const [loadedWorkshopId, setLoadedWorkshopId] = useState<string | null>(null);
-  const [seats, setSeats] = useState<SeatSummary[]>([]);
-  const [rooms, setRooms] = useState<RoomSummary[]>([]);
-  const [chairAgentId, setChairAgentId] = useState<string | null>(null);
+  const { seats, rooms, chairAgentId, bulletin, loadedWorkshopId,
+    error: workshopError, refresh: loadWorkshop, setBulletin } = useWorkshopSummary(activeWid, !!active);
+  const { operations: workshopOperations, uncertain: workshopUncertain,
+    error: operationError } = useWorkshopOperationStatus(activeWid, !!active);
   const [chairOpen, setChairOpen] = useState(false);
   const [, forceChairRunTick] = useState(0);
   const [, forceTabStatusTick] = useState(0);
-  const [bulletin, setBulletin] = useState<BulletinEntry[]>([]);
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([]);
   const [view, setView] = useState<CycloneView>(null);
-  const workshopRequestGuard = useRef(createLatestRequestGuard());
   const viewRef = useRef(view); viewRef.current = view;
   const activeWidRef = useRef(activeWid); activeWidRef.current = activeWid;
   const activeRoomId = view?.kind === 'room' ? view.id : null;
   const visibleSeatId = view?.kind === 'seat' ? view.id : null;
-
-  const refreshAgents = useCallback(async () => {
-    try { setAgents(await getAgents()); }
-    catch (error) { console.error(`[cyclone] ${tRef.current('cyclone.shell.loadAgentsFailed')}`, error); }
-  }, []);
-  const refreshWorkshops = useCallback(async () => {
-    try {
-      const response = await fetch('/api/cyclone/list');
-      if (response.ok) setWorkshops(await response.json());
-      else console.error(await readCycloneError(response, tRef.current('cyclone.shell.loadListFailed')));
-    } catch (error) { console.error(`[cyclone] ${tRef.current('cyclone.shell.loadListFailed')}`, error); }
-  }, []);
-  const loadWorkshop = useCallback(async (workshopId: string) => {
-    const request = workshopRequestGuard.current.begin();
-    const response = await fetch(`/api/cyclone/workshop/${workshopId}/summary`);
-    if (!response.ok) {
-      if (request.isCurrent()) console.error(await readCycloneError(response, tRef.current('cyclone.shell.loadWorkshopFailed')));
-      return;
-    }
-    const summary: { chairAgentId?: string; seats: SeatSummary[]; rooms: RoomSummary[];
-      bulletin?: { entries: BulletinEntry[] } } = await response.json();
-    if (!request.isCurrent()) return;
-    setSeats(summary.seats); setRooms(summary.rooms); setChairAgentId(summary.chairAgentId ?? null);
-    setBulletin(summary.bulletin?.entries ?? []);
-    setLoadedWorkshopId(workshopId);
-  }, []);
 
   const { dispatches, refresh: refreshDispatches, act: dispatchAction, markSeatRead } = useWorkshopDispatches(activeWid, !!active, {
     requestFailed: t('cyclone.dispatch.requestFailed', { status: '{status}' }), noWorkshop: t('cyclone.dispatch.noWorkshop'),
@@ -80,18 +65,41 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     if (activeWidRef.current) void loadWorkshop(activeWidRef.current);
     refreshDispatchesSafely();
   }, [loadWorkshop, refreshDispatchesSafely]), refreshDispatchesSafely, locale);
+  const localRoomStreaming = !!(activeRoomId && roomRunners.getRunner(activeRoomId)?.streaming);
+  const externalEnabled = !!active && !!activeWid && !!activeRoomId && !localRoomStreaming;
+  const externalRoom = useRoomExternalActivity(activeWid ?? '', activeRoomId ?? '', externalEnabled, locale, localRoomStreaming);
   const subscribeSeat = seatRunners.subscribe;
   const subscribeRoom = roomRunners.subscribe;
   const workspaceStatus = projectWorkspaceStatus({
-    seats, rooms, dispatches, getSeatRunner: seatRunners.getRunner,
+    seats, rooms, dispatches, operations: workshopOperations, uncertain: workshopUncertain,
+    getSeatRunner: seatRunners.getRunner,
     getRoomRunner: roomRunners.getRunner, chairKey: chairStreamKey,
+    externalRoom: activeRoomId && externalRoom.activity?.operationId === `room:${activeWid}:${activeRoomId}`
+      ? { roomId: activeRoomId, running: externalRoom.activity.running && !externalRoom.error,
+        status: externalRoom.fact?.status }
+      : externalRoom.fact && activeRoomId
+        && externalRoom.fact.operationId === `room:${activeWid}:${activeRoomId}`
+        ? { roomId: activeRoomId, running: false, status: externalRoom.fact.status }
+        : undefined,
   });
 
-  useEffect(() => { if (active) { void refreshAgents(); void refreshWorkshops(); } }, [active, refreshAgents, refreshWorkshops]);
   useEffect(() => {
-    setLoadedWorkshopId(null); setSeats([]); setRooms([]); setChairAgentId(null); setBulletin([]);
-    if (activeWid) void loadWorkshop(activeWid); else workshopRequestGuard.current.cancel();
-  }, [activeWid, loadWorkshop]);
+    if (!workshopsLoaded || !activeWid || workshops.some(item => item.id === activeWid)) return;
+    setActiveWid(null); setWorkspaceTabs([]); setView(null);
+  }, [activeWid, workshops, workshopsLoaded]);
+  useEffect(() => {
+    if (!activeWid || loadedWorkshopId !== activeWid) return;
+    const available: WorkspaceTab[] = [
+      ...seats.map(seat => ({ kind: 'seat' as const, id: seat.id, title: seat.title })),
+      ...rooms.map(room => ({ kind: 'room' as const, id: room.id, title: room.title })),
+    ];
+    const valid = new Set(available.map(tabKey));
+    setWorkspaceTabs(current => reconcileWorkspaceTabs(current, available));
+    setView(current => current && (current.kind === 'seat' || current.kind === 'room')
+      && !valid.has(tabKey(current)) ? null : current);
+    const currentView = viewRef.current;
+    if (currentView?.kind === 'room' && !valid.has(tabKey(currentView))) setChairOpen(false);
+  }, [activeWid, loadedWorkshopId, rooms, seats]);
   const visibleSeatHasUnreadResult = visibleSeatId !== null && dispatches.some(item => (
     item.targetSeatId === visibleSeatId && item.readState === 'unread'
     && (item.status === 'completed' || item.status === 'failed')
@@ -137,6 +145,10 @@ export default function CyclonePage({ active }: { active?: boolean }) {
     setWorkspaceTabs(current => openWorkspaceTab(current, tab));
     setView({ kind: tab.kind, id: tab.id });
   }, []);
+  const activityNavigationError = useCycloneActivityNavigation({
+    active, preselectOperation, onClearPreselect, workshopsLoaded, workshops,
+    activeWid, setActiveWid, loadedWorkshopId, seats, rooms, openWorkspaceView,
+  });
   const closeWorkspaceView = useCallback((tab: WorkspaceTab) => {
     const activeKey = viewRef.current?.kind === 'seat' || viewRef.current?.kind === 'room' ? tabKey(viewRef.current) : null;
     const result = closeWorkspaceTab(workspaceTabs, activeKey, tabKey(tab));
@@ -152,39 +164,40 @@ export default function CyclonePage({ active }: { active?: boolean }) {
 
   async function setChair(agentId: string) {
     if (!activeWid) return;
-    const response = await fetch(`/api/cyclone/workshop/${activeWid}/set-chair`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chairAgentId: agentId }),
-    });
-    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.setChairFailed'))); return; }
-    setChairAgentId(agentId || null); await loadWorkshop(activeWid);
+    if (!await runControl(
+      () => setCycloneChair(activeWid, agentId), t('cyclone.shell.setChairFailed'),
+    )) return;
+    await loadWorkshop(activeWid);
   }
   async function createWorkshop(config: { title: string; chairAgentId?: string }) {
-    const response = await fetch('/api/cyclone/create', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config),
-    });
-    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.createWorkshopFailed'))); return; }
-    const workshop = await response.json(); await refreshWorkshops(); setActiveWid(workshop.id); setView(null);
+    const workshop = await runControl(
+      () => createCycloneWorkshop(config), t('cyclone.shell.createWorkshopFailed'),
+    );
+    if (!workshop) return;
+    await refreshWorkshops(); setActiveWid(workshop.id); setView(null);
   }
   async function openWorkshopWorkspace() {
     if (!activeWid) return;
-    const response = await fetch(`/api/cyclone/workshop/${activeWid}/open-workspace`, { method: 'POST' });
-    if (!response.ok) alert(await readCycloneError(response, t('cyclone.shell.openWorkspaceFailed')));
+    await runControl(
+      () => openCycloneWorkspace(activeWid), t('cyclone.shell.openWorkspaceFailed'),
+    );
   }
   async function deleteWorkshop(workshopId: string, title: string) {
     if (!(await confirm({ title: t('cyclone.shell.deleteWorkshopTitle', { title }), message: t('cyclone.shell.deleteWorkshopMessage'), confirmText: t('common.delete'), danger: true }))) return;
-    if (activeWid === workshopId) rooms.forEach(room => seatRunners.kill(workshopId, chairStreamKey(room.id)));
-    const response = await fetch(`/api/cyclone/workshop/${workshopId}/delete`, { method: 'POST' });
-    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.deleteWorkshopFailed'))); return; }
+    if (activeWid === workshopId) rooms.forEach(room => seatRunners.kill(chairStreamKey(room.id)));
+    if (!await runControl(
+      () => deleteCycloneWorkshop(workshopId), t('cyclone.shell.deleteWorkshopFailed'),
+    )) return;
     if (activeWid === workshopId) { setActiveWid(null); setView(null); setChairOpen(false); }
     await refreshWorkshops();
   }
   async function createSeat(draft: SeatDraft) {
     if (!activeWid) return;
-    const response = await fetch(`/api/cyclone/workshop/${activeWid}/add-seat`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft),
-    });
-    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.addSeatFailed'))); return; }
-    const seat = await response.json(); await refreshWorkshops(); await loadWorkshop(activeWid);
+    const seat = await runControl(
+      () => addCycloneSeat(activeWid, draft), t('cyclone.shell.addSeatFailed'),
+    );
+    if (!seat) return;
+    await refreshWorkshops(); await loadWorkshop(activeWid);
     openWorkspaceView({ kind: 'seat', id: seat.id, title: seat.title });
   }
   async function openEditSeat(seatId: string) {
@@ -202,26 +215,27 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   }
   async function editSeat(seatId: string, draft: SeatDraft) {
     if (!activeWid) return;
-    const response = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/update-role`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft),
-    });
-    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.saveSeatFailed'))); return; }
+    if (!await runControl(
+      () => updateCycloneSeat(activeWid, seatId, draft), t('cyclone.shell.saveSeatFailed'),
+    )) return;
     await loadWorkshop(activeWid); openWorkspaceView({ kind: 'seat', id: seatId, title: draft.title });
   }
   async function deleteSeat(seatId: string, title: string) {
     if (!activeWid || !(await confirm({ title: t('cyclone.shell.deleteSeatTitle', { title }), message: t('cyclone.shell.deleteSeatMessage'), confirmText: t('common.delete'), danger: true }))) return;
-    seatRunners.kill(activeWid, seatId);
-    const response = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/delete`, { method: 'POST' });
-    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.deleteSeatFailed'))); return; }
+    seatRunners.kill(seatId);
+    if (!await runControl(
+      () => deleteCycloneSeat(activeWid, seatId), t('cyclone.shell.deleteSeatFailed'),
+    )) return;
     const tab = workspaceTabs.find(item => item.kind === 'seat' && item.id === seatId); if (tab) closeWorkspaceView(tab);
     await refreshWorkshops(); await loadWorkshop(activeWid);
   }
   async function deleteRoom(roomId: string, title: string) {
     if (!activeWid || !(await confirm({ title: t('cyclone.shell.deleteRoomTitle', { title }), message: t('cyclone.shell.deleteRoomMessage'), confirmText: t('common.delete'), danger: true }))) return;
     const workshopId = activeWid;
-    const response = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/delete`, { method: 'POST' });
-    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.deleteRoomFailed'))); return; }
-    roomRunners.kill(workshopId, roomId); seatRunners.kill(workshopId, chairStreamKey(roomId));
+    if (!await runControl(
+      () => deleteCycloneRoom(workshopId, roomId), t('cyclone.shell.deleteRoomFailed'),
+    )) return;
+    roomRunners.kill(roomId); seatRunners.kill(chairStreamKey(roomId));
     const tab = workspaceTabs.find(item => item.kind === 'room' && item.id === roomId); if (tab) closeWorkspaceView(tab);
     if (activeWidRef.current === workshopId) { setChairOpen(false); await loadWorkshop(workshopId); await refreshDispatches(); }
     await refreshWorkshops();
@@ -229,17 +243,20 @@ export default function CyclonePage({ active }: { active?: boolean }) {
   async function createRoom(config: { title: string; topic: string; mode: 'build' | 'plan'; participantSeatIds: string[];
     intros: Array<{ seatId: string; behavior: 'summary' | 'intro' | 'none' }> }) {
     if (!activeWid) return;
-    const response = await fetch(`/api/cyclone/workshop/${activeWid}/create-room`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config),
-    });
-    if (!response.ok) { alert(await readCycloneError(response, t('cyclone.shell.createRoomFailed'))); return; }
-    const room = await response.json(); await loadWorkshop(activeWid);
+    const room = await runControl(
+      () => createCycloneRoom(activeWid, config), t('cyclone.shell.createRoomFailed'),
+    );
+    if (!room) return;
+    await loadWorkshop(activeWid);
     openWorkspaceView({ kind: 'room', id: room.id, title: room.title });
     if (config.intros.some(item => item.behavior !== 'none')) roomRunners.startIntro(activeWid, room.id, config.intros);
   }
 
   if (!active) return null;
-  return <div style={{ display: 'flex', height: '100%' }}>
+  return <div style={{ display: 'flex', height: '100%', position: 'relative' }}>
+    {(activityNavigationError || workshopError || operationError) && <p role="alert" className="agent-detail__error"
+      style={{ position: 'absolute', top: 8, right: 18, zIndex: 2 }}>
+      {activityNavigationError || workshopError || operationError}</p>}
     <CycloneSidebar workshops={workshops} activeWid={activeWid} seats={seats} rooms={rooms} view={view}
       status={workspaceStatus}
       onCreateWorkshop={() => setView({ kind: 'create-workshop' })}
@@ -254,6 +271,7 @@ export default function CyclonePage({ active }: { active?: boolean }) {
       rooms={rooms} bulletin={bulletin} dispatches={dispatches} view={view} tabs={workspaceTabs}
       status={workspaceStatus}
       chairAgentId={chairAgentId} chairOpen={chairOpen} seatRunners={seatRunners} roomRunners={roomRunners}
+      externalRoom={externalRoom}
       dispatchAction={dispatchAction} setView={setView} onCreateWorkshop={createWorkshop}
       onCreateSeat={createSeat} onRetrySeat={id => void openEditSeat(id)}
       onEditSeat={editSeat} onCreateRoom={createRoom}
@@ -263,4 +281,13 @@ export default function CyclonePage({ active }: { active?: boolean }) {
       onWorkshopsReload={() => void refreshWorkshops()} onBulletinSaved={setBulletin}
       onChairToggle={() => setChairOpen(open => !open)} onSetChair={agentId => void setChair(agentId)} />
   </div>;
+}
+
+async function runControl<T>(action: () => Promise<T>, fallback: string): Promise<T | undefined> {
+  try {
+    return await action();
+  } catch (error) {
+    alert(`${fallback}: ${(error as Error).message}`);
+    return undefined;
+  }
 }

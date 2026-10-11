@@ -70,14 +70,16 @@ export function McpPage() {
 
   const saveServer = async (payload: McpConfigPayload) => {
     const endpoint = formMode === 'edit' ? '/api/mcp/update' : '/api/mcp/add';
-    await request(endpoint, postOptions(payload));
+    const result = await request<{ connectionError?: string }>(endpoint, postOptions(payload));
+    setPageError(result.connectionError ? t('mcp.page.savedOffline', { error: result.connectionError }) : '');
     setFormMode(null);
     setEditing(undefined);
     await refresh();
   };
 
   const importServers = async (configs: McpConfigPayload[]) => {
-    await request('/api/mcp/import', postOptions({ configs }));
+    const result = await request<{ connectionError?: string }>('/api/mcp/import', postOptions({ configs }));
+    setPageError(result.connectionError ? t('mcp.page.importedOffline', { error: result.connectionError }) : '');
     setImporting(false);
     await refresh();
   };

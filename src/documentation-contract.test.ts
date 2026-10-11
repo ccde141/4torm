@@ -102,11 +102,12 @@ test('public introduction entry points use the current page name', async () => {
   }
 });
 
-test('personal labels and skin media stay out of version control', async () => {
+test('personal labels and skin media stay local except the reviewed default texture', async () => {
   const gitignore = await fs.readFile(new URL('../.gitignore', import.meta.url), 'utf8');
 
   assert.match(gitignore, /^data\/labels\.json$/m);
-  assert.match(gitignore, /^data\/skin-textures\/$/m);
+  assert.match(gitignore, /^data\/skin-textures\/\*$/m);
+  assert.match(gitignore, /^!data\/skin-textures\/custom-1780312588120\.png$/m);
   assert.match(gitignore, /^data\/skin-videos\/$/m);
 });
 
@@ -134,17 +135,15 @@ test('browser is a versioned skill with one runtime-backed tool entry', async ()
   assert.equal(tools[0]?.executorType, 'builtin');
 });
 
-test('architecture documents only the browser surface users can access', async () => {
-  const overview = await fs.readFile(
-    new URL('../docs/architecture/overview.md', import.meta.url),
+test('desktop documentation describes the browser surface users can access', async () => {
+  const desktop = await fs.readFile(
+    new URL('../docs/architecture/desktop.md', import.meta.url),
     'utf8',
   );
 
-  assert.match(overview, /## 浏览器/);
-  assert.match(overview, /季风会话和气旋普通工位私聊/);
-  assert.match(overview, /浏览器不会自动打开/);
-  assert.match(overview, /任务板的执行记录/);
-  assert.doesNotMatch(overview, /Computer Capability|Application UI Capability|plugin loader/);
+  assert.match(desktop, /季风会话和气旋普通工位私聊/);
+  assert.match(desktop, /任务板打开视窗/);
+  assert.doesNotMatch(desktop, /Computer Capability|Application UI Capability|plugin loader/);
 });
 
 test('system status definitions do not depend on the obsolete data file', async () => {
@@ -175,34 +174,6 @@ test('data layout documents current owners, persistence, and backup boundaries',
   assert.doesNotMatch(layout, /好处是|代价是|删库/);
 });
 
-test('architecture overview explains runtime behavior before developer entry points', async () => {
-  const overview = await fs.readFile(
-    new URL('../docs/architecture/overview.md', import.meta.url),
-    'utf8',
-  );
-
-  assert.match(overview, /## 运行时组成/);
-  assert.match(overview, /## 一次 Agent 任务如何执行/);
-  assert.match(overview, /## 数据与状态/);
-  assert.match(overview, /## 页面刷新/);
-  assert.match(overview, /## 程序关闭与重新启动/);
-  assert.match(overview, /## 开发者入口/);
-  assert.doesNotMatch(overview, /## 分层架构|## 共享基础设施|## 技术栈/);
-});
-
-test('architecture overview ends with a source directory locator', async () => {
-  const overview = await fs.readFile(
-    new URL('../docs/architecture/overview.md', import.meta.url),
-    'utf8',
-  );
-
-  assert.ok(overview.indexOf('## 代码目录') > overview.indexOf('## 相关文档'));
-  assert.match(overview, /src\/.*前端代码/s);
-  assert.match(overview, /server\/.*服务端启动/s);
-  assert.match(overview, /electron\/.*桌面窗口/s);
-  assert.match(overview, /docs\/.*VitePress 文档源码/s);
-});
-
 test('introduction stays focused on observable framework capabilities', async () => {
   const [introduction, config] = await Promise.all([
     fs.readFile(new URL('../docs/guide/introduction.md', import.meta.url), 'utf8'),
@@ -210,7 +181,7 @@ test('introduction stays focused on observable framework capabilities', async ()
   ]);
 
   assert.match(introduction, /^# 介绍$/m);
-  assert.match(introduction, /按流程接力、分支或汇合/);
+  assert.match(introduction, /Agent 接力，并设置人工检查点/);
   assert.doesNotMatch(introduction, /设计哲学|平台定位|框架特点|一次性会议/);
   assert.doesNotMatch(config, /介绍与设计哲学/);
 });
@@ -258,6 +229,23 @@ const publicDocs = [
   '../docs/modes/tide.md',
 ];
 
+test('README keeps installation instructions while quick start begins inside the app', async () => {
+  const [readme, readmeZh, quickStart, quickStartEn] = await Promise.all([
+    '../README.md', '../README.zh-CN.md',
+    '../docs/guide/getting-started.md', '../docs/en/guide/getting-started.md',
+  ].map(file => fs.readFile(new URL(file, import.meta.url), 'utf8')));
+  for (const readmeText of [readme, readmeZh]) {
+    assert.match(readmeText, /npm --prefix server install/);
+    assert.match(readmeText, /npm run electron:prod/);
+    assert.match(readmeText, /https:\/\/localhost:3001/);
+  }
+  assert.match(quickStart, /打开 4torm 后[\s\S]*提供商[\s\S]*创建 Agent[\s\S]*季风/);
+  assert.match(quickStartEn, /Open 4torm[\s\S]*Provider[\s\S]*Create an Agent[\s\S]*Monsoon/i);
+  for (const page of [quickStart, quickStartEn]) {
+    assert.doesNotMatch(page, /git clone|npm --prefix server install|npm run (?:dev|build|electron:prod)/);
+  }
+});
+
 test('公开文档不再描述已经移除的 Agent 全局串行机制', async () => {
   const contents = await Promise.all(publicDocs.map(async file => ({
     file,
@@ -276,8 +264,8 @@ test('潮汐开篇说明真实的配置来源与调度边界', async () => {
     'utf8',
   );
 
-  assert.match(tide, /读取控制台中的当前模型、工具、技能和执行权限配置/);
-  assert.match(tide, /4torm 关闭期间任务不会执行/);
+  assert.match(tide, /使用该 Agent 当时在控制台中的模型、工具、技能和执行权限/);
+  assert.match(tide, /4torm 关闭时，潮汐不会在后台执行/);
 });
 
 test('潮汐创建说明明确保留轮数与首次触发语义', async () => {
@@ -286,8 +274,8 @@ test('潮汐创建说明明确保留轮数与首次触发语义', async () => {
     'utf8',
   );
 
-  assert.match(tide, /达到该轮数后自动归档较早的一半/);
-  assert.match(tide, /创建本身不会立刻执行任务/);
+  assert.match(tide, /达到该轮数后归档较早的一半/);
+  assert.match(tide, /创建动作本身不会立即运行任务/);
 });
 
 test('潮汐推送目标说明工具过程的真实保存边界', async () => {
@@ -296,32 +284,32 @@ test('潮汐推送目标说明工具过程的真实保存边界', async () => {
     'utf8',
   );
 
-  assert.match(tide, /工具调用过程不会出现在该会话中/);
-  assert.match(tide, /保存在对应的潮汐运行记录文件中/);
+  assert.match(tide, /工具调用过程不会出现在该季风会话中/);
+  assert.match(tide, /保存在对应的潮汐运行记录里/);
 });
 
-test('气旋文档说明正式会议设置与成员生命周期边界', async () => {
+test('气旋文档说明协作关系、会议设置与成员边界', async () => {
   const cyclone = await fs.readFile(
     new URL('../docs/modes/cyclone.md', import.meta.url),
     'utf8',
   );
 
+  assert.match(cyclone, /协作结构.*谁能主动联络谁/s);
   assert.match(cyclone, /群聊右上角的「会议设置」/);
-  assert.match(cyclone, /「请离会议」只会将工位移出当前群聊/);
-  assert.match(cyclone, /成员已加入，但入会发言失败/);
-  assert.match(cyclone, /公共会议、会议助理私聊或当前群聊的异步派发仍在处理/);
+  assert.match(cyclone, /「请离会议」只会让工位离开当前群聊/);
+  assert.match(cyclone, /完整私聊带进会议/);
 });
 
-test('信风文档说明出口全量交接与会议双会话形态', async () => {
+test('信风文档说明信封交接、人工介入与自动运行边界', async () => {
   const tradewind = await fs.readFile(
     new URL('../docs/modes/tradewind.md', import.meta.url),
     'utf8',
   );
 
-  assert.match(tradewind, /等待信封全量交接/);
-  assert.match(tradewind, /浮动卡片左侧提供公共会议与会议助理私聊的切换入口/);
-  assert.match(tradewind, /会议助理正在整理会议纪要/);
-  assert.match(tradewind, /不能被当作普通回复直接丢弃/);
+  assert.match(tradewind, /信封.*并非把上一个节点的完整对话搬过去/);
+  assert.match(tradewind, /会议室结束后.*会议助理整理纪要/s);
+  assert.match(tradewind, /自动运行不能包含会议室或暂停点/);
+  assert.match(tradewind, /等待本次所有应到达的信封完成交接/);
 });
 
 test('核心概念只描述两档文件工具权限及真实边界', async () => {
@@ -332,8 +320,8 @@ test('核心概念只描述两档文件工具权限及真实边界', async () =>
 
   assert.match(concepts, /项目级/);
   assert.match(concepts, /无限制/);
-  assert.match(concepts, /工作区即使位于 4torm 目录之外/);
-  assert.match(concepts, /主要约束框架内置文件工具/);
+  assert.match(concepts, /当前工作区/);
+  assert.match(concepts, /只约束内置文件工具/);
   assert.doesNotMatch(concepts, /`strict`|`relaxed`|分三档/);
 });
 
@@ -350,18 +338,18 @@ test('安全章节说明跨功能区自动校验及工具边界', async () => {
   assert.doesNotMatch(security, /`strict`|`relaxed`|沙箱级别/);
 });
 
-test('Agent 管理说明权限随 Agent 自动应用到功能区工作区', async () => {
+test('Agent 管理说明执行权限作用于内置文件工具', async () => {
   const agents = await fs.readFile(
     new URL('../docs/guide/agents.md', import.meta.url),
     'utf8',
   );
 
-  assert.match(agents, /执行权限会随 Agent 保存/);
-  assert.match(agents, /共享工作区会自动纳入允许范围/);
+  assert.match(agents, /执行权限.*项目级.*无限制/s);
+  assert.match(agents, /约束内置文件工具的路径范围/);
   assert.match(agents, /安全与隔离/);
 });
 
-test('五个功能区说明内置文件工具使用的当前工作区', async () => {
+test('功能区说明工作区及执行配置', async () => {
   const files = {
     chat: '../docs/modes/chat.md',
     convection: '../docs/modes/convection.md',
@@ -376,11 +364,11 @@ test('五个功能区说明内置文件工具使用的当前工作区', async ()
     ]),
   ));
 
-  assert.match(docs.chat, /Agent 的工作区.*执行权限/);
-  assert.match(docs.convection, /会议室工作区.*当前工作区/);
-  assert.match(docs.cyclone, /工作室共享目录.*当前工作区/);
-  assert.match(docs.tradewind, /工作流共享目录.*当前工作区/);
-  assert.match(docs.tide, /当前模型、工具、技能和执行权限配置/);
+  assert.match(docs.chat, /默认工作区/);
+  assert.match(docs.convection, /会议室的共同工作区协作/);
+  assert.match(docs.cyclone, /工作室共享文件/);
+  assert.match(docs.tradewind, /工作流的共享文件/);
+  assert.match(docs.tide, /当时在控制台中的模型、工具、技能和执行权限/);
 });
 
 test('扩展文档区分内置文件守卫、自定义执行器与 MCP', async () => {
@@ -479,11 +467,10 @@ test('中英文模型提供商文档只说明用户可操作的配置与能力�
     assert.doesNotMatch(document, /自动化契约|付费验收|automated contracts|paid live API/i);
     assert.doesNotMatch(document, /默认地址|Default URL|https?:\/\/(?:api|localhost|127\.0\.0\.1)/i);
   }
-  assert.match(providers, /选择与实际服务一致的.*提供商类型/s);
-  assert.match(providers, /云端提供商.*MiniMax 等/s);
-  assert.match(providers, /本地推理框架.*vLLM 等/s);
-  assert.match(providersEn, /provider type.*matches the actual service/is);
-  assert.match(providersEn, /cloud providers.*such as/is);
+  assert.match(providers, /选择与你实际使用的模型服务相符的提供商类型/);
+  assert.match(providers, /OpenAI Compatible.*MiniMax.*LM Studio.*vLLM/s);
+  assert.match(providersEn, /provider type.*matches the model service/is);
+  assert.match(providersEn, /presets include.*MiniMax.*LM Studio.*vLLM/is);
   assert.match(providers, /图片理解.*检测/s);
   assert.match(providersEn, /image understanding.*test/is);
   assert.match(gettingStarted, /\[模型提供商\]\(\.\/providers\)/);
@@ -493,7 +480,7 @@ test('中英文模型提供商文档只说明用户可操作的配置与能力�
   assert.match(config, /模型提供商.*\/guide\/providers/);
 });
 
-test('中英文故障排查按真实 HTTP 状态码说明原因', async () => {
+test('中英文故障排查区分外层状态、上游原因与处理入口', async () => {
   const [troubleshooting, troubleshootingEn, config] = await Promise.all([
     fs.readFile(new URL('../docs/guide/troubleshooting.md', import.meta.url), 'utf8'),
     fs.readFile(new URL('../docs/en/guide/troubleshooting.md', import.meta.url), 'utf8'),
@@ -501,29 +488,28 @@ test('中英文故障排查按真实 HTTP 状态码说明原因', async () => {
   ]);
 
   for (const code of ['400', '401', '403', '404', '409', '413', '415', '429', '500', '502', '503', '504']) {
-    assert.ok(troubleshooting.includes(`| \`${code}\``), code);
-    assert.ok(troubleshootingEn.includes(`| \`${code}\``), code);
+    assert.ok(troubleshooting.includes(`\`${code}\``), code);
+    assert.ok(troubleshootingEn.includes(`\`${code}\``), code);
   }
-  assert.match(troubleshooting, /429.*502.*503.*不会在后台隐式重试/s);
-  assert.match(troubleshootingEn, /429.*502.*503.*does not retry them implicitly/is);
+  assert.match(troubleshooting, /显示 `502`.*上游 `HTTP 503`/s);
+  assert.match(troubleshootingEn, /show `502`.*upstream service returned `HTTP 503`/is);
   assert.doesNotMatch(troubleshooting, /LM Studio 报|请求超过上下文上限|图片发送失败|npm run docs:build/);
   assert.doesNotMatch(troubleshootingEn, /LM Studio Reports|Request Exceeds the Context Window|Image Sending Fails|npm run docs:build/);
   assert.match(config, /故障排查.*\/guide\/troubleshooting/);
 });
 
 test('Agent 管理区分控制台工具与功能区系统能力', async () => {
-  const [agents, agentsEn] = await Promise.all([
+  const [agents, agentsEn, chat] = await Promise.all([
     fs.readFile(new URL('../docs/guide/agents.md', import.meta.url), 'utf8'),
     fs.readFile(new URL('../docs/en/guide/agents.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../docs/modes/chat.md', import.meta.url), 'utf8'),
   ]);
 
-  assert.match(agents, /部分能力由当前功能区直接提供/);
-  assert.match(agents, /季风.*工作队/s);
-  assert.match(agents, /对流、潮汐和气旋群聊不提供 SubAgent/);
-  assert.doesNotMatch(agents, /季风和气旋工位私聊.*SubAgent/);
-  assert.doesNotMatch(agents, /`ask`、`task_board` 和 `delegate`.*仍会保留/);
-  assert.match(agentsEn, /Monsoon.*session team/is);
-  assert.doesNotMatch(agentsEn, /Monsoon and Cyclone seat conversations.*SubAgents/);
+  assert.match(agents, /框架协作能力/);
+  assert.match(agents, /可调用的操作由你的选择决定/);
+  assert.match(chat, /当前会话创建工作队/);
+  assert.doesNotMatch(agents, /SubAgent|`delegate`/);
+  assert.match(agentsEn, /framework collaboration/i);
 });
 
 test('季风文档以工作队描述协作且不再暴露 delegate', async () => {
@@ -535,26 +521,27 @@ test('季风文档以工作队描述协作且不再暴露 delegate', async () =>
   ]);
 
   assert.match(chat, /工作队/);
-  assert.match(chat, /持续协作者/);
+  assert.match(chat, /主 Agent 负责协调/);
   assert.doesNotMatch(chat, /`delegate`|SubAgent/);
-  assert.match(chatEn, /session team/i);
-  assert.match(chatEn, /persistent collaborators/i);
+  assert.match(chatEn, /team in the current conversation/i);
+  assert.match(chatEn, /main agent coordinates/i);
   assert.doesNotMatch(chatEn, /`delegate`|SubAgent/i);
   assert.match(index, /工作队/);
-  assert.match(indexEn, /session team/i);
+  assert.match(indexEn, /organize a team/i);
 });
 
-test('季风文档说明图片输入、保存方式与功能区边界', async () => {
+test('季风文档说明图片输入、保存方式与模型要求', async () => {
   const chat = await fs.readFile(
     new URL('../docs/modes/chat.md', import.meta.url),
     'utf8',
   );
 
-  assert.match(chat, /选择文件.*粘贴.*拖入/s);
-  assert.match(chat, /单条消息最多包含 4 张图片/);
-  assert.match(chat, /单张不能超过 8 MB/);
+  assert.match(chat, /附件按钮选择图片.*粘贴.*拖入/s);
+  assert.match(chat, /单条消息最多附带 4 张图片/);
+  assert.match(chat, /每张不超过 8 MB/);
   assert.match(chat, /PNG、JPEG、WebP 和 GIF/);
-  assert.match(chat, /目前完整的会话图片输入只接入季风/);
+  assert.match(chat, /图片保存在当前会话/);
+  assert.match(chat, /模型.*支持图片输入/);
 });
 
 test('数据目录列出季风会话图片附件', async () => {

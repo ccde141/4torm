@@ -5,6 +5,7 @@ export function buildConversationHistory(messages: ChatMessage[]): NativeContext
 }
 
 function mapChatMessage(message: ChatMessage): NativeContextMessage[] {
+  if (message.contextOmitted) return [];
   const mapped = mapMessageContent(message);
   if (!message.streamStopped) return mapped;
   return [...mapped, assistantMessage(

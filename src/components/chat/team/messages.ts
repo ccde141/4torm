@@ -13,6 +13,7 @@ export const zh = {
   dispatch: '主 Agent → 成员', reply: '成员 → 主 Agent', review: '主 Agent 判断',
   contextHint: '只读显示已保存的成员消息与工具结果；运行中的最新内容可能尚未保存。',
   noContext: '尚无已保存的会话消息', search: '搜索成员会话', user: '派工 / 输入', assistant: '成员', tool: '工具结果',
+  partial: '内容已按查看预算截断，可缩小范围后刷新。',
 };
 export const en: Record<keyof typeof zh, string> = {
   title: 'Team', open: 'View team', collaboration: 'Collaborate', close: 'Close', refresh: 'Refresh', loading: 'Loading team…',
@@ -29,4 +30,5 @@ export const en: Record<keyof typeof zh, string> = {
   dispatch: 'Main → Member', reply: 'Member → Main', review: 'Main’s decision',
   contextHint: 'Read-only saved messages and tool results. The latest running output may not yet be saved.',
   noContext: 'No saved messages yet', search: 'Search member conversation', user: 'Assignment / input', assistant: 'Member', tool: 'Tool result',
+  partial: 'Content was truncated to the viewing budget. Narrow the scope and refresh.',
 };

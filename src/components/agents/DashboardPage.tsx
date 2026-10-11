@@ -1,65 +1,68 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { getAgents, deleteAgent, getOfflineAgentIds } from '../../store/agent';
+import { getAgentsWithActivity, deleteAgent, getOfflineAgentIds } from '../../store/agent';
 import { getAllSessions } from '../../store/chat';
-import { SYSTEM_STATUSES, getLabels, type UserLabel } from '../../store/statuses';
+import { SYSTEM_STATUSES } from '../../store/statuses';
 import type { Agent, DashboardStats } from '../../types';
 import AgentCard from './AgentCard';
 import AgentConfigModal from './AgentConfigModal';
-import MemoryPanel from './MemoryPanel';
 import { loadDashboardSnapshot } from './dashboard-data';
+import { createAgentDeletionFlow } from './agent-deletion';
 import { createLatestRequestGuard } from '../../lib/latest-request';
+import { readCollaborationSnapshot, type CollaborationSnapshot } from '../../api/collaboration';
+import { projectAgentActivity } from './dashboard-activity';
+import { mergeAgentRecords } from './agent-record-view';
+import { useDashboardRecentRecords } from './useDashboardRecentRecords';
+import AgentDetailDialog from './AgentDetailDialog';
+import { CompactionSettingsDialog } from './CompactionSettingsDialog';
+import { PresenceItems } from '../common/PresenceItems';
 import { useLocale } from '../../i18n/LocaleContext';
 import '../../styles/components/dashboard.css';
 
-interface FilterOption {
-  id: string;
-  label: string;
-  color: string;
-  kind: 'system' | 'label';
-}
-
-export default function DashboardPage({ active = true }: { active?: boolean }) {
+export default function DashboardPage({ active = true, onNavigate }: {
+  active?: boolean; onNavigate?: (page: string, targetId?: string) => void;
+}) {
   const { t } = useLocale();
   const [agents, setAgents] = useState<Agent[]>([]);
+  const recent = useDashboardRecentRecords(active, agents.map(agent => agent.id));
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [filterOptions, setFilterOptions] = useState<FilterOption[]>([]);
-  const [configAgent, setConfigAgent] = useState<Agent | null>(null);
-  const [memoryAgent, setMemoryAgent] = useState<Agent | null>(null);
   const [creating, setCreating] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
   const [offlineIds, setOfflineIds] = useState<Set<string>>(new Set());
+  const [activityAvailable, setActivityAvailable] = useState(false);
+  const [probeSnapshot, setProbeSnapshot] = useState<CollaborationSnapshot | null>(null);
+  const [probeError, setProbeError] = useState('');
+  const [detail, setDetail] = useState<{ id: string; origin: DOMRect } | null>(null);
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const [deleteError, setDeleteError] = useState('');
   const refreshGuard = useRef(createLatestRequestGuard());
+  const probeGuard = useRef(createLatestRequestGuard());
+  const deletionFlow = useRef(createAgentDeletionFlow(deleteAgent, {
+    onPendingChange: setDeletingIds,
+    onDeleted: id => {
+      refreshGuard.current.cancel();
+      setAgents(previous => previous.filter(agent => agent.id !== id));
+      void refresh();
+    },
+    onError: error => setDeleteError(error.message),
+  }));
 
   const refresh = useCallback(async () => {
     const request = refreshGuard.current.begin();
     const snapshot = await loadDashboardSnapshot(
-      { getAgents, getAllSessions, getOfflineAgentIds },
-      nextAgents => {
+      { getAgentsWithActivity, getAllSessions, getOfflineAgentIds },
+      (nextAgents, nextActivityAvailable) => {
         if (!request.isCurrent()) return;
-        setAgents(nextAgents);
+        setAgents(deletionFlow.current.visibleAgents(nextAgents));
+        setActivityAvailable(nextActivityAvailable);
         setLoading(false);
       },
     );
     if (!request.isCurrent()) return;
     setOfflineIds(snapshot.offlineIds);
+    setActivityAvailable(snapshot.activityAvailable);
     setStats(snapshot.stats);
-  }, []);
-
-  useEffect(() => {
-    const systemOpts: FilterOption[] = SYSTEM_STATUSES.map(s => ({
-      ...s,
-      kind: 'system' as const,
-    }));
-    getLabels().then(labels => {
-      const labelOpts: FilterOption[] = labels.map((l: UserLabel) => ({
-        id: l.id,
-        label: l.label,
-        color: l.color,
-        kind: 'label' as const,
-      }));
-      setFilterOptions([...systemOpts, ...labelOpts]);
-    });
   }, []);
 
   // 仅页面活跃时执行重量级快照加载，隐藏页面不读取所有会话索引。
@@ -74,27 +77,54 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
     };
   }, [refresh, active]);
 
-  const handleDelete = async (id: string) => {
-    await deleteAgent(id);
-    refresh();
+  useEffect(() => {
+    if (!active) return;
+    const guard = probeGuard.current;
+    const load = async () => {
+      const request = guard.begin();
+      try {
+        const snapshot = await readCollaborationSnapshot({
+          view: 'summary', limit: 100, maxTextChars: 12000, maxTextLines: 200,
+        });
+        if (request.isCurrent()) { setProbeSnapshot(snapshot); setProbeError(''); }
+      } catch (cause) {
+        if (request.isCurrent()) { setProbeSnapshot(null); setProbeError(String(cause)); }
+      }
+    };
+    void load();
+    const timer = setInterval(() => void load(), 5000);
+    return () => { clearInterval(timer); guard.cancel(); };
+  }, [active]);
+
+  const handleDelete = (id: string) => {
+    setDeleteError('');
+    void deletionFlow.current.remove(id);
   };
 
   const handleSaveConfig = () => {
-    setConfigAgent(null);
     setCreating(false);
     refresh();
   };
 
   function matchesFilter(agent: Agent): boolean {
+    const activity = agentActivity(agent);
     if (filter === 'all') return true;
-    if (filter === 'idle') {
-      return agent.status === 'idle' && !agent.busy && !offlineIds.has(agent.id);
-    }
-    if (filter === 'busy') return !!agent.busy;
+    if (filter === 'idle' || filter === 'offline' || filter === 'waiting'
+      || filter === 'unknown') return activity.kind === filter;
+    if (filter === 'busy') return activity.kind === 'running';
     if (agent.status === filter) return true;
-    if (agent.label === filter) return true;
     return false;
   }
+
+  function agentActivity(agent: Agent) {
+    const activity = projectAgentActivity(agent, activityAvailable,
+      probeSnapshot, offlineIds.has(agent.id));
+    const record = recent.records[agent.id];
+    return record ? mergeAgentRecords(activity, [record]) : activity;
+  }
+
+  const selectedAgent = agents.find(agent => agent.id === detail?.id);
+  const selectedActivity = selectedAgent && agentActivity(selectedAgent);
 
   if (loading) {
     return (
@@ -117,8 +147,10 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
           </div>
           <div className="dashboard__info-item">
             <span className="dashboard__info-dot dashboard__info-dot--online" />
-            <span className="dashboard__info-value">{stats.onlineAgents}</span>
-            <span>{t('dashboard.idle')}</span>
+            <span className="dashboard__info-value">{agents.filter(agent =>
+              projectAgentActivity(agent, activityAvailable, probeSnapshot,
+                offlineIds.has(agent.id)).kind === 'idle').length}</span>
+            <span>已确认空闲</span>
           </div>
           <div className="dashboard__info-item">
             <span className="dashboard__info-dot dashboard__info-dot--session" />
@@ -136,7 +168,7 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
           >
             {t('dashboard.all')}
           </button>
-          {filterOptions.map(opt => (
+          {SYSTEM_STATUSES.map(opt => (
             <button
               key={opt.id}
               className={`dashboard__filter-btn${filter === opt.id ? ' dashboard__filter-btn--active' : ''}`}
@@ -147,36 +179,46 @@ export default function DashboardPage({ active = true }: { active?: boolean }) {
               {opt.label}
             </button>
           ))}
+          {[{ id: 'waiting', label: '等待中' }, { id: 'unknown', label: '状态未知' }].map(opt => (
+            <button key={opt.id} className={`dashboard__filter-btn${filter === opt.id ? ' dashboard__filter-btn--active' : ''}`}
+              onClick={() => setFilter(opt.id)}>{opt.label}</button>
+          ))}
         </div>
+        <button className="dashboard__filter-btn" onClick={() => setSettingsOpen(true)}>{t('compaction.settings')}</button>
         <button className="dashboard__create-btn primary-cta-btn" onClick={() => setCreating(true)}>
           {t('dashboard.createAgent')}
         </button>
       </div>
 
+      {deleteError && <p className="dashboard__delete-error" role="alert">{t('agent.deleteFailed', { detail: deleteError })}</p>}
+      {probeError && <p className="dashboard__probe-warning" role="status">状态探针暂不可用：{probeError}</p>}
+      {recent.failureCount > 0 && <p className="dashboard__probe-warning" role="status">
+        {t('dashboard.card.historyUnavailable')}</p>}
+
       <div className="dashboard__agent-grid">
-        {agents
-          .filter(matchesFilter)
-          .map(agent => (
+        <PresenceItems items={agents.filter(matchesFilter)} getKey={agent => agent.id}
+          scope="agents" render={agent => (
             <AgentCard
-              key={agent.id}
               agent={agent}
-              onConfig={a => setConfigAgent(a)}
-              onMemory={a => setMemoryAgent(a)}
-              onDelete={handleDelete}
+              activity={agentActivity(agent)}
+              onClick={(target, element) => setDetail({ id: target.id,
+                origin: element.getBoundingClientRect() })}
+              expanded={detail?.id === agent.id}
+              deleting={deletingIds.has(agent.id)}
             />
-          ))}
+          )} />
       </div>
 
-      {memoryAgent && (
-        <MemoryPanel agentId={memoryAgent.id} agentName={memoryAgent.name} onClose={() => setMemoryAgent(null)} />
-      )}
+      {selectedAgent && selectedActivity && detail && <AgentDetailDialog key={selectedAgent.id}
+        agent={selectedAgent} activity={selectedActivity} origin={detail.origin}
+        onClose={() => setDetail(null)} onNavigate={onNavigate}
+        onSaveConfig={() => { void refresh(); }}
+        onDelete={() => handleDelete(selectedAgent.id)} />}
 
-      {configAgent && (
-        <AgentConfigModal mode="edit" agent={configAgent} onClose={() => setConfigAgent(null)} onSave={handleSaveConfig} />
-      )}
       {creating && (
         <AgentConfigModal mode="create" onClose={() => setCreating(false)} onSave={handleSaveConfig} />
       )}
+      {settingsOpen && <CompactionSettingsDialog onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

@@ -12,14 +12,14 @@ function fixture(id: string): ChatSession {
   };
 }
 
-test('模型命名持久化一次，后续消息删除及旧快照保存不改变标题', async t => {
+test('模型命名持久化一次，旧快照不能删除消息或覆盖标题', async t => {
   const env = mockStorage(t);
   const original = fixture('once');
-  await saveSession(original);
+  const created = await saveSession(original);
   await Promise.all([nameCompletedSession(original.id), nameCompletedSession(original.id)]);
   assert.equal(env.calls(), 1);
   assert.equal((await getSession(original.id))?.title, '架构讨论');
-  await saveSession({ ...original, messages: [] });
+  await assert.rejects(saveSession({ ...created, messages: [] }), /会话已被其他操作更新/);
   await nameCompletedSession(original.id);
   assert.equal((await getSession(original.id))?.title, '架构讨论');
   assert.equal((await getSession(original.id))?.titleState, 'generated');
@@ -29,13 +29,15 @@ test('模型命名持久化一次，后续消息删除及旧快照保存不改�
 test('命名期间手动改名优先，迟到结果不覆盖后续消息', async t => {
   const env = mockStorage(t, true);
   const original = fixture('manual');
-  await saveSession(original);
+  const created = await saveSession(original);
   const naming = nameCompletedSession(original.id);
   await env.started;
-  await saveSession({ ...original, title: '人类标题', titleManual: true, messages: [] }, { rename: true });
+  const latest = await getSession(original.id);
+  assert.ok(latest);
+  await saveSession({ ...latest, title: '人类标题', titleManual: true }, { rename: true });
   env.finish();
   await naming;
-  await saveSession(original);
+  await assert.rejects(saveSession(created), /会话已被其他操作更新/);
   assert.equal((await getSession(original.id))?.title, '人类标题');
   assert.equal((await getSession(original.id))?.titleManual, true);
 });
@@ -62,7 +64,7 @@ test('旧会话和手动标题不发命名请求', async t => {
 });
 
 function mockStorage(t: Parameters<Parameters<typeof test>[1]>[0], deferred = false) {
-  const files = new Map<string, string>();
+  const sessions = new Map<string, ChatSession>();
   let count = 0;
   let finish!: () => void;
   let start!: () => void;
@@ -77,11 +79,35 @@ function mockStorage(t: Parameters<Parameters<typeof test>[1]>[0], deferred = fa
       if (deferred) await gate;
       return Response.json({ title: '架构讨论' });
     }
-    const key = url.searchParams.get('path') || '';
-    if (url.pathname.endsWith('/write')) { files.set(key, String(init?.body)); return new Response(''); }
-    if (url.pathname.endsWith('/read')) return files.has(key) ? new Response(files.get(key)) : new Response('', { status: 404 });
-    if (url.pathname.endsWith('/delete')) files.delete(key);
-    return new Response('');
+    if (url.pathname === '/api/conversation/sessions' && init?.method === 'POST') {
+      const value = { ...JSON.parse(String(init.body)), revision: 1 } as ChatSession;
+      if (sessions.has(value.id)) return Response.json({ error: '会话已经存在' }, { status: 409 });
+      sessions.set(value.id, value);
+      return Response.json(value, { status: 201 });
+    }
+    const match = url.pathname.match(/^\/api\/conversation\/sessions\/([^/]+)\/([^/]+)$/);
+    if (match) {
+      const id = decodeURIComponent(match[2]!);
+      const current = sessions.get(id);
+      if (init?.method === 'DELETE') { sessions.delete(id); return Response.json({ ok: true }); }
+      if (init?.method === 'PUT') {
+        if (!current) return Response.json({ error: '会话不存在' }, { status: 404 });
+        const body = JSON.parse(String(init.body));
+        if (body.expectedRevision !== current.revision) {
+          return Response.json({ error: '会话已被其他操作更新', current }, { status: 409 });
+        }
+        const incoming = body.session as ChatSession;
+        const next = body.mode === 'rename'
+          ? { ...current, title: incoming.title, titleManual: incoming.titleManual,
+            titleState: incoming.titleState, revision: current.revision! + 1 }
+          : { ...incoming, title: current.title, titleManual: current.titleManual,
+            titleState: current.titleState, revision: current.revision! + 1 };
+        sessions.set(id, next);
+        return Response.json(next);
+      }
+      return current ? Response.json(current) : new Response('', { status: 404 });
+    }
+    return new Response('', { status: 404 });
   };
   return { calls: () => count, started, finish: () => finish() };
 }

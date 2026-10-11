@@ -63,6 +63,30 @@ test('tool registration refuses names already provided by a skill', async (t) =>
   await assert.rejects(() => prepareToolRegistration(dataDir, args('skill_tool')), /技能「demo」/);
 });
 
+test('tool registration refuses conversation capability router names', async (t) => {
+  const dataDir = await createDataDir();
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  for (const name of ['framework_status', 'framework_guide']) {
+    await assert.rejects(
+      () => prepareToolRegistration(dataDir, args(name)),
+      /框架保留名称/,
+    );
+  }
+});
+
+test('registration rejects generated capability names and current framework actions at prepare and commit', async t => {
+  const dataDir = await createDataDir();
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await writeExecutor(dataDir, 'framework_capability_tide');
+  await writeExecutor(dataDir, 'create_discussion');
+  await assert.rejects(() => prepareToolRegistration(dataDir, args('framework_capability_tide')), /框架保留名称/);
+  await assert.rejects(() => prepareToolRegistration(dataDir, args('create_discussion'), ['create_discussion']), /框架保留名称/);
+
+  const stale = await prepareToolRegistration(dataDir, args('create_discussion'), []);
+  await assert.rejects(() => commitToolRegistration(dataDir, stale, ['create_discussion']), /框架保留名称/);
+  assert.equal(JSON.parse(await fs.readFile(path.join(dataDir, 'tools', 'registry.json'), 'utf8')).length, 0);
+});
+
 test('concurrent confirmed registrations keep both tools without overwriting the registry', async (t) => {
   const dataDir = await createDataDir();
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));

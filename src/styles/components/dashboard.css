@@ -124,8 +124,22 @@
 /* ─── Agent Grid ─────────────────────────────────────────── */
 .dashboard__agent-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: var(--space-6);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 365px), 1fr));
+  gap: 18px;
+  max-width: 1440px;
+}
+.dashboard__probe-warning { margin: -4px 0 18px; padding: 10px 13px;
+  color: #f1ca93; border: 1px solid rgba(241,202,147,.22);
+  border-radius: 8px; background: rgba(75,54,23,.18); font-size: 12px; }
+@media (max-width: 700px) {
+  .dashboard__grid-head > span { display: none; }
+  .dashboard__agent-grid { grid-template-columns: 1fr; }
+}
+
+.dashboard__delete-error {
+  margin: 0 0 var(--space-4);
+  color: var(--color-error);
+  font-size: var(--text-sm);
 }
 
 /* ─── Loading Skeleton ───────────────────────────────────── */

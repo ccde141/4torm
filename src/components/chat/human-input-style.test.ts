@@ -14,12 +14,12 @@ test('human steering reuses user message structure with a pale blue identity rin
 });
 
 test('human steering is a separate timeline entry instead of an attachment to the preceding message', () => {
-  const page = fs.readFileSync('src/components/chat/ChatPage.tsx', 'utf8');
+  const page = fs.readFileSync('src/components/chat/MonsoonConversation.tsx', 'utf8');
   const styles = fs.readFileSync('src/styles/components/chat.css', 'utf8');
   const inputListStyles = styles.match(/\.chat__human-inputs\s*\{([^}]*)\}/)?.[1] ?? '';
 
-  assert.match(page, /<Fragment key=\{msg\.id\}>[\s\S]*?<MessageItem[\s\S]*?<HumanInputList message=\{msg\} \/>[\s\S]*?<\/Fragment>/);
-  assert.doesNotMatch(page, /<div key=\{msg\.id\}>[\s\S]*?<HumanInputList message=\{msg\} \/>[\s\S]*?<\/div>/);
+  assert.match(page, /<Fragment key=\{message\.id\}>[\s\S]*?<MessageItem[\s\S]*?<HumanInputList message=\{message\} \/>[\s\S]*?<\/Fragment>/);
+  assert.doesNotMatch(page, /<div key=\{message\.id\}>[\s\S]*?<HumanInputList message=\{message\} \/>[\s\S]*?<\/div>/);
   assert.doesNotMatch(inputListStyles, /margin-top:\s*calc\([^;]*-1/);
 });
 

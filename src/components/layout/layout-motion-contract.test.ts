@@ -53,12 +53,12 @@ test('meeting assistant side panels use a role title without an Agent identity',
 
 test('shared icon controls expose localized accessible names', () => {
   const header = read('src/components/layout/Header.tsx');
-  const chat = read('src/components/chat/ChatPage.tsx');
+  const chat = read('src/components/chat/MonsoonSidebar.tsx');
   const cyclone = read('src/cyclone/ui/pages/CycloneSidebar.tsx');
-  const tide = read('src/tide/ui/TidePage.tsx');
+  const tide = read('src/tide/ui/TidePageSidebar.tsx');
 
   assert.match(header, /aria-label=\{t\('header\.skin'\)\}/);
-  assert.match(chat, /aria-label=\{translate\('chat\.page\.newSession'\)\}/);
+  assert.match(chat, /aria-label=\{t\('chat\.page\.newSession'\)\}/);
   assert.match(cyclone, /addLabel=\{t\('cyclone\.shell\.createWorkshop'\)\}/);
   assert.match(tide, /aria-label=\{t\('tide\.page\.addTask'\)\}/);
 });
@@ -105,7 +105,7 @@ test('approved modal controls avoid broad transitions and name icon actions', ()
   ]) assert.doesNotMatch(read(file), /transition:\s*all/, file);
 
   assert.match(read('src/components/agents/AgentConfigModal.tsx'), /aria-label=\{t\('config\.close'\)\}/);
-  assert.match(read('src/components/agents/MemoryPanel.tsx'), /aria-label=\{t\('memory\.close'\)\}/);
+  assert.match(read('src/components/agents/AgentDetailDialog.tsx'), /aria-label=\{t\('dashboard\.detail\.close'\)\}/);
   assert.match(read('src/components/chat/MessageItem.tsx'), /aria-label=\{t\('chat\.editMessage'\)\}/);
   assert.match(read('src/cyclone/ui/pages/ChairDrawer.tsx'), /aria-label=\{t\('cyclone\.chair\.collapse'\)\}/);
 });

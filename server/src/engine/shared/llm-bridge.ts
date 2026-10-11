@@ -10,6 +10,7 @@
  */
 
 import fs from 'node:fs/promises';
+import { logModelDiagnostic } from '../../config/developer-mode.js';
 import { createRuntimeFetch } from '../../model-runtime/providers/runtime-fetch.js';
 import path from 'node:path';
 import type {
@@ -40,17 +41,18 @@ import {
   parseAnthropicResponse,
 } from './provider-transports/anthropic.js';
 import { parseAnthropicSSEStream } from './provider-transports/anthropic-stream.js';
-import {
-  resolveProviderProtocol,
-  type ProviderProtocol,
-} from './provider-transports/protocol.js';
+import type { ProviderProtocol } from './provider-transports/protocol.js';
 import { parseTextToolResponse } from './text-tool-protocol.js';
 import { TextToolStreamGate } from './text-tool-stream-gate.js';
 import { resolveProviderSelection } from '../../model-runtime/config/provider-selection.js';
 import { resolveLoggedProviderSelection } from '../../model-runtime/config/provider-selection-log.js';
-import type { TransportId } from '../../model-runtime/contracts/provider-config.js';
 import { providerScheduler } from '../../model-runtime/scheduling/provider-scheduler.js';
-import { providerHttpError, providerNetworkError } from './provider-request-error.js';
+import { providerHttpError, providerNetworkError, providerResponseError } from './provider-request-error.js';
+import { resolveToolTransportContract } from '../../model-runtime/config/tool-transport-contract.js';
+import { resolveProviderGenerationBudget, type ProviderGenerationBudgetRequest }
+  from '../../model-runtime/providers/generation-budget.js';
+import { enforceProviderOutputBudget } from './provider-output-budget.js';
+import { applyProviderOutputControl, type ProviderOutputControl } from './provider-output-control.js';
 
 interface Provider {
   id: string;
@@ -145,17 +147,16 @@ async function loadProviders(dataDir: string): Promise<Provider[]> {
 export interface NativeModeDecision {
   /** 最终是否走原生工具调用 */
   native: boolean;
-  /** 配置模式（用于上层判断是否需要发警告） */
+  /** 当前运行时仅按自动探测决议；保留字段供既有调用方读取。 */
   mode: 'auto' | 'native' | 'text';
-  /** 强制 native 但探测显示不支持 → 需要前端警告 */
+  /** 旧版强制模式兼容字段，当前运行时恒为 false。 */
   forcedMismatch: boolean;
 }
 
 /**
- * 根据 provider 的 nativeMode + nativeProbe 决议该 model 是否走原生。
- * - native：强制原生（探测为 false 时标记 forcedMismatch 供警告）
- * - text：强制文本
- * - auto（默认）：查探测缓存，有记录按记录；无记录乐观走原生
+ * 根据与当前端点、协议和模型匹配的工具传输探测结果选择循环。
+ * 旧版 nativeMode/nativeProbe 配置保留可读，但不参与当前决议。
+ * 未得到有效探测结论时先走原生，由文本工具调用回退处理兼容输出。
  */
 export async function resolveNativeMode(dataDir: string, fullModelKey: string): Promise<NativeModeDecision> {
   const providers = await loadProviders(dataDir);
@@ -163,13 +164,12 @@ export async function resolveNativeMode(dataDir: string, fullModelKey: string): 
   const model = extractModelId(fullModelKey);
   const mode = 'auto' as const;
   const transport = provider?.toolTransports?.[model];
-  const validTransport = provider && transport?.fingerprint === toolTransportFingerprint(provider, model)
+  const validTransport = provider && transport?.fingerprint === resolveToolTransportContract(provider, model).fingerprint
     ? transport.status : undefined;
   const native = validTransport === 'native-confirmed' ? true
     : validTransport === 'text-required' ? false : undefined;
 
-  // auto：有探测记录按记录；无记录乐观走原生（赌现代模型大多支持，
-  // 不支持时 finish_reason 终结 + 未知工具友好回填可兜底，不会崩）
+  // 没有有效探测记录时选择原生；提供商拒绝请求会如实抛出。
   return { native: native ?? true, mode, forcedMismatch: false };
 }
 
@@ -195,49 +195,19 @@ function applyTextToolFallback(
   };
 }
 
-const TOOL_TRANSPORT_PROBE_VERSION = 2;
-
-function normalizeTransportBaseUrl(baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl);
-    return `${url.protocol}//${url.host.toLowerCase()}${url.pathname.replace(/\/+$/, '')}`;
-  } catch {
-    return baseUrl.trim().replace(/\/+$/, '');
-  }
-}
-
-function toolTransportFingerprint(provider: Provider, model: string): string {
-  const selection = resolveProviderSelection(provider, model);
-  if (selection.source === 'legacy') {
-    return JSON.stringify([
-      provider.id,
-      normalizeTransportBaseUrl(provider.baseUrl),
-      resolveProviderProtocol(provider.baseUrl, provider.protocol),
-      model,
-      provider.modelProfiles?.[model] ?? 'auto',
-      TOOL_TRANSPORT_PROBE_VERSION,
-    ]);
-  }
-  return JSON.stringify([
-    provider.id,
-    normalizeTransportBaseUrl(provider.baseUrl),
-    selection.transport,
-    selection.providerType,
-    model,
-    provider.modelProfiles?.[model] ?? 'auto',
-    TOOL_TRANSPORT_PROBE_VERSION,
-  ]);
-}
-
 export interface LLMCallParams {
   dataDir: string;
   fullModelKey: string;
   messages: ContextMessage[];
   options?: LLMOptions;
+  /** Required framework allowance overrides provider defaults/custom output fields for this call only. */
+  outputTokenBudget?: number;
+  /** Optional limits for controlled generation; ordinary ReAct calls leave this unset. */
+  outputControl?: ProviderOutputControl;
   /** 流式回调：每收到一个 token chunk 调一次。不传则走非流式。 */
   onChunk?: (chunk: string) => void;
   /** 原生思考流回调：模型吐 reasoning_content/reasoning/thinking 时调一次。
-   *  与 onChunk 物理分开；不支持原生思考的模型永不触发（零副作用）。 */
+   *  与 onChunk 分开；模型未返回思考内容时不触发。 */
   onReasoning?: (chunk: string) => void;
   /** 原生工具参数生成进度；限频后回调，不包含参数正文。 */
   onToolProgress?: (progress: ToolPreparationProgress) => void;
@@ -254,6 +224,21 @@ export async function resolveModelPromptBudget(
   dataDir: string,
   fullModelKey: string,
 ): Promise<number | undefined> {
+  const { identity, runtimeFetch } = await modelBudgetContext(dataDir, fullModelKey);
+  const runtime = await discoverProviderRuntimeCapabilities(identity, runtimeFetch);
+  if (!runtime) return undefined;
+  return resolveSafePromptTokens(runtime.contextWindowTokens, resolveMaxOutputTokens(identity));
+}
+
+/** Budget resolution and request translation share the same provider identity and runtime policy. */
+export async function resolveModelGenerationBudget(
+  dataDir: string, fullModelKey: string, requested: ProviderGenerationBudgetRequest,
+) {
+  const { identity, runtimeFetch } = await modelBudgetContext(dataDir, fullModelKey);
+  return resolveProviderGenerationBudget(identity, requested, runtimeFetch);
+}
+
+async function modelBudgetContext(dataDir: string, fullModelKey: string) {
   const providers = await loadProviders(dataDir);
   const provider = resolveProvider(providers, fullModelKey);
   if (!provider) throw new Error(`找不到模型 ${fullModelKey} 的提供商`);
@@ -266,13 +251,9 @@ export async function resolveModelPromptBudget(
     providerType: selection.providerType,
     runtimePolicy: provider.runtimePolicy,
     generationDefaults: provider.generationDefaults,
+    customRequestParameters: provider.customRequestParameters,
   };
-  const runtime = await discoverProviderRuntimeCapabilities(identity, createRuntimeFetch(provider));
-  if (!runtime) return undefined;
-  return resolveSafePromptTokens(
-    runtime.contextWindowTokens,
-    resolveMaxOutputTokens(identity),
-  );
+  return { identity, runtimeFetch: createRuntimeFetch(provider) };
 }
 
 /** 构造请求公共部分 */
@@ -286,9 +267,7 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
 
   const model = options?.model ?? extractModelId(fullModelKey);
   const selection = resolveLoggedProviderSelection(provider.id, provider, model);
-  const protocol = selection.source === 'explicit'
-    ? supportedProtocol(selection.transport)
-    : resolveProviderProtocol(provider.baseUrl, provider.protocol);
+  const protocol = resolveToolTransportContract(provider, model).protocol;
   if (protocol === 'anthropic-messages') {
     const request = buildAnthropicRequest({
       baseUrl: provider.baseUrl,
@@ -298,10 +277,11 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
       messages,
       tools: params.tools,
       stream,
-      maxTokens: options?.maxTokens ?? 8192,
+      maxTokens: params.outputTokenBudget ?? options?.maxTokens ?? 8192,
       temperature: options?.temperature ?? 0.7,
     });
     const body = mergeCustomRequestParameters(request.body, provider.customRequestParameters);
+    enforceProviderOutputBudget(body, params.outputTokenBudget);
     logCustomParameterFields(provider.id, provider.customRequestParameters);
     return {
       ...request,
@@ -331,6 +311,9 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
   }
   const forwardMap = new Map<string, string>();
   for (const [sanitized, original] of nameMap) forwardMap.set(original, sanitized);
+  for (const tool of params.tools ?? []) {
+    if (!forwardMap.has(tool.name)) forwardMap.set(tool.name, tool.name);
+  }
 
   const identity = {
     baseUrl: provider.baseUrl,
@@ -341,7 +324,7 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
     generationDefaults: provider.generationDefaults,
     customRequestParameters: provider.customRequestParameters,
   };
-  const maxOutputTokens = resolveMaxOutputTokens(identity, options?.maxTokens);
+  const maxOutputTokens = resolveMaxOutputTokens(identity, params.outputTokenBudget ?? options?.maxTokens);
   const temperature = resolveRequestTemperature(identity, options?.temperature);
   const body: Record<string, unknown> = {
     model,
@@ -368,6 +351,8 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
     identity,
     body,
   );
+  enforceProviderOutputBudget(normalizedBody, params.outputTokenBudget, identity);
+  applyProviderOutputControl(normalizedBody, identity, params.outputControl);
   logCustomParameterFields(provider.id, provider.customRequestParameters);
   return {
     url, headers, body: normalizedBody, nameMap, protocol,
@@ -396,13 +381,8 @@ function logCustomParameterFields(providerId: string, parameters: unknown): void
   if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) return;
   const fields = Object.keys(parameters);
   if (fields.length > 0) {
-    console.info(`[provider-config] ${providerId} 发送自定义请求字段：${fields.join(', ')}`);
+    logModelDiagnostic(`[provider-config] ${providerId} 发送自定义请求字段：${fields.join(', ')}`);
   }
-}
-
-function supportedProtocol(transport: TransportId): ProviderProtocol {
-  if (transport === 'openai-chat-completions' || transport === 'anthropic-messages') return transport;
-  throw new Error(`当前版本尚未实现模型传输协议：${transport}`);
 }
 
 /**
@@ -465,11 +445,15 @@ async function callLLMInner(
     // 成功响应
     if (!useStream) {
       if (protocol === 'anthropic-messages') {
-        const result = parseAnthropicResponse(await res.json() as Record<string, any>, nameMap);
+        const data = await res.json() as Record<string, any>;
+        const responseError = providerResponseError(data);
+        if (responseError) throw responseError;
+        const result = parseAnthropicResponse(data, nameMap);
         return applyTextToolFallback(result, params.tools, nameMap);
       }
       const data = (await res.json()) as ChatCompletionResponse;
-      if (data.error?.message) throw new Error(`LLM 错误：${data.error.message}`);
+      const responseError = providerResponseError(data);
+      if (responseError) throw responseError;
       const message = data.choices?.[0]?.message;
       const rawContent = message?.content;
       // 原生模式：有 tool_calls 时 content 常为 null/空，属正常
@@ -479,14 +463,14 @@ async function callLLMInner(
       const content = typeof rawContent === 'string' ? rawContent : '';
       const reasoningContent = extractReasoningContent(message);
       const reasoningEnvelope = extractReasoningEnvelope(message);
+      const rawReason = data.choices?.[0]?.finish_reason;
+      const finishReason = normalizeFinishReason(rawReason);
       if (!content && toolCalls.length === 0) {
         // 文本模式下 content 必须有；原生模式下若既无 content 又无 tool_calls 才算异常
-        if (!params.tools) {
+        if (!params.tools && !(params.outputControl?.allowEmptyAtLimit && finishReason === 'length')) {
           throw new Error('LLM 返回结构异常：缺少 choices[0].message.content');
         }
       }
-      const rawReason = data.choices?.[0]?.finish_reason;
-      const finishReason = normalizeFinishReason(rawReason);
       const usage = parseUsage(data.usage);
       return applyTextToolFallback({
         content,
@@ -502,14 +486,14 @@ async function callLLMInner(
     const gate = params.tools ? new TextToolStreamGate(params.onChunk!) : undefined;
     const onChunk = gate ? (chunk: string) => gate.push(chunk) : params.onChunk!;
     if (protocol === 'anthropic-messages') {
-      const result = await parseAnthropicSSEStream(res, nameMap, onChunk, params.onReasoning);
+      const result = await parseAnthropicSSEStream(res, nameMap, onChunk, params.onReasoning, params.outputControl);
       const normalized = applyTextToolFallback(result, params.tools, nameMap);
       gate?.finish(Boolean(normalized.content));
       return normalized;
     }
     const result = await parseSSEStream(
       res, onChunk, !!params.tools, nameMap, params.onReasoning, params.onToolProgress,
-      cumulativeStream,
+      cumulativeStream, params.outputControl,
     );
     const normalized = applyTextToolFallback(result, params.tools, nameMap);
     gate?.finish(Boolean(normalized.content));
@@ -527,11 +511,16 @@ function normalizeFinishReason(raw: string | undefined | null): 'stop' | 'length
 }
 
 /** 解析 API 返回的 usage 对象 */
-function parseUsage(raw: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined | null): TokenUsage | undefined {
-  if (!raw) return undefined;
-  const prompt = raw.prompt_tokens ?? 0;
-  const completion = raw.completion_tokens ?? 0;
-  const total = raw.total_tokens ?? (prompt + completion);
+function parseUsage(raw: unknown): TokenUsage | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  const fields = ['prompt_tokens', 'completion_tokens', 'total_tokens'] as const;
+  if (!fields.some(field => value[field] !== undefined)) return undefined;
+  if (fields.some(field => value[field] !== undefined
+    && (!Number.isSafeInteger(value[field]) || Number(value[field]) < 0))) return undefined;
+  const prompt = Number(value.prompt_tokens ?? 0);
+  const completion = Number(value.completion_tokens ?? 0);
+  const total = Number(value.total_tokens ?? (prompt + completion));
   if (prompt === 0 && completion === 0 && total === 0) return undefined;
   return { promptTokens: prompt, completionTokens: completion, totalTokens: total };
 }
@@ -558,6 +547,7 @@ async function parseSSEStream(
   onReasoning?: (chunk: string) => void,
   onToolProgress?: (progress: ToolPreparationProgress) => void,
   cumulativeStream = false,
+  outputControl?: ProviderOutputControl,
 ): Promise<LLMResult> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error('LLM 流式响应无 body');
@@ -626,8 +616,11 @@ async function parseSSEStream(
       const payload = trimmed.slice(5).trim();
       if (payload === '[DONE]') return true;
 
-      try {
-        const json = JSON.parse(payload) as {
+      let parsed: unknown;
+      try { parsed = JSON.parse(payload); } catch { return false; }
+      const responseError = providerResponseError(parsed);
+      if (responseError) throw responseError;
+        const json = parsed as {
           choices?: Array<{
             delta?: {
               content?: string;
@@ -640,6 +633,7 @@ async function parseSSEStream(
               reasoning_details?: unknown[];
             };
             finish_reason?: string | null;
+            usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
           }>;
           usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
         };
@@ -693,12 +687,13 @@ async function parseSSEStream(
           finishReason = normalizeFinishReason(choice.finish_reason);
         }
         // usage 出现在 stream_options.include_usage 启用后的最后一个 chunk
-        if (json.usage) {
-          usage = parseUsage(json.usage);
+        const reported = parseUsage(json.usage) ?? parseUsage(choice?.usage);
+        if (reported) usage = reported;
+        // A delta may contain both thought and body: accept the complete delta before stopping.
+        if (outputControl?.shouldStop?.()) {
+          finishReason = 'length';
+          return true;
         }
-      } catch {
-        // 非 JSON 行忽略
-      }
       return false;
   };
 

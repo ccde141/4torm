@@ -8,6 +8,8 @@ test('框架工具始终保持独立', () => {
     'register_tool', 'register_skill', 'review_changes', 'list_agents',
     'create_workflow', 'list_workflows', 'update_workflow', 'complete_task',
     'create_automation', 'update_automation', 'list_automations',
+    'get_automation', 'list_automation_targets', 'set_automation_enabled',
+    'run_automation', 'delete_automation',
     'envelope_add', 'envelope_remove', 'envelope_list',
   ]) {
     assert.equal(isFrameworkTool(name), true, name);
@@ -21,6 +23,8 @@ test('每种框架工具只切断当前位置，后续普通工具会重新成�
     'register_tool', 'register_skill', 'review_changes', 'list_agents',
     'create_workflow', 'list_workflows', 'update_workflow', 'complete_task',
     'create_automation', 'update_automation', 'list_automations',
+    'get_automation', 'list_automation_targets', 'set_automation_enabled',
+    'run_automation', 'delete_automation',
     'envelope_add', 'envelope_remove', 'envelope_list',
   ];
   for (const frameworkTool of frameworkTools) {

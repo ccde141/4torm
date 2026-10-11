@@ -15,6 +15,17 @@ test('任务板每次写入使用唯一临时文件名', () => {
   assert.match(second, /session\.taskboard\.json\.\d+\.[0-9a-f-]+\.tmp$/i);
 });
 
+test('任务板业务失败与空板读取有显式状态', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-taskboard-status-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const target = path.join(dir, 'session.taskboard.json');
+
+  assert.equal((await execTaskBoard(null, { action: 'set' })).ok, false);
+  assert.equal((await execTaskBoard(target, { action: 'get' })).ok, true);
+  assert.equal((await execTaskBoard(target, { action: 'set', expectedRevision: 0,
+    tasks: [] })).ok, false);
+});
+
 test('任务板写入完成后不残留临时文件', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-taskboard-'));
   const target = path.join(dir, 'session.taskboard.json');
@@ -35,12 +46,14 @@ test('任务板只接受基于当前 revision 的覆盖写入', async (t) => {
     action: 'set', expectedRevision: 0, goal: '交付',
     tasks: [{ title: '第一版', status: 'doing' }],
   });
+  assert.equal(created.ok, true);
   assert.equal(created.meta?.taskboard?.revision, 1);
 
   const updated = await execTaskBoard(target, {
     action: 'set', expectedRevision: 1, goal: '交付',
     tasks: [{ title: '第二版', status: 'done' }],
   });
+  assert.equal(updated.ok, true);
   assert.equal(updated.meta?.taskboard?.revision, 2);
   assert.match((await execTaskBoard(target, { action: 'get' })).result, /revision=2/);
 
@@ -48,6 +61,7 @@ test('任务板只接受基于当前 revision 的覆盖写入', async (t) => {
     action: 'set', expectedRevision: 1, goal: '交付',
     tasks: [{ title: '过期覆盖', status: 'doing' }],
   });
+  assert.equal(stale.ok, false);
   assert.match(stale.result, /版本冲突/);
   assert.equal(stale.meta?.taskboard?.revision, 2);
   assert.equal(readTaskboard(target)?.tasks[0]?.title, '第二版');

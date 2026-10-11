@@ -18,21 +18,21 @@ test('session index preserves provider prompt and completion usage', () => {
 
 test('cleared usage is visibly pending instead of reusing a stale pre-compact value', () => {
   assert.deepEqual(tokenUsageToMeta(undefined), {});
-  assert.deepEqual(formatTokenUsage(undefined), { label: '--', title: '尚无模型返回的实际用量' });
+  assert.deepEqual(formatTokenUsage(undefined), { label: '--', title: '本次用量未知' });
   assert.deepEqual(formatTokenUsage({ promptTokens: 0, completionTokens: 0, totalTokens: 9000 }), {
-    label: '9.0K',
-    title: '历史实际总量 9.0K tokens；输入/输出明细将在下次回复后补齐',
+    label: '--',
+    title: '历史总量 9.0K tokens · 本次未知',
   });
   assert.deepEqual(formatTokenUsage({ promptTokens: 12_000, completionTokens: 345, totalTokens: 12_345 }), {
-    label: '12.3K',
-    title: '实际用量：输入 12.0K + 输出 345 = 12.3K tokens',
+    label: '12.0K',
+    title: '输入 12.0K · 输出 345 · 合计 12.3K tokens',
   });
 });
 
 test('token usage tooltip supports English without changing values', () => {
   assert.deepEqual(formatTokenUsage({ promptTokens: 12_000, completionTokens: 345, totalTokens: 12_345 }, 'en-US'), {
-    label: '12.3K',
-    title: 'Actual usage: 12.0K input + 345 output = 12.3K tokens',
+    label: '12.0K',
+    title: 'Input 12.0K · output 345 · total 12.3K tokens',
   });
-  assert.deepEqual(formatTokenUsage(undefined, 'en-US'), { label: '--', title: 'No actual model usage reported yet' });
+  assert.deepEqual(formatTokenUsage(undefined, 'en-US'), { label: '--', title: 'Latest usage unavailable' });
 });

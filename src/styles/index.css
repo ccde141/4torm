@@ -6,6 +6,8 @@
 
 @import './variables/tokens.css';
 @import './variables/motion.css';
+@import './components/entity-presence.css';
+@import './components/compaction-notice.css';
 @import './skin.css';
 @import './components/tradewind.css';
 @import './components/tradewind-panels.css';

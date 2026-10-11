@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { callLLM } from './llm-bridge.js';
+import { isProviderContextOverflow } from './provider-request-error.js';
 
 async function withProvider(run: (dataDir: string) => Promise<void>) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-anthropic-'));
@@ -13,6 +14,48 @@ async function withProvider(run: (dataDir: string) => Promise<void>) {
   }] }));
   try { await run(dataDir); } finally { await fs.rm(dataDir, { recursive: true, force: true }); }
 }
+
+test('Anthropic output control cancels its reader and keeps the final accepted text or thinking delta', async t => {
+  await withProvider(async dataDir => {
+    for (const kind of ['thinking', 'text']) {
+      let canceled = false;
+      let accepted = false;
+      const events = [
+        { type: 'content_block_start', index: 0, content_block: { type: kind } },
+        { type: 'content_block_delta', index: 0, delta: kind === 'text'
+          ? { type: 'text_delta', text: '正文' } : { type: 'thinking_delta', thinking: '思考' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '不应消费' } },
+      ];
+      let closeTimer: NodeJS.Timeout;
+      t.mock.method(globalThis, 'fetch', async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new TextEncoder().encode(events
+          .map(event => `data: ${JSON.stringify(event)}\n\n`).join('')));
+          closeTimer = setTimeout(() => controller.close(), 100); },
+        cancel() { canceled = true; },
+      })));
+      const result = await callLLM({ dataDir, fullModelKey: 'pvd_claude:claude-test',
+        messages: [{ role: 'user', content: '压缩' }], onChunk: () => { accepted = true; },
+        onReasoning: () => { accepted = true; }, outputControl: { shouldStop: () => accepted },
+      });
+      clearTimeout(closeTimer!);
+      assert.equal(result.content, kind === 'text' ? '正文' : '');
+      assert.equal(result.reasoningContent, kind === 'thinking' ? '思考' : undefined);
+      assert.equal(result.finishReason, 'length');
+      assert.equal(canceled, true);
+    }
+  });
+});
+
+test('Anthropic SSE capacity errors retain their recovery classification', async t => {
+  await withProvider(async dataDir => {
+    t.mock.method(globalThis, 'fetch', async () => new Response(
+      'event: error\ndata: {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long"}}\n\n',
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    ));
+    await assert.rejects(callLLM({ dataDir, fullModelKey: 'pvd_claude:claude-test',
+      messages: [{ role: 'user', content: 'test' }], onChunk: () => {} }), isProviderContextOverflow);
+  });
+});
 
 test('Anthropic requests apply custom provider parameters without exposing system', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-anthropic-custom-'));

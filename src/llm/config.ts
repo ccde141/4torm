@@ -1,8 +1,7 @@
 import { readJson, writeJson } from '../api/storage';
 import type { ProviderProfileId } from './provider-profiles';
-import { resolveProviderProtocol, type ProviderProtocol } from './provider-protocol';
+import type { ProviderProtocol } from './provider-protocol';
 import {
-  buildToolTransportFingerprint,
   readModelCapability,
   writeModelCapability,
   type ModelCapabilityMap,
@@ -30,9 +29,9 @@ export interface ProviderEntry {
   customParameterDefinitions?: ProviderCustomParameterDefinition[];
   /** Provider request and response protocol. Missing values retain legacy OpenAI-compatible behavior. */
   protocol?: ProviderProtocol;
-  /** 工具调用模式：auto=探测决定（默认）, native=强制原生, text=JSON 文本工具调用 */
+  /** 旧版工具模式字段；运行时只根据当前模型的有效探测结果选择。 */
   nativeMode?: 'auto' | 'native' | 'text';
-  /** 原生能力探测缓存：model id → 探测结果（auto 模式据此选循环） */
+  /** 旧版探测记录，仅供读取兼容；运行时使用带指纹的 toolTransports。 */
   nativeProbe?: Record<string, { native: boolean; probedAt: string }>;
   /** Per-model capability analysis. nativeProbe remains readable for compatibility. */
   modelCapabilities?: ModelCapabilityMap;
@@ -62,19 +61,10 @@ const FILE = 'providers.json';
 let cache: { providers: ProviderEntry[]; activeModel: string } | null = null;
 let writeQueue: Promise<void> = Promise.resolve();
 
-function resolveApiKey(provider: ProviderEntry): string {
-  if (provider.apiKey) return provider.apiKey;
-  const envKey = (import.meta as { env?: Record<string, string> }).env?.[`VITE_PROVIDER_KEY_${provider.id}`];
-  return envKey || '';
-}
-
 async function load(): Promise<{ providers: ProviderEntry[]; activeModel: string }> {
   if (cache) return cache;
   const data = await readJson<{ providers: ProviderEntry[]; activeModel: string }>(FILE);
   cache = data || { providers: [], activeModel: '' };
-  for (const p of cache.providers) {
-    p.apiKey = resolveApiKey(p);
-  }
   return cache;
 }
 
@@ -158,6 +148,23 @@ export function invalidateCache() {
   cache = null;
 }
 
+async function readToolTransportDescriptor(
+  providerId: string, model: string,
+): Promise<{ protocol: 'openai-chat-completions' | 'anthropic-messages'; fingerprint: string }> {
+  const query = new URLSearchParams({ providerId, model });
+  const response = await fetch(`/api/model-runtime/tool-transport?${query}`);
+  if (!response.ok) throw new Error(`工具传输配置读取失败：HTTP ${response.status}`);
+  const value: unknown = await response.json();
+  if (!value || typeof value !== 'object') throw new Error('工具传输配置响应无效');
+  const descriptor = value as { protocol?: unknown; fingerprint?: unknown };
+  if ((descriptor.protocol !== 'openai-chat-completions'
+    && descriptor.protocol !== 'anthropic-messages')
+    || typeof descriptor.fingerprint !== 'string' || !descriptor.fingerprint) {
+    throw new Error('工具传输配置响应无效');
+  }
+  return { protocol: descriptor.protocol, fingerprint: descriptor.fingerprint };
+}
+
 /**
  * 探测某 model 的原生能力并落盘到 provider.nativeProbe。
  * 连通失败（reachable=false）不落盘，返回结果供 UI 提示。
@@ -172,28 +179,26 @@ export async function probeAndStore(providerId: string, model: string): Promise<
   const provider = await getProvider(providerId);
   if (!provider) return { reachable: false, native: false, status: 'unknown' };
 
+  const transport = await readToolTransportDescriptor(providerId, model);
+
   const result = await probeNativeCapability({
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
     headers: provider.customHeaders,
     model,
-    protocol: resolveProviderProtocol(provider.baseUrl, provider.protocol),
+    protocol: transport.protocol,
     profile: provider.modelProfiles?.[model] ?? 'auto',
   });
 
   if (result.status !== 'unknown') {
     const checkedAt = new Date().toISOString();
-    const protocol = resolveProviderProtocol(provider.baseUrl, provider.protocol);
-    const profile = provider.modelProfiles?.[model] ?? 'auto';
     const probe = { ...(provider.nativeProbe ?? {}) };
     probe[model] = { native: result.native, probedAt: checkedAt };
     const toolTransports = { ...(provider.toolTransports ?? {}) };
     toolTransports[model] = {
       status: result.status,
       checkedAt,
-      fingerprint: buildToolTransportFingerprint({
-        providerId, baseUrl: provider.baseUrl, protocol, model, profile,
-      }),
+      fingerprint: transport.fingerprint,
     };
     await updateProvider(providerId, {
       nativeProbe: probe,
@@ -215,12 +220,13 @@ export async function probeVisionAndStore(providerId: string, model: string) {
   const { probeVisionCapability } = await import('./vision-probe');
   const provider = await getProvider(providerId);
   if (!provider) return { status: 'inconclusive' as const, error: 'Provider not found' };
+  const transport = await readToolTransportDescriptor(providerId, model);
   const result = await probeVisionCapability({
     baseUrl: provider.baseUrl,
     apiKey: provider.apiKey,
     headers: provider.customHeaders,
     model,
-    protocol: resolveProviderProtocol(provider.baseUrl, provider.protocol),
+    protocol: transport.protocol,
   });
   if (result.status !== 'inconclusive') {
     await updateProvider(providerId, {

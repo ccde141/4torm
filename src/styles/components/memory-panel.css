@@ -39,7 +39,8 @@
 
 .mem-summary { flex: 1; font-weight: 600; font-size: var(--font-sm); color: var(--color-text-primary); }
 .mem-actions { display: flex; gap: var(--space-1); opacity: 0; transition: opacity var(--duration-fast) var(--ease-out-expo); }
-.mem-item:hover .mem-actions { opacity: 1; }
+.mem-item:hover .mem-actions,.mem-item:focus-within .mem-actions { opacity: 1; }
+@media (hover: none) { .mem-actions { opacity: 1; } }
 
 .mem-icon-btn {
   border: none; background: transparent; cursor: pointer;

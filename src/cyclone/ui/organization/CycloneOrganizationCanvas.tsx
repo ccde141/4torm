@@ -65,6 +65,7 @@ export function CycloneOrganizationCanvas(props: Props) {
   const labels = useMemo(() => ({
     seat: t('cyclone.org.seat'), running: t('cyclone.org.running'),
     waiting: t('cyclone.org.waiting'), failed: t('cyclone.org.failed'), unread: t('cyclone.org.unread'),
+    unknown: t('cyclone.org.unknown'),
     idle: t('cyclone.org.idle'), openChat: t('cyclone.org.openChat'),
   }), [t]);
   const layoutDraft = useMemo(

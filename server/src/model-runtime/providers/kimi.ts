@@ -1,6 +1,7 @@
 import { providerHost } from './host.js';
-import type { ProviderAdapter } from '../contracts/provider-adapter.js';
+import type { ProviderAdapter, ProviderGenerationLimits, ProviderModelIdentity } from '../contracts/provider-adapter.js';
 import { normalizeKimiConfig } from '../config/kimi-config.js';
+import { mergeCustomRequestParameters } from './custom-request-parameters.js';
 
 const KIMI_HOSTS = new Set(['api.moonshot.ai', 'api.moonshot.cn', 'api.kimi.com']);
 
@@ -15,12 +16,36 @@ export const kimiAdapter: ProviderAdapter = {
     maxTokensField: 'max_completion_tokens',
     reasoningHistory: 'reasoning_content',
   },
+  generationLimits: kimiGenerationLimits,
+  disableThinking: (body, identity) => {
+    if (kimiFamily(identity.model) !== 'k2.6') return false;
+    body.thinking = { type: 'disabled' };
+    delete body.reasoning_effort;
+    return true;
+  },
   normalizeRequest: (body, identity) => {
     const defaults = normalizeKimiConfig({ generationDefaults: identity.generationDefaults })
       .generationDefaults;
     normalizeThinking(body, identity.model, defaults.thinkingMode, defaults.reasoningEffort);
   },
 };
+
+function kimiGenerationLimits(identity: ProviderModelIdentity): ProviderGenerationLimits {
+  const body: Record<string, unknown> = {};
+  kimiAdapter.normalizeRequest?.(body, identity);
+  const final = mergeCustomRequestParameters(body, identity.customRequestParameters);
+  const family = kimiFamily(identity.model);
+  // https://platform.kimi.ai/docs/api/models-overview — 32K on K2.x is a default, not a hard cap.
+  if (family === 'k3') {
+    return { contextWindowTokens: 1_048_576, maxOutputTokens: 1_048_576, reasoning: true };
+  }
+  if (family === 'k2.7-code') return { contextWindowTokens: 262_144, reasoning: true };
+  if (family === 'other') return {};
+  const thinking = final.thinking;
+  const disabled = thinking && typeof thinking === 'object' && !Array.isArray(thinking)
+    && (thinking as Record<string, unknown>).type === 'disabled';
+  return { contextWindowTokens: 262_144, reasoning: !disabled };
+}
 
 function normalizeThinking(
   body: Record<string, unknown>,

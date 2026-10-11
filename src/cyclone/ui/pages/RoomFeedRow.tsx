@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocale } from '../../../i18n/LocaleContext';
 import { renderTextWithCode } from '../../../engine/markdown';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
-import type { FeedMsg } from './useRoomStreamRunners';
+import type { FeedMsg } from './room-stream-events';
 import type { FeedTool, RoomReplySegment } from './room-reply-segments';
 import { splitTurnSegments } from './cyclone-room-turn';
 import DispatchCard from './DispatchCard';

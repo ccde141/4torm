@@ -21,6 +21,8 @@ import { toolsEn, toolsZh } from './tools-messages';
 import { skillsEn, skillsZh } from './skills-messages';
 import { mcpEn, mcpZh } from './mcp-messages';
 import { modelSettingsEn, modelSettingsZh } from './model-settings-messages';
+import { dashboardEn, dashboardZh } from './dashboard-messages';
+import { compactionEn, compactionZh } from './compaction-messages';
 
 export type Locale = 'zh-CN' | 'en-US';
 
@@ -60,10 +62,6 @@ const coreZh = {
   'common.delete': '删除',
   'common.edit': '编辑',
   'common.loading': '加载中…',
-  'dashboard.idle': '空闲',
-  'dashboard.sessions': '会话',
-  'dashboard.all': '全部',
-  'dashboard.createAgent': '+ 创建 Agent',
   'agent.configure': '配置 Agent',
   'agent.memory': '长期记忆',
   'agent.model': '模型',
@@ -71,8 +69,11 @@ const coreZh = {
   'agent.notSelected': '未选择',
   'agent.copyWorkspace': '{path}（点击复制）',
   'agent.deleteWarning': '工作区与对话信息将被清空，确认删除?',
+  'agent.deleting': '正在删除…',
+  'agent.deleteFailed': '删除 Agent 失败：{detail}',
   'agent.tabBasic': '基本',
   'agent.tabPrompt': '提示词',
+  'agent.tabTools': '工具',
   'agent.tabSkills': '技能',
   'agent.avatarLabel': '{name}的头像',
   'avatar.preview': '待保存的 Agent 头像',
@@ -164,10 +165,6 @@ const coreEn: Record<keyof typeof coreZh, string> = {
   'common.delete': 'Delete',
   'common.edit': 'Edit',
   'common.loading': 'Loading…',
-  'dashboard.idle': 'Idle',
-  'dashboard.sessions': 'Sessions',
-  'dashboard.all': 'All',
-  'dashboard.createAgent': '+ Create Agent',
   'agent.configure': 'Configure Agent',
   'agent.memory': 'Long-term memory',
   'agent.model': 'Model',
@@ -175,8 +172,11 @@ const coreEn: Record<keyof typeof coreZh, string> = {
   'agent.notSelected': 'Not selected',
   'agent.copyWorkspace': '{path} (click to copy)',
   'agent.deleteWarning': 'This clears the workspace and conversation data. Delete this agent?',
+  'agent.deleting': 'Deleting…',
+  'agent.deleteFailed': 'Unable to delete Agent: {detail}',
   'agent.tabBasic': 'Basic',
-  'agent.tabPrompt': 'Prompt & tools',
+  'agent.tabPrompt': 'Prompt',
+  'agent.tabTools': 'Tools',
   'agent.tabSkills': 'Skills',
   'agent.avatarLabel': "{name}'s avatar",
   'avatar.preview': 'Pending Agent avatar',
@@ -249,8 +249,8 @@ export function writeStoredLocale(storage: Pick<Storage, 'setItem'>, locale: Loc
 
 export type MessageValues = Record<string, string | number>;
 
-const zh = { ...coreZh, ...agentConfigZh, ...chatZh, ...taskboardZh, ...chatPageZh, ...convectionZh, ...cycloneZh, ...cycloneSeatZh, ...cycloneShellZh, ...cycloneBulletinZh, ...cycloneRoomZh, ...cycloneSeatChatZh, ...tradewindShellZh, ...tradewindConfigZh, ...tradewindProfileZh, ...tradewindInfoZh, ...tradewindChatZh, ...tradewindMeetingZh, ...tradewindCanvasZh, ...tideZh, ...toolsZh, ...skillsZh, ...mcpZh, ...modelSettingsZh } as const;
-const en: Record<keyof typeof zh, string> = { ...coreEn, ...agentConfigEn, ...chatEn, ...taskboardEn, ...chatPageEn, ...convectionEn, ...cycloneEn, ...cycloneSeatEn, ...cycloneShellEn, ...cycloneBulletinEn, ...cycloneRoomEn, ...cycloneSeatChatEn, ...tradewindShellEn, ...tradewindConfigEn, ...tradewindProfileEn, ...tradewindInfoEn, ...tradewindChatEn, ...tradewindMeetingEn, ...tradewindCanvasEn, ...tideEn, ...toolsEn, ...skillsEn, ...mcpEn, ...modelSettingsEn };
+const zh = { ...coreZh, ...compactionZh, ...dashboardZh, ...agentConfigZh, ...chatZh, ...taskboardZh, ...chatPageZh, ...convectionZh, ...cycloneZh, ...cycloneSeatZh, ...cycloneShellZh, ...cycloneBulletinZh, ...cycloneRoomZh, ...cycloneSeatChatZh, ...tradewindShellZh, ...tradewindConfigZh, ...tradewindProfileZh, ...tradewindInfoZh, ...tradewindChatZh, ...tradewindMeetingZh, ...tradewindCanvasZh, ...tideZh, ...toolsZh, ...skillsZh, ...mcpZh, ...modelSettingsZh } as const;
+const en: Record<keyof typeof zh, string> = { ...coreEn, ...compactionEn, ...dashboardEn, ...agentConfigEn, ...chatEn, ...taskboardEn, ...chatPageEn, ...convectionEn, ...cycloneEn, ...cycloneSeatEn, ...cycloneShellEn, ...cycloneBulletinEn, ...cycloneRoomEn, ...cycloneSeatChatEn, ...tradewindShellEn, ...tradewindConfigEn, ...tradewindProfileEn, ...tradewindInfoEn, ...tradewindChatEn, ...tradewindMeetingEn, ...tradewindCanvasEn, ...tideEn, ...toolsEn, ...skillsEn, ...mcpEn, ...modelSettingsEn };
 export type MessageKey = keyof typeof zh;
 
 export function resolveMessage(locale: Locale, key: string, values?: MessageValues): string {

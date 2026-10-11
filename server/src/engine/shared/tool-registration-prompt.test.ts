@@ -23,12 +23,19 @@ function emptyToolSeatPrompt(native: boolean): string {
 test('tool registration instructions appear only in interactive prompts', () => {
   const interactive = buildSelfManagementSection({ allowToolRegistration: true });
   const unattended = buildSelfManagementSection({ allowToolRegistration: false });
+  assert.match(interactive, /## 4torm 框架导航/);
+  assert.match(interactive, /docs\/architecture\//);
+  assert.match(interactive, /server\/src\/tools\/framework\/catalog\.json/);
+  assert.match(interactive, /data\/skills\/\{名称\}\/SKILL\.md/);
+  assert.match(interactive, /data\/mcp\/servers\.json/);
   assert.match(interactive, /register_tool/);
   assert.match(interactive, /executionMode/);
   assert.match(interactive, /ctx\.signal/);
   assert.match(interactive, /detachable/);
-  assert.match(interactive, /"type":"tool_call","name":"register_tool"/);
+  assert.match(interactive, /按本轮工具协议调用 `register_tool`/);
+  assert.doesNotMatch(interactive, /"type":"tool_call","name":"register_tool"/);
   assert.doesNotMatch(interactive, /<action/);
+  assert.doesNotMatch(interactive, /在 `data\/mcp\/servers\.json` 追加/);
   assert.doesNotMatch(unattended, /register_tool/);
 });
 

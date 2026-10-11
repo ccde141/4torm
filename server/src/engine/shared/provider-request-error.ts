@@ -1,8 +1,30 @@
 import { frameworkError, type FrameworkError } from './framework-error.js';
 
 const SOURCE = 'llm-bridge';
+const CONTEXT_CODES = new Set([
+  'context_length_exceeded', 'max_context_length_exceeded', 'context_window_exceeded',
+  'prompt_too_long', 'input_tokens_exceeded',
+]);
+
+/** Only an explicit input/context-capacity rejection permits compaction recovery. */
+export function isProviderContextOverflow(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'data' in error
+    && !!error.data && typeof error.data === 'object' && 'code' in error.data
+    && error.data.code === 'MODEL_CONTEXT_LIMIT_EXCEEDED';
+}
+
+export function providerResponseError(payload: unknown): FrameworkError | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const value = payload as Record<string, unknown>;
+  if (!value.error) return null;
+  return providerHttpError(422, JSON.stringify(value));
+}
 
 export function providerHttpError(status: number, responseBody: string): FrameworkError {
+  if ((status === 400 || status === 413 || status === 422) && isContextRejection(responseBody)) {
+    return make('MODEL_CONTEXT_LIMIT_EXCEEDED', 'provider',
+      `模型服务确认输入超过上下文容量${detailSuffix(responseBody)}`);
+  }
   if (status === 401) {
     return make('MODEL_AUTH_FAILED', 'permission', `模型服务鉴权失败（HTTP ${status}），请检查 API Key`);
   }
@@ -24,6 +46,23 @@ export function providerHttpError(status: number, responseBody: string): Framewo
     return make(`MODEL_PROVIDER_HTTP_${status}`, 'provider', `模型服务暂时不可用（HTTP ${status}）`, true);
   }
   return make(`MODEL_PROVIDER_HTTP_${status}`, 'provider', `模型服务请求失败（HTTP ${status}）`);
+}
+
+function isContextRejection(body: string): boolean {
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    const error = parsed.error && typeof parsed.error === 'object'
+      ? parsed.error as Record<string, unknown> : parsed;
+    if ([error.code, error.type].some(code => typeof code === 'string'
+      && CONTEXT_CODES.has(code.toLowerCase()))) return true;
+  } catch { /* Non-JSON provider diagnostics are still matched against explicit capacity language. */ }
+  const detail = safeProviderDetail(body) || body;
+  return /maximum context length|context (?:length|window).*(?:exceed|too (?:long|large))|(?:exceed|longer than).*(?:context (?:length|window))|prompt is too long|input token(?:s)? (?:limit )?exceeded|输入.*(?:token|令牌).*超|上下文.*(?:超出|超过)/i.test(detail);
+}
+
+function detailSuffix(body: string): string {
+  const detail = safeProviderDetail(body);
+  return detail ? `：${detail}` : '';
 }
 
 export function providerNetworkError(error: unknown): FrameworkError {

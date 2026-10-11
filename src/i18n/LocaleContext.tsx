@@ -1,21 +1,12 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   DEFAULT_LOCALE,
   readStoredLocale,
   resolveMessage,
   writeStoredLocale,
   type Locale,
-  type MessageKey,
-  type MessageValues,
 } from './locale';
-
-interface LocaleContextValue {
-  locale: Locale;
-  setLocale: (locale: Locale) => void;
-  t: (key: MessageKey, values?: MessageValues) => string;
-}
-
-const LocaleContext = createContext<LocaleContextValue | null>(null);
+import { LocaleContext, type LocaleContextValue } from './locale-context';
 
 function initialLocale(): Locale {
   if (typeof window === 'undefined') return DEFAULT_LOCALE;

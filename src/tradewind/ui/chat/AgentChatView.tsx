@@ -1,4 +1,4 @@
-import type { KeyboardEvent, RefObject } from 'react';
+import { memo, type KeyboardEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { ChatMessage } from '../../../types';
 import ToolCallMessage from './ToolCallMessage';
@@ -8,6 +8,8 @@ import DelegateCard from './DelegateCard';
 import ContactCard from './ContactCard';
 import { useLocale } from '../../../i18n/LocaleContext';
 import type { MessageKey } from '../../../i18n/locale';
+import type { ProviderUsage } from '../token-usage';
+import { CompactionNotice } from '../../../components/common/CompactionNotice';
 
 export type AgentChatActivity = 'idle' | 'waiting' | 'reasoning' | 'responding'
   | 'tool' | 'delegate' | 'contact' | 'failed';
@@ -20,6 +22,8 @@ interface Props {
   isEnvelopeRound: boolean;
   activity: AgentChatActivity;
   nodeLabel: string;
+  latestUsage?: ProviderUsage | null;
+  compactionNotice?: string | null;
   messages: ChatMessage[];
   error: string | null;
   input: string;
@@ -51,17 +55,22 @@ const activityBadgeKeys: Record<AgentChatActivity, MessageKey> = {
 export default function AgentChatView(props: Props) {
   const { t } = useLocale();
   const { visible, sealed, paused, streaming, isEnvelopeRound, activity, nodeLabel,
-    messages, error, input, messagesContainerRef, messagesEndRef, onClose, onInput,
+    latestUsage, compactionNotice, messages, error, input, messagesContainerRef, messagesEndRef, onClose, onInput,
     onKeyDown, onSend, onStop, onPauseRound, onResumeRound, onStopWorkflow } = props;
   const statusText = sealed ? t('tradewind.chat.sealedStatus')
     : paused ? t('tradewind.chat.pausedStatus') : t(activityLabelKeys[activity]);
+  if (!visible) return null;
   return createPortal(
-    <div className="tw-chat-overlay" style={{ display: visible ? undefined : 'none' }}>
+    <div className="tw-chat-overlay">
       <div className="tw-chat-window">
         <div className="tw-chat-window__header">
           <div className="tw-chat-window__identity">
             <span className="tw-chat-window__eyebrow">AGENT NODE</span>
             <span className="tw-chat-window__title">{nodeLabel}</span>
+            {latestUsage !== undefined && <small className="tw-chat-window__eyebrow"
+              title={t('tradewind.chat.recentInputTooltip')}>{latestUsage
+              ? t('tradewind.chat.recentInputTokens', { count: latestUsage.promptTokens.toLocaleString() })
+              : t('tradewind.chat.recentInputUnknown')}</small>}
           </div>
           <span className={`tw-chat-window__state tw-chat-window__state--${activity}${streaming ? ' tw-chat-window__state--active' : ''}`}>
             {sealed ? t('tradewind.chat.sealedBadge') : paused ? t('tradewind.chat.pausedBadge') : t(activityBadgeKeys[activity])}
@@ -72,6 +81,7 @@ export default function AgentChatView(props: Props) {
           {messages.map((msg) => <AgentChatMessage key={msg.id} message={msg}
             isStreaming={streaming && msg === messages[messages.length - 1]} />)}
           {error && <div className="tw-chat-msg tw-chat-msg--error">{error}</div>}
+          {compactionNotice && <CompactionNotice message={compactionNotice} />}
           <div ref={messagesEndRef} />
         </div>
         <div className={`tw-chat-status tw-chat-status--${activity}${streaming ? ' tw-chat-status--active' : ''}${paused ? ' tw-chat-status--paused' : ''}`}>
@@ -97,7 +107,7 @@ export default function AgentChatView(props: Props) {
   );
 }
 
-function AgentChatMessage({ message, isStreaming }: { message: ChatMessage; isStreaming: boolean }) {
+const AgentChatMessage = memo(function AgentChatMessage({ message, isStreaming }: { message: ChatMessage; isStreaming: boolean }) {
   const { t } = useLocale();
   if (message.toolCall?.toolName === 'delegate') return <DelegateCard toolCall={message.toolCall as any} content={message.content} />;
   if (message.toolCall?.toolName === 'contact') return <ContactCard toolCall={message.toolCall} />;
@@ -124,7 +134,7 @@ function AgentChatMessage({ message, isStreaming }: { message: ChatMessage; isSt
         : <>{message.content}{isStreaming && <span className="tw-chat-cursor" />}</>}
     </div>
   </div>;
-}
+});
 
 function AgentChatControls({ paused, streaming, isEnvelopeRound, input, onSend, onStop,
   onPauseRound, onResumeRound, onStopWorkflow }: Pick<Props, 'paused' | 'streaming' | 'isEnvelopeRound' |

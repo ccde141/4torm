@@ -8,6 +8,7 @@
 import { useState } from 'react';
 import type { Agent } from '../../../types';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { generateCycloneSeatDuty } from './cyclone-control-client';
 
 export interface SeatDraft {
   agentId: string;
@@ -17,10 +18,9 @@ export interface SeatDraft {
   overrideAgentRole: boolean;
 }
 
-export default function SeatPanel({ mode, agents, workshopId, initial, onSubmit, onCancel }: {
+export default function SeatPanel({ mode, agents, initial, onSubmit, onCancel }: {
   mode: 'create' | 'edit';
   agents: Agent[];
-  workshopId: string;
   initial?: Partial<SeatDraft>;
   onSubmit: (draft: SeatDraft) => Promise<void>;
   onCancel: () => void;
@@ -38,17 +38,12 @@ export default function SeatPanel({ mode, agents, workshopId, initial, onSubmit,
     if (!agentId || genning) return;
     setGenning(true);
     try {
-      const r = await fetch(`/api/cyclone/workshop/${workshopId}/gen-duty`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId, title: title.trim() || t('cyclone.seat.fallbackTitle'), rolePrompt }),
-      });
-      if (!r.ok) {
-        const e = await r.json().catch(() => ({}));
-        alert(e?.error || t('cyclone.seat.generateFailed', { status: r.status }));
-        return;
-      }
-      const d = await r.json();
+      const d = await generateCycloneSeatDuty(
+        agentId, title.trim() || t('cyclone.seat.fallbackTitle'), rolePrompt,
+      );
       if (d.duty) setDuty(d.duty);
+    } catch (error) {
+      alert(`${t('cyclone.seat.generateFailed', { status: '' })}: ${(error as Error).message}`);
     } finally {
       setGenning(false);
     }

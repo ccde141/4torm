@@ -3,6 +3,8 @@ const SYSTEM_TOOLS = new Set([
   'register_tool', 'register_skill', 'review_changes', 'list_agents',
   'create_workflow', 'list_workflows', 'update_workflow', 'complete_task',
   'create_automation', 'update_automation', 'list_automations',
+  'get_automation', 'list_automation_targets', 'set_automation_enabled',
+  'run_automation', 'delete_automation',
   'envelope_add', 'envelope_remove', 'envelope_list',
 ]);
 

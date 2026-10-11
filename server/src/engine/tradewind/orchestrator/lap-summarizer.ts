@@ -1,12 +1,9 @@
 /**
- * 圈间摘要器 —— carryOver='summary' 模式的核心
+ * 圈间摘要器 —— carryOver='summary' 模式
  *
  * 职责：把上圈产出（output.json）压成一段"必要摘要"，作为下圈结转输入。
- * - 完整产出仍留在磁盘（output.json / 工作区文件），不丢
- * - 摘要用**产出那个终点 agent 自己的模型**做（顺 output.source → agentId → model）
- * - 失败降级：摘要失败则回退为"原样带上圈产出"（等价 accumulate），绝不让循环断链
- *
- * 与对流压缩器同源思路（callLLM 一次性调用），但信风独立副本。
+ * - 从 output.source 查找终点 Agent 的模型
+ * - 读取不到 output.json 时返回空字符串；找不到模型或模型调用失败时返回原文
  */
 
 import path from 'node:path';
@@ -32,7 +29,7 @@ const DEFAULT_SUMMARY_PROMPT = `你是圈间交接摘要专家。下面是本轮
 - 完整产出已存档于磁盘，摘要无需复述全文
 - 直接输出摘要正文，不加前缀说明`;
 
-/** 读 output.json → [{source, content}]，返回 {source终点节点id, 拼接全文} */
+/** 读取 output.json 并拼接正文；文件缺失、无效或内容为空时返回 null。 */
 async function readOutput(runDir: string): Promise<{ source: string; text: string } | null> {
   try {
     const raw = await fs.readFile(path.join(runDir, 'output.json'), 'utf-8');
@@ -55,7 +52,8 @@ async function resolveSourceModel(graph: WorkflowGraph, dataDir: string, sourceI
 }
 
 /**
- * 生成圈间摘要。返回摘要文本；任何环节失败则返回 fallback（原样全文），保证不断链。
+ * 生成圈间摘要。模型未配置或调用失败时返回原文；读取不到产出时返回空字符串。
+ * 源 Agent 配置读取失败会抛出。
  */
 export async function summarizeLap(params: LapSummarizeParams): Promise<string> {
   const out = await readOutput(params.runDir);

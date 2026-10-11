@@ -59,6 +59,19 @@ test('MCP API 拒绝缺少 URL 的远程配置', async t => {
   assert.match(response.json().error, /url/);
 });
 
+test('MCP 注册成功但连接失败时仍返回已保存的真实状态', async t => {
+  const { app } = await createApp(t);
+  const response = await app.inject({ method: 'POST', url: '/api/mcp/add', payload: {
+    name: 'offline', enabled: true, transport: 'streamable-http',
+    url: 'http://127.0.0.1:1/mcp',
+  } });
+  assert.equal(response.statusCode, 200);
+  assert.match(response.json().connectionError, /MCP 连接失败/);
+  const list = await app.inject({ method: 'GET', url: '/api/mcp/list' });
+  assert.deepEqual(list.json().map((item: { name: string; connected: boolean }) =>
+    [item.name, item.connected]), [['offline', false]]);
+});
+
 test('MCP API 原子导入多项配置并拒绝整批重名', async t => {
   const { app, dataDir } = await createApp(t);
   const payload = { configs: [

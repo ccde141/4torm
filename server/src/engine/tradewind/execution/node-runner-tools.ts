@@ -10,9 +10,10 @@ import {
   tryRegisterWait,
   clearWait,
 } from './contact-registry';
-import type { NodeRunnerEvent, NodeRunnerOpts } from './node-runner';
+import type { NodeRunner, NodeRunnerEvent, NodeRunnerOpts } from './node-runner';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import type { ToolCallOutcome } from '../../shared/react/native-loop.js';
 
 // ── Delegate ─────────────────────────────────────────────────────
 
@@ -20,7 +21,7 @@ export async function execDelegate(
   opts: NodeRunnerOpts,
   args: Record<string, string>,
   emit: (ev: NodeRunnerEvent) => void,
-): Promise<string> {
+): Promise<ToolCallOutcome> {
   const task = args.task || '';
   const context = args.context || '';
   const subSystemPrompt = args.systemPrompt || '';
@@ -66,7 +67,7 @@ export async function execDelegate(
   }
 
   emit({ type: 'delegate-done', delegateId, summary: result.summary, status: result.status });
-  return `[${result.status}] ${result.summary}`;
+  return { result: `[${result.status}] ${result.summary}`, ok: result.status === 'success' };
 }
 
 // ── Contact ──────────────────────────────────────────────────────
@@ -77,7 +78,7 @@ export async function execContact(
   emit: (ev: NodeRunnerEvent) => void,
   /** 本轮正在服务的 contact 源节点 ID（非 contact 轮为 null）——死锁提示分流用 */
   currentContactFrom?: string | null,
-): Promise<string> {
+): Promise<ToolCallOutcome> {
   const target = args.target || '';
   const message = args.message || '';
 
@@ -88,7 +89,7 @@ export async function execContact(
   if (!found) {
     const err = `联络失败：找不到名为「${target}」的协作者。请检查团队名册中的名称。`;
     emit({ type: 'contact-done', target, result: err, ok: false });
-    return err;
+    return { result: err, ok: false };
   }
 
   // 2. 死锁检测：环被拒时，按"目标是否正是当前正在服务你联络的那一方"分流措辞——
@@ -102,10 +103,16 @@ export async function execContact(
       ? `联络被系统拒绝：「${target}」正在等你回复它本轮的联络，反向联络会造成死锁。请不要再联络它，直接在本次回复里给出它需要的内容。`
       : `联络被系统拒绝：与「${target}」互相联络会造成死锁（它也正需要你的回复）。请勿等待它——先用你已有的信息把手头工作推进/收口；它的请求会在另一轮交由你处理。`;
     emit({ type: 'contact-done', target, result: err, ok: false });
-    return err;
+    return { result: err, ok: false };
   }
 
-  // 3. 向目标 runner 投递 contact 消息，等待完整 ReAct 完成
+  return await completeContact(opts, found.runner, target, message, emit);
+}
+
+async function completeContact(
+  opts: NodeRunnerOpts, runner: NodeRunner, target: string, message: string,
+  emit: (ev: NodeRunnerEvent) => void,
+): Promise<ToolCallOutcome> {
   try {
     const selfLabel = opts.systemPrompt.match(/你当前的身份：(.+)/)?.[1] || opts.nodeId;
     const contactContent = `[系统信息：来自协作者「${selfLabel}」的联络]\n\n${message}`;
@@ -115,7 +122,7 @@ export async function execContact(
         reject(new Error('contact 超时（20 分钟未响应）'));
       }, 20 * 60 * 1000);
 
-      found.runner.push({
+      runner.push({
         source: 'contact',
         content: contactContent,
         contactFrom: opts.nodeId,
@@ -136,11 +143,11 @@ export async function execContact(
     });
 
     emit({ type: 'contact-done', target, result: answer, ok: true });
-    return `[系统信息：来自协作者「${target}」的回复]\n\n${answer}`;
+    return { result: `[系统信息：来自协作者「${target}」的回复]\n\n${answer}`, ok: true };
   } catch (e) {
     const err = `联络「${target}」失败：${(e as Error).message}`;
     emit({ type: 'contact-done', target, result: err, ok: false });
-    return err;
+    return { result: err, ok: false };
   } finally {
     clearWait(opts.nodeId);
   }

@@ -60,8 +60,7 @@ data/
 │       └── bak/
 ├── tradewind/
 │   ├── workflows/{workflowId}/
-│   │   ├── graph.json
-│   │   ├── meta.json
+│   │   ├── definition.json
 │   │   ├── profiles.json
 │   │   └── workspace/
 │   └── runs/{workflowId}/{executionId}/
@@ -87,6 +86,7 @@ data/
 ├── providers.json
 ├── providers.template.json
 ├── labels.json
+│   Legacy Agent category labels; not read or written by this version
 ├── skin-config.json
 └── skin-textures/
 ```

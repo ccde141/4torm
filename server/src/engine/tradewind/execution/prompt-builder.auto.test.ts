@@ -44,6 +44,7 @@ console.log('信封交接 prompt 段');
 
 run('native + autoMode=true → 含交接信封段（自动措辞）+ complete_task + 信封工具', () => {
   const p = buildTradewindSystemPrompt({ ...base, native: true, autoMode: true });
+  assert.equal(p.match(/## 4torm 框架导航/g)?.length, 1);
   assert.match(p, /平等的协作者/);
   assert.match(p, /信封是当前节点的任务契约/);
   assert.match(p, /不替上下游包办/);
@@ -68,6 +69,7 @@ run('native + 手动（autoMode 缺省）→ 也含交接信封段 + complete_ta
 
 run('text agent（native=false）→ JSON 工具信封，普通自然语言自动交接', () => {
   const p = buildTradewindSystemPrompt({ ...base, native: false });
+  assert.equal(p.match(/## 4torm 框架导航/g)?.length, 1);
   assert.doesNotMatch(p, /# 交接信封/);
   assert.doesNotMatch(p, /complete_task/);
   assert.match(p, /"type":"tool_call"/);

@@ -8,14 +8,16 @@
  *
  * 设计要点：
  * - 按 provider family 分支翻译，对内统一成规范格式
- * - 现在只实现 openai family（含「假 OpenAI」中转，如 One API）
- * - anthropic / gemini 留类型位，不实现（YAGNI）
+ * - 本文件处理 OpenAI 兼容格式（含「假 OpenAI」中转，如 One API）
+ * - Anthropic Messages 的工具映射位于 provider-transports/anthropic-tools.ts
+ * - gemini 仅保留类型位
  *
- * 不含任何引擎协议个性逻辑 → 属共享层，三引擎安全共用。
+ * 不含引擎专属协议逻辑，供多个引擎复用。
  */
 
 import type { ToolDef } from './tool-defs-loader';
 import type { NativeToolCall } from './types';
+import { mapToolParameterSchema } from './tool-parameter-schema.js';
 
 export type ProviderFamily = 'openai' | 'anthropic' | 'gemini';
 
@@ -71,23 +73,20 @@ export function toProviderToolsWithMap(defs: ToolDef[], family: ProviderFamily):
   if (family !== 'openai') {
     throw new Error(`tool-bridge: family '${family}' 尚未实现（当前仅支持 openai）`);
   }
-  const used = new Set<string>();
+  // Reserve already-valid names first so a sanitized MCP name cannot steal one.
+  const used = new Set(defs.map(definition => definition.name)
+    .filter(name => /^[a-zA-Z0-9_-]+$/.test(name)));
   const nameMap = new Map<string, string>();
   const tools = defs.map<OpenAIFunctionTool>(d => {
     const legal = /^[a-zA-Z0-9_-]+$/.test(d.name);
     const safeName = legal ? d.name : sanitizeToolName(d.name, used);
-    if (legal) used.add(d.name);
     if (safeName !== d.name) nameMap.set(safeName, d.name);
     return {
       type: 'function',
       function: {
         name: safeName,
         description: d.description ?? '',
-        parameters: {
-          type: 'object',
-          properties: d.parameters?.properties ?? {},
-          required: Array.isArray(d.parameters?.required) ? d.parameters!.required : [],
-        },
+        parameters: mapToolParameterSchema(d.parameters),
       },
     };
   });

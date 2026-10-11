@@ -15,7 +15,7 @@ export class TextToolStreamGate {
     } else if (source.startsWith('`')) {
       const newline = source.indexOf('\n');
       if (newline < 0) return;
-      if (source.slice(0, newline).trim() === '```tool_call') return;
+      if (/^```(?:tool_call|json)$/i.test(source.slice(0, newline).trim())) return;
     }
     this.release();
   }

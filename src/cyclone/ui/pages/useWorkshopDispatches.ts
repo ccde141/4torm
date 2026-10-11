@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CycloneDispatch } from './dispatch-timeline';
+import {
+  actOnDispatch,
+  markSeatDispatchesRead,
+  type DispatchAction,
+} from './dispatch-client';
+import { subscribeCycloneChanges } from './cyclone-change-client';
 
-export type DispatchAction = 'read' | 'include' | 'dismiss';
+export type { DispatchAction } from './dispatch-client';
 
 interface DispatchMessages {
   requestFailed: string;
@@ -55,6 +61,8 @@ export function useWorkshopDispatches(
   useEffect(() => {
     if (!workshopId || !enabled) return;
     let disposed = false;
+    const sequence = requestSeq;
+    let timer: number | undefined;
     const poll = async () => {
       const seq = ++requestSeq.current;
       try {
@@ -64,13 +72,20 @@ export function useWorkshopDispatches(
         if (!disposed) console.error('[cyclone] 刷新异步派发失败', error);
       }
     };
-    void poll();
-    const timer = window.setInterval(() => {
-      void poll();
-    }, 2_000);
+    const fallback = async () => {
+      await poll();
+      if (!disposed) timer = window.setTimeout(fallback, 2_000);
+    };
+    void fallback();
+    const unsubscribe = subscribeCycloneChanges(event => {
+      if (event.type === 'sync' || (event.type === 'change'
+        && event.workshopId === workshopId && event.scope === 'dispatch')) void poll();
+    });
     return () => {
       disposed = true;
-      window.clearInterval(timer);
+      sequence.current++;
+      if (timer !== undefined) window.clearTimeout(timer);
+      unsubscribe();
     };
   }, [workshopId, enabled]);
 
@@ -80,15 +95,7 @@ export function useWorkshopDispatches(
     action: DispatchAction,
   ): Promise<CycloneDispatch> => {
     if (!workshopId) throw new Error(messagesRef.current.noWorkshop);
-    const response = await fetch(
-      `/api/cyclone/workshop/${workshopId}/room/${roomId}/dispatches/${dispatchId}/${action}`,
-      { method: 'POST' },
-    );
-    if (!response.ok) throw await readDispatchError(
-      response,
-      requestFallback(messagesRef.current.requestFailed, response.status),
-    );
-    const updated: CycloneDispatch = await response.json();
+    const updated = await actOnDispatch(workshopId, roomId, dispatchId, action);
     requestSeq.current++;
     setSnapshot(current => current?.workshopId === workshopId
       ? { workshopId, items: current.items.map(item => item.id === updated.id ? updated : item) }
@@ -98,15 +105,7 @@ export function useWorkshopDispatches(
 
   const markSeatRead = useCallback(async (seatId: string): Promise<CycloneDispatch[]> => {
     if (!workshopId) throw new Error(messagesRef.current.noWorkshop);
-    const response = await fetch(
-      `/api/cyclone/workshop/${workshopId}/seat/${encodeURIComponent(seatId)}/dispatches/read`,
-      { method: 'POST' },
-    );
-    if (!response.ok) throw await readDispatchError(
-      response,
-      requestFallback(messagesRef.current.requestFailed, response.status),
-    );
-    const updated = await response.json() as CycloneDispatch[];
+    const updated = await markSeatDispatchesRead(workshopId, seatId);
     requestSeq.current++;
     setSnapshot(current => current?.workshopId === workshopId
       ? { workshopId, items: mergeDispatchReadReceipts(current.items, updated) }

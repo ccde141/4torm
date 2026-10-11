@@ -4,6 +4,8 @@ import { renderTextWithCode } from '../../../engine/markdown';
 import type { MeetingChairMessage, MeetingMessage, MeetingStatus } from './meeting-client';
 import { MeetingMessageItem } from './MeetingMessageItem';
 import { useLocale } from '../../../i18n/LocaleContext';
+import type { ProviderUsage } from '../token-usage';
+import { CompactionNotice } from '../../../components/common/CompactionNotice';
 
 export type MeetingView = 'public' | 'chair';
 
@@ -13,6 +15,7 @@ interface MeetingPanelViewProps {
   activeView: MeetingView;
   setActiveView: (view: MeetingView) => void;
   status: MeetingStatus | null;
+  latestUsage?: ProviderUsage | null;
   publicMsgs: MeetingMessage[];
   chairMsgs: MeetingChairMessage[];
   publicInput: string;
@@ -22,6 +25,7 @@ interface MeetingPanelViewProps {
   busy: boolean;
   chairBusy: boolean;
   error: string | null;
+  compactionNotice?: string | null;
   isOpening: boolean;
   isEnded: boolean;
   publicStateLabel: string;
@@ -46,7 +50,7 @@ interface MeetingPanelViewProps {
 export default function MeetingPanelView(props: MeetingPanelViewProps) {
   const { t } = useLocale();
   const {
-    nodeLabel, visible, activeView, setActiveView, status, publicMsgs, chairMsgs,
+    nodeLabel, visible, activeView, setActiveView, status, latestUsage, publicMsgs, chairMsgs,
     publicInput, chairInput, setPublicInput, setChairInput, busy, chairBusy, error,
     isOpening, isEnded, publicStateLabel, chairStateLabel, publicEndRef, chairEndRef,
     publicContainerRef, chairContainerRef, onClose, onEndMeeting, onJoin, onLeave,
@@ -61,6 +65,10 @@ export default function MeetingPanelView(props: MeetingPanelViewProps) {
           <div className="tw-meeting-panel__identity">
             <span className="tw-meeting-panel__eyebrow">MEETING NODE</span>
             <span className="tw-meeting-panel__title">{nodeLabel}{isEnded && t('tradewind.meeting.endedSuffix')}</span>
+            {latestUsage !== undefined && <small className="tw-meeting-panel__eyebrow"
+              title={t('tradewind.meeting.recentInputTooltip')}>{latestUsage
+              ? t('tradewind.meeting.recentInputTokens', { count: latestUsage.promptTokens.toLocaleString() })
+              : t('tradewind.meeting.recentInputUnknown')}</small>}
           </div>
           <span className={`tw-meeting-panel__header-state${busy ? ' tw-meeting-panel__header-state--active' : ''}`}>
             {publicStateLabel}
@@ -73,6 +81,7 @@ export default function MeetingPanelView(props: MeetingPanelViewProps) {
           </div>
         </div>
         {error && <div className="tw-meeting-panel__error">{error}</div>}
+        {props.compactionNotice && <CompactionNotice message={props.compactionNotice} />}
         {isOpening && <div className="tw-meeting-panel__opening-banner">{t('tradewind.meeting.openingBanner')}</div>}
         {isEnded && <div className="tw-meeting-panel__opening-banner">{t('tradewind.meeting.endedBanner')}</div>}
         <div className="tw-meeting-panel__body">

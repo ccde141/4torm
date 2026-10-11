@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { partitionToolActivity, type ToolActivityLike } from './tool-activity-group';
 import { useLocale } from '../../i18n/LocaleContext';
 
@@ -6,6 +6,8 @@ export interface ToolActivityItem extends ToolActivityLike {
   status?: string;
   args?: Record<string, unknown>;
 }
+
+const MAX_AUTO_OPEN_FAILED_ITEMS = 20;
 
 function targetOf(item: ToolActivityItem): string {
   const args = item.args || {};
@@ -23,6 +25,9 @@ function Group<T extends ToolActivityItem>({ items, renderItem, stopped }: {
 }) {
   const { t, locale } = useLocale();
   const failed = items.filter(item => item.status === 'error').length;
+  const autoOpenFailure = failed > 0 && items.length <= MAX_AUTO_OPEN_FAILED_ITEMS;
+  const [open, setOpen] = useState(autoOpenFailure);
+  useEffect(() => { if (autoOpenFailure) setOpen(true); }, [autoOpenFailure, failed]);
   const running = items.findLast(item => item.status === 'running' || item.status === 'pending');
   const current = running || items.at(-1)!;
   const target = targetOf(current);
@@ -30,7 +35,8 @@ function Group<T extends ToolActivityItem>({ items, renderItem, stopped }: {
     ? t('chat.tool.failedCount', { count: failed })
     : running ? t('chat.tool.running', { tool: current.tool }) : t('chat.tool.completed');
   return (
-    <details className="tool-activity-group" open={failed > 0}>
+    <details className="tool-activity-group" open={open}
+      onToggle={event => setOpen(event.currentTarget.open)}>
       <summary className="tool-activity-group__summary">
         <span className="tool-activity-group__arrow">▶</span>
         <span>{t('chat.tool.operationCount', { count: items.length })}</span>
@@ -38,7 +44,7 @@ function Group<T extends ToolActivityItem>({ items, renderItem, stopped }: {
         {target && <span className="tool-activity-group__target" title={target}>{target}</span>}
         {running && !stopped && <span className="thinking-card__tool-spinner" />}
       </summary>
-      <div className="tool-activity-group__body">{items.map(renderItem)}</div>
+      {open && <div className="tool-activity-group__body">{items.map(renderItem)}</div>}
     </details>
   );
 }

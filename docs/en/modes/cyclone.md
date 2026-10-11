@@ -1,156 +1,53 @@
 # Cyclone · Workshops
 
-Cyclone lets several agents collaborate in one long-lived workspace. A workshop contains permanent seats. Each seat points to a registered agent and keeps its own responsibility, role prompt, and private conversation history; its bound agent can be changed at any time.
+Cyclone is a place for several Agents to work together over time. You can create a workshop for a project and give different Agents their own seats. When they need to discuss something together, invite the relevant seats into a room. Everyone shares the workshop files, while each seat's private chat and each room's discussion remain separate.
 
-Talk directly with a seat or create group rooms where selected seats discuss in order. Every seat and room shares workshop files, while their conversation contexts remain separate.
+For example, to prepare a product launch, you could create a “Writer” seat and a “Reviewer” seat. Give each a task, then bring them into a room to discuss the launch. The Reviewer can inspect a file written by the Writer in the same workshop; their earlier private chats with you are not automatically made public in the room.
 
-Each seat conversation has an independent taskboard, used like the [Monsoon conversation taskboard](./chat#conversation-taskboard). The workshop also has a bulletin board shared by all agents for durable information, common agreements, and goals.
+## Start Work at a Seat
 
-Within the boundaries allowed by the collaboration structure, seats and room participants communicate in two ways:
+Use the plus button in the workshop list to create a workshop, then add seats. Choose an existing Agent and a name for each seat. A seat role prompt describes its responsibility here. You can also give it a short responsibility card to help other seats decide whom to ask or assign work to.
 
-- `contact` is synchronous: the current agent asks a target seat and waits for its reply before continuing.
-- `dispatch` is asynchronous: the current agent delegates longer work to a target seat and continues without waiting.
+Click the Writer seat to chat with it, give it work, and inspect tool activity and its taskboard. Click the Reviewer seat to open a separate private conversation. Both can use the shared workshop files. You can change the Agent bound to a seat later without clearing that seat's existing private chat.
 
-A workshop may also have a meeting assistant. It occupies no seat and does not speak in rooms; it provides private advice in each room's right sidebar, like the [Convection meeting assistant](./convection#private-meeting-assistant).
+The workshop bulletin board is a place for goals and agreements that all seats should know, such as launch scope or shared delivery criteria. It belongs to the workshop rather than to one seat's private chat.
 
-![Collaboration structure in a Cyclone workshop](/images/cyclone/collaboration-structure.webp)
+## Let Seats Collaborate
 
-## Create a Workshop
+On the Collaboration Structure canvas, put seats that may work directly together in the same group, or draw connections between seats in different groups. Save the canvas to make those relationships effective. The structure determines **who may contact whom**; it does not start tasks or merge conversations by itself.
 
-Use the plus button beside the workshop list and enter a name. Select a meeting assistant now, leave it empty, or configure it later from any room's assistant panel.
+![Seats, collaboration groups, and connections in a workshop](/images/cyclone/collaboration-structure.webp)
 
-A new workshop has no seats or rooms. Add permanent seats first, then create rooms for specific topics. Its name, assistant, seats, rooms, and shared files are persisted independently.
+If the Writer only needs to confirm one requirement with the Reviewer, it can use `contact` and wait for an answer before continuing. If an entire draft needs separate review, it can use `dispatch`, carry on with its own work, and check the assigned task's status and result later. The review happens in the Reviewer's own conversation; the two private chats are not combined into one record.
 
-## Create and Configure Seats
+## Discuss Work in a Room
 
-Use the plus button beside the seat list. Select a registered agent and give the seat a name unique within the workshop. The role prompt and responsibility card may be added later from seat settings.
+Create a room and invite the relevant seats when they need to discuss something together. After you speak, they reply in the order set for that room. On joining, a seat may introduce itself, share a work summary, or join silently. None of these choices publishes its full private chat to the room.
 
-The seat role prompt defines the agent's identity and working method here. By default, it is appended to the agent's base role prompt. With **Override Agent Base Role** enabled, only the seat prompt is used.
+Use **Meeting Settings** in the room's upper-right corner to change its topic, speaking order, or participants. Removing a seat from the meeting only removes it from that room; its seat, private chat, and earlier messages remain.
 
-The responsibility card is a short description shown to other seats when choosing a `contact` or `dispatch` target. It can be generated from the agent and seat configuration.
+The `build` mode suits discussions where participants also use tools to work with workshop files. The `plan` mode suits planning first: it restricts direct file writes, deletion, and command execution. Participants can contact other seats according to the collaboration structure in either mode.
 
-The bound agent, name, prompt, and card can all be changed. A new binding takes effect next round without clearing seat settings or private history. If the old agent was deleted, bind another valid agent to continue.
+You may also assign a meeting assistant to the workshop and talk to it privately from the panel on the right of a room. It can refer to that room's public discussion and the bulletin board, but its private replies do not enter the public discussion. Each room keeps its own meeting assistant chat.
 
-### Seat Conversations
+## Let an Agent Coordinate the Workshop
 
-Each seat has one conversation. Its agent uses the currently bound model, tools, and skills under the seat role prompt. File operations use the shared workshop directory.
+In Monsoon, you can ask an Agent to create a Cyclone workshop, add seats and rooms, assign tasks to each seat, and arrange further work based on their replies. It can also continue work in an existing workshop.
 
-Built-in file tools apply the bound agent's execution permissions, with the workshop directory always included as the current workspace. Reasoning, tools, SubAgent delegation, and live execution state appear in the conversation.
+Independent research, file writing, and work involving several steps are best assigned to each seat's private chat. Rooms are for sharing background, discussing disagreements, and bringing brief reports together. The bulletin board holds common goals, agreements, and conclusions. Simple questions or joint discussions can happen directly in a room.
 
-Background-capable tools such as `run_command` return an execution ID and continue if they have not finished after roughly three seconds. The seat agent can continue working, inspect status, wait for a bounded time, or terminate the process. The human can watch output and terminate it from the seat taskboard.
+The coordinating Agent can read seat replies and assignment results, continue seat tasks, adjust room membership, and talk privately with the meeting assistant.
 
-These background controls currently apply only to ordinary seat conversations. Rooms, assistant chats, and unattended `contact` or `dispatch` turns still wait for their tools to finish.
+For example:
 
-Seat context never enters rooms or other seats. The agent can use `contact` for a synchronous question or `dispatch` for asynchronous work.
+> Create a review workshop for this project. Have one seat check the installation flow and another verify the feature descriptions, each in its own private chat. Put shared requirements on the bulletin board. Once both have delivered their findings, hold a room discussion to resolve disagreements and collect revision suggestions.
 
-A seat conversation can also create and request registration of a global tool. Registration occurs only after human confirmation in that conversation. Rooms, assistant chats, and unattended communication turns cannot register tools; route such work to a permanent seat for review.
+Open Cyclone to inspect the seats' actual conversations, room discussions, and bulletin board, or take over part of the work yourself.
 
-### Long-Term Memory
+## Review Progress
 
-A seat uses the memory of its currently bound agent. Seat conversations, room turns, and target turns triggered by `contact` recall task-relevant entries and may use `memory_list`, `memory_read`, and `memory_write`.
+Seat chats and rooms show replies, tool activity, and communication between seats. Asynchronous assignments have their own status and result records. Once an assignment finishes, you can inspect its result and decide whether to bring it back into the room discussion.
 
-Memory belongs to the agent, not the workshop or seat. Rebinding keeps prior conversations but moves subsequent recall and writes to the new agent.
+Seat chats, rooms, and meeting assistant chats all support `/compact` in their own composer to summarize the conversation and continue. Send `/reset` to archive and clear the current conversation.
 
-A `dispatch` runs as the target seat and therefore uses its bound agent's memory. Temporary SubAgents created with `delegate` remain isolated and do not automatically use long-term memory. Meeting assistants have no tools and do not access agent memory.
-
-## Collaboration Structure
-
-The collaboration structure defines how seats in a workshop discover and communicate with one another. Every node on the canvas remains an independent seat. Groups and relation lines define only the collaboration boundaries between seats: they do not merge private conversation histories or create group rooms automatically.
-
-Seats in the same group can `contact` and `dispatch` to one another. Seats in different groups need a relation line between them. A two-way relation lets both ends contact and dispatch to each other; a one-way relation permits operations only from its source seat to its target seat. Seats that neither share a group nor have a relation line do not appear among each other's available communication targets.
-
-Creating groups, moving seats, changing membership, and editing relation lines on the canvas initially affect only the local draft. The new collaboration boundaries are written to the workshop and take effect only after you select **Save Collaboration Structure**. Deleting a group only removes the membership relationship and does not delete its seats. Deleting a seat also removes its memberships, relation lines, and canvas position.
-
-## Create and Manage Group Rooms
-
-Use the plus button beside the room list. Set a name, topic, run mode, and initial seats. A room may start empty and invite seats later.
-
-Each joining seat can enter with:
-
-- **Work summary**, generated from recent private progress;
-- **Introduction**, generated from the responsibility card; or
-- **Silent join**, which adds the seat without a message.
-
-Join messages become public room history but never expose the full private seat context.
-
-**Meeting Settings** changes the room name, topic, run mode, speaker order, invitations, and removals. If a seat joins successfully but its join message fails, the UI reports both facts instead of treating the entire operation as failed.
-
-Removing a seat affects only this room. The seat, its private history, old public messages, and dispatch records remain. Joins and departures produce system entries on the public timeline, including initial seats in their configured order.
-
-Rooms have two run modes:
-
-- `build`: participants may use configured tools and modify shared workshop files.
-- `plan`: participants cannot call write, delete, or command-execution tools, but may read information and use `contact` or `dispatch`.
-
-After a human message, participating seats reply in current meeting order. Meeting settings lock while the public meeting, assistant chat, or a dispatch from this room is active; changes resume afterward and apply next round.
-
-### Live Conversation and Tool Records
-
-Seat conversations and rooms stream text, reasoning, and tool activity throughout execution. Ordinary tools are grouped into consecutive execution stages. System operations with distinct semantics—`ask`, `delegate`, `contact`, and `dispatch`—remain separate.
-
-Text, tools, and seat communication retain their actual order. Intermediate text around tools remains visible; tools after an `ask` resume form a new stage, and asynchronous dispatch status and results stay at their original timeline positions.
-
-After refresh, persisted text, tool records, and dispatch information return in order. Temporary live state that was never persisted is not presented as a completed record.
-
-### Communication Between Seats
-
-Seats in private conversations and participating seats in rooms can communicate only with target seats allowed by the collaboration structure, turning current work into synchronous questions or asynchronous execution.
-
-`contact` sends a question or update to a target seat and waits. The exchange enters the target seat's private history. Its reply returns only as the current tool result and is not automatically posted publicly.
-
-Use `contact` for progress checks, verification, or quick judgment. If the target is busy, waiting for a human, or would create a communication cycle, the system returns the reason instead of waiting forever.
-
-`dispatch` delegates longer work and lets the current agent continue. The target executes independently in its private conversation; progress and outcome form a dispatch record. After completion, the human decides whether to bring the result back into the room. If no decision is made within three completed room rounds, the result is not included by default, while its content and dispatch record remain available.
-
-Both forms share workshop files without merging private contexts.
-
-## Private Meeting Assistant
-
-Set, replace, or clear the workshop meeting assistant from any room's right sidebar. The choice belongs to the workshop and applies to all its rooms.
-
-Each room keeps separate assistant-chat history. The assistant sees that room's recent public discussion, present seats, and workshop bulletin board, but not other rooms or private seat conversations. Its messages never enter public discussion.
-
-The assistant provides text analysis only and calls no tools. Public discussion and assistant chat cannot run simultaneously in the same room. Replacing the assistant takes effect with the next private reply and does not clear history.
-
-## Reset Conversations
-
-Enter a reset command as a message in the input whose scope you want to reset.
-
-### Public Room Input
-
-- `/reset`: archive and clear public discussion only.
-- `/reset summary`: summarize public discussion with the assistant model and use it as new public context.
-- `/reset all`: archive and clear both public discussion and this room's assistant chat.
-- `/reset all summary`: summarize and reset public discussion and assistant chat separately.
-
-### Meeting Assistant Input
-
-- `/reset`: archive and clear this room's assistant chat only.
-- `/reset summary`: summarize and reset this room's assistant chat only.
-
-### Seat Conversation Input
-
-- `/reset`: archive and clear this seat's private context.
-- `/reset summary`: summarize the seat history and use it as new context.
-
-Resetting does not delete shared files, seat settings, room membership, or speaker order. Earlier dispatch records remain after a public reset but no longer enter new discussion. Archives are stored under the workshop's `bak/` directory.
-
-Summary resets require an available model; public-room summaries also require a configured meeting assistant. If summarization fails, reset stops and the original record remains.
-
-## Data and Recovery
-
-Workshop settings, collaboration structure, seat conversations, rooms, bulletin board, dispatches, and shared files are local and reload after refresh. Incomplete live output and tool progress are not replayed as completed records.
-
-- Workshop index: `data/cyclone/_index.json`
-- Workshop metadata: `data/cyclone/{workshopId}/meta.json`
-- Collaboration structure: `data/cyclone/{workshopId}/organization.json`
-- Shared workspace: `data/cyclone/{workshopId}/workspace/`
-- Bulletin and history: `bulletin.json`, `bulletin-history.json`
-- Seat conversations and taskboards: `data/cyclone/{workshopId}/seats/`
-- Rooms and assistant chats: `data/cyclone/{workshopId}/rooms/`
-- Dispatch records: `data/cyclone/{workshopId}/dispatches/`
-- Conversation archives: `data/cyclone/{workshopId}/bak/`
-
-After an application restart, dispatches that had not started remain queued. A dispatch that was running at shutdown is marked failed with an explicit shutdown reason and is not retried automatically.
-
-The entire `data/cyclone/` directory is excluded from Git. Git exclusion is not a backup; preserve it separately when moving or retaining workshops.
+In a room, `/reset all` archives and clears both the public discussion and meeting assistant chat. Room compaction requires a meeting assistant to be set for the workshop.

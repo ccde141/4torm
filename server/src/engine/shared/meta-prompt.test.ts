@@ -29,7 +29,7 @@ test('各功能基线不能允许角色提示词覆盖共同元认知', () => {
   const engineDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const baselines = [
     path.join(engineDir, 'conversation', 'baseline.md'),
-    path.join(engineDir, 'convection', 'baseline.md'),
+    path.join(engineDir, '..', 'modules', 'convection', 'execution', 'baseline.md'),
     path.join(engineDir, 'tradewind', 'execution', 'baseline.md'),
   ];
 

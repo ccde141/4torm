@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import type { ToolDef } from '../../shared/tool-defs-loader';
 import { buildSandboxSection, type SandboxLevel } from '../../shared/sandbox-prompt';
 import { buildTextToolProtocol } from '../../shared/text-tool-prompt';
+import { buildFrameworkNavigationSection } from '../../shared/framework-navigation.js';
 import { buildTradewindNodeMeta } from './meta-profiles.js';
 
 /** 读取信风基础协作准则段（baseline.md，与本文件同级）。读不到则静默跳过。 */
@@ -106,6 +107,9 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
 
   // §0.5 共同元认知 + 信风节点身份
   sections.push(buildTradewindNodeMeta());
+
+  // §0.7 框架内稳定入口。信风节点具备持续执行与工具能力，应能自行查明框架事实。
+  sections.push(buildFrameworkNavigationSection());
 
   // §1 角色定义
   sections.push(`# 角色\n\n${params.rolePrompt}`);

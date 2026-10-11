@@ -1,22 +1,28 @@
 /**
  * 气旋工作室公告板 —— 工作室级共享看板（全体工位可见，人与工位皆可写）
  *
- * 结构化存储：按「条目」组织，增量读写（add/update/remove），天然免掉全量覆盖冲突——
- * 多工位、人与 agent 并发写各改各的条目，不互踩。
+ * 结构化存储：按「条目」组织，支持增量读写（add/update/remove）。
  *
  * - 落盘：data/cyclone/{id}/bulletin.json = { entries: BulletinEntry[], updatedAt }
  * - 注入：每个工位 system prompt 里列出条目（buildBulletinSection），带变更注意力标记
  * - 假工具 bulletin：与 task_board 同级，服务端 inline 执行，各引擎 toolCaller 按名拦截
  * - 变更注意力：每条目带 updatedAt；工位私聊带 seenAt → 标 🆕 提示"自你上次以来的变动"
  *
- * 边界铁律：只 import node 内置 + 本模块 paths，绝不 import 别的引擎。
+ * 依赖边界：只 import node 内置 + 气旋路径/持久化，不 import 别的引擎。
  */
 
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import path from 'node:path';
-import { workshopBulletinFile, workshopBulletinHistoryFile } from './paths';
-import { atomicWriteFile } from '../shared/atomic-io';
+import {
+  workshopBulletinFile, workshopBulletinHistoryFile, workshopBulletinPendingFile,
+} from './paths';
+import {
+  commitCyclonePair, recoverCyclonePair, recoverCyclonePairSync, serializeCycloneFile,
+  emptyBulletin, genEntryId, MAX_ENTRIES, MAX_TEXT,
+  parseBulletin as parse, parseBulletinHistory as parseHistory,
+} from './bulletin-persistence.js';
+import { notifyBulletinChange } from './bulletin-change-listeners.js';
+export { subscribeBulletinChanges } from './bulletin-change-listeners.js';
 
 export interface BulletinEntry {
   id: string;
@@ -51,70 +57,53 @@ export interface BulletinChange {
   revertOf?: number;
 }
 
-const MAX_ENTRIES = 60;
-const MAX_TEXT = 1200;
 const MAX_HISTORY = 200;
 
-function genEntryId(): string {
-  return `b-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-}
-
-/** 解析 + 兼容迁移旧结构 { content, updatedAt } → 单条目 */
-function parse(raw: string): Bulletin {
-  const j = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
-  if (Array.isArray(j?.entries)) {
-    const entries: BulletinEntry[] = j.entries
-      .filter((e: any) => e && typeof e.text === 'string')
-      .slice(0, MAX_ENTRIES)
-      .map((e: any) => ({
-        id: String(e.id || genEntryId()),
-        text: String(e.text).slice(0, MAX_TEXT),
-        author: String(e.author || '人类'),
-        updatedAt: Number(e.updatedAt) || 0,
-      }));
-    return { entries, updatedAt: Number(j.updatedAt) || 0 };
-  }
-  if (typeof j?.content === 'string' && j.content.trim()) {
-    const now = Number(j.updatedAt) || 0;
-    return { entries: [{ id: genEntryId(), text: j.content.slice(0, MAX_TEXT), author: '人类', updatedAt: now }], updatedAt: now };
-  }
-  return { entries: [], updatedAt: 0 };
+function isMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === 'ENOENT';
 }
 
 export function readBulletinSync(dataDir: string, workshopId: string): Bulletin {
-  try { return parse(fs.readFileSync(workshopBulletinFile(dataDir, workshopId), 'utf-8')); }
-  catch { return { entries: [], updatedAt: 0 }; }
+  const [pending, board, history] = pairFiles(dataDir, workshopId);
+  recoverCyclonePairSync(pending, board, history, validatePair);
+  let raw: string;
+  try { raw = fs.readFileSync(workshopBulletinFile(dataDir, workshopId), 'utf-8'); }
+  catch (error) { if (isMissing(error)) return emptyBulletin(); throw error; }
+  return parse(raw);
 }
 
 export async function readBulletin(dataDir: string, workshopId: string): Promise<Bulletin> {
-  try { return parse(await fsp.readFile(workshopBulletinFile(dataDir, workshopId), 'utf-8')); }
-  catch { return { entries: [], updatedAt: 0 }; }
+  return serializeCycloneFile(workshopBulletinFile(dataDir, workshopId), async () => {
+    await recoverPending(dataDir, workshopId);
+    return readBulletinRaw(dataDir, workshopId);
+  });
 }
 
-async function writeBulletin(dataDir: string, workshopId: string, b: Bulletin): Promise<void> {
-  const fp = workshopBulletinFile(dataDir, workshopId);
-  await fsp.mkdir(path.dirname(fp), { recursive: true });
-  await atomicWriteFile(fp, JSON.stringify(b, null, 2));
+async function readBulletinRaw(dataDir: string, workshopId: string): Promise<Bulletin> {
+  let raw: string;
+  try { raw = await fsp.readFile(workshopBulletinFile(dataDir, workshopId), 'utf-8'); }
+  catch (error) { if (isMissing(error)) return emptyBulletin(); throw error; }
+  return parse(raw);
 }
 
 // ── 改动时间轴 ────────────────────────────────────────────────
 
 export async function readBulletinHistory(dataDir: string, workshopId: string): Promise<BulletinChange[]> {
-  try {
-    const raw = await fsp.readFile(workshopBulletinHistoryFile(dataDir, workshopId), 'utf-8');
-    const j = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
-    return Array.isArray(j?.changes) ? j.changes : [];
-  } catch { return []; }
+  return serializeCycloneFile(workshopBulletinFile(dataDir, workshopId), async () => {
+    await recoverPending(dataDir, workshopId);
+    return readHistoryRaw(dataDir, workshopId);
+  });
 }
 
-async function writeHistory(dataDir: string, workshopId: string, changes: BulletinChange[]): Promise<void> {
-  const fp = workshopBulletinHistoryFile(dataDir, workshopId);
-  await fsp.mkdir(path.dirname(fp), { recursive: true });
-  await atomicWriteFile(fp, JSON.stringify({ changes: changes.slice(-MAX_HISTORY) }, null, 2));
+async function readHistoryRaw(dataDir: string, workshopId: string): Promise<BulletinChange[]> {
+  let raw: string;
+  try { raw = await fsp.readFile(workshopBulletinHistoryFile(dataDir, workshopId), 'utf-8'); }
+  catch (error) { if (isMissing(error)) return []; throw error; }
+  return parseHistory(raw);
 }
 
 /**
- * 增量应用一批操作（读-改-写，原子落盘）。逐条改，绝不整表覆盖 → 并发写不互踩。
+ * 读取公告板，逐条应用操作，再原子写回文件。
  * 每条生效的 op 追加一条改动记录到时间轴（审计 + 撤回依据）。
  * @param defaultAuthor 操作的执行者落款（工位 title 或 '人类'）
  * @param revertOf 若本批是某次撤回产生的，指向被撤回的 seq（记录 kind 标为 'revert'）
@@ -122,10 +111,17 @@ async function writeHistory(dataDir: string, workshopId: string, changes: Bullet
 export async function applyBulletinOps(
   dataDir: string, workshopId: string, ops: BulletinOp[], defaultAuthor: string, revertOf?: number,
 ): Promise<Bulletin> {
-  const b = await readBulletin(dataDir, workshopId);
+  return serializeCycloneFile(workshopBulletinFile(dataDir, workshopId),
+    () => applyBulletinOpsUnlocked(dataDir, workshopId, ops, defaultAuthor, revertOf));
+}
+
+async function applyBulletinOpsUnlocked(
+  dataDir: string, workshopId: string, ops: BulletinOp[], defaultAuthor: string, revertOf?: number,
+): Promise<Bulletin> {
+  await recoverPending(dataDir, workshopId);
+  const b = await readBulletinRaw(dataDir, workshopId);
   const now = Date.now();
   const recorded: Array<Pick<BulletinChange, 'kind' | 'entryId' | 'before' | 'after'>> = [];
-
   for (const op of ops) {
     if (op.op === 'add' || op.op === 'restore') {
       const text = String(op.text ?? '').trim().slice(0, MAX_TEXT);
@@ -151,11 +147,9 @@ export async function applyBulletinOps(
       recorded.push({ kind: 'remove', entryId: e.id, before, after: null });
     }
   }
-
   if (recorded.length) {
+    const hist = await readHistoryRaw(dataDir, workshopId);
     b.updatedAt = now;
-    await writeBulletin(dataDir, workshopId, b);
-    const hist = await readBulletinHistory(dataDir, workshopId);
     let seq = hist.length ? hist[hist.length - 1].seq : 0;
     for (const r of recorded) {
       seq++;
@@ -166,7 +160,7 @@ export async function applyBulletinOps(
         ...(revertOf != null ? { revertOf } : {}),
       });
     }
-    await writeHistory(dataDir, workshopId, hist);
+    await commitBulletin(dataDir, workshopId, b, hist);
   }
   return b;
 }
@@ -178,11 +172,19 @@ export async function applyBulletinOps(
 export async function revertBulletinChange(
   dataDir: string, workshopId: string, seq: number, actor: string,
 ): Promise<Bulletin> {
-  const hist = await readBulletinHistory(dataDir, workshopId);
-  const c = hist.find(x => x.seq === seq);
-  if (!c) return readBulletin(dataDir, workshopId);
+  return serializeCycloneFile(workshopBulletinFile(dataDir, workshopId),
+    () => revertBulletinChangeUnlocked(dataDir, workshopId, seq, actor));
+}
 
-  const cur = await readBulletin(dataDir, workshopId);
+async function revertBulletinChangeUnlocked(
+  dataDir: string, workshopId: string, seq: number, actor: string,
+): Promise<Bulletin> {
+  await recoverPending(dataDir, workshopId);
+  const hist = await readHistoryRaw(dataDir, workshopId);
+  const c = hist.find(x => x.seq === seq);
+  if (!c) return readBulletinRaw(dataDir, workshopId);
+
+  const cur = await readBulletinRaw(dataDir, workshopId);
   const exists = cur.entries.some(e => e.id === c.entryId);
 
   let op: BulletinOp | null = null;
@@ -196,7 +198,31 @@ export async function revertBulletinChange(
       : { op: 'restore', id: c.entryId, text: c.before.text, author: c.before.author };
   }
   if (!op) return cur;
-  return applyBulletinOps(dataDir, workshopId, [op], actor, seq);
+  return applyBulletinOpsUnlocked(dataDir, workshopId, [op], actor, seq);
+}
+
+function pairFiles(dataDir: string, workshopId: string): [string, string, string] {
+  return [workshopBulletinPendingFile(dataDir, workshopId),
+    workshopBulletinFile(dataDir, workshopId), workshopBulletinHistoryFile(dataDir, workshopId)];
+}
+
+function validatePair(board: string, history: string): void {
+  parse(board);
+  parseHistory(history);
+}
+
+function recoverPending(dataDir: string, workshopId: string): Promise<void> {
+  const [pending, board, history] = pairFiles(dataDir, workshopId);
+  return recoverCyclonePair(pending, board, history, validatePair);
+}
+
+async function commitBulletin(
+  dataDir: string, workshopId: string, board: Bulletin, changes: BulletinChange[],
+): Promise<void> {
+  const [pending, boardFile, historyFile] = pairFiles(dataDir, workshopId);
+  await commitCyclonePair(pending, boardFile, historyFile,
+    JSON.stringify(board, null, 2), JSON.stringify({ changes: changes.slice(-MAX_HISTORY) }, null, 2));
+  notifyBulletinChange(dataDir, workshopId);
 }
 
 function summarize(b: Bulletin): string {
@@ -205,44 +231,31 @@ function summarize(b: Bulletin): string {
 }
 
 /**
- * 假工具 bulletin 的服务端执行。返回 result 进 LLM，meta 走 UI 侧通道。
- * action: get / add(text) / update(id,text) / remove(id)
+ * 假工具 bulletin 的服务端执行。Agent 仅可 get / add；旧 update/remove 调用明确拒绝。
+ * 返回 result 进 LLM，meta 走 UI 侧通道。
  */
 export async function execBulletin(
   dataDir: string, workshopId: string, args: Record<string, any>, author: string,
-): Promise<{ result: string; meta: { bulletin: Bulletin } }> {
+): Promise<{ result: string; ok: boolean; meta: { bulletin: Bulletin } }> {
   const action = args.action || 'get';
 
   if (action === 'get') {
     const b = await readBulletin(dataDir, workshopId);
-    return { result: summarize(b), meta: { bulletin: b } };
+    return { result: summarize(b), ok: true, meta: { bulletin: b } };
   }
   if (action === 'add') {
     if (!String(args.text ?? '').trim()) {
       const b = await readBulletin(dataDir, workshopId);
-      return { result: 'bulletin add 需要非空 text。', meta: { bulletin: b } };
+      return { result: 'bulletin add 需要非空 text。', ok: false, meta: { bulletin: b } };
     }
     const b = await applyBulletinOps(dataDir, workshopId, [{ op: 'add', text: args.text, author }], author);
-    return { result: `已新增公告条目。当前公告板：\n${summarize(b)}`, meta: { bulletin: b } };
-  }
-  if (action === 'update') {
-    if (!args.id || !String(args.text ?? '').trim()) {
-      const b = await readBulletin(dataDir, workshopId);
-      return { result: 'bulletin update 需要 id 和非空 text。', meta: { bulletin: b } };
-    }
-    const b = await applyBulletinOps(dataDir, workshopId, [{ op: 'update', id: String(args.id), text: args.text, author }], author);
-    return { result: `已更新公告条目。当前公告板：\n${summarize(b)}`, meta: { bulletin: b } };
-  }
-  if (action === 'remove') {
-    if (!args.id) {
-      const b = await readBulletin(dataDir, workshopId);
-      return { result: 'bulletin remove 需要 id。', meta: { bulletin: b } };
-    }
-    const b = await applyBulletinOps(dataDir, workshopId, [{ op: 'remove', id: String(args.id) }], author);
-    return { result: `已删除公告条目。当前公告板：\n${summarize(b)}`, meta: { bulletin: b } };
+    return { result: `已新增公告条目。当前公告板：\n${summarize(b)}`, ok: true, meta: { bulletin: b } };
   }
   const b = await readBulletin(dataDir, workshopId);
-  return { result: `未知 action：${action}（可用 get / add / update / remove）`, meta: { bulletin: b } };
+  const result = action === 'update' || action === 'remove'
+    ? `bulletin ${action} 已拒绝：改写和删除仅人类可执行。可用 get / add。`
+    : `未知 action：${action}（可用 get / add）`;
+  return { result, ok: false, meta: { bulletin: b } };
 }
 
 /**
@@ -263,7 +276,7 @@ export function buildBulletinSection(b: Bulletin, opts?: { seenAt?: number; read
 
   const usage = opts?.readOnly
     ? `\n\n（这是只读视图：你不能改公告板；如需变更请提示人类或对应工位。）`
-    : `\n\n维护方式：用 bulletin 工具 —— add(text) 新增 / update(id,text) 改写 / remove(id) 删除 / get 读取。仅在产生需要全体知晓的结论、目标或状态变化时写，别刷屏、别写私事。`;
+    : `\n\n维护方式：用 bulletin 工具 —— add(text) 新增 / get 读取；改写和删除仅人类可执行。仅在产生需要全体知晓的结论、目标或状态变化时写，别刷屏、别写私事。`;
 
   return `## 工作室公告板
 

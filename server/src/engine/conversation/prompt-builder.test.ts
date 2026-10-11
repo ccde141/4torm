@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { buildConversationSystemPrompt } from './prompt-builder.js';
-import { TIDE_META } from '../../services/tide/meta.js';
+import { TIDE_META } from '../../modules/tide/public.js';
 
 test('季风与潮汐使用不同的协作身份', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), '4torm-surface-meta-'));
@@ -34,6 +34,8 @@ test('季风与潮汐使用不同的协作身份', async () => {
     assert.match(tide, /潮汐定时任务/);
     assert.doesNotMatch(tide, /长期的一对一协作/);
     assert.doesNotMatch(tide, /\bask\b|\bdelegate\b/);
+    assert.doesNotMatch(tide, /## 工作流搭建能力|### create_workflow/);
+    assert.doesNotMatch(tide, /## 任务板/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -7,36 +7,90 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { skillDir, toolRegistryFile } from '../../services/data-paths.js';
+import { skillDir } from '../../services/data-paths.js';
 import { resolveMcpTools } from './mcp-manager';
-import { FRAMEWORK_TOOLS, isFrameworkToolName } from '../../tools/framework/catalog.js';
+import { FRAMEWORK_TOOLS } from '../../tools/framework/catalog.js';
+import { inspectToolNames, toolSourceIssue, type ToolNameSnapshot } from '../../tools/tool-name-policy.js';
 import type { ToolDefinition } from '../../tools/tool-definition.js';
 
 export type ToolDef = ToolDefinition;
+export interface AgentToolBinding {
+  definition: ToolDef;
+  source: 'framework' | 'custom' | 'skill' | 'mcp';
+  skillId?: string;
+}
 
-async function readJsonSafe<T>(file: string): Promise<T | null> {
-  try {
-    const raw = await fs.readFile(file, 'utf-8');
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
+function stripInternalCapability(tool: ToolDef): ToolDef {
+  const { frameworkCapability: _internalCapability, _skillId: _owner, ...publicTool } =
+    tool as ToolDef & { _skillId?: string };
+  return publicTool;
+}
+
+function addBinding(
+  result: AgentToolBinding[], seen: Set<string>, definition: ToolDef,
+  source: AgentToolBinding['source'], skillId?: string,
+): void {
+  if (seen.has(definition.name)) return;
+  result.push({ definition: { ...definition }, source, ...(skillId ? { skillId } : {}) });
+  seen.add(definition.name);
+}
+
+function addLocalBindings(
+  result: AgentToolBinding[], seen: Set<string>, snapshot: ToolNameSnapshot,
+  selectedNames: ReadonlySet<string>, toolMode: 'all' | 'selected', hasSkills: boolean,
+): void {
+  const framework = (toolMode === 'all' ? FRAMEWORK_TOOLS
+    : FRAMEWORK_TOOLS.filter(tool => selectedNames.has(tool.name)))
+    .filter(tool => tool.name !== 'use_skill' || hasSkills);
+  framework.forEach(tool => addBinding(result, seen, tool, 'framework'));
+  if (toolMode === 'all') return;
+  for (const tool of snapshot.custom) {
+    if (selectedNames.has(tool.name) && !toolSourceIssue(snapshot, 'custom', tool.name)) {
+      addBinding(result, seen, tool, 'custom');
+    }
   }
 }
 
-async function loadCustomTools(dataDir: string, names?: string[]): Promise<ToolDef[]> {
-  const all = await readJsonSafe<ToolDef[]>(toolRegistryFile(dataDir));
-  if (!Array.isArray(all)) return [];
-  const valid = all.filter(t => t && typeof t.name === 'string' && !isFrameworkToolName(t.name));
-  if (names === undefined) return valid;
-  if (names.length === 0) return [];
-  const set = new Set(names);
-  return valid.filter(t => set.has(t.name));
+function concise(value: unknown, limit: number): string {
+  return typeof value === 'string'
+    ? value.replace(/\s+/g, ' ').trim().slice(0, limit)
+    : '';
 }
 
-async function loadSkillTools(dataDir: string, skillId: string): Promise<ToolDef[]> {
-  const file = path.join(skillDir(dataDir, skillId), 'tools.json');
-  const tools = await readJsonSafe<ToolDef[]>(file);
-  return Array.isArray(tools) ? tools.filter(t => t && typeof t.name === 'string') : [];
+async function skillHint(dataDir: string, skillId: string): Promise<string> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(path.join(skillDir(dataDir, skillId), 'config.json'), 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return skillId;
+    return `${skillId} · 元数据不可读`;
+  }
+  let meta: unknown;
+  try { meta = JSON.parse(raw); }
+  catch { return `${skillId} · 元数据损坏`; }
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+    return `${skillId} · 元数据无效`;
+  }
+  const fields = meta as Record<string, unknown>;
+  const name = concise(fields.name, 36);
+  const description = concise(fields.description, 90);
+  return [skillId, name, description].filter(Boolean).join(' · ');
+}
+
+async function useSkillDescription(dataDir: string, skillIds: string[]): Promise<string> {
+  const ids = [...new Set(skillIds)];
+  const limit = 1200;
+  // 所有 ID 必须可见；超出预算时只省略详细用途，不能隐藏可用技能。
+  let description = `任务符合技能用途时，先调用 use_skill 加载指令。skill 参数填技能 ID。已启用技能 ID：${ids.join('、')}\n用途摘要：`;
+  let shown = 0;
+  for (const id of ids) {
+    const line = `\n- ${await skillHint(dataDir, id)}`;
+    if (description.length + line.length > limit - 40) break;
+    description += line;
+    shown++;
+  }
+  if (shown < ids.length) description += `\n其余 ${ids.length - shown} 项用途摘要省略；ID 如上。`;
+  return description;
 }
 
 /**
@@ -49,67 +103,51 @@ async function loadSkillTools(dataDir: string, skillId: string): Promise<ToolDef
  * - skills[] 携带的工具（去重，框架/自定义工具优先）
  * - skills[] 非空时自动补充 use_skill，并动态写入可用技能说明
  */
-export async function loadAgentToolDefs(
+export async function loadAgentToolBindings(
   dataDir: string,
   toolNames: string[] = [],
   skillIds: string[] = [],
   toolMode: 'all' | 'selected' = toolNames.length === 0 ? 'all' : 'selected',
-): Promise<ToolDef[]> {
-  const result: ToolDef[] = [];
+): Promise<AgentToolBinding[]> {
+  const result: AgentToolBinding[] = [];
   const seenNames = new Set<string>();
+  const snapshot = await inspectToolNames(dataDir);
 
-  // 1) 框架工具来自代码内固定清单；用户工具来自 data 注册表。
   const localNames = toolNames.filter(n => !n.startsWith('mcp:'));
   if (skillIds.length > 0 && !localNames.includes('use_skill')) localNames.push('use_skill');
   const mcpNames = toolNames.filter(n => n.startsWith('mcp:'));
+  addLocalBindings(result, seenNames, snapshot, new Set(localNames), toolMode, skillIds.length > 0);
 
-  const selectedNames = new Set(localNames);
-  const frameworkTools = toolMode === 'all'
-    ? FRAMEWORK_TOOLS
-    : FRAMEWORK_TOOLS.filter(tool => selectedNames.has(tool.name));
-  for (const t of frameworkTools) {
-    if (!seenNames.has(t.name)) {
-      // 运行时会按 Agent 技能改写 use_skill 描述；不能修改只读框架清单本体。
-      result.push({ ...t });
-      seenNames.add(t.name);
-    }
-  }
-
-  const customTools = await loadCustomTools(dataDir, toolMode === 'all' ? [] : localNames);
-  for (const t of customTools) {
-    if (!seenNames.has(t.name)) {
-      result.push(t);
-      seenNames.add(t.name);
-    }
-  }
-
-  // 2) 从 skills 各自的 tools.json 追加（去重，registry 优先级高）
+  // 2) 仅追加已启用且全局名称无冲突的技能工具。
   for (const skillId of skillIds) {
-    const skillTools = await loadSkillTools(dataDir, skillId);
-    for (const t of skillTools) {
-      if (!seenNames.has(t.name)) {
-        result.push(t);
-        seenNames.add(t.name);
+    for (const tool of snapshot.skills.get(skillId) ?? []) {
+      if (!toolSourceIssue(snapshot, 'skill', tool.name, skillId)) {
+        addBinding(result, seenNames, tool, 'skill', skillId);
       }
     }
   }
 
   // 3) MCP 工具（按名称或通配解析）
   const mcpTools = resolveMcpTools(mcpNames);
-  for (const t of mcpTools) {
-    if (!seenNames.has(t.name)) {
-      result.push(t);
-      seenNames.add(t.name);
-    }
-  }
+  mcpTools.forEach(tool => addBinding(result, seenNames, tool, 'mcp'));
 
   // 4) use_skill 描述动态注入
   if (skillIds.length > 0) {
-    const useSkill = result.find(t => t.name === 'use_skill');
+    const useSkill = result.find(t => t.definition.name === 'use_skill');
     if (useSkill) {
-      useSkill.description = `加载技能指令。当前可用技能: ${skillIds.join(', ')}`;
+      useSkill.definition.description = await useSkillDescription(dataDir, skillIds);
     }
   }
 
-  return result;
+  return result.map(binding => ({ ...binding, definition: stripInternalCapability(binding.definition) }));
+}
+
+export async function loadAgentToolDefs(
+  dataDir: string,
+  toolNames: string[] = [],
+  skillIds: string[] = [],
+  toolMode: 'all' | 'selected' = toolNames.length === 0 ? 'all' : 'selected',
+): Promise<ToolDef[]> {
+  return (await loadAgentToolBindings(dataDir, toolNames, skillIds, toolMode))
+    .map(binding => binding.definition);
 }

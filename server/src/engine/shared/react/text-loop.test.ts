@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ContextMessage } from '../types.js';
 import { frameworkError } from '../framework-error.js';
+import { parseTextToolResult } from '../text-tool-protocol.js';
 import { runReActLoop } from './text-loop.js';
 
 function reply(content: string) {
@@ -33,6 +34,43 @@ test('text loop executes a JSON tool call and accepts a natural-language answer'
   assert.equal(messages.at(-2)?.content, JSON.stringify({
     type: 'tool_result', name: 'read_file', ok: true, content: 'hello',
   }));
+});
+
+test('text loop writes explicit tool failure status into tool_result without parsing error words', async () => {
+  const messages: ContextMessage[] = [{ role: 'user', content: 'Read.' }];
+  const responses = [
+    reply('{"type":"tool_call","name":"read_file","arguments":{}}'),
+    reply('Done.'),
+  ];
+  const resultEvents: Array<{ ok?: boolean }> = [];
+  const result = await runReActLoop({
+    messages,
+    llm: { call: async () => responses.shift()! },
+    tools: { call: async () => ({ result: '读取失败', ok: false }) },
+    onEvent: event => { if (event.type === 'tool-result') resultEvents.push(event as { ok?: boolean }); },
+  });
+
+  assert.equal(result.content, 'Done.');
+  assert.deepEqual(parseTextToolResult(messages.at(-2)?.content ?? ''), {
+    name: 'read_file', content: '读取失败', ok: false,
+  });
+  assert.equal(resultEvents.length, 1);
+  assert.equal(resultEvents[0].ok, false);
+});
+
+test('text loop treats a legacy string result as success even when its content starts with Error', async () => {
+  const messages: ContextMessage[] = [{ role: 'user', content: 'Read.' }];
+  const responses = [
+    reply('{"type":"tool_call","name":"read_file","arguments":{}}'),
+    reply('Done.'),
+  ];
+  await runReActLoop({
+    messages,
+    llm: { call: async () => responses.shift()! },
+    tools: { call: async () => 'Error: literal file contents' },
+  });
+
+  assert.equal(parseTextToolResult(messages.at(-2)?.content ?? '')?.ok, true);
 });
 
 test('text loop hides tool-call envelope tokens but streams the final answer', async () => {

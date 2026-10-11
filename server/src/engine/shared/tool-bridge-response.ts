@@ -2,12 +2,14 @@ import { FrameworkError, isFrameworkErrorData, type FrameworkErrorKind } from '.
 
 export interface ToolBridgeResult {
   result: string;
+  ok: boolean;
   meta?: unknown;
   observationId?: string;
 }
 
 interface ToolBridgePayload {
   result?: unknown;
+  ok?: unknown;
   error?: unknown;
   meta?: unknown;
   observationId?: unknown;
@@ -37,9 +39,17 @@ export async function readToolBridgeResponse(response: Response): Promise<ToolBr
       source: 'tool.bridge', retryable: false,
     });
   }
+  if (payload.ok !== undefined && typeof payload.ok !== 'boolean') {
+    throw new FrameworkError({
+      code: 'TOOL_BRIDGE_PROTOCOL_ERROR', kind: 'protocol',
+      message: '工具桥接返回结构异常：ok 必须是布尔值',
+      source: 'tool.bridge', retryable: false,
+    });
+  }
 
   return {
     result: payload.result,
+    ok: payload.ok ?? true,
     meta: payload.meta,
     observationId: typeof payload.observationId === 'string' ? payload.observationId : undefined,
   };

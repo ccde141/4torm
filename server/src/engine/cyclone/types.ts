@@ -5,8 +5,8 @@
  * 工位（Seat）= 角色提示词 + 绑定框架内 agent + 一个后端持久化的私聊会话。
  * 群聊（Room）= 同一工作室下随时建/删的讨论场。
  *
- * 边界铁律：本模块只 import shared/，绝不 import conversation/ 或 convection/。
- * 哪怕结构与对流的 session.ts 相似，也各写一份，零交叉代码。
+ * 依赖边界：本模块只 import shared/，不 import conversation/ 或 convection/。
+ * 会话结构与对流的 session.ts 分开维护。
  *
  * 存储布局：
  *   data/cyclone/{workshopId}/
@@ -32,7 +32,7 @@ export interface SeatContextMessage extends ContextMessage {
 /** 工位职责名片默认值（空 duty 兜底，借信风 DEFAULT_ROLE 同款语义） */
 export const DEFAULT_DUTY = '补位协作者，可处理任意交办事务。专业事务请交给对应专业工位。';
 
-/** 累计 token 用量（真实 API 返回值，provider 可能不返回） */
+/** 最近模型调用的实际用量（provider 可能不返回）。 */
 export interface CycloneTokenUsage {
   promptTokens: number;
   completionTokens: number;
@@ -70,6 +70,7 @@ export interface SeatData {
   messages: SeatContextMessage[];
   tokenUsage?: CycloneTokenUsage;
   compactState?: CycloneCompactState;
+  compactionNotice?: import('../shared/compaction/contracts.js').CompactionNotice;
   /** 本工位上次已读到的工作室公告板 updatedAt（变更注意力：晚于它的条目在下一轮标 🆕） */
   bulletinSeenAt?: number;
   /**
@@ -186,10 +187,23 @@ export interface RoomData {
    * 按 room 隔离，换会议不串台。
    */
   chairMessages?: ContextMessage[];
+  /** Exact compacted chair context; public and private source records are retained separately. */
+  chairActiveContext?: ContextMessage[];
+  chairContextRawCount?: number;
+  chairContextPublicVersion?: number;
+  chairContextPublicAnchor?: { timestamp: number; hash: string };
+  /** Exact prior model-input estimate anchors growth from new public/private records. */
+  chairRequestEstimate?: number;
   /** 会长私聊累计 token 用量 */
   chairTokenUsage?: CycloneTokenUsage;
   tokenUsage?: CycloneTokenUsage;
+  /** 群聊最近一次模型调用输入用量，供界面展示；tokenUsage 保留本轮最大值。 */
+  publicLatestTokenUsage?: CycloneTokenUsage;
+  /** 本轮任一群聊模型未报告用量时，聚合值不完整。 */
+  publicUsageIncomplete?: boolean;
   compactState?: CycloneCompactState;
+  compactionNotice?: import('../shared/compaction/contracts.js').CompactionNotice;
+  chairCompactionNotice?: import('../shared/compaction/contracts.js').CompactionNotice;
   /** 公共上下文代次；reset 后旧代次的异步派发不再进入当前讨论。 */
   dispatchContextVersion?: number;
   /** 已完整结束的人类发言轮次；中止轮次不递增。 */

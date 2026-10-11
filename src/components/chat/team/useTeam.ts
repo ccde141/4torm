@@ -11,8 +11,14 @@ export function useTeam(agentId: string, sessionId: string, mainBusy: boolean) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     async function read() {
       try {
-        const query = new URLSearchParams({ agentId, sessionId });
-        const response = await fetch(`/api/conversation/team?${query}`, { signal: controller.signal });
+        const response = await fetch('/api/collaboration/invoke', {
+          method: 'POST', signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            feature: 'monsoon', method: 'getTeam', input: { agentId, sessionId },
+            budget: { items: 60, textChars: 20_000 },
+          }),
+        });
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
         const snapshot: TeamSnapshot = await response.json();
         if (controller.signal.aborted) return;

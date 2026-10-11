@@ -11,7 +11,8 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
-import type { RoomStreamRunners, FeedMsg } from './useRoomStreamRunners';
+import type { RoomStreamRunners } from './useRoomStreamRunners';
+import type { FeedMsg } from './room-stream-events';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import DispatchIndex from './DispatchIndex';
 import RoomTimeline from './RoomTimeline';
@@ -19,40 +20,46 @@ import RoomComposer from './RoomComposer';
 import RoomSettingsPanel from './RoomSettingsPanel';
 import type { CycloneDispatch } from './dispatch-timeline';
 import type { DispatchAction } from './useWorkshopDispatches';
-import { publicToFeed, readRoomError, type RoomData } from './room-messages';
+import { useRoomStatus } from './useRoomStatus';
+import { useRoomDispatchFeedback } from './useRoomDispatchFeedback';
+import { findRoomMessageIndex, snapshotRoomMessage,
+  type ExpectedRoomMessage } from './room-message-identity';
 import '../../../styles/components/convection.css';
 import { useSmartChatScroll } from './useSmartChatScroll';
 import { useLocale } from '../../../i18n/LocaleContext';
+import type { ExternalRoomView } from './useRoomExternalActivity';
+import { abortCycloneExecution } from './cyclone-execution-client';
+import { formatCycloneUsage, visibleCycloneUsage } from './cyclone-token-usage';
+import { CompactionNotice } from '../../../components/common/CompactionNotice';
+import { visibleCompactionFeedback } from '../../../components/common/compaction-feedback';
+import {
+  deleteCycloneRoomMessage,
+  editCycloneRoomMessage,
+  resetCycloneRoomContext as resetRoomContextThroughCenter,
+  compactCycloneRoomContext,
+} from './cyclone-control-client';
 
 interface SeatLite { id: string; title: string; }
 
 export default function RoomPanel({ workshopId, roomId, seats, runners, dispatches,
-  onDispatchAction, onChanged, onOpenSeat, settingsLocked = false, active = true }: {
+  externalRoom, onDispatchAction, onChanged, onOpenSeat, settingsLocked = false, active = true }: {
   workshopId: string; roomId: string; seats: SeatLite[]; runners: RoomStreamRunners;
   dispatches: CycloneDispatch[];
+  externalRoom: ExternalRoomView;
   onDispatchAction: (roomId: string, dispatchId: string, action: DispatchAction) => Promise<CycloneDispatch>;
   onChanged?: () => void; onOpenSeat: (seatId: string) => void; settingsLocked?: boolean; active?: boolean;
 }) {
-  const { t } = useLocale();
-  const tRef = useRef(t);
-  tRef.current = t;
+  const { t, locale } = useLocale();
   const confirm = useConfirm();
-  const [room, setRoom] = useState<RoomData | null>(null);
-  const [history, setHistory] = useState<FeedMsg[]>([]);
   // 草稿初值取自注册表：切走/重挂回来未发文本还在（内存级）
   const [input, setInputRaw] = useState(() => runners.getDraft(roomId));
-  const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
+  const [editingMessage, setEditingMessage] = useState<ExpectedRoomMessage | null>(null);
   const [editMessageContent, setEditMessageContent] = useState('');
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [dispatchNotice, setDispatchNotice] = useState<CycloneDispatch | null>(null);
-  const [highlightedDispatchId, setHighlightedDispatchId] = useState<string | null>(null);
+  const [contextBusy, setContextBusy] = useState(false);
   /** 订阅 tick：runner 每次 notify 自增，触发本组件重渲染读取最新 roundFeed 缓冲 */
   const [, forceTick] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const onChangedRef = useRef(onChanged);
-  const knownDispatchesRef = useRef(new Map<string, CycloneDispatch['status']>());
-  const mountedAtRef = useRef(Date.now());
-  onChangedRef.current = onChanged;
+  const settlingRunId = useRef('');
   // 写穿草稿：每次改动同步进注册表，组件卸载/重挂不丢
   const setInput = useCallback((v: string | ((p: string) => string)) => {
     setInputRaw(prev => {
@@ -65,10 +72,23 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
   useDroppedPathInput(setInput, inputRef, active);
 
   const runner = runners.getRunner(roomId);
-  const streaming = !!runner?.streaming;
+  const externalActivity = externalRoom.activity?.operationId === `room:${workshopId}:${roomId}`
+    ? externalRoom.activity : null;
+  const externalFact = externalRoom.fact?.operationId === `room:${workshopId}:${roomId}`
+    ? externalRoom.fact : null;
+  const streaming = !!runner?.streaming || (!!externalActivity?.running && !externalRoom.error);
+  const { room, history, error: loadError, reload } = useRoomStatus({
+    workshopId, roomId, active, streaming, onChanged,
+  });
+  const token = formatCycloneUsage(visibleCycloneUsage(
+    runner ? runner.tokenUsage : externalActivity?.tokenUsage, room?.publicLatestTokenUsage,
+  ), locale);
+  const editingMessageIndex = editingMessage && room
+    ? findRoomMessageIndex(room.publicMessages, editingMessage) : null;
+  const editingMessageChanged = editingMessage !== null && editingMessageIndex === -1;
   const queue = runners.getQueue(roomId);
   // 即使 done 也继续显示 roundFeed，直到 reload 完成 + clearIfDone 删除 runner，避免终答闪空
-  const roundFeed = runner?.roundFeed ?? null;
+  const roundFeed = runner?.roundFeed ?? externalActivity?.roundFeed ?? null;
   const roomLiveSignal = roundFeed?.map(message => (
     `${message.key}:${message.content.length}:${message.reasoning?.length ?? 0}:${message.phase ?? ''}`
   )).join('|') ?? '';
@@ -78,27 +98,15 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
     content: history,
     liveContent: roomLiveSignal,
   });
-  const reload = useCallback(async (notify = false) => {
-    const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/status`);
-    if (!r.ok) {
-      const msg = await readRoomError(r, tRef.current('cyclone.roomPanel.loadFailed'));
-      console.error(`[cyclone] ${tRef.current('cyclone.roomPanel.loadFailed')}`, msg);
-      setLoadError(msg);
-      return;
-    }
-    setLoadError(null);
-    const data: RoomData = await r.json();
-    setRoom(data);
-    setHistory(publicToFeed(data.publicMessages));
-    if (notify) onChangedRef.current?.();
-  }, [workshopId, roomId]);
-
-  // 挂载：订阅 runner 通知 + 首次拉历史
+  const { roomDispatches, notice: dispatchNotice, setNotice: setDispatchNotice,
+    highlightedId: highlightedDispatchId, focus: focusDispatch } = useRoomDispatchFeedback({
+    roomId, dispatches, onDispatchAction, scrollRef,
+  });
+  // 挂载：订阅 runner 通知；状态读取由独立的 room status port 完成。
   useEffect(() => {
     const unsub = runners.subscribe(roomId, () => forceTick(t => t + 1));
-    reload();
     return unsub;
-  }, [roomId, runners, reload]);
+  }, [roomId, runners]);
 
   // runner 结束后：reload 落库历史（publicMessages），再清出 runner 释放 roundFeed，避免双源重影
   const doneRoomId = runner?.done ? roomId : null;
@@ -123,60 +131,67 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
     })();
   }, [doneRoomId, reload, runners]);
 
-  const roomDispatches = dispatches.filter(item => item.sourceRoomId === roomId);
   useEffect(() => {
-    const currentDispatches = dispatches.filter(item => item.sourceRoomId === roomId);
-    const previous = knownDispatchesRef.current;
-    const completed = currentDispatches.find(item => {
-      const terminal = item.status === 'completed' || item.status === 'failed';
-      const wasTerminal = previous.get(item.id) === 'completed' || previous.get(item.id) === 'failed';
-      const createdHere = Date.parse(item.createdAt) >= mountedAtRef.current;
-      return terminal && !wasTerminal && (previous.has(item.id) || createdHere);
-    });
-    knownDispatchesRef.current = new Map(currentDispatches.map(item => [item.id, item.status]));
-    if (completed) setDispatchNotice(completed);
-  }, [dispatches, roomId]);
+    if (!active || !externalActivity || externalActivity.running
+      || settlingRunId.current === externalActivity.runId) return;
+    const runId = externalActivity.runId;
+    settlingRunId.current = runId;
+    void reload(true).then(loaded => {
+      if (!loaded) return;
+      externalRoom.clearIfSettled(runId);
+      const next = runners.dequeue(roomId);
+      if (next != null) void dispatchText(next);
+    }).finally(() => { if (settlingRunId.current === runId) settlingRunId.current = ''; });
+  }, [active, externalActivity, externalRoom.clearIfSettled, reload, roomId, runners]);
 
-  useEffect(() => {
-    if (!dispatchNotice) return;
-    const timer = window.setTimeout(() => setDispatchNotice(null), 5_000);
-    return () => window.clearTimeout(timer);
-  }, [dispatchNotice]);
   // ── 房间写操作 ──
-  async function postAction(action: string, body: Record<string, unknown>, fallback: string): Promise<boolean> {
-    const r = await fetch(`/api/cyclone/workshop/${workshopId}/room/${roomId}/${action}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    if (!r.ok) { alert(await readRoomError(r, fallback)); return false; }
+  async function runAction(action: () => Promise<unknown>, fallback: string): Promise<boolean> {
+    try { await action(); } catch (error) {
+      alert((error as Error).message || fallback);
+      await reload(true);
+      return false;
+    }
     await reload(true);
     return true;
   }
   function startEditMessage(message: FeedMsg) {
     if (message.sourceIndex === undefined) return;
-    setEditingMessageIndex(message.sourceIndex);
+    const original = room?.publicMessages[message.sourceIndex];
+    if (!original) return;
+    setEditingMessage(snapshotRoomMessage(original));
     setEditMessageContent(message.content);
   }
 
   function cancelEditMessage() {
-    setEditingMessageIndex(null);
+    setEditingMessage(null);
     setEditMessageContent('');
   }
 
   async function saveEditMessage() {
-    if (editingMessageIndex === null) return;
-    if (await postAction('edit-message', { index: editingMessageIndex, content: editMessageContent }, t('cyclone.roomPanel.editFailed'))) cancelEditMessage();
+    if (!editingMessage || editingMessageIndex === null || editingMessageIndex < 0) return;
+    if (await runAction(
+      () => editCycloneRoomMessage(workshopId, roomId, editingMessageIndex,
+        editMessageContent, editingMessage),
+      t('cyclone.roomPanel.editFailed'),
+    )) cancelEditMessage();
   }
 
   async function deleteMessage(message: FeedMsg) {
     if (message.sourceIndex === undefined) return;
+    const original = room?.publicMessages[message.sourceIndex];
+    if (!original) return;
+    const expected = snapshotRoomMessage(original);
     if (!(await confirm({ title: t('cyclone.roomPanel.deleteTitle'), message: t('cyclone.roomPanel.deleteMessage'), confirmText: t('common.delete'), danger: true }))) return;
-    if (await postAction('delete-message', { index: message.sourceIndex }, t('cyclone.roomPanel.deleteFailed'))) {
+    if (await runAction(
+      () => deleteCycloneRoomMessage(workshopId, roomId, message.sourceIndex as number, expected),
+      t('cyclone.roomPanel.deleteFailed'),
+    )) {
       if (editingMessageIndex === message.sourceIndex) cancelEditMessage();
     }
   }
 
   async function resetRoomContext(mode: 'clear' | 'summary', scope: 'public' | 'both' = 'public') {
-    if (streaming) return;
+    if (streaming || contextBusy) return;
     const label = t(scope === 'both' ? 'cyclone.roomPanel.scopeBoth' : 'cyclone.roomPanel.scopePublic');
     const action = t(mode === 'summary' ? 'cyclone.roomPanel.resetSummary' : 'cyclone.roomPanel.resetClear');
     if (!(await confirm({
@@ -184,13 +199,18 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
       message: t('cyclone.roomPanel.resetMessage'),
       confirmText: t(mode === 'summary' ? 'cyclone.roomPanel.confirmSummary' : 'cyclone.roomPanel.confirmClear'), danger: true,
     }))) return;
-    await postAction('reset-context', { mode, scope }, t('cyclone.roomPanel.resetFailed'));
+    setContextBusy(true);
+    try { await runAction(
+      () => mode === 'summary' ? compactCycloneRoomContext(workshopId, roomId, scope)
+        : resetRoomContextThroughCenter(workshopId, roomId, mode, scope),
+      t('cyclone.roomPanel.resetFailed'),
+    ); } finally { setContextBusy(false); }
   }
 
   /** 实际派发一轮：slash 指令优先，否则发起群聊轮。出队续发与即时发送共用。 */
   async function dispatchText(text: string) {
     if (text === '/reset' || text === '/reset clear') { await resetRoomContext('clear', 'public'); return; }
-    if (text === '/reset summary') { await resetRoomContext('summary', 'public'); return; }
+    if (text === '/compact' || text === '/reset summary') { await resetRoomContext('summary', 'public'); return; }
     if (text === '/reset all' || text === '/reset all clear') { await resetRoomContext('clear', 'both'); return; }
     if (text === '/reset all summary') { await resetRoomContext('summary', 'both'); return; }
     if (!room || room.participantSeatIds.length === 0) { alert(t('cyclone.roomPanel.noSeats')); return; }
@@ -199,6 +219,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
   }
 
   function speak() {
+    if (contextBusy) return;
     const text = input.trim();
     if (!text) return;
     if (streaming) {                       // 运行期：入队，不打断当前轮
@@ -210,20 +231,11 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
   }
 
   function stop() {
-    runners.abortRoom(workshopId, roomId);
-  }
-
-  function focusDispatch(item: CycloneDispatch) {
-    if (item.readState === 'unread') {
-      void onDispatchAction(roomId, item.id, 'read')
-        .catch(error => console.error('[cyclone] 标记派发已读失败', error));
+    if (runner?.streaming) { runners.abortRoom(roomId); return; }
+    if (externalActivity?.running) {
+      void abortCycloneExecution(externalActivity.operationId, externalActivity.runId)
+        .catch(error => alert((error as Error).message));
     }
-    setHighlightedDispatchId(item.id);
-    requestAnimationFrame(() => {
-      scrollRef.current?.querySelector<HTMLElement>(`#dispatch-${CSS.escape(item.id)}`)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
-    window.setTimeout(() => setHighlightedDispatchId(current => current === item.id ? null : current), 1_600);
   }
 
   async function handleDispatchAction(dispatchId: string, action: DispatchAction) {
@@ -245,15 +257,36 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
       <div className="conv__header">
         <span className="conv__header-title"># {room.title}</span>
         <span className="conv__header-id">{room.topic}</span>
+        <span className="conv__header-tokens" title={token.title}>{token.label}</span>
         <DispatchIndex dispatches={roomDispatches} onSelect={focusDispatch} />
         <RoomSettingsPanel room={room} seats={seats}
+          workshopId={workshopId} roomId={roomId}
           roomUrl={`/api/cyclone/workshop/${workshopId}/room/${roomId}`}
-          locked={streaming || settingsLocked} onChanged={() => reload(true)} />
+          locked={streaming || settingsLocked || contextBusy} onChanged={async () => { await reload(true); }} />
       </div>
+
+      {loadError && <div role="alert" className="agent-detail__error">
+        {t('cyclone.roomPanel.loadFailed')}: {loadError}
+      </div>}
+      {editingMessageChanged && <div role="alert" className="agent-detail__error">
+        {t('cyclone.roomPanel.editChanged')}
+        <button type="button" onClick={cancelEditMessage}>{t('common.cancel')}</button>
+      </div>}
+      {externalRoom.error && !runner?.streaming && (
+        <div role="status" className="agent-detail__error">{t('cyclone.roomPanel.loadFailed')}: {externalRoom.error}</div>
+      )}
+      {externalFact && (externalFact.status === 'failed' || externalFact.status === 'crashed') && (
+        <div role="alert" className="agent-detail__error">
+          {externalFact.errorMessage || t('cyclone.tabs.failed')}
+        </div>
+      )}
 
       {/* Messages：已落库 history + 本轮 roundFeed（流式中 history 不含本轮；done 后 reload 带回、clearIfDone 清 roundFeed，无重影） */}
       <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex' }}>
         <div ref={scrollRef} className="chat__messages conv__messages" style={{ flex: 1, overflowY: 'auto' }}>
+          <CompactionNotice message={visibleCompactionFeedback(
+            runner ? runner.compactionNotice : externalActivity?.compactionNotice, room.compactionNotice,
+          )} />
           <RoomTimeline history={history} roundFeed={roundFeed} dispatches={roomDispatches}
             highlightedId={highlightedDispatchId} editingMessageIndex={editingMessageIndex}
             editMessageContent={editMessageContent} onEditContent={setEditMessageContent}
@@ -275,7 +308,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
       )}
 
       <RoomComposer inputRef={inputRef} input={input} streaming={streaming}
-        phase={roundFeed?.[roundFeed.length - 1]?.phase} queue={queue}
+        disabled={contextBusy} phase={contextBusy ? t('chat.page.compacting') : externalRoom.error || roundFeed?.[roundFeed.length - 1]?.phase} queue={queue}
         onInput={setInput} onSend={speak} onStop={stop}
         onRemoveQueued={index => runners.removeQueued(roomId, index)} />
     </div>

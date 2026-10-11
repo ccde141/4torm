@@ -1,5 +1,3 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import type { NodeExecutor, WorkflowGraph, WorkflowMode } from '../engine/tradewind/foundation/types/index.js';
 import { validateWorkflow } from '../engine/tradewind/foundation/workflow-validator.js';
 import { Orchestrator, LoopController } from '../engine/tradewind/orchestrator/index.js';
@@ -11,7 +9,6 @@ import { NoteExecutor } from '../engine/tradewind/nodes/note.js';
 import { HumanGateExecutor } from '../engine/tradewind/nodes/human-gate.js';
 import { autoProfileToLoopConfig, findProfile, loadProfiles } from '../engine/tradewind/foundation/profile-store.js';
 import { pushExecutionLifecycle } from '../engine/tradewind/streaming/unified-stream.js';
-import { tradewindWorkflowDir } from './data-paths.js';
 
 export interface TradewindTrigger {
   source: 'user' | 'conversation';
@@ -27,6 +24,7 @@ export interface StartTradewindInput {
   mode?: WorkflowMode;
   profileId?: string;
   trigger: TradewindTrigger;
+  workflowName?: string;
 }
 
 export interface TradewindStartResult {
@@ -41,6 +39,7 @@ export interface TradewindStartResult {
 let activeOrchestrator: Orchestrator | null = null;
 let activeLoop: LoopController | null = null;
 let starting = false;
+let startingExecution: { workflowId: string; startedAt: string } | null = null;
 
 function createExecutors(): Map<string, NodeExecutor> {
   return new Map<string, NodeExecutor>([
@@ -65,6 +64,10 @@ export function isTradewindExecutionRunning(): boolean {
   return starting || !!(activeLoop?.isRunning() || activeOrchestrator?.isRunning());
 }
 
+export function getStartingTradewindExecution(): { workflowId: string; startedAt: string } | null {
+  return startingExecution ? { ...startingExecution } : null;
+}
+
 export async function stopActiveTradewindExecution(): Promise<void> {
   if (activeLoop?.isRunning()) {
     await activeLoop.stop();
@@ -77,6 +80,7 @@ export async function stopActiveTradewindExecution(): Promise<void> {
 export async function startTradewindExecution(input: StartTradewindInput): Promise<TradewindStartResult> {
   if (isTradewindExecutionRunning()) throw new Error('已有信风工作流正在运行');
   starting = true;
+  startingExecution = { workflowId: input.workflowId, startedAt: new Date().toISOString() };
   try {
     const executors = createExecutors();
     const mode: WorkflowMode = input.mode === 'auto' ? 'auto' : 'manual';
@@ -95,7 +99,7 @@ export async function startTradewindExecution(input: StartTradewindInput): Promi
       loopConfig = autoProfileToLoopConfig(profile);
     }
 
-    const workflowName = await loadWorkflowName(input.dataDir, input.workflowId);
+    const workflowName = input.workflowName?.trim() || input.workflowId;
     if (loopConfig) {
       activeLoop = new LoopController({
         graph: input.graph,
@@ -134,27 +138,6 @@ export async function startTradewindExecution(input: StartTradewindInput): Promi
     return result;
   } finally {
     starting = false;
-  }
-}
-
-export async function startStoredTradewindExecution(input: {
-  dataDir: string;
-  workflowId: string;
-  initialInput?: string;
-  trigger: TradewindTrigger;
-}): Promise<TradewindStartResult> {
-  const workflowDir = tradewindWorkflowDir(input.dataDir, input.workflowId);
-  const raw = await fs.readFile(path.join(workflowDir, 'graph.json'), 'utf8');
-  const graph = JSON.parse(raw) as WorkflowGraph;
-  return startTradewindExecution({ ...input, graph, mode: 'manual' });
-}
-
-async function loadWorkflowName(dataDir: string, workflowId: string): Promise<string> {
-  try {
-    const raw = await fs.readFile(path.join(tradewindWorkflowDir(dataDir, workflowId), 'meta.json'), 'utf8');
-    const meta = JSON.parse(raw) as { name?: string };
-    return meta.name?.trim() || workflowId;
-  } catch {
-    return workflowId;
+    startingExecution = null;
   }
 }

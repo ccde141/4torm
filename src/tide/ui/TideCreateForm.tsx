@@ -7,6 +7,7 @@ import { createTask, type CreateTaskInput, type TidePushMode } from '../../api/t
 import { getSessionsByAgent } from '../../store/chat';
 import { inputStyle, actionBtnStyle } from './tide-styles';
 import { useLocale } from '../../i18n/LocaleContext';
+import { parseTideRepeatCountInput } from './tide-form-values';
 
 interface CreateFormProps {
   agentId: string;
@@ -168,7 +169,7 @@ export default function CreateForm({ agentId, onDone, onCancel }: CreateFormProp
         <input
           type="number"
           value={repeatCount}
-          onChange={e => setRepeatCount(parseInt(e.target.value, 10) || -1)}
+          onChange={e => setRepeatCount(parseTideRepeatCountInput(e.target.value))}
           style={{ ...inputStyle, width: '60px', marginBottom: 0 }}
         />
         <span style={{ fontSize: '10px', color: 'var(--color-text-tertiary)' }}>{t('tide.create.repeatHint')}</span>

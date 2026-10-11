@@ -1,77 +1,64 @@
 # Monsoon · Chat
 
-## What Is Monsoon?
+## What Monsoon Is
 
-Monsoon is the persistent conversation interface for a single agent. Talk with an agent, ask it to read information, edit files, run commands, use skills, or organize a session team when useful.
+Monsoon is where you have an ongoing conversation with one agent. You can talk with it, ask it to read information, modify files, use tools, or organize a team for the current conversation when useful.
 
-One agent can have several independent conversations. Each stores its own messages, tool execution, reasoning, taskboard, and model selection, while all conversations share the agent's identity, capabilities, and workspace.
-
-Built-in file tools use the agent's workspace and automatically apply the execution permissions saved in the Console.
+The same agent can have multiple independent conversations. Messages, execution details, the taskboard, and the selected model belong to each conversation. Those conversations share the agent's long-term configuration and default workspace from the console.
 
 ## Start a Conversation
 
-Open Monsoon and select an agent on the left. Existing conversations appear below it; use the plus button to create another.
-
-A new conversation uses the agent's default model. The model selector at the top changes this conversation only—it does not change the agent's default or its configuration elsewhere.
-
-After the first message, a title is generated from its content. Double-click to rename it. Deleting a conversation requires confirmation and permanently removes its messages and execution records.
-
-![Runtime status in a Monsoon conversation](/images/chat/runtime-status.webp)
+Open Monsoon and select an agent on the left. Open an existing conversation from the list, or use the plus button to create a new one. You can change the model for this conversation at the top without changing the agent's default model in the console.
 
 ## Send Images
 
-Send images with text by selecting files, pasting, or dragging them into the composer. Preview and remove individual images before sending.
+Select images with the attachment button, paste them, or drag them into the composer. You can preview and remove individual images before sending. A message sent while the agent is replying cannot include images; send them as a new message after the current run ends.
 
-A message accepts up to four PNG, JPEG, WebP, or GIF images, at most 8 MB each. Attachments are saved with the Monsoon conversation and remain viewable without the original files.
-
-4torm formats image content for the current protocol: image messages for OpenAI Compatible APIs and the corresponding image blocks for Anthropic Messages.
-
-Only a model with actual vision support can read images. Unsupported models, rejected input, and provider format limits produce real request errors; 4torm does not substitute a filename for image content.
-
-Complete conversational image input is currently available only in Monsoon. File paths, web screenshots, and MCP image results from other workspaces are not automatically converted into model-readable images.
+A message can include up to four PNG, JPEG, WebP, or GIF images, each no larger than 8 MB. Images are saved with the conversation and remain viewable when you reopen it. The selected model must also support image input for the agent to understand them.
 
 ## Watch Execution
 
-During a response, the message and composer status show whether the agent is awaiting the model, generating text, preparing arguments, or running a tool, along with elapsed time. When identifiable, the status also names the tool, file, or command involved.
+While the agent replies, the interface shows its current activity. If the model provides reasoning, it appears separately from the final reply. Tool calls create expandable records where you can inspect arguments, results, and errors. File changes also show diffs.
 
-Reasoning appears separately and collapses after completion. Tool calls form ordered cards with expandable arguments and results. File edits show their diffs, and failures retain their actual error messages.
+Long-running commands that support background execution return an execution ID. The agent can continue other work, then inspect output, wait for a result, or terminate the command. You can also inspect and stop it from the taskboard's execution records.
 
-Tools such as `run_command` move to the background if they run for roughly three seconds and return an execution ID. The agent can continue other work, inspect the execution, wait for a bounded period, or terminate it without starting it again.
+## Add Information During a Reply
 
-Background commands appear on the taskboard with live output and a manual stop action. They continue updating until completion, failure, or cancellation even after the agent's current reply ends.
+You can send additional text while the agent is replying. The message will be offered to the current run; if that run has just ended, it becomes the next turn. Input whose delivery has not been confirmed remains visible so you can check or handle it. Images and conversation commands such as `/compact` must wait until the current run ends.
 
-## Act While a Reply Is Running
+## Work with a Team
 
-Messages sent during a reply enter an ordered queue and can be withdrawn above the composer. Switching conversations or agents does not interrupt the task. Return later to continue watching, or use the stop button to end the current run.
+For work that benefits from division of responsibility, the main agent can create a team in the current conversation and assign work. Members handle their assigned parts; the main agent coordinates them, checks their reports, and delivers the final result.
 
-## Work with a Session Team
+The team entry at the top of the conversation shows members, assignments, member conversations, and reports.
 
-When a task contains responsibility units that can be advanced and reviewed independently, the main agent can create session-team members and dispatch work to them. Members are persistent collaborators within the current conversation. Each keeps an independent message context and can receive follow-up questions or later assignments. They share the workspace with the main agent but do not automatically inherit the complete main-conversation history.
+## Let an Agent Coordinate Across Workspaces
 
-The main agent supplies the necessary background, limits the operating scope, reviews member reports, and decides whether the overall goal is complete. A report remains available in the team after a member finishes a run so the main agent can read and integrate it later.
+Describe your goal in Monsoon and let the agent choose a collaboration mode, divide the work, and follow execution. You can also specify the workspace you want it to use.
 
-Use the team entry beside the workspace control to inspect the collaboration graph, member state, assignments, and reports. This panel is read-only; the main agent creates members, supplies context, and dispatches work.
+In the Console, select the agent card, open **Tools**, enable the Convection, Cyclone, Tradewind, or Tide capabilities you need, and save.
 
-## Build Workflows and Automation
+| Workspace | What the agent can do |
+|---|---|
+| **Convection** | Create meetings, arrange members and speaking order, start discussions, chat privately with the meeting assistant, and read selected discussion rounds. |
+| **Cyclone** | Set up workshops, seats, and group rooms; assign work to individual seats; share requirements on the bulletin board; and inspect seat replies and dispatch results. |
+| **Tradewind** | Create, adjust, and start workflows, inspect node execution, and add information to nodes or meetings. You release pause points. |
+| **Tide** | Create and adjust scheduled tasks, enable, pause, or run them immediately, and inspect run records. Results can stay in an independent Tide conversation or be appended to a selected Monsoon conversation belonging to the agent running the task. |
 
-A Monsoon agent can create Tradewind workflows from natural language and inspect or modify saved workflows. It first reads available agents and may ask you to confirm roles and nodes when several designs are possible. A created workflow remains editable in Tradewind. Discussion and editing never start it automatically; the agent runs it only after an explicit request or confirmation.
+For example:
 
-The current agent can also create a recurring Tide task for itself and inspect or edit existing tasks, but cannot enable or pause them. Agent-created tasks start disabled and must be reviewed and enabled on the Tide page. An unattended Tide run cannot create or modify automation tasks.
+> Check this project's code structure and test coverage. Set up a Cyclone workshop and have two seats handle the checks separately, then compare their findings in a group discussion. Follow their progress and bring me the final report and any questions that need my decision.
 
-## Create Standalone Tools
+Research, file writing, and command execution suit individual seats. Group discussions are for sharing goals, resolving disagreements, and bringing findings together.
 
-A Monsoon agent may create and request registration of a global tool. It first completes the executor and definition, then asks for confirmation in the conversation. The tool enters the global registry only after you choose **Register**.
+The agent can inspect status, wait for tasks to finish, read results, and arrange the next step. You can also open the corresponding workspace to inspect seat conversations, meeting discussions, node results, or task run records.
 
-Registration does not add the tool to any agent's explicit tool list. Enable it for the relevant agents in the Console.
+## Create Custom Tools
 
-## Compact Long Conversations
+A Monsoon agent can write a custom tool and request its registration. Once you confirm registration in the conversation, the tool enters the global list. You can then enable it for the relevant agents in the console.
 
-After context reaches roughly 8,000 tokens, send `/compact` to create a structured summary. Older messages are compacted while the latest four remain verbatim.
+## Manage Long Conversations
 
-Compaction never deletes the original record: old messages remain visible through the compaction marker, while future model context starts from the newest summary. A failed compaction changes nothing. Token counts update after the next model response.
+When a conversation grows long, send `/compact` after the current reply finishes to summarize it and continue. Configure automatic compaction, its thresholds, and its model in the Console under **Global settings → Conversation compaction**.
 
-## Conversation Taskboard
-
-The right sidebar contains the current conversation's taskboard. For multi-step work, the agent records goals and progress as pending, in progress, completed, or blocked.
-
-The taskboard belongs only to this conversation. Expand it to add, edit, delete, or change the state and notes of tasks manually.
+The taskboard on the right belongs to the current conversation and records goals and progress for multi-step work. You can inspect items the agent added or add, edit, and delete them yourself. Different conversations with the same agent do not share a taskboard.

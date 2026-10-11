@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { agentRegistryFile, agentWorkspaceDir } from './data-paths.js';
+import { agentRegistryFile, resolveAgentWorkspaceDir } from './data-paths.js';
 
 export type SandboxLevel = 'project' | 'unrestricted';
 export type SandboxLevelInput = SandboxLevel | 'strict' | 'relaxed';
@@ -24,7 +24,7 @@ export function normalizeSandboxLevel(value: unknown): SandboxLevel {
 
 async function getAgentConfig(dataDir: string, agentId: string): Promise<AgentConfig> {
   const projectDir = path.resolve(dataDir, '..');
-  let workspace = path.resolve(agentWorkspaceDir(dataDir, agentId));
+  let workspace = resolveAgentWorkspaceDir(dataDir, agentId);
   let sandboxLevel: SandboxLevel = 'project';
 
   try {
@@ -32,7 +32,7 @@ async function getAgentConfig(dataDir: string, agentId: string): Promise<AgentCo
     const registry = JSON.parse(raw) as Record<string, { config?: Record<string, unknown> }>;
     const config = registry[agentId]?.config;
     if (typeof config?.workspace === 'string' && config.workspace) {
-      workspace = path.resolve(projectDir, config.workspace);
+      workspace = resolveAgentWorkspaceDir(dataDir, agentId, config.workspace);
     }
     sandboxLevel = normalizeSandboxLevel(config?.sandboxLevel);
   } catch {

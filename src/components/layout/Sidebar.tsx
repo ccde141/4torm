@@ -215,7 +215,7 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
         </div>
       </nav>
 
-      {/* Footer / Links Placeholder */}
+      {/* Public project and author links. */}
       <div className="sidebar__footer">
         <LanguageSwitch />
         <div className="sidebar__links-label">{t('nav.links')}</div>

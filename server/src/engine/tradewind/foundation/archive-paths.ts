@@ -28,3 +28,11 @@ export function getMeetingsDir(runDir: string): string {
 export function getMeetingFileName(meetingNodeId: string, round: number): string {
   return `${sanitizePathToken(meetingNodeId)}-${round}.json`;
 }
+
+export function getMeetingUsageFileName(meetingNodeId: string): string {
+  return `${sanitizePathToken(meetingNodeId)}-usage.json`;
+}
+
+export function getMeetingRoundUsageFileName(meetingNodeId: string, round: number): string {
+  return `${sanitizePathToken(meetingNodeId)}-${round}-usage.json`;
+}

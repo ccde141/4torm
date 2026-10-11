@@ -1,111 +1,73 @@
-import { useState, useEffect } from 'react';
-import { getAllModels } from '../../llm';
-import { checkModelAvailable } from '../../store/agent';
 import type { Agent } from '../../types';
-import { getAgentRuntimeStatus } from './agent-runtime-status';
+import type { AgentActivityView } from './dashboard-activity';
 import AgentAvatar from './AgentAvatar';
+import { activityPreview } from './agent-activity-view';
+import { activitySummaryKey, cardDetails, featureKey, statusKey,
+  workspaceDisplayLabel } from './agent-card-view';
 import { useLocale } from '../../i18n/LocaleContext';
 import '../../styles/components/agent-card.css';
 
 interface AgentCardProps {
   agent: Agent;
-  onClick?: (agent: Agent) => void;
-  onConfig?: (agent: Agent) => void;
-  onMemory?: (agent: Agent) => void;
-  onDelete?: (id: string) => void;
+  activity: AgentActivityView;
+  onClick: (agent: Agent, element: HTMLButtonElement) => void;
+  deleting?: boolean;
+  expanded?: boolean;
 }
 
-export default function AgentCard({ agent, onClick, onConfig, onMemory, onDelete }: AgentCardProps) {
-  const { t } = useLocale();
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [modelAvailable, setModelAvailable] = useState<boolean | null>(null);
-  const [modelName, setModelName] = useState('');
-
-  useEffect(() => {
-    if (agent.model) {
-      checkModelAvailable(agent.model).then(setModelAvailable);
-    } else {
-      setModelAvailable(false);
-    }
-    getAllModels().then(models => {
-      const m = models.find(o => o.key === agent.model);
-      setModelName(m?.label || agent.model || t('agent.notSelected'));
-    });
-  }, [agent.model, t]);
-
-  const runtimeStatus = getAgentRuntimeStatus(agent, modelAvailable === false);
-  const statusTitle = [runtimeStatus.label, runtimeStatus.surfaces, agent.label]
-    .filter(Boolean)
-    .join(' · ');
-
+export default function AgentCard({
+  agent, activity, onClick, deleting = false, expanded = false,
+}: AgentCardProps) {
+  const { t, locale } = useLocale();
+  const events = activityPreview(activity);
+  const summaryKey = activitySummaryKey(activity);
+  const details = cardDetails(agent, activity);
+  const workspace = workspaceDisplayLabel(details.workspace);
   return (
-    <div className="agent-card" onClick={() => onClick?.(agent)} style={{ position: 'relative' }}>
-      {onConfig && (
-        <button className="agent-card__config-btn" title={t('agent.configure')} onClick={e => { e.stopPropagation(); onConfig(agent); }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-        </button>
-      )}
-      {onMemory && (
-        <button className="agent-card__memory-btn" title={t('agent.memory')} onClick={e => { e.stopPropagation(); onMemory(agent); }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-1.04Z" />
-            <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-1.04Z" />
-          </svg>
-        </button>
-      )}
-      <div className="agent-card__header">
+    <button type="button"
+      data-agent-card={agent.id}
+      className={`agent-card agent-card--${activity.kind}${expanded ? ' agent-card--source-hidden' : ''}${deleting ? ' agent-card--deleting' : ''}`}
+      aria-label={t('dashboard.card.open', { name: agent.name })}
+      aria-busy={deleting} disabled={deleting}
+      onClick={event => onClick(agent, event.currentTarget)}>
+      <span className="agent-card__header">
         <AgentAvatar agent={agent} className="agent-card__avatar" fallback={agent.name[0]} />
-        <div className="agent-card__info">
-          <div className="agent-card__name">{agent.name}</div>
-          <div className="agent-card__role">{agent.role}</div>
-          <div className="agent-card__status" title={statusTitle}>
-            <span className={`agent-card__status-dot agent-card__status-dot--${runtimeStatus.tone}`} />
-            <span>{runtimeStatus.label}</span>
-            {runtimeStatus.surfaces && (
-              <span className="agent-card__status-source">· {runtimeStatus.surfaces}</span>
-            )}
-          </div>
-        </div>
-      </div>
-      <p className="agent-card__description">{agent.description}</p>
-      <div className="agent-card__meta">
-        <div className="agent-card__meta-row">
-          <span className="agent-card__meta-label">{t('agent.model')}</span>
-          <span className="agent-card__meta-value agent-card__meta-value--ellipsis" title={modelName}>{modelName}</span>
-        </div>
-        {agent.config?.workspace && (
-          <div className="agent-card__meta-row">
-            <span className="agent-card__meta-label">{t('agent.workspace')}</span>
-            <span
-              className="agent-card__meta-value agent-card__workspace"
-              title={t('agent.copyWorkspace', { path: agent.config.workspace })}
-              onClick={e => { e.stopPropagation(); navigator.clipboard.writeText(agent.config!.workspace!); }}
-            >{agent.config.workspace}</span>
-          </div>
-        )}
-        {onDelete && !confirmDelete && (
-          <button
-            className="agent-card__delete-btn"
-            onClick={e => { e.stopPropagation(); setConfirmDelete(true); }}
-          >{t('common.delete')}</button>
-        )}
-        {confirmDelete && (
-          <div className="agent-card__delete-confirm">
-            <span>{t('agent.deleteWarning')}</span>
-            <button
-              className="agent-card__delete-yes"
-              onClick={e => { e.stopPropagation(); onDelete?.(agent.id); setConfirmDelete(false); }}
-            >{t('common.delete')}</button>
-            <button
-              className="agent-card__delete-no"
-              onClick={e => { e.stopPropagation(); setConfirmDelete(false); }}
-            >{t('common.cancel')}</button>
-          </div>
-        )}
-      </div>
-    </div>
+        <span className="agent-card__info">
+          <strong className="agent-card__name">{agent.name}</strong>
+          <small className="agent-card__role">{agent.role}</small>
+        </span>
+        <span className="agent-card__status">
+          <i className="agent-card__status-dot" aria-hidden="true" />
+          {deleting ? t('agent.deleting') : locale === 'zh-CN' ? activity.label
+            : t(statusKey(activity.item?.status ?? activity.kind))}
+        </span>
+      </span>
+      <span className="agent-card__activity">
+        <small>{t('dashboard.card.activity')}</small>
+        {events.length ? events.map(event => <span className="agent-card__event" key={event.key}>
+          <span className="agent-card__event-meta">
+            {t(featureKey(event.feature))} · {t(statusKey(event.item.status))}
+            {event.item.updatedAt && <time dateTime={event.item.updatedAt}>
+              {new Date(event.item.updatedAt).toLocaleString(locale,
+                { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>}
+          </span>
+          <span className="agent-card__event-title">{event.title
+            ?? `${t(featureKey(event.feature))} · ${t(statusKey(event.item.status))}`}</span>
+        </span>) : <span className="agent-card__empty">
+          {summaryKey ? t(summaryKey) : activity.summary}</span>}
+      </span>
+      <span className="agent-card__meta">
+        <span className="agent-card__meta-row">
+          <small>{t('agent.model')}</small>
+          <span title={details.model}>{details.model || t('agent.notSelected')}</span>
+        </span>
+        <span className="agent-card__meta-row">
+          <small>{t('agent.workspace')}</small>
+          <span title={workspace}>{workspace}</span>
+        </span>
+      </span>
+      {!activity.complete && <span className="agent-card__foot">
+        {t('dashboard.card.partialActivity')}</span>}
+    </button>
   );
 }

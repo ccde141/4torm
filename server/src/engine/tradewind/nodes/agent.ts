@@ -31,6 +31,7 @@ import { markEnvelopePending, markEnvelopeDone } from '../foundation/node-status
 import { abortableSleep, readDeliveryDelaySec } from '../execution/delivery-delay';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { atomicWriteFile } from '../../shared/atomic-io.js';
 import { waitForTaskFailureOrAbort } from '../execution/execution-lifetime.js';
 
 /** 活跃 NodeRunner 注册表：nodeId → NodeRunner */
@@ -132,6 +133,8 @@ export class AgentExecutor implements NodeExecutor {
 
     // 持久化路径（归档用，写 messages.json）
     const persistDir = path.join(ctx.runDir, 'nodes', ctx.nodeId);
+    await fs.mkdir(persistDir, { recursive: true });
+    await atomicWriteFile(path.join(persistDir, 'agent.json'), JSON.stringify({ agentId }));
 
     // 压缩归档路径：workspace/transcripts/bak/agent_{nodeLabel}/
     const nodeLabel = (ctx.nodeConfig as any)._nodeLabel || ctx.nodeId;
@@ -141,6 +144,8 @@ export class AgentExecutor implements NodeExecutor {
     const contactTargets = teamRoster.filter(m => !m.isSelf).map(m => m.label);
     const runner = new NodeRunner({
       dataDir: ctx.dataDir,
+      workflowId: ctx.workflowId,
+      executionId: ctx.executionId,
       nodeId: ctx.nodeId,
       agentId,
       model: agent.model,
@@ -151,6 +156,7 @@ export class AgentExecutor implements NodeExecutor {
       workspace: nodeWorkspace,
       sandboxLevel: agent.sandboxLevel,
       systemPrompt,
+      compactionPrompt: agent.compactionPrompt,
       signal: ctx.signal,
       persistDir,
       compactArchiveDir,
@@ -248,7 +254,7 @@ export class AgentExecutor implements NodeExecutor {
           JSON.stringify(runner.getMessages(), null, 2),
         );
       } catch { /* 归档失败不阻塞 */ }
-      activeNodeRunners.delete(ctx.nodeId);
+      if (activeNodeRunners.get(ctx.nodeId) === runner) activeNodeRunners.delete(ctx.nodeId);
       ctx.setState('idle');
     }
   }

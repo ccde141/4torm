@@ -15,12 +15,12 @@ import type { ChatMessage, Agent } from '../../types';
 import type { ChatSession } from '../../store/chat';
 import { nameCompletedSession } from '../../store/chat';
 import { TitleCompletion } from '../../store/session-naming';
-import type { ToolDef } from '../../store/tools';
 import type { TaskBoard } from '../../utils/taskboard';
-import { applyDelegateStreamEvent, finalizeStreamAnswer } from './delegate-stream-events';
-import { appendToolStep, finishLatestToolStep } from './tool-step-events';
-import { applyInputEvent } from './input-events';
 import { retainStopped } from './stream-retention';
+import { interruptedStreamContent, StreamTerminal } from './stream-terminal';
+import { readMonsoonEvents, type MonsoonBrowserEvent } from './sse-events';
+import { reconcileMonsoonInterruption } from './run-reconciliation';
+import { MonsoonMessageProjection } from './monsoon-projection';
 
 export type StreamCtx = {
   session: ChatSession;
@@ -33,13 +33,11 @@ export type StreamCtx = {
     /** 原生历史回灌：tool 结果消息配对 id */
     toolCallId?: string;
   }>;
-  providerInfo: { baseUrl: string; apiKey: string; headers?: Record<string, string>; signal: AbortSignal };
-  modelId: string;
-  toolDefs: ToolDef[];
   agent: Agent;
   selectedModel: string;
+  request?: typeof fetch;
   setMessages: (msgs: ChatMessage[]) => void;
-  saveSessionFn: (s: ChatSession) => Promise<void>;
+  saveSessionFn: (s: ChatSession) => Promise<ChatSession>;
   refreshSessions: (a: Agent) => void;
   generateMessageIdFn: () => string;
   abortController: AbortController;
@@ -52,13 +50,19 @@ export type StreamCtx = {
 };
 
 export async function runStreamLoop(ctx: StreamCtx) {
-  const { session, chatMessages, agent, selectedModel,
+  let { session } = ctx;
+  const { chatMessages, agent, selectedModel,
     setMessages,
     saveSessionFn, refreshSessions, generateMessageIdFn, abortController } = ctx;
   let allMessages = ctx.allMessages;
 
   const getTitle = (_msgs: ChatMessage[]) => session.title;
   const titleCompletion = new TitleCompletion();
+  const streamTerminal = new StreamTerminal();
+  const request = ctx.request ?? fetch;
+  let requestStarted = false;
+  let initialSaved = false;
+  let completeStream = false;
 
   // 创建 assistant 占位消息
   const assistantMsgId = generateMessageIdFn();
@@ -78,10 +82,14 @@ export async function runStreamLoop(ctx: StreamCtx) {
   const assistantMsg: ChatMessage = {
     id: assistantMsgId, role: 'assistant', content: '',
     inputRunId: assistantMsgId,
+    runCommitted: false,
     timestamp: new Date().toISOString(), agentId: agent.id,
     streamingPhase: 'llm-waiting', phaseElapsed: 0,
   };
   allMessages = [...allMessages, assistantMsg];
+  const projection = new MonsoonMessageProjection(
+    allMessages, assistantMsgId, agent.id, generateMessageIdFn,
+  );
   setMessages([...allMessages]);
 
   // 等待计时器
@@ -98,9 +106,11 @@ export async function runStreamLoop(ctx: StreamCtx) {
 
   try {
     if (ctx.isAbandoned?.()) throw new Error('Session deleted');
-    await saveSessionFn({ ...session, messages: allMessages, model: selectedModel });
+    session = await saveSessionFn({ ...session, messages: allMessages, model: selectedModel });
+    initialSaved = true;
     // POST 到后端 SSE 端点
-    const res = await fetch(streamUrl('/api/conversation/chat'), {
+    requestStarted = true;
+    const res = await request(streamUrl('/api/conversation/chat'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -119,53 +129,31 @@ export async function runStreamLoop(ctx: StreamCtx) {
     }
 
     clearInterval(waitInterval);
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    const processLine = async (line: string) => {
-      if (!line.startsWith('data: ')) return;
-      const json = line.slice(6).trim();
-      if (!json) return;
-
-      let ev: any;
-      try { ev = JSON.parse(json); } catch { return; }
+    projection.acceptHumanInput();
+    allMessages = projection.messages;
+    doFlush();
+    const processEvent = async (ev: MonsoonBrowserEvent) => {
       titleCompletion.observe(ev.type);
-      if (ev.type?.startsWith('input-')) {
-        allMessages = applyInputEvent(allMessages, assistantMsgId, ev);
-        doFlush();
-        return;
+      streamTerminal.observe(ev.type);
+      if (ev.type === 'error') throw new Error(String(ev.message || '执行失败'));
+      const effect = projection.apply(ev);
+      if (effect.revision !== undefined) session.revision = effect.revision;
+      allMessages = projection.messages;
+      streamContent = projection.content;
+      if (effect.firstOutput) { firstTokenReceived = true; clearInterval(waitInterval); }
+      if (Object.hasOwn(effect, 'taskboard')) ctx.onTaskboard?.(effect.taskboard ?? null);
+      if (Object.hasOwn(effect, 'usage')) {
+        if (effect.usage) session.tokenUsage = effect.usage;
+        else delete session.tokenUsage;
+        refreshSessions(agent);
       }
-
-      // task_board 的 meta 侧通道：结构化任务板即时上屏（不进 LLM 上下文）
-      if (ev.type === 'tool-result' && ev.meta && 'taskboard' in ev.meta) {
-        ctx.onTaskboard?.(ev.meta.taskboard);
-      }
-
-      await handleSSEEvent(ev, {
-        assistantMsgId, allMessages, streamContent,
-        setMessages, generateMessageIdFn,
-        agent, session, selectedModel, saveSessionFn, refreshSessions, getTitle,
-        setStreamContent: (c: string) => { streamContent = c; },
-        setAllMessages: (m: ChatMessage[]) => { allMessages = m; },
-        setFirstToken: () => { firstTokenReceived = true; clearInterval(waitInterval); },
-        throttledFlush: scheduleFlush,
-      });
+      if (effect.flush === 'immediate') doFlush();
+      else if (effect.flush === 'throttled') scheduleFlush();
     };
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) await processLine(line);
-    }
-    // 收尾：flush 解码器 + 处理末尾未换行终结的残留（否则尾段事件会丢）
-    buffer += decoder.decode();
-    if (buffer) for (const line of buffer.split('\n')) await processLine(line);
+    for await (const event of readMonsoonEvents(res.body)) await processEvent(event);
+    streamTerminal.assertClosed(abortController.signal.aborted);
+    completeStream = !abortController.signal.aborted;
     // 流正常结束：强制最终刷新，保证节流期间未渲染的尾部 token 全部呈现
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     setMessages([...allMessages]);
@@ -177,7 +165,10 @@ export async function runStreamLoop(ctx: StreamCtx) {
     // TypeError「Failed to fetch」而非 AbortError，故以 signal.aborted 为准。
     // 主动中断不写错误气泡，已收到的部分内容静默存盘即可。
     if (!abortController.signal.aborted) {
-      const errContent = streamContent || `(连接中断: ${(e as Error).message})`;
+      const reason = requestStarted
+        ? await reconcileMonsoonInterruption(session.id, assistantMsgId, (e as Error).message, request)
+        : (e as Error).message;
+      const errContent = interruptedStreamContent(streamContent, reason);
       allMessages = allMessages.map(m => m.id === assistantMsgId ? { ...m, content: errContent } : m);
       setMessages([...allMessages]);
     }
@@ -187,10 +178,14 @@ export async function runStreamLoop(ctx: StreamCtx) {
     allMessages = retainStopped(allMessages, assistantMsgId);
     setMessages([...allMessages]);
   }
+  if (!initialSaved) { ctx.onFinish?.(false); return; }
   // 被删会话（弃用）跳过存盘，否则 saveSession 会把文件和索引重建出来 → 僵尸复活
   if (!ctx.isAbandoned?.()) {
     try {
-      await saveSessionFn({ ...session, messages: allMessages, title: getTitle(allMessages), model: selectedModel });
+      const finalized = allMessages.map(message => message.id === assistantMsgId
+        ? { ...message, runCommitted: completeStream } : message);
+      await saveSessionFn({ ...session, messages: finalized,
+        title: getTitle(finalized), model: selectedModel });
       refreshSessions(agent);
       if (titleCompletion.ready(abortController.signal.aborted)) {
         void nameCompletedSession(session.id).then(() => refreshSessions(agent))
@@ -208,179 +203,4 @@ export async function runStreamLoop(ctx: StreamCtx) {
     }
   }
   ctx.onFinish?.(titleCompletion.ready(abortController.signal.aborted));
-}
-
-// ── SSE 事件处理 ─────────────────────────────────────────────────
-
-interface EventHandlerCtx {
-  assistantMsgId: string;
-  allMessages: ChatMessage[];
-  streamContent: string;
-  setMessages: (msgs: ChatMessage[]) => void;
-  generateMessageIdFn: () => string;
-  agent: Agent;
-  session: ChatSession;
-  selectedModel: string;
-  saveSessionFn: (s: ChatSession) => Promise<void>;
-  refreshSessions: (a: Agent) => void;
-  getTitle: (msgs: ChatMessage[]) => string;
-  setStreamContent: (c: string) => void;
-  setAllMessages: (m: ChatMessage[]) => void;
-  setFirstToken: () => void;
-  /** 节流刷新 UI（token 高频场景用，避免每 token 全量重渲染） */
-  throttledFlush: () => void;
-}
-
-async function handleSSEEvent(ev: any, ctx: EventHandlerCtx): Promise<void> {
-  switch (ev.type) {
-    case 'reasoning': {
-      // 原生思考流：累积到独立字段，与正文互不干扰。首个思考 chunk 也算"模型开始响应"
-      ctx.setFirstToken();
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
-      if (!target) break;
-      const updated = { ...target, reasoningContent: (target.reasoningContent || '') + ev.content, streamingPhase: 'model-output' as const, phaseElapsed: 0, streamingStatus: undefined, streamingTool: undefined, streamingArgumentChars: undefined };
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
-      ctx.throttledFlush();
-      break;
-    }
-    case 'token': {
-      ctx.setFirstToken();
-      ctx.setStreamContent(ctx.streamContent + ev.content);
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId)!;
-      // 首 token 到达即清掉等待状态（模型开始写了）
-      const updated = { ...target, content: ctx.streamContent + ev.content, streamingPhase: 'model-output' as const, phaseElapsed: 0, streamingStatus: undefined, streamingTool: undefined, streamingArgumentChars: undefined };
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
-      // 节流：超长输出时每个 token 都 setMessages 会导致 O(n²) 渲染塌方，
-      // 改为最多每 THROTTLE_MS 刷新一次 UI（最终内容由后续事件或流结束保证完整）
-      ctx.throttledFlush();
-      break;
-    }
-    case 'tool-progress': {
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
-      if (!target) break;
-      const updated = {
-        ...target,
-        streamingPhase: 'tool-preparing' as const,
-        phaseElapsed: Math.round((ev.elapsed || 0) / 1000),
-        streamingStatus: undefined,
-        streamingTool: ev.tool,
-        streamingArgumentChars: ev.argumentChars,
-      };
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
-      ctx.throttledFlush();
-      break;
-    }
-    case 'tool-call': {
-      // 累积到 assistantMsg.toolSteps[]（流式期间内嵌展示，运行时字段不持久化）
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
-      if (!target) break;
-      const withStep = appendToolStep(ctx.allMessages, ctx.assistantMsgId, ev.tool, ev.args || {});
-      ctx.setAllMessages(withStep.map(m => m.id === ctx.assistantMsgId ? {
-        ...m, streamingPhase: 'tool-exec' as const, phaseElapsed: 0,
-        streamingTool: ev.tool, streamingArgumentChars: undefined,
-      } : m));
-      ctx.throttledFlush();
-      break;
-    }
-    case 'tool-result': {
-      // 找最后一个 running step 更新
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
-      if (!target?.toolSteps) break;
-      const before = typeof ev.meta?.before === 'string' ? ev.meta.before : undefined;
-      const pendingAutomation = ev.meta?.pendingAutomation;
-      const workflowExecution = ev.meta?.workflowExecution;
-      const finished = finishLatestToolStep(ctx.allMessages, ctx.assistantMsgId, ev.result, ev.ok !== false, { before, pendingAutomation, workflowExecution });
-      ctx.setAllMessages(finished.map(m => m.id === ctx.assistantMsgId ? {
-        ...m, streamingPhase: 'llm-waiting' as const, phaseElapsed: 0,
-        streamingTool: undefined, streamingArgumentChars: undefined,
-      } : m));
-      ctx.throttledFlush();
-      break;
-    }
-    case 'heartbeat': {
-      // 流式期间的等待状态：phase + elapsed 写到 assistantMsg
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
-      if (!target) break;
-      const phase = ev.phase === 'tool-exec' ? 'tool-exec' as const : 'llm-waiting' as const;
-      const updated = { ...target, streamingPhase: phase, phaseElapsed: Math.round((ev.elapsed || 0) / 1000) };
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
-      ctx.throttledFlush();
-      break;
-    }
-    case 'notice': {
-      const target = findMsg(ctx.allMessages, ctx.assistantMsgId);
-      if (!target) break;
-      const queued = typeof ev.message === 'string' && ev.message.includes('排队');
-      const updated = {
-        ...target,
-        streamingPhase: queued ? 'queued' as const : target.streamingPhase,
-        streamingStatus: ev.message,
-      };
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? updated : m));
-      ctx.throttledFlush();
-      break;
-    }
-    // delegate 事件 → 写入 assistantMsg.toolSteps[] 里的一个 delegate step，
-    // 按调用顺序落位（与其它工具同列），由 DelegateCard inline 渲染。
-    case 'delegate-start':
-    case 'delegate-token':
-    case 'delegate-tool-call':
-    case 'delegate-tool-result':
-    case 'delegate-done': {
-      ctx.setAllMessages(applyDelegateStreamEvent(ctx.allMessages, ctx.assistantMsgId, ev));
-      ctx.throttledFlush();
-      break;
-    }
-    case 'answer': {
-      // 最终回复：用完整 rawContent 替换占位消息
-      // 保留结构化工具步骤，正文只负责展示模型回答。
-      ctx.setAllMessages(finalizeStreamAnswer(ctx.allMessages, ctx.assistantMsgId, ev, ctx.agent.id));
-      ctx.setMessages([...ctx.allMessages]);
-      break;
-    }
-    case 'ask': {
-      // agent 提出问题，等待人类回复
-      const askMsg: ChatMessage = {
-        id: ctx.generateMessageIdFn(), role: 'assistant',
-        content: ev.question,
-        timestamp: new Date().toISOString(), agentId: ctx.agent.id,
-        ask: { question: ev.question, options: ev.options, answered: false },
-      };
-      // 保留 assistantMsg 中已流式产出的普通正文，追加 askMsg
-      const cleanContent = ctx.streamContent.trim();
-      let msgs = ctx.allMessages;
-      if (cleanContent) {
-        // 把 assistantMsg 内容更新为已产出的正文，保留它
-        msgs = msgs.map(m => m.id === ctx.assistantMsgId ? { ...m, content: cleanContent } : m);
-      } else {
-        // 没有可保留内容时，移除空占位
-        msgs = msgs.filter(m => m.id !== ctx.assistantMsgId || m.inputRunId);
-      }
-      msgs.push(askMsg);
-      ctx.setAllMessages(msgs);
-      ctx.setMessages([...msgs]);
-      break;
-    }
-    case 'error': {
-      const errMsg = ctx.streamContent || `(错误: ${ev.message})`;
-      ctx.setAllMessages(ctx.allMessages.map(m => m.id === ctx.assistantMsgId ? { ...m, content: errMsg } : m));
-      ctx.setMessages([...ctx.allMessages]);
-      break;
-    }
-    case 'usage': {
-      // 覆盖（非累加）：记录当前上下文体积 = 本次 input + output（output 会追加到 messages，下次就是 input）
-      if (ev.usage) {
-        ctx.session.tokenUsage = {
-          promptTokens: ev.usage.promptTokens,
-          completionTokens: ev.usage.completionTokens,
-          totalTokens: ev.usage.promptTokens + ev.usage.completionTokens,
-        };
-      }
-      break;
-    }
-  }
-}
-
-function findMsg(msgs: ChatMessage[], id: string): ChatMessage | undefined {
-  return msgs.find(m => m.id === id);
 }

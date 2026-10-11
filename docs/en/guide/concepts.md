@@ -1,48 +1,37 @@
 # Core Concepts
 
-Every collaboration mode in 4torm shares the same foundations. Understanding agents, tools, skills, MCP, memory, and execution permissions explains how the five workspaces operate together.
+In 4torm, an agent is a persistent collaborator. Monsoon conversations, Convection meeting rooms, Cyclone seats, Tradewind workflows, and Tide tasks are different places where it can work. Understanding who is working, where the work takes place, and which capabilities are available helps distinguish what persists from what belongs to a particular task.
 
-## Agent · Persistent Entity
+## Agents and Workspaces
 
-An agent is 4torm's basic unit of work: a long-term identity reused across workspaces. Each agent has:
+You can create an agent in the console and configure its default model, role prompt, tools, skills, memory, and workspace. The same agent can work across multiple areas without being recreated for each task.
 
-- a **role prompt** (`role-prompt.md`) defining identity, responsibilities, and working style;
-- a **model configuration** selecting the model, provider, temperature, and related parameters;
-- a **tool list** controlling which tools it can call;
-- a **skill list** providing expertise and methods loaded on demand; and
-- an **independent workspace** for long-lived files.
+Each place keeps its own content. Two Monsoon conversations with the same agent remain separate; a Cyclone seat keeps its own private chat; a Convection meeting room keeps its public discussion; and Tradewind saves workflows and run results. Moving to another place does not bring the entire previous conversation along. Provide the relevant background there, or ask the agent to read records it can access.
 
-After creation, the same agent can join a Monsoon conversation today, enter a Tradewind workflow tomorrow, and later be awakened by a Tide task. Its base capabilities do not need to be configured again in each workspace.
+A place may also give an agent a task-specific role or shared directory. A Cyclone seat can have its own role instructions, while meeting rooms and workflows have their own workspaces. These settings do not change the agent's base configuration in the console.
 
-## Tool
+Monsoon team members are different: the main agent creates them for the current conversation, and they do not appear in the console's agent list. A member has its own conversation context and can receive further assignments. The main agent must supply the necessary background and check and integrate the member's reports.
 
-Tools perform real interactions with the environment, including file access, directory browsing, command execution, and web retrieval. Built-in tools come from a fixed server-side registry. Custom tools are stored in `data/tools/registry.json` and `data/tools/executors/*.js`.
+## Tools, Skills, and MCP
 
-## Skill
+**Tools** let an agent read information, modify files, run commands, and collaborate. You can choose which tools to enable for an agent in the console.
 
-Skills preserve reusable expertise and working methods, primarily in `data/skills/{id}/SKILL.md`. Agents call `use_skill` to load instructions when needed, so every skill does not permanently consume conversation context. Skills may also include dedicated tools.
+**Skills** store reusable knowledge and working methods. You can enable them for an agent in the console. The agent reads a skill's instructions when needed, instead of loading all of them into every conversation. A skill can also include dedicated tools. You can create skills yourself, or an agent can register them.
 
-## MCP · External Capabilities
+**MCP** connects external tool services. After connecting a service, you can select its tools for an agent in the console. What an agent can do when calling them depends on the capabilities and configuration of that external service.
 
-MCP (Model Context Protocol) connects external tool services. The MCP page supports stdio, Streamable HTTP, and compatible SSE connections for search, browsers, databases, and other services. After connecting, explicitly select the tools to enable in each agent's configuration.
+## Workspaces and Execution Permissions
 
-## Long-Term Memory
+An agent has a default workspace. Meeting rooms, workshops, and workflows can also provide shared workspaces. When referring to a file, specify which workspace it belongs to so that identical filenames do not cause confusion.
 
-Long-term memory belongs to an agent and persists across conversations and workspaces. In supported conversations, the system recalls entries relevant to the current task, and the agent can inspect, write, or update memory itself.
+Execution permissions have two levels: **Project** and **Unrestricted**. Project lets built-in file tools access the 4torm project and the current workspace; Unrestricted lets them access other paths. Framework-managed data must still be changed through the corresponding feature entry points. This setting constrains only built-in file tools. Commands, custom tools, and MCP tools operate according to their own capabilities.
 
-Merely including a conversation in context does not save it to memory, and memory is never shared between agents. Availability varies by workspace and role; see the relevant workspace guide for exact behavior.
+## Activity Records and Memory
 
-## Streaming Output
+An agent's console card and details help you find recent activity. The full content remains in the area where the work took place. Older activity may no longer appear in the current conversation. When needed, tell the agent what happened and roughly when, and ask it to search the saved records.
 
-Generated text, reasoning, tool calls, and delegated subtasks stream to the frontend over SSE (`text/event-stream`). Closing a conversation window does not interrupt the running task; reopen it to continue watching. Tradewind nodes and meeting-room nodes use the same live-status mechanism.
+**Long-term memory** belongs to an agent and preserves preferences, agreements, and experience that remain useful across tasks. It is not a complete conversation record; information is not automatically written to memory merely because it appeared in a conversation. Each agent has its own memory.
 
-## Execution Permissions
+Starting work, receiving a successful tool response, or getting a team member's report does not mean the overall goal is complete. To confirm the outcome, check the run status and actual deliverables in the relevant area. You can also continue observing work that is still running there.
 
-Agents provide two permission levels:
-
-- **Project**: built-in file tools can access the 4torm project and the current workspace. An explicitly configured workspace remains accessible even outside the project; other external paths are denied.
-- **Unrestricted**: built-in file tools can access any path, for agents that need to work across directories.
-
-At either level, ordinary file tools cannot directly rewrite the agent registry, Tide task table, or workflow control files. Those changes must go through the corresponding feature entry point or dedicated tool.
-
-Execution permissions primarily constrain built-in file tools. Commands, MCP tools, and custom executors still operate with their own capabilities. See [Security and Isolation](../architecture/security).
+To get started, see [Monsoon Chat](../modes/chat), [Convection Meeting Rooms](../modes/convection), [Cyclone Workshops](../modes/cyclone), [Tradewind Workflows](../modes/tradewind), or [Tide Automation](../modes/tide).

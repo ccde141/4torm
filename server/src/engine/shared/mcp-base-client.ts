@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
-import { formatMcpToolResult } from './mcp-result.js';
-import type { McpClient, McpToolDef } from './mcp-types.js';
+import { readMcpToolOutcome } from './mcp-result.js';
+import type { McpClient, McpToolDef, McpToolOutcome } from './mcp-types.js';
 
 function recordValue(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -63,8 +63,12 @@ export abstract class McpBaseClient extends EventEmitter implements McpClient {
   }
 
   async callTool(toolName: string, args: Record<string, unknown>): Promise<string> {
+    return (await this.callToolOutcome(toolName, args)).result;
+  }
+
+  async callToolOutcome(toolName: string, args: Record<string, unknown>): Promise<McpToolOutcome> {
     const result = await this.request('tools/call', { name: toolName, arguments: args });
-    return formatMcpToolResult(result);
+    return readMcpToolOutcome(result);
   }
 
   disconnect(): void {

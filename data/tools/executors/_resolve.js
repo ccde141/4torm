@@ -70,37 +70,41 @@ function assertInAllowedRoot(resolved, ctx) {
   }
 }
 
+// 写入与删除使用同一组控制面声明；删除额外保护这些位置的祖先。
+function controlPlanePaths(ctx, resolve = canonicalPath) {
+  const relative = part => resolve(path.resolve(ctx.dataDir, part))
+  return {
+    files: CONTROL_PLANE_FILES.map(relative),
+    workflowRoot: relative(WORKFLOWS_ROOT),
+    executorRoot: relative(TOOL_EXECUTORS_ROOT),
+    skillRoot: relative(SKILLS_ROOT),
+  }
+}
+
+function isWorkflowControl(target, root) {
+  if (!within(target, root)) return false
+  const parts = path.relative(root, target).split(path.sep)
+  return !(parts.length >= 2 && parts[1] === 'workspace')
+}
+
+function isExecutorLocation(target, locations) {
+  if (within(target, locations.executorRoot)) return true
+  if (!within(target, locations.skillRoot)) return false
+  const parts = path.relative(locations.skillRoot, target).split(path.sep)
+  return parts.length >= 2 && parts[1] === 'executors'
+}
+
 /** 写操作前校验：命中控制面则拒绝。读操作不受限。 */
 function assertWritable(resolved, ctx) {
   if (!ctx.dataDir) return
   const requestedTarget = path.resolve(resolved)
   const target = canonicalPath(resolved)
-  const files = CONTROL_PLANE_FILES.map(p => canonicalPath(path.resolve(ctx.dataDir, p)))
-  const fileHit = files.some(f => path.relative(f, target) === '')
-
-  // 工作流目录：命中则拒，但 {wfId}/workspace/** 是 agent 工作区，放行。
-  let workflowHit = false
-  const wfRoot = canonicalPath(path.resolve(ctx.dataDir, WORKFLOWS_ROOT))
-  if (within(target, wfRoot)) {
-    const parts = path.relative(wfRoot, target).split(path.sep) // [wfId, seg2, ...]
-    const inWorkspace = parts.length >= 2 && parts[1] === 'workspace'
-    workflowHit = !inWorkspace
-  }
-
-  const toolExecutorsRoot = canonicalPath(path.resolve(ctx.dataDir, TOOL_EXECUTORS_ROOT))
-  const skillRoot = canonicalPath(path.resolve(ctx.dataDir, SKILLS_ROOT))
-  const skillParts = within(target, skillRoot)
-    ? path.relative(skillRoot, target).split(path.sep)
-    : []
-  const requestedToolRoot = path.resolve(ctx.dataDir, TOOL_EXECUTORS_ROOT)
-  const requestedSkillRoot = path.resolve(ctx.dataDir, SKILLS_ROOT)
-  const requestedSkillParts = within(requestedTarget, requestedSkillRoot)
-    ? path.relative(requestedSkillRoot, requestedTarget).split(path.sep)
-    : []
-  const inExecutorDirectory = within(target, toolExecutorsRoot)
-    || within(requestedTarget, requestedToolRoot)
-    || (skillParts.length >= 3 && skillParts[1] === 'executors')
-    || (requestedSkillParts.length >= 3 && requestedSkillParts[1] === 'executors')
+  const locations = controlPlanePaths(ctx)
+  const requestedLocations = controlPlanePaths(ctx, part => path.resolve(part))
+  const fileHit = locations.files.some(file => path.relative(file, target) === '')
+  const workflowHit = isWorkflowControl(target, locations.workflowRoot)
+  const inExecutorDirectory = isExecutorLocation(target, locations)
+    || isExecutorLocation(requestedTarget, requestedLocations)
   let existingExecutorHit = false
   if (inExecutorDirectory) {
     try {
@@ -117,10 +121,30 @@ function assertWritable(resolved, ctx) {
   }
 }
 
+/** rm 不能经父目录删掉控制面；同时检查实际目标与配置入口，防止链接绕过。 */
+function assertDeletable(resolved, ctx) {
+  if (!ctx.dataDir) return
+  for (const resolve of [part => path.resolve(part), canonicalPath]) {
+    const target = resolve(resolved)
+    const locations = controlPlanePaths(ctx, resolve)
+    const ancestorHit = locations.files.some(file => within(file, target))
+      || within(locations.workflowRoot, target)
+      || within(locations.executorRoot, target)
+      || within(locations.skillRoot, target)
+    // 单个技能的目录也包含注册与执行器资源，须经技能管理入口删除。
+    const skillOwnerHit = within(target, locations.skillRoot)
+      && path.relative(locations.skillRoot, target).split(path.sep).length <= 1
+    if (ancestorHit || skillOwnerHit || isWorkflowControl(target, locations.workflowRoot)
+      || isExecutorLocation(target, locations)) {
+      throw new Error(`拒绝删除受保护目录或其父目录：${resolved}。框架控制文件、工具和技能须经对应管理入口维护。`)
+    }
+  }
+}
+
 /**
  * @param {string} fp 用户传入的文件路径（相对或绝对）
  * @param {{ dataDir?: string, workspaceDir: string, projectDir: string, sandboxLevel?: 'project' | 'unrestricted' | 'strict' | 'relaxed' }} ctx
- * @param {{ write?: boolean }} [opts] write=true 时额外做控制面保护（write_file/edit_file/delete_file 传入）
+ * @param {{ write?: boolean, delete?: boolean }} [opts] 删除包含写保护与祖先保护；普通写入保持原语义。
  * @returns {string} 校验通过后的绝对路径
  */
 export function resolvePath(fp, ctx, opts = {}) {
@@ -128,6 +152,7 @@ export function resolvePath(fp, ctx, opts = {}) {
   const resolved = path.isAbsolute(fp) ? path.resolve(fp) : path.resolve(ctx.workspaceDir, fp)
 
   assertInAllowedRoot(resolved, ctx)
-  if (opts.write) assertWritable(resolved, ctx)
+  if (opts.write || opts.delete) assertWritable(resolved, ctx)
+  if (opts.delete) assertDeletable(resolved, ctx)
   return resolved
 }

@@ -1,5 +1,6 @@
 import type { ContextMessage } from './types.js';
 import type { SubAgentResult } from './sub-agent-types.js';
+import type { ToolCallOutcome } from './react/native-loop.js';
 import { formatTextToolResult, parseTextToolResponse } from './text-tool-protocol.js';
 
 interface ModelResult {
@@ -12,7 +13,7 @@ export interface TextSubAgentLoopParams {
   maxRounds: number;
   signal: AbortSignal;
   callModel: () => Promise<ModelResult>;
-  callTool: (name: string, args: Record<string, string>) => Promise<string>;
+  callTool: (name: string, args: Record<string, string>) => Promise<string | ToolCallOutcome>;
   onToolCall?: (name: string, args: Record<string, string>) => void;
   onToolResult?: (name: string, result: string, ok: boolean) => void;
 }
@@ -52,9 +53,12 @@ export async function runTextSubAgentLoop(
     }
     params.onToolCall?.(parsed.name, args);
     try {
-      const result = await params.callTool(parsed.name, args);
-      params.onToolResult?.(parsed.name, result, true);
-      params.messages.push({ role: 'user', content: formatTextToolResult(parsed.name, result, true) });
+      const value = await params.callTool(parsed.name, args);
+      const outcome = typeof value === 'string' ? { result: value, ok: true } : value;
+      params.onToolResult?.(parsed.name, outcome.result, outcome.ok);
+      params.messages.push({
+        role: 'user', content: formatTextToolResult(parsed.name, outcome.result, outcome.ok),
+      });
     } catch (cause) {
       const result = (cause as Error).message;
       params.onToolResult?.(parsed.name, result, false);

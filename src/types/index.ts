@@ -1,12 +1,6 @@
 /** Agent 的持久化可用状态；实时 busy 由服务端活动表覆盖。 */
 export type AgentStatus = string;
 
-/**
- * 用户自定义分类标签。
- * 纯展示用，不影响任何锁定逻辑。
- */
-export type AgentLabel = string;
-
 /** Agent 信息 */
 export interface Agent {
   id: string;
@@ -17,13 +11,13 @@ export interface Agent {
   busy?: boolean;
   /** 当前运行来源，仅由服务端运行态覆盖，不持久化。 */
   activeSurfaces?: Array<'conversation' | 'convection' | 'cyclone' | 'tradewind' | 'tide'>;
-  /** 用户自定义分类标签（纯展示，不影响锁） */
-  label?: AgentLabel;
   /** 本地头像版本；图片存于 data/agents/{id}/profile/avatar.webp。 */
   avatar?: { version: number };
   model: string;
   description: string;
   config?: AgentConfig;
+  /** API 列表的展示路径：软件目录内为相对路径，外部为绝对路径。 */
+  workspaceDisplayPath?: string;
   createdAt: string;
   updatedAt: string;
   lastActivity?: string;
@@ -56,12 +50,16 @@ export interface ChatMessage {
   reasoningBreaks?: number[];
   streamStopped?: boolean;
   inputRunId?: string;
+  /** True only after a complete run is included in a saved session. */
+  runCommitted?: boolean;
   inputReady?: boolean;
   inputClosed?: boolean;
   inputIncludedIds?: string[];
   humanInputs?: Array<{ id: string; content: string; runId: string; sequence: number; receivedAt: string;
     state: 'received' | 'included' | 'retained' }>;
   contextExact?: boolean;
+  contextOmitted?: boolean;
+  compactionNotice?: string;
   inputRecoveryError?: string;
   inputSkipped?: string[];
   id: string;
@@ -79,6 +77,8 @@ export interface ChatMessage {
     question: string;
     options?: string[];
     answered: boolean;
+    /** 产生此问题的运行标识；不参与可插话输入流。 */
+    sourceRunId?: string;
     /** 人类的回复内容（answered=true 后填充） */
     reply?: string;
   };
@@ -144,7 +144,7 @@ export interface ToolCall {
   status: 'pending' | 'success' | 'error' | 'running';
   /** UI 侧通道元数据：覆盖写入时的旧内容，用于渲染真实 diff（不进 LLM 上下文） */
   diff?: { before?: string };
-  /** UI 侧通道：AI 增改潮汐任务的信息卡数据（服务端按真实字段生成；启用仍在潮汐页由人操作） */
+  /** UI 侧通道：Agent 增改潮汐任务时由服务端生成的事实快照。 */
   pendingAutomation?: {
     mode: 'created' | 'updated';
     taskId: string; name: string; schedule: string; repeatCount: number; perpetual: boolean;
@@ -198,6 +198,7 @@ export interface SkillMeta {
 export interface AgentConfig {
   masterPrompt?: string;
   rolePrompt?: string;
+  compactionPrompt?: string;
   temperature?: number;
   tools?: string[];
   /** 缺省仅兼容旧数据；新配置始终保存为 selected，空数组即不启用本地工具。 */

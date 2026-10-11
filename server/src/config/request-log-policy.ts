@@ -1,25 +1,31 @@
-const SILENT_GET_PREFIXES = [
-  '/api/storage/read',
-  '/api/tradewind/node-status',
-  '/api/tide/tasks',
-  '/api/convection/list',
-  '/api/skills/list',
-  '/api/tradewind/status',
-  '/api/agents/activity',
-  '/api/tools/observations',
-];
+import type { ModuleMethodKind } from '../engine/collaboration/contracts.js';
 
-const SILENT_SUCCESS_REQUESTS = [
-  { method: 'POST', prefix: '/api/tradewind/workflow/save' },
-];
+const SILENT_SUCCESS_POSTS = new Set([
+  '/api/tradewind/workflow/save',
+  '/api/collaboration/observe',
+  '/api/collaboration/snapshot',
+  '/api/collaboration/operation',
+  '/api/collaboration/operation/wait',
+  '/api/collaboration/records/find',
+  '/api/collaboration/records/read',
+  '/api/collaboration/records/agents/latest',
+]);
 
-export function shouldLogRequest(method: string, url: string, statusCode: number): boolean {
+/** 查询参数可能含本地路径或凭据；终端只显示请求路径。 */
+export function requestLogPath(url: string): string {
+  return url.split('?')[0]!.replace(/[\u0000-\u001f\u007f]/g, '');
+}
+
+export function shouldLogRequest(
+  method: string, url: string, statusCode: number,
+  callKind?: ModuleMethodKind, detailed = false,
+): boolean {
   if (statusCode >= 400) return true;
-  if (method === 'GET' && /^\/api\/cyclone\/workshop\/[^/]+\/dispatches(?:\?|$)/.test(url)) return false;
-  if (method === 'GET' && /^\/api\/cyclone\/workshop\/[^/]+\/activities(?:\?|$)/.test(url)) return false;
-  if (method === 'GET' && /^\/api\/cyclone\/workshop\/[^/]+\/seat\/[^/]+\/activity(?:\?|$)/.test(url)) return false;
-  if (method === 'GET' && /^\/api\/cyclone\/workshop\/[^/]+\/seat\/[^/]+\/revision(?:\?|$)/.test(url)) return false;
-  if (method === 'GET' && /^\/api\/conversation\/team(?:\?|$)/.test(url)) return false;
-  if (method === 'GET' && SILENT_GET_PREFIXES.some(prefix => url.startsWith(prefix))) return false;
-  return !SILENT_SUCCESS_REQUESTS.some(rule => method === rule.method && url.startsWith(rule.prefix));
+  if (detailed) return true;
+  if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return false;
+  if (method !== 'POST') return true;
+  const pathname = requestLogPath(url);
+  if (SILENT_SUCCESS_POSTS.has(pathname)) return false;
+  // POST 并不一定是写操作；以中心注册协议为准，不猜测方法名称。
+  return pathname !== '/api/collaboration/invoke' || callKind !== 'query';
 }

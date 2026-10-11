@@ -1,3 +1,5 @@
+import { invokeFeature } from '../../api/collaboration';
+
 export interface AutoProfile {
   id: string;
   name: string;
@@ -9,35 +11,14 @@ export interface AutoProfile {
   summaryPrompt?: string;
 }
 
-async function requireOk(response: Response, fallback: string): Promise<void> {
-  if (response.ok) return;
-  const body = await response.json().catch(() => null) as { error?: unknown } | null;
-  const message = typeof body?.error === 'string' && body.error.trim()
-    ? body.error
-    : `${fallback} (HTTP ${response.status})`;
-  throw new Error(message);
-}
-
 export async function listProfiles(workflowId: string, fallback = '加载循环档案失败'): Promise<AutoProfile[]> {
-  const response = await fetch(`/api/tradewind/workflow/${encodeURIComponent(workflowId)}/profiles`);
-  await requireOk(response, fallback);
-  const body = await response.json() as { profiles?: AutoProfile[] };
-  return Array.isArray(body.profiles) ? body.profiles : [];
+  return invokeFeature<AutoProfile[]>('tradewind', 'loadWorkflowProfiles', { workflowId }, fallback);
 }
 
 export async function saveProfiles(workflowId: string, profiles: AutoProfile[], fallback = '保存循环档案失败'): Promise<void> {
-  const response = await fetch(`/api/tradewind/workflow/${encodeURIComponent(workflowId)}/profiles`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ profiles }),
-  });
-  await requireOk(response, fallback);
+  await invokeFeature('tradewind', 'saveWorkflowProfiles', { workflowId, profiles }, fallback);
 }
 
 export async function deleteProfile(workflowId: string, profileId: string, fallback = '删除循环档案失败'): Promise<void> {
-  const response = await fetch(
-    `/api/tradewind/workflow/${encodeURIComponent(workflowId)}/profiles/${encodeURIComponent(profileId)}`,
-    { method: 'DELETE' },
-  );
-  await requireOk(response, fallback);
+  await invokeFeature('tradewind', 'deleteWorkflowProfile', { workflowId, profileId }, fallback);
 }

@@ -6,12 +6,13 @@
  * - end 时更新 meta.json（endTime, status: 'done' | 'error'）
  * - 启动自愈：扫描 data/tradewind/runs/ 下 status='running' 的遗留执行，标记为 'crashed'
  *
- * 归档写入失败不阻塞主流程（log + 继续）
+ * 写入失败向编排器报告；不得将内存终态冒充已提交的运行事实。
  */
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { atomicWriteFile } from '../../shared/atomic-io.js';
+import { FrameworkError } from '../../shared/framework-error.js';
 
 export interface ExecutionMeta {
   executionId: string;
@@ -26,8 +27,9 @@ export class ArchiveManager {
   private readonly runDir: string;
   private readonly metaPath: string;
   private meta: ExecutionMeta;
-  /** 终结状态写一次即锁定：首个 writeEnd 胜出，防止 stop() 覆写 handleNodeDone 已写的 'done'。 */
+  /** 首个成功提交的终态锁定；失败不能阻止明确的后续持久化调用。 */
   private ended = false;
+  private endCommit: Promise<void> | null = null;
 
   constructor(runDir: string, executionId: string, workflowId: string, trigger?: ExecutionMeta['trigger']) {
     this.runDir = runDir;
@@ -47,21 +49,39 @@ export class ArchiveManager {
       await fs.mkdir(this.runDir, { recursive: true });
       await atomicWriteFile(this.metaPath, JSON.stringify(this.meta, null, 2));
     } catch (err) {
-      console.warn('[archive] writeStart failed:', (err as Error).message);
+      throw this.writeError('start', err);
     }
   }
 
   /** 标记执行结束。'stopped' = 被外部 stop() 中止（未跑到 output 终点）。 */
   async writeEnd(status: 'done' | 'error' | 'stopped'): Promise<void> {
-    if (this.ended) return; // 首个终结状态胜出（done/error 优先于随后的 stop→stopped）
-    this.ended = true;
-    this.meta.endTime = new Date().toISOString();
-    this.meta.status = status;
+    const previous = this.endCommit ?? Promise.resolve();
+    const current = previous.catch(() => {}).then(() => this.commitEnd(status));
+    this.endCommit = current;
+    try { await current; }
+    finally { if (this.endCommit === current) this.endCommit = null; }
+  }
+
+  private async commitEnd(status: 'done' | 'error' | 'stopped'): Promise<void> {
+    if (this.ended) return;
+    const next = { ...this.meta, endTime: new Date().toISOString(), status };
     try {
-      await atomicWriteFile(this.metaPath, JSON.stringify(this.meta, null, 2));
+      await atomicWriteFile(this.metaPath, JSON.stringify(next, null, 2));
     } catch (err) {
-      console.warn('[archive] writeEnd failed:', (err as Error).message);
+      throw this.writeError('end', err);
     }
+    this.meta = next;
+    this.ended = true;
+  }
+
+  private writeError(stage: 'start' | 'end', cause: unknown): FrameworkError {
+    return new FrameworkError({
+      code: 'TRADEWIND_ARCHIVE_WRITE_FAILED', kind: 'io',
+      message: stage === 'start' ? '信风启动记录未能保存，工作流未开始执行'
+        : '信风终态记录未能保存，请检查运行归档；不会自动重新执行工作流',
+      source: 'tradewind.archive', retryable: false,
+      details: { stage, executionId: this.meta.executionId, workflowId: this.meta.workflowId },
+    }, { cause });
   }
 
   /** 启动自愈：扫描 runsRoot 下所有 meta.json，把 status='running' 标记为 'crashed' */

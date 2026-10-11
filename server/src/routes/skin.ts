@@ -1,7 +1,6 @@
 /**
  * Skin 静态文件路由 — 提供 data/skin/ 下的图片资源
  *
- * 迁移自 vite.config.ts 的 skin-static 中间件。
  */
 
 import type { FastifyInstance } from 'fastify';

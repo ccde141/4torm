@@ -1,12 +1,8 @@
 /**
  * 事件总线 —— emit 事件 + append 写 events.jsonl + SSE 推送
  *
- * 核心约束：
- * - 「文件是真相，SSE 只是渲染通道」(§8 核心原则)：每条事件必须先落盘后推送
- * - fs.appendFile 单次 write 在常见数据量下原子，先朴素实现，后续按需加锁
- * - SSE listener 断线必须清理，避免内存泄漏
- *
- * 运行环境：Node.js（Vite 插件钩子内）
+ * 同一实例的写入串行执行；写入成功后才向 SSE 订阅者推送。
+ * 写入失败时记录警告、跳过推送，emit 仍正常返回；断开的订阅者会移除。
  */
 
 import fs from 'node:fs/promises';
@@ -23,7 +19,6 @@ interface SSESubscriber {
 /**
  * 单次执行的事件总线实例。
  *
- * 每次工作流执行新建一个，不复用——隔离最干净。
  * 每次工作流执行新建一个实例，不跨 execution 复用。
  */
 export class EventBus {
@@ -36,9 +31,7 @@ export class EventBus {
   }
 
   /**
-   * 发射事件：先落盘，后推送。
-   *
-   * 用 promise chain 串行化所有写入，避免 appendFile 并发交错。
+   * 串行写入事件文件；成功后推送，失败时只记录警告。
    */
   emit(log: EventLog): Promise<void> {
     const line = JSON.stringify(log) + '\n';
@@ -82,7 +75,7 @@ export class EventBus {
     }
   }
 
-  /** 等待所有挂起的写入完成（用于收尾时确保落盘） */
+  /** 等待已入队的写入结束；写入失败只记录警告。 */
   async flush(): Promise<void> {
     await this.writeQueue;
   }

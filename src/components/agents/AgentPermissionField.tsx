@@ -17,17 +17,22 @@ export default function AgentPermissionField({ value, onChange }: Props) {
   return (
     <div className="config-field" style={{ marginBottom: 'var(--space-4)' }}>
       <label className="config-label">{t('permission.label')}</label>
-      <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
-        {options.map(option => (
+      <div className="agent-permission__options" role="group" aria-label={t('permission.label')}>
+        {options.map(option => {
+          const selected = value === option.value;
+          return (
           <button
             key={option.value}
             type="button"
-            className={`config-btn ${value === option.value ? 'config-btn-save' : 'config-btn-cancel'}`}
+            className={`config-btn agent-permission__option${selected ? ' agent-permission__option--selected' : ''}`}
+            aria-pressed={selected}
             onClick={() => onChange(option.value)}
           >
+            <span className="agent-permission__mark" aria-hidden="true">{selected ? '✓' : ''}</span>
             {option.label}
           </button>
-        ))}
+          );
+        })}
       </div>
       <div className="config-hint" style={{ display: 'block', marginTop: 'var(--space-2)' }}>
         {description}

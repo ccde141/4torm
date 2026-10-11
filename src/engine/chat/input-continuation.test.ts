@@ -13,7 +13,7 @@ test('handoff preserves the final response and saves one ordinary user message b
   let current = structuredClone(session);
   let launches = 0;
   const ports = { load: async () => current, canStart: () => true,
-    save: async (value: ChatSession) => { current = value; },
+    save: async (value: ChatSession) => { current = value; return value; },
     start: (value: ChatSession, runId: string) => {
       assert.equal(current.messages.at(-1)?.id, input.id);
       assert.equal(value.messages[0].content, 'final result');
@@ -32,7 +32,8 @@ test('deleted sessions, changed ownership and a new active run cannot be overwri
   for (const value of [null, { ...session, agentId: 'other' }, session]) {
     let writes = 0;
     await assert.rejects(continueInputTurn(input, { load: async () => value,
-      canStart: () => false, save: async () => { writes++; }, start: () => { writes++; } }));
+      canStart: () => false, save: async value => { writes++; return value; },
+      start: () => { writes++; } }));
     assert.equal(writes, 0);
   }
 });
@@ -42,4 +43,14 @@ test('failure to save the ordinary message prevents model execution', async () =
   await assert.rejects(continueInputTurn(input, { load: async () => session, canStart: () => true,
     save: async () => { throw new Error('disk full'); }, start: () => { starts++; } }), /disk full/);
   assert.equal(starts, 0);
+});
+
+test('handoff launches with the revision returned by its saved user message', async () => {
+  let launchedRevision: number | undefined;
+  await continueInputTurn(input, {
+    load: async () => ({ ...session, revision: 4 }), canStart: () => true,
+    save: async value => ({ ...value, revision: 5 }),
+    start: value => { launchedRevision = value.revision; },
+  });
+  assert.equal(launchedRevision, 5);
 });

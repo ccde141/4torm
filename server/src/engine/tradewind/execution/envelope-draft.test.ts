@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { EnvelopeDraft, execEnvelopeTool, ENVELOPE_TOOL_NAMES, COMPLETE_TASK_TOOL, isEnvelopeRound, classifyRoundInterrupt } from './envelope-draft';
+import { EnvelopeDraft, execEnvelopeTool, execEnvelopeToolOutcome, ENVELOPE_TOOL_NAMES, COMPLETE_TASK_TOOL, isEnvelopeRound, classifyRoundInterrupt } from './envelope-draft';
 import { buildEnvelopeToolDefs } from './virtual-tools';
 
 function run(name: string, fn: () => void) {
@@ -136,6 +136,14 @@ run('execEnvelopeTool：complete_task 返回封口内容（条目+备注）', ()
 run('execEnvelopeTool：未知工具给明确提示', () => {
   const d = new EnvelopeDraft();
   assert.match(execEnvelopeTool(d, 'envelope_wat', {}), /未知信封工具/);
+});
+
+run('信封工具的业务拒绝返回真实失败状态且兼容旧文本结果', () => {
+  const d = new EnvelopeDraft();
+  const outcome = execEnvelopeToolOutcome(d, 'envelope_add', { text: '  ' });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.result, execEnvelopeTool(d, 'envelope_add', { text: '  ' }));
+  assert.equal(execEnvelopeToolOutcome(d, 'envelope_list', {}).ok, true);
 });
 
 run('buildEnvelopeToolDefs：恰好四个工具、名字与 ENVELOPE_TOOL_NAMES 对齐', () => {

@@ -5,7 +5,7 @@
  * 每个档案带「运行」按钮 → onRun('auto', id)；顶部「不循环单圈」→ onRun('auto', undefined)。
  * 仿 WorkflowListPanel 的滑出面板 + fetch-on-visible + 整存整取模式。
  *
- * 本刀只做 relative 节拍（潮汐 absolute 已砍），故 UI 不暴露 cadence 类型选择。
+ * UI 只提供 relative 节拍设置。
  */
 
 import { useState, useEffect, useCallback } from 'react';

@@ -12,10 +12,13 @@ test('runtime no longer exposes legacy XML answer cleaners', () => {
   for (const relativePath of [
     'shared/react/native-loop.ts',
     'shared/react/text-loop.ts',
-    'convection/convection-react-adapter.ts',
     'tradewind/execution/tradewind-react-adapter.ts',
   ]) {
     const source = fs.readFileSync(path.join(engineDir, relativePath), 'utf8');
     assert.doesNotMatch(source, /function stripInternalTags/);
   }
+  const convection = fs.readFileSync(path.join(
+    engineDir, '../modules/convection/execution/convection-react-adapter.ts',
+  ), 'utf8');
+  assert.doesNotMatch(convection, /function stripInternalTags/);
 });

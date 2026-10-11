@@ -25,6 +25,15 @@ function report(state: TeamState, member: TeamMember, outcome: TeamOutcome, cont
     ...(member.run.requestId ? { requestId: member.run.requestId } : {}),
     task: member.run.task, outcome, content, acknowledged: false });
 }
+function validRequestId(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-zA-Z0-9_-]{1,160}$/.test(value);
+}
+function sameDefinition(member: TeamMember, definition: MemberDefinition): boolean {
+  return member.name === definition.name && member.mission === definition.mission
+    && member.rolePrompt === definition.rolePrompt && member.taskContext === definition.taskContext
+    && member.constraints === definition.constraints
+    && JSON.stringify(member.permissions) === JSON.stringify(definition.permissions);
+}
 
 /** Session-owned durable state; execution and model activation belong to a separate runner. */
 export class TeamStore {
@@ -45,9 +54,33 @@ export class TeamStore {
     });
   }
 
+  async createAndStart(value: unknown, task: string, parent: TeamPermissions, requestId: string) {
+    if (typeof task !== 'string' || !task.trim()) throw teamError('TEAM_INVALID_TASK');
+    if (!validRequestId(requestId)) throw teamError('TEAM_INVALID_REQUEST_ID');
+    validateDefinition(value);
+    enforcePermissions(value.permissions, parent);
+    const definition: MemberDefinition = structuredClone(value);
+    return mutateTeam(this.dataDir, this.owner, state => {
+      const current = state.members.find(item => item.run?.requestId === requestId);
+      const prior = state.reports.find(item => item.requestId === requestId);
+      if (current || prior) {
+        const member = current ?? findMember(state, prior!.memberId);
+        const previous = current?.run ?? prior!;
+        if (previous.task !== task || !sameDefinition(member, definition)) throw teamError('TEAM_REQUEST_CONFLICT');
+        const run = current?.run ?? { id: prior!.runId, runtimeId: this.runtimeId,
+          requestId, task, status: prior!.outcome };
+        return { memberId: member.id, ...run, replayed: true };
+      }
+      const member: TeamMember = { ...definition, id: randomUUID(), lifecycle: 'active', context: [],
+        run: { id: randomUUID(), runtimeId: this.runtimeId, task, requestId, status: 'running' } };
+      state.members.push(member);
+      return { memberId: member.id, ...member.run!, replayed: false };
+    });
+  }
+
   async start(memberId: string, task: string, parent: TeamPermissions, requestId?: string) {
     if (typeof task !== 'string' || !task.trim()) throw teamError('TEAM_INVALID_TASK');
-    if (requestId !== undefined && (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(requestId))) throw teamError('TEAM_INVALID_REQUEST_ID');
+    if (requestId !== undefined && !validRequestId(requestId)) throw teamError('TEAM_INVALID_REQUEST_ID');
     const policy = structuredClone(parent);
     return mutateTeam(this.dataDir, this.owner, state => {
       const member = findMember(state, memberId);

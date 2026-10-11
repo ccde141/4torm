@@ -2,51 +2,71 @@
 
 ## What Is the Console?
 
-The Console is the management entry point for every agent. Agents created here persist and can be reused in Monsoon conversations, Convection meetings, Cyclone workshops, Tradewind workflows, and Tide automation. You configure one agent—not a temporary role tied to one conversation.
+The Console is the management entry point for every agent. Agents created here persist and can be reused in Monsoon, Convection, Cyclone, Tradewind, and Tide. You configure one agent, not a temporary role tied to a conversation.
 
-Each agent card shows its role, default model, workspace, and current status. Summary counts and custom labels help with filtering but do not change agent capabilities.
+Each card shows the agent's name, role, current status, recent activity, default model, and workspace. The summary shows the total agent count, the number confirmed idle, and the conversation count. Select the whole card to open details and change its configuration.
 
-If an agent's model becomes unavailable—for example, because its provider was deleted—the card displays an error state. The agent and its data remain intact and can be used again after a valid model is assigned.
+Status and recent activity come from actual feature runs. If some activity cannot be read, the card indicates incomplete information. An unavailable model configuration is shown separately.
 
-![Agent overview in the Console](/images/guide/agent-console-overview.webp)
+![Example agent cards in the Console](/images/guide/agent-console-overview.webp)
+
+## View Agent Details
+
+Select a card to open the detail window. Its navigation includes **Overview**, **Statistics**, **Configuration**, **Prompt**, **Tools**, **Skills**, and **Memory**.
+
+- **Overview** shows the current state and recent attributable work. Select an item to inspect its feature, status, and available records. When there is a destination, you can open the original feature.
+- **Statistics** counts only visible items explicitly attributed to this agent. It indicates when some features could not be read.
+- **Configuration, Prompt, Tools, Skills, and Memory** contain the agent's persistent settings. Save configuration changes to apply them.
+
+![Agent details and current status](/images/guide/agent-detail.webp)
 
 ## Create an Agent
 
-Select **Create Agent** in the upper-right corner. You do not need to configure every capability immediately; use the settings button on the agent card to change them later.
+Select **Create Agent** in the upper-right corner. The form has **Basic**, **Prompt**, **Tools**, and **Skills** tabs. You can finish the remaining settings later by opening the agent's card.
+
+![Basic settings while creating an agent](/images/guide/agent-create.webp)
 
 - **Name** is how the agent appears throughout the app.
-- **Role** is a short UI label such as “Programmer” or “Research Organizer.” It does not affect behavior.
-- **Description** explains the agent's responsibility and helps distinguish similar agents.
-- **Category labels** are only Console filters. They are not included in prompts and do not change execution.
+- **Role** is a short UI label. It does not replace the role prompt.
+- **Description** explains the agent's responsibility.
+- **Default model** is the model the agent normally uses. If left empty, 4torm chooses the first registered model.
+- **Workspace** defaults to an independent directory for the agent; you may enter another path.
+- **Execution permission** can be **Project** or **Unrestricted**. It controls the paths accessible to built-in file tools. See [Security and Isolation](../architecture/security) for the exact boundary.
 
-The avatar accepts any image file up to 20 MB. Before saving, 4torm centers and crops it into a 256px WebP; removing it restores the name-initial fallback. Avatars appear in the Console, Monsoon, and Convection. Cyclone, Tradewind, and Tide keep their own initials or workspace markers instead of using agent avatars.
-
-The default model is used unless a workspace overrides it. Choose one explicitly; if left empty, 4torm uses the first registered model.
-
-The **role prompt** controls how the agent understands its identity and work. The role shown on its card is only display metadata.
-
-If the workspace is left empty, 4torm creates a private directory for the agent.
-
-Execution permissions are stored with the agent and automatically applied whenever built-in file tools run. Shared workspaces used by Convection, Cyclone, and Tradewind are added to the allowed scope. See [Security and Isolation](../architecture/security).
+You can select an avatar image up to 20 MB. Before saving, 4torm centers and crops it into a 256px WebP. Removing it restores the name-initial fallback. Avatars appear in the Console, Monsoon, and Convection; Cyclone, Tradewind, and Tide retain their own initials or feature markers.
 
 ## Configure Tools and Skills
 
-Tools determine what an agent can execute; skills provide reusable methods and knowledge. They are configured independently, and a skill may include dedicated tools.
+**Tools** determine what an agent can call. **Skills** supply methods and knowledge for particular kinds of work. Built-in framework tools are enabled for a new agent; custom and MCP tools require explicit selection.
 
-![Agent configuration](/images/guide/agent-configuration.webp)
+On the agent's **Tools** page, framework collaboration capabilities are grouped under Convection, Cyclone, Tradewind, and Tide. You can enable or disable a whole group; Cyclone and Tradewind also let you select individual operations.
 
-Built-in framework tools are enabled for new agents by default, allowing file access, command execution, and web lookup. Disable them manually if the agent should only converse.
+The agent receives instructions for enabled capabilities. Your selection determines which operations it can call, such as creating collaboration structures or scheduled tasks, starting execution, checking progress, and reading results.
 
-Some capabilities belong to a workspace rather than the agent's Console tool list. Monsoon can ask the human and organize a session team. Cyclone seat conversations can ask the human and delegate to SubAgents. Tradewind agent nodes can delegate but cannot ask the human mid-run. Convection, Tide, and Cyclone group rooms do not provide SubAgents.
+Foundation, custom, and MCP tools appear in separate sections. Select the tools you need, then click **Save** to apply the changes.
 
-Cyclone `contact`, `dispatch`, and bulletin-board capabilities, along with taskboards in Monsoon and Cyclone, are also controlled by their workspaces. Moving between workspaces does not modify the agent's saved tool configuration.
+![Framework capability groups on the agent Tools page](/images/guide/agent-configuration.webp)
 
-Tool selection follows these rules:
+Installed skills are enabled for a new agent by default and can be deselected individually. Their instructions do not occupy conversation context continuously; the agent loads a skill through `use_skill` when needed. Tools bundled with a skill are added with that skill and need not be selected again in the ordinary tool list.
 
-- After saving, the selection is the agent's local tool set; unselected tools are unavailable.
-- **Custom and MCP tools are not enabled by default and must be selected explicitly.**
-- Tools bundled with a skill are added with that skill and need not be selected again globally.
+A warning beside a tool name indicates that it can write or delete files, run commands, or perform similar actions. It does not mean every call displays another confirmation prompt.
 
-Installed skills are enabled for new agents by default and can be disabled before saving. A skill's `SKILL.md` is not permanently placed in conversation context. The agent calls `use_skill` to load it when needed; this remains available while the skill is enabled.
+## Global Conversation Compaction
 
-A warning beside a tool name only indicates that it can write or delete files, run commands, or perform similarly consequential actions. It does not mean every call displays another confirmation prompt.
+In the Console, select **Global settings**, then open **Conversation compaction**. Automatic compaction is off by default. When enabled, you can set separate thresholds for each kind of conversation or meeting and choose the fraction of older content to compact. Tide tasks that append to a Monsoon conversation use the Monsoon threshold.
+
+After a threshold is reached, the system summarizes older content before the next message or model call and retains recent text. For example, a threshold of **240K tokens** with a **2/3** fraction compacts roughly the older two-thirds and keeps the most recent third unchanged. Original records are archived.
+
+Saved changes require no restart; subsequent checks use the latest settings.
+
+Ordinary conversations can use their current model or a fixed compaction model. After choosing a fixed model, select **Test model** to check whether it is available. Meetings use the meeting assistant's model and compaction prompt, with the fixed model available as a fallback.
+
+If the preferred model cannot complete compaction, the system reports the reason and tries a different configured fallback model. If that also fails, it preserves the original content and displays the error. The automatic compaction switch controls threshold-triggered compaction. If the model API explicitly reports that the input exceeds its limit, the system still attempts compaction before continuing the current request, even with automatic compaction disabled.
+
+To compact manually, send `/compact` to summarize the current conversation's entire history while archiving the original records. Independent Tide conversations use the **Compact session** button in the task details.
+
+## Modify or Delete an Agent
+
+Select the agent card, open the relevant section, and save to update its settings. The delete action is at the bottom of the detail window and requires a second confirmation.
+
+Deleting an agent removes it from the list and deletes its dedicated directory under `data/agents/`, including its default workspace, Monsoon conversations, and memory. An external workspace configured for the agent and records stored separately by other features are not removed by this action. Those records and tasks may still refer to the deleted agent.

@@ -1,6 +1,7 @@
 import { providerHost } from './host.js';
-import type { ProviderAdapter } from '../contracts/provider-adapter.js';
+import type { ProviderAdapter, ProviderGenerationLimits, ProviderModelIdentity } from '../contracts/provider-adapter.js';
 import { normalizeDeepSeekConfig } from '../config/deepseek-config.js';
+import { mergeCustomRequestParameters } from './custom-request-parameters.js';
 
 export const deepSeekAdapter: ProviderAdapter = {
   id: 'deepseek',
@@ -9,6 +10,12 @@ export const deepSeekAdapter: ProviderAdapter = {
     temperature: 'passthrough',
     maxTokensField: 'max_tokens',
     reasoningHistory: 'reasoning_content',
+  },
+  generationLimits: deepSeekGenerationLimits,
+  disableThinking: body => {
+    body.thinking = { type: 'disabled' };
+    delete body.reasoning_effort;
+    return true;
   },
   normalizeRequest: (body, identity) => {
     const defaults = normalizeDeepSeekConfig({ generationDefaults: identity.generationDefaults })
@@ -30,6 +37,30 @@ export const deepSeekAdapter: ProviderAdapter = {
     delete body.reasoning_effort;
   },
 };
+
+function deepSeekGenerationLimits(identity: ProviderModelIdentity): ProviderGenerationLimits {
+  const defaults = normalizeDeepSeekConfig({ generationDefaults: identity.generationDefaults })
+    .generationDefaults;
+  const model = identity.model.toLowerCase();
+  const knownV4 = model.startsWith('deepseek-v4') || model === 'deepseek-flash';
+  const body: Record<string, unknown> = {};
+  deepSeekAdapter.normalizeRequest?.(body, identity);
+  const final = mergeCustomRequestParameters(body, identity.customRequestParameters);
+  const thinking = final.thinking;
+  const switchValue = thinking && typeof thinking === 'object' && !Array.isArray(thinking)
+    ? (thinking as Record<string, unknown>).type : undefined;
+  const effort = final.reasoning_effort;
+  const reasoning = typeof effort === 'string' ? effort !== 'none'
+    : switchValue === 'disabled' ? false : switchValue === 'enabled' ? true
+      : defaults.thinkingMode !== 'auto' ? defaults.thinkingMode === 'enabled'
+        : knownV4 || model === 'deepseek-reasoner' ? true
+          : model === 'deepseek-chat' ? false : undefined;
+  // https://api-docs.deepseek.com/api/create-chat-completion/ (V4 total output includes thinking).
+  return {
+    ...(knownV4 ? { contextWindowTokens: 1_048_576, maxOutputTokens: 393_216 } : {}),
+    ...(reasoning === undefined ? {} : { reasoning }),
+  };
+}
 
 function effectiveThinking(
   model: string,

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { buildTaskBoardSection } from './taskboard';
-import { buildWorkflowToolsSection } from '../../services/tradewind-tools/builder';
 
 function assertNoLegacyXml(prompt: string): void {
   assert.doesNotMatch(prompt, /<action|<answer|<think|<result/);
@@ -21,18 +20,6 @@ run('文本任务板使用 JSON 调用信封', () => {
 
 run('native 任务板不教授文本 transport', () => {
   const prompt = buildTaskBoardSection(null, true);
-  assert.doesNotMatch(prompt, /"type":"tool_call"/);
-  assertNoLegacyXml(prompt);
-});
-
-run('文本工作流工具使用 JSON 调用信封', () => {
-  const prompt = buildWorkflowToolsSection(false);
-  assert.match(prompt, /"type":"tool_call","name":"create_workflow"/);
-  assertNoLegacyXml(prompt);
-});
-
-run('native 工作流工具不教授文本 transport', () => {
-  const prompt = buildWorkflowToolsSection(true);
   assert.doesNotMatch(prompt, /"type":"tool_call"/);
   assertNoLegacyXml(prompt);
 });

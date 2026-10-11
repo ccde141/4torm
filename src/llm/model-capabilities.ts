@@ -14,16 +14,7 @@ export interface ModelCapabilities {
 
 export type ModelCapabilityMap = Record<string, ModelCapabilities>;
 
-export const TOOL_TRANSPORT_PROBE_VERSION = 2;
 export type ToolTransportStatus = 'native-confirmed' | 'text-required';
-
-export interface ToolTransportIdentity {
-  providerId: string;
-  baseUrl: string;
-  protocol: string;
-  model: string;
-  profile: string;
-}
 
 export interface ToolTransportProbe {
   status: ToolTransportStatus;
@@ -37,34 +28,6 @@ interface CapabilitySource {
   modelCapabilities?: ModelCapabilityMap;
   nativeProbe?: Record<string, { native: boolean; probedAt: string }>;
   toolTransports?: ToolTransportMap;
-}
-
-function normalizeBaseUrl(baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl);
-    return `${url.protocol}//${url.host.toLowerCase()}${url.pathname.replace(/\/+$/, '')}`;
-  } catch {
-    return baseUrl.trim().replace(/\/+$/, '');
-  }
-}
-
-export function buildToolTransportFingerprint(identity: ToolTransportIdentity): string {
-  return JSON.stringify([
-    identity.providerId,
-    normalizeBaseUrl(identity.baseUrl),
-    identity.protocol,
-    identity.model,
-    identity.profile,
-    TOOL_TRANSPORT_PROBE_VERSION,
-  ]);
-}
-
-export function readToolTransport(
-  provider: CapabilitySource,
-  identity: ToolTransportIdentity,
-): ToolTransportProbe | undefined {
-  const probe = provider.toolTransports?.[identity.model];
-  return probe?.fingerprint === buildToolTransportFingerprint(identity) ? probe : undefined;
 }
 
 export function readModelCapability(

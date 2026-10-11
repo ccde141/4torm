@@ -54,5 +54,5 @@ test('目标工位能区分群聊派发与工位私聊派发', () => {
 
 test('目标工位把 dispatch 外部活动接入实时回合', () => {
   const source = fs.readFileSync('src/cyclone/ui/pages/SeatChat.tsx', 'utf8');
-  assert.match(source, /externalActivity\?\.kind === 'contact' \|\| externalActivity\?\.kind === 'dispatch'/);
+  assert.match(source, /projectPrivateChatLive\(\{[\s\S]*legacy: externalActivity/);
 });

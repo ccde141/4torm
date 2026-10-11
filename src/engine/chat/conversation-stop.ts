@@ -10,16 +10,18 @@ async function stopError(response: Response): Promise<string> {
 /** Keep the SSE authoritative: it closes only after the server runner has actually settled. */
 export async function requestConversationStop(
   sessionId: string,
+  runId: string,
   runner: StoppingRunner,
-  endpoint: string,
   request: typeof fetch = fetch,
 ): Promise<void> {
   runner.userStopped = true;
   try {
-    const response = await request(endpoint, {
+    const response = await request('/api/collaboration/invoke', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId }),
+      body: JSON.stringify({
+        feature: 'monsoon', method: 'stopRun', input: { sessionId, runId },
+      }),
     });
     if (!response.ok) throw new Error(await stopError(response));
   } catch (error) {

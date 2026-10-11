@@ -1,4 +1,4 @@
-import type { FeedMsg } from './useRoomStreamRunners';
+import type { FeedMsg } from './room-stream-events';
 import type { RoomReplySegment } from './room-reply-segments';
 
 export interface TurnParts {

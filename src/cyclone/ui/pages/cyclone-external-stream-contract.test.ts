@@ -15,6 +15,17 @@ test('工位私聊订阅外部 contact 与入会摘要活动', () => {
   assert.match(seat, /externalRunning/);
 });
 
+test('Agent 外部工位和会议助理私聊接入已打开的私聊页', () => {
+  const seat = fs.readFileSync('src/cyclone/ui/pages/SeatChat.tsx', 'utf8');
+  const hook = fs.readFileSync('src/cyclone/ui/pages/usePrivateChatActivity.ts', 'utf8');
+  const chair = fs.readFileSync('src/cyclone/ui/pages/ChairDrawer.tsx', 'utf8');
+  assert.match(seat, /usePrivateChatActivity\(/);
+  assert.match(seat, /projectPrivateChatLive\(/);
+  assert.match(hook, /'readPrivateChatActivity'/);
+  assert.match(hook, /nextActivityCursor\(payload\)/);
+  assert.match(chair, /active=\{open\}/);
+});
+
 test('工位与群聊流注册表 API 在父组件重渲染时保持引用稳定', () => {
   for (const file of ['useSeatStreamRunners.ts', 'useRoomStreamRunners.ts']) {
     const source = fs.readFileSync(`src/cyclone/ui/pages/${file}`, 'utf8');

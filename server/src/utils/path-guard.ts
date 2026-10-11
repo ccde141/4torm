@@ -1,13 +1,13 @@
 /**
  * 路径安全守卫 — 防止路径穿越
  *
- * 所有文件操作必须经过此函数校验，确保路径在 DATA_DIR 内。
+ * 对传入的相对路径做字面检查；不解析符号链接。
  */
 
 import path from 'node:path';
 
 /**
- * 解析相对路径到绝对路径，确保在 dataDir 内。
+ * 解析相对路径到绝对路径，拒绝指向 dataDir 之外的字面路径。
  * 非法路径抛出错误。
  */
 export function resolveSafePath(dataDir: string, filePath: string): string {

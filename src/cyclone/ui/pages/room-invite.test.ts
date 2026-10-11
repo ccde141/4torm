@@ -17,23 +17,21 @@ function sseResponse(event: object): Response {
 
 test('静默邀请只修改成员名单', async () => {
   const calls: string[] = [];
-  const result = await inviteSeatToRoom(async (url) => {
+  const result = await inviteSeatToRoom({ join: async () => { calls.push('join'); }, fetcher: async (url) => {
     calls.push(String(url));
     return jsonResponse({ participantSeatIds: ['seat-a'] });
-  }, '/room-a', 'seat-a', 'none');
+  }, introUrl: '/room-a/intro', seatId: 'seat-a', behavior: 'none' });
 
-  assert.deepEqual(calls, ['/room-a/join']);
+  assert.deepEqual(calls, ['join']);
   assert.deepEqual(result, { joined: true });
 });
 
 test('成员已加入但入会发言失败时返回部分成功', async () => {
   let call = 0;
-  const result = await inviteSeatToRoom(async () => {
+  const result = await inviteSeatToRoom({ join: async () => { call += 1; }, fetcher: async () => {
     call += 1;
-    return call === 1
-      ? jsonResponse({ participantSeatIds: ['seat-a'] })
-      : sseResponse({ type: 'error', message: '模型不可用' });
-  }, '/room-a', 'seat-a', 'summary');
+    return sseResponse({ type: 'error', message: '模型不可用' });
+  }, introUrl: '/room-a/intro', seatId: 'seat-a', behavior: 'summary' });
 
   assert.deepEqual(result, { joined: true, introError: '模型不可用' });
 });
@@ -41,10 +39,11 @@ test('成员已加入但入会发言失败时返回部分成功', async () => {
 test('成员加入失败时真实抛出且不启动入会发言', async () => {
   let calls = 0;
   await assert.rejects(
-    inviteSeatToRoom(async () => {
+    inviteSeatToRoom({ join: async () => {
       calls += 1;
-      return jsonResponse({ error: '会议运行中' }, 409);
-    }, '/room-a', 'seat-a', 'intro'),
+      throw new Error('会议运行中');
+    }, fetcher: async () => { calls += 1; return jsonResponse({}); },
+    introUrl: '/room-a/intro', seatId: 'seat-a', behavior: 'intro' }),
     /会议运行中/,
   );
   assert.equal(calls, 1);
@@ -52,17 +51,15 @@ test('成员加入失败时真实抛出且不启动入会发言', async () => {
 
 test('邀请使用本地化 fallback 且保留部分成功语义', async () => {
   let call = 0;
-  const result = await inviteSeatToRoom(async () => {
+  const result = await inviteSeatToRoom({ join: async () => { call += 1; }, fetcher: async () => {
     call += 1;
-    return call === 1
-      ? jsonResponse({ participantSeatIds: ['seat-a'] })
-      : sseResponse({ type: 'error' });
-  }, '/room-a', 'seat-a', 'intro', {
+    return sseResponse({ type: 'error' });
+  }, introUrl: '/room-a/intro', seatId: 'seat-a', behavior: 'intro', messages: {
     joinFailed: 'Failed to invite seat',
     introFailed: 'Introduction failed',
     missingStream: 'Missing SSE stream',
     disconnected: 'SSE disconnected',
-  });
+  } });
 
   assert.deepEqual(result, { joined: true, introError: 'Introduction failed' });
 });

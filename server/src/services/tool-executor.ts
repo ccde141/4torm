@@ -8,13 +8,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveExecutionContext, type SandboxLevelInput } from './execution-context.js';
-import { skillDir, toolExecutorDir, toolRegistryFile } from './data-paths.js';
-import { FRAMEWORK_TOOLS, findFrameworkTool, isFrameworkToolName } from '../tools/framework/catalog.js';
+import { skillDir, toolExecutorDir } from './data-paths.js';
+import { FRAMEWORK_TOOLS, findFrameworkTool } from '../tools/framework/catalog.js';
 import type { ToolDefinition } from '../tools/tool-definition.js';
 import type { ToolExecutionMode } from '../tools/tool-definition.js';
 import { loadAgent } from '../engine/shared/agent-loader.js';
-import { loadAgentToolDefs } from '../engine/shared/tool-defs-loader.js';
+import { loadAgentToolBindings, type AgentToolBinding } from '../engine/shared/tool-defs-loader.js';
 import { FrameworkError } from '../engine/shared/framework-error.js';
+import { inspectToolNames } from '../tools/tool-name-policy.js';
+import type { McpToolOutcome } from '../engine/shared/mcp-types.js';
 
 export class ToolPermissionError extends FrameworkError {
   constructor(tool: string, agentId: string) {
@@ -63,65 +65,6 @@ interface ToolDefWithSource extends ToolDefinition {
   _skillId?: string;
 }
 
-export async function findToolInRegistry(
-  dataDir: string, tool: string,
-): Promise<ToolDefWithSource | undefined> {
-  try {
-    const raw = await fs.readFile(
-      toolRegistryFile(dataDir), 'utf-8',
-    );
-    const registry: ToolDefWithSource[] = JSON.parse(raw);
-    return registry.find(t => t.name === tool && !isFrameworkToolName(t.name));
-  } catch { return undefined; }
-}
-
-export async function findToolInSkills(
-  dataDir: string, tool: string,
-): Promise<ToolDefWithSource | undefined> {
-  try {
-    const skillsDir = path.join(dataDir, 'skills');
-    const entries = await fs.readdir(skillsDir, { withFileTypes: true })
-      .catch(() => [] as Array<{ name: string; isDirectory(): boolean }>);
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      try {
-        const toolsPath = path.join(skillDir(dataDir, entry.name), 'tools.json');
-        const toolsRaw = await fs.readFile(toolsPath, 'utf-8');
-        const tools: ToolDefWithSource[] = JSON.parse(toolsRaw);
-        const found = tools.find(t => t.name === tool);
-        if (found) {
-          found._skillId = entry.name;
-          return found;
-        }
-      } catch { /* skip */ }
-    }
-  } catch { /* skip */ }
-  return undefined;
-}
-
-/** 收集 registry + 所有 skills 的已知工具名（用于归一化候选匹配）。 */
-async function listKnownToolNames(dataDir: string): Promise<string[]> {
-  const names = new Set<string>(FRAMEWORK_TOOLS.map(tool => tool.name));
-  try {
-    const raw = await fs.readFile(toolRegistryFile(dataDir), 'utf-8');
-    for (const t of JSON.parse(raw) as ToolDefWithSource[]) {
-      if (t?.name && !isFrameworkToolName(t.name)) names.add(t.name);
-    }
-  } catch { /* skip */ }
-  try {
-    const skillsDir = path.join(dataDir, 'skills');
-    const entries = await fs.readdir(skillsDir, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      try {
-        const raw = await fs.readFile(path.join(skillDir(dataDir, entry.name), 'tools.json'), 'utf-8');
-        for (const t of JSON.parse(raw) as ToolDefWithSource[]) if (t?.name) names.add(t.name);
-      } catch { /* skip */ }
-    }
-  } catch { /* skip */ }
-  return [...names];
-}
-
 /**
  * 工具名归一化匹配。本地模型（7B~35B）常吐脏工具名：带空格、大小写不一、
  * `functions.`/`tools.` 前缀、`namespace/tool` 分隔。精确匹配不中时按候选顺序
@@ -163,27 +106,31 @@ export async function executeTool(
   signal?: AbortSignal,
   onOutput?: (stream: 'stdout' | 'stderr', text: string) => void,
 ): Promise<string> {
+  return (await executeToolOutcome(
+    dataDir, tool, args, agentId, workspaceDirOverride, sandboxLevelOverride,
+    onMeta, signal, onOutput,
+  )).result;
+}
+
+/** Status-aware execution; the string API above keeps its original return shape. */
+export async function executeToolOutcome(
+  ...params: Parameters<typeof executeTool>
+): Promise<McpToolOutcome> {
+  const [dataDir, tool, args, agentId, workspaceDirOverride, sandboxLevelOverride,
+    onMeta, signal, onOutput] = params;
   if (signal?.aborted) throw createAbortError();
-  // MCP 工具：本执行器只认本地工具/技能注册表，mcp: 前缀必须直接走 MCP client。
-  // 在此单点拦截，可一并修复所有入口（HTTP /api/tools/exec、各 sub-agent-runner、信风 node-runner）。
-  if (tool.startsWith('mcp:')) {
-    await assertAgentToolAccess(dataDir, agentId, tool);
-    const { callMcpTool } = await import('../engine/shared/mcp-manager');
-    try {
-      return await callMcpTool(tool, args);
-    } catch (e) {
-      return `（MCP 工具调用失败：${tool}）${(e as Error).message}`;
-    }
-  }
+  if (tool.startsWith('mcp:')) return executeMcpToolOutcome(dataDir, tool, args, agentId);
   const resolved = await resolveToolDefinition(dataDir, tool);
   if (!resolved) {
     // 未知工具不是系统故障，而是模型用错了工具名（或复读了协议示例占位符）。
     // 返回友好结果让模型自我纠正，不抛异常（避免被上层包成 HTTP 500 崩掉本轮对话）。
-    return `（未知工具：${tool}）该工具不存在。请检查工具名是否正确，或确认是否误把协议示例当成了真实调用。`;
+    return { result: `（未知工具：${tool}）该工具不存在。请检查工具名是否正确，或确认是否误把协议示例当成了真实调用。`, ok: false };
   }
-  tool = resolved.tool;
-  const toolDef = resolved.toolDef;
-  await assertAgentToolAccess(dataDir, agentId, tool);
+  const canonicalTool = resolved.tool;
+  const authorization = await assertAgentToolAccess(dataDir, agentId, canonicalTool, args);
+  const toolDef: ToolDefWithSource = authorization
+    ? { ...authorization.definition, ...(authorization.skillId ? { _skillId: authorization.skillId } : {}) }
+    : resolved.toolDef;
 
   const resolvedContext = await resolveExecutionContext(
     dataDir,
@@ -194,14 +141,27 @@ export async function executeTool(
   const ctx = { ...resolvedContext, signal, onOutput };
 
   if (toolDef.executorType === 'template' && toolDef.executorTemplate) {
-    return executeTemplateTool(dataDir, toolDef, args, ctx, signal, onOutput);
+    return { result: await executeTemplateTool(dataDir, toolDef, args, ctx, signal, onOutput), ok: true };
   }
 
   if (toolDef.executorType === 'builtin' || toolDef.executorType === 'custom') {
-    return executeModuleTool(dataDir, tool, toolDef, args, ctx, onMeta, signal);
+    return { result: await executeModuleTool(
+      dataDir, canonicalTool, toolDef, args, ctx, onMeta, signal,
+    ), ok: true };
   }
 
   throw new Error(`未知执行器类型: ${toolDef.executorType}`);
+}
+
+async function executeMcpToolOutcome(
+  dataDir: string, tool: string, args: Record<string, string>, agentId: string,
+): Promise<McpToolOutcome> {
+  await assertAgentToolAccess(dataDir, agentId, tool);
+  const { callMcpToolOutcome } = await import('../engine/shared/mcp-manager');
+  try { return await callMcpToolOutcome(tool, args); }
+  catch (error) {
+    return { result: `（MCP 工具调用失败：${tool}）${(error as Error).message}`, ok: false };
+  }
 }
 
 /** 运行入口只根据工具定义决定是否允许后台化；缺省和未知工具一律同步。 */
@@ -211,27 +171,51 @@ export async function getToolExecutionMode(dataDir: string, tool: string): Promi
   return resolved?.toolDef.executionMode === 'detachable' ? 'detachable' : 'sync';
 }
 
-async function assertAgentToolAccess(dataDir: string, agentId: string, tool: string): Promise<void> {
-  // 空 agentId 仅供框架内部诊断与独立执行器单测；所有真实 Agent 路径必须二次核验。
-  if (!agentId) return;
+async function assertAgentToolAccess(
+  dataDir: string, agentId: string, tool: string, args?: Record<string, string>,
+): Promise<AgentToolBinding | undefined> {
+  if (!agentId) {
+    if (tool === 'use_skill') throw new ToolPermissionError(tool, '未指定');
+    return undefined;
+  }
   const agent = await loadAgent(dataDir, agentId);
   if (!agent) throw new ToolPermissionError(tool, agentId);
-  const allowed = await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode);
-  if (!allowed.some(definition => definition.name === tool)) {
+  if (tool === 'use_skill') {
+    if (!args?.skill) throw new Error('缺少 skill 参数');
+    if (!agent.skills.includes(args.skill)) {
+      throw new ToolPermissionError(`${tool}:${args.skill}`, agentId);
+    }
+  }
+  const allowed = await loadAgentToolBindings(dataDir, agent.tools, agent.skills, agent.toolMode);
+  const binding = allowed.find(item => item.definition.name === tool);
+  if (!binding || (tool.startsWith('mcp:') && binding.source !== 'mcp')) {
     throw new ToolPermissionError(tool, agentId);
   }
+  return binding;
 }
 
 async function resolveToolDefinition(dataDir: string, tool: string) {
-  let toolDef: ToolDefWithSource | undefined = findFrameworkTool(tool);
-  toolDef ??= await findToolInRegistry(dataDir, tool) ?? await findToolInSkills(dataDir, tool);
-  if (toolDef) return { tool, toolDef };
-  const normalized = resolveToolName(tool, await listKnownToolNames(dataDir));
-  if (!normalized || normalized === tool) return null;
-  console.warn(`[tool-executor] 工具名归一化：${JSON.stringify(tool)} → ${normalized}`);
-  toolDef = findFrameworkTool(normalized);
-  toolDef ??= await findToolInRegistry(dataDir, normalized) ?? await findToolInSkills(dataDir, normalized);
-  return toolDef ? { tool: normalized, toolDef } : null;
+  const snapshot = await inspectToolNames(dataDir);
+  const known = [...FRAMEWORK_TOOLS.map(item => item.name),
+    ...snapshot.custom.map(item => item.name),
+    ...[...snapshot.skills.values()].flatMap(items => items.map(item => item.name))];
+  const normalized = known.includes(tool) ? tool : resolveToolName(tool, [...new Set(known)]);
+  if (!normalized) return null;
+  const builtin = findFrameworkTool(normalized);
+  if (builtin) return { tool: normalized, toolDef: builtin };
+  const conflict = snapshot.issues.find(issue => issue.name === normalized);
+  if (conflict) throw new Error(`工具名称冲突：${normalized}；${conflict.reason}`);
+  if (normalized !== tool) console.warn(`[tool-executor] 工具名归一化：${JSON.stringify(tool)} → ${normalized}`);
+  const custom = snapshot.custom.find(item => item.name === normalized);
+  if (custom) {
+    const { _skillId: _owner, ...definition } = custom as ToolDefWithSource;
+    return { tool: normalized, toolDef: definition };
+  }
+  for (const [skillId, items] of snapshot.skills) {
+    const skillTool = items.find(item => item.name === normalized);
+    if (skillTool) return { tool: normalized, toolDef: { ...skillTool, _skillId: skillId } };
+  }
+  return null;
 }
 
 async function executeTemplateTool(
@@ -260,8 +244,8 @@ async function executeModuleTool(
 ): Promise<string> {
   const fileName = toolDef.executorFile || tool;
   const candidates = toolDef._skillId
-    ? [path.join(skillDir(dataDir, toolDef._skillId), 'executors', `${fileName}.js`)] : [];
-  candidates.push(path.join(toolExecutorDir(dataDir), `${fileName}.js`));
+    ? [path.join(skillDir(dataDir, toolDef._skillId), 'executors', `${fileName}.js`)]
+    : [path.join(toolExecutorDir(dataDir), `${fileName}.js`)];
   let lastError: unknown;
   for (const filePath of candidates) {
     try {

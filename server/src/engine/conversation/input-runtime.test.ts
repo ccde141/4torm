@@ -7,6 +7,22 @@ import { ConversationInputRuntime } from './input-runtime.js';
 import { readInputJournal } from './input-journal.js';
 import type { ContextMessage } from '../shared/types.js';
 
+test('compaction rebases input checkpoints so archived tools are not replayed', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-input-rebase-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const owner = { agentId: 'agent-test', sessionId: 'session-test', runId: 'run-test' };
+  const runtime = new ConversationInputRuntime(dataDir, owner, () => {});
+  const messages: ContextMessage[] = [{ role: 'system', content: 'prompt' },
+    { role: 'user', content: 'old question' }];
+  runtime.bind(messages);
+  messages.splice(1, 1, { role: 'system', content: 'summary' });
+  runtime.rebase(messages.length);
+  messages.push({ role: 'assistant', content: 'new answer' });
+  await runtime.finish();
+  assert.deepEqual((await readInputJournal(dataDir, owner)).checkpoint?.context,
+    [{ role: 'assistant', content: 'new answer' }]);
+});
+
 test('runtime saves ordered human input with its exact context and fences input on stop', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-input-runtime-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));

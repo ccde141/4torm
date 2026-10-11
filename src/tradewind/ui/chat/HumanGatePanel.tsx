@@ -2,20 +2,22 @@
  * Human Gate 暂停点面板
  *
  * 触发：监听 tw-open-gate CustomEvent
- * 行为：展示可编辑的信封内容 → 人类编辑后点"继续" → POST /human-gate/{id}/submit
+ * 行为：展示可编辑的信封内容 → 人类编辑后点“继续” → 中心命令提交
  */
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { submitHumanGate } from '../execution-client';
 
 interface HumanGatePanelProps {
   nodeId: string;
+  executionId: string;
   nodeLabel: string;
   envelopeContent: string;
   onClose: () => void;
 }
 
-export function HumanGatePanel({ nodeId, nodeLabel, envelopeContent, onClose }: HumanGatePanelProps) {
+export function HumanGatePanel({ executionId, nodeId, nodeLabel, envelopeContent, onClose }: HumanGatePanelProps) {
   const { t } = useLocale();
   const [content, setContent] = useState(envelopeContent);
   const [busy, setBusy] = useState(false);
@@ -32,15 +34,7 @@ export function HumanGatePanel({ nodeId, nodeLabel, envelopeContent, onClose }: 
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/tradewind/human-gate/${nodeId}/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: content.trim() || envelopeContent }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error((data as any).error || `HTTP ${res.status}`);
-      }
+      await submitHumanGate(executionId, nodeId, content.trim() || envelopeContent);
       onClose();
     } catch (e) {
       setError((e as Error).message);

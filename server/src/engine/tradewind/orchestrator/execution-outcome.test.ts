@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -51,4 +52,33 @@ test('未到达 output 的人工停止保留 stopped 终态', async (t) => {
   assert.equal(await orchestrator.whenSettled(), 'stopped');
   const meta = JSON.parse(await fs.readFile(path.join(orchestrator.getRunDir(), 'meta.json'), 'utf8')) as { status: string };
   assert.equal(meta.status, 'stopped');
+});
+
+test('极速出口在 meta 与快照提交之后激活，仍通过编排器保存真实 done', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-instant-output-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const graph: WorkflowGraph = {
+    nodes: ['entry', 'output'].map((type, x) => ({
+      id: type, type, label: type, position: { x, y: 0 }, config: {},
+    })),
+    edges: [{ id: 'edge', source: 'entry', sourcePort: 0,
+      target: 'output', targetPort: 0, kind: 'handoff' }],
+  };
+  let calls = 0;
+  const instant = new OutputExecutor();
+  instant.execute = async context => {
+    calls++;
+    const meta = JSON.parse(readFileSync(path.join(context.runDir, 'meta.json'), 'utf8'));
+    const snapshot = JSON.parse(readFileSync(path.join(context.runDir, 'graph-snapshot.json'), 'utf8'));
+    assert.equal(meta.status, 'running');
+    assert.equal(snapshot.nodes.length, 2);
+  };
+  const map = executors();
+  map.set('output', instant);
+  const orchestrator = new Orchestrator({ graph, dataDir, workflowId: 'wf-instant', executors: map });
+  await orchestrator.start();
+  assert.equal(await orchestrator.whenSettled(), 'done');
+  assert.equal(calls, 1);
+  const meta = JSON.parse(await fs.readFile(path.join(orchestrator.getRunDir(), 'meta.json'), 'utf8'));
+  assert.equal(meta.status, 'done');
 });

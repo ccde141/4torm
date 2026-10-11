@@ -47,6 +47,91 @@ test('Anthropic request separates system text and maps tool history', () => {
   });
 });
 
+test('Anthropic native request restores prior text tool calls and results', () => {
+  const request = buildAnthropicRequest({
+    baseUrl: 'https://api.anthropic.com/v1', model: 'claude',
+    stream: false, maxTokens: 1024,
+    messages: [
+      { role: 'user', content: 'Inspect both files.' },
+      { role: 'assistant', content: '{"type":"tool_call","name":"read_file","arguments":{"path":"a.txt"}}' },
+      { role: 'user', content: '{"type":"tool_result","name":"read_file","ok":true,"content":"A"}' },
+      { role: 'assistant', content: '{"type":"tool_call","name":"read_file","arguments":{"path":"b.txt"}}' },
+      { role: 'user', content: '{"type":"tool_result","name":"read_file","ok":true,"content":"B"}' },
+    ],
+    tools: [{ name: 'read_file', description: 'Read a file', parameters: {
+      type: 'object', properties: { path: { type: 'string' } }, required: ['path'],
+    } }],
+  });
+
+  assert.deepEqual(request.body.messages.slice(1), [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'text-history-1', name: 'read_file', input: { path: 'a.txt' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'text-history-1', content: 'A' }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'text-history-3', name: 'read_file', input: { path: 'b.txt' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'text-history-3', content: 'B' }] },
+  ]);
+});
+
+test('Anthropic native request preserves a failed text tool result', () => {
+  const request = buildAnthropicRequest({
+    baseUrl: 'https://api.anthropic.com/v1', model: 'claude',
+    stream: false, maxTokens: 1024,
+    messages: [
+      { role: 'assistant', content: '{"type":"tool_call","name":"read_file","arguments":{}}' },
+      { role: 'user', content: '{"type":"tool_result","name":"read_file","ok":false,"content":"permission denied"}' },
+    ],
+    tools: [{ name: 'read_file', description: '', parameters: { type: 'object', properties: {} } }],
+  });
+
+  assert.deepEqual(request.body.messages[1], {
+    role: 'user', content: [{ type: 'tool_result', tool_use_id: 'text-history-0',
+      content: 'permission denied', is_error: true }],
+  });
+});
+
+test('Anthropic native request marks an explicit native tool failure as is_error', () => {
+  const request = buildAnthropicRequest({
+    baseUrl: 'https://api.anthropic.com/v1', model: 'claude',
+    stream: false, maxTokens: 1024,
+    messages: [
+      { role: 'assistant', content: '', toolCalls: [
+        { id: 'failed', name: 'inspect', arguments: '{}' },
+      ] },
+      { role: 'tool', toolCallId: 'failed', content: 'permission denied', toolOk: false },
+    ],
+    tools: [{ name: 'inspect', description: '', parameters: { type: 'object', properties: {} } }],
+  });
+
+  assert.deepEqual(request.body.messages[1], {
+    role: 'user', content: [{ type: 'tool_result', tool_use_id: 'failed',
+      content: 'permission denied', is_error: true }],
+  });
+});
+
+test('Anthropic text request encodes prior native tool calls and results', () => {
+  const request = buildAnthropicRequest({
+    baseUrl: 'https://api.anthropic.com/v1', model: 'claude',
+    stream: false, maxTokens: 1024,
+    messages: [
+      { role: 'user', content: 'Inspect the file.' },
+      { role: 'assistant', content: '', toolCalls: [
+        { id: 'call-1', name: 'read_file', arguments: '{"path":"a.txt"}' },
+      ] },
+      { role: 'tool', toolCallId: 'call-1', content: 'A' },
+      { role: 'user', content: 'What next?' },
+    ],
+  });
+
+  assert.equal(request.body.tools, undefined);
+  assert.deepEqual(request.body.messages, [
+    { role: 'user', content: [{ type: 'text', text: 'Inspect the file.' }] },
+    { role: 'assistant', content: [{ type: 'text', text: '{"type":"tool_call","name":"read_file","arguments":{"path":"a.txt"}}' }] },
+    { role: 'user', content: [
+      { type: 'text', text: '{"type":"tool_result","name":"read_file","ok":true,"content":"A"}' },
+      { type: 'text', text: 'What next?' },
+    ] },
+  ]);
+});
+
 test('Anthropic request respects explicit headers without losing protocol defaults', () => {
   const request = buildAnthropicRequest({
     baseUrl: 'https://proxy.example/v1/messages',
@@ -153,6 +238,7 @@ test('Anthropic stream accumulator preserves signed thinking for replay', () => 
 test('Anthropic request replays thinking blocks before assistant tools', () => {
   const request = buildAnthropicRequest({
     baseUrl: 'https://api.anthropic.com/v1', model: 'claude', stream: false, maxTokens: 1024,
+    tools: [{ name: 'read_file', description: 'Read a file' }],
     messages: [{
       role: 'assistant', content: '',
       reasoningEnvelope: {
@@ -160,7 +246,7 @@ test('Anthropic request replays thinking blocks before assistant tools', () => {
         value: [{ type: 'thinking', thinking: 'inspect', signature: 'signed' }],
       },
       toolCalls: [{ id: 'toolu_4', name: 'read_file', arguments: '{}' }],
-    }],
+    }, { role: 'tool', toolCallId: 'toolu_4', content: 'file body' }],
   });
 
   assert.deepEqual(request.body.messages, [{
@@ -169,5 +255,7 @@ test('Anthropic request replays thinking blocks before assistant tools', () => {
       { type: 'thinking', thinking: 'inspect', signature: 'signed' },
       { type: 'tool_use', id: 'toolu_4', name: 'read_file', input: {} },
     ],
+  }, {
+    role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_4', content: 'file body' }],
   }]);
 });

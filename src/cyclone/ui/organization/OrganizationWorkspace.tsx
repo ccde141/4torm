@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { createLatestRequestGuard, type LatestRequest } from '../../../lib/latest-request';
 import BulletinBoard, { type BulletinEntry } from '../pages/BulletinBoard';
+import { subscribeCycloneChanges } from '../pages/cyclone-change-client';
 import type { CycloneDispatch } from '../pages/dispatch-timeline';
 import type { SeatRunnerOutcome, SeatStreamRunners } from '../pages/useSeatStreamRunners';
 import type { WorkspaceEntityStatus } from '../pages/cyclone-workspace-status';
 import { loadOrganization, saveOrganization } from './organization-client';
-import { createEditableOrganization } from './organization-model';
+import { createEditableOrganization, rebaseEditableOrganization } from './organization-model';
 import { deriveOrganizationRuntime, updateCompletionSignals, updateContactReturnSignals, updateSeatCompletionSignals } from './organization-runtime';
 import type { EditableOrganization, OrganizationSeat, WorkshopOrganizationState } from './organization-types';
 import { CycloneOrganizationCanvas } from './CycloneOrganizationCanvas';
@@ -36,6 +38,7 @@ interface Props {
 interface PendingOrganizationState {
   workshopId: string;
   state: WorkshopOrganizationState;
+  request: LatestRequest;
 }
 
 export function OrganizationWorkspace(props: Props) {
@@ -49,6 +52,17 @@ export function OrganizationWorkspace(props: Props) {
   const [runtimeTick, forceRuntimeTick] = useState(0);
   const [completedSignals, setCompletedSignals] = useState<Record<string, number>>({});
   const [contactReturnSignals, setContactReturnSignals] = useState<Record<string, number>>({});
+  const requestGuard = useRef(createLatestRequestGuard());
+  const selectedWorkshopRef = useRef(props.workshopId);
+  const savedDraftRef = useRef(savedDraft);
+  const savingRef = useRef(saving);
+  const deferredChangeRef = useRef(false);
+  const subscribedWorkshopRef = useRef<string | null>(null);
+  const tRef = useRef(t);
+  selectedWorkshopRef.current = props.workshopId;
+  savedDraftRef.current = savedDraft;
+  savingRef.current = saving;
+  tRef.current = t;
   const statusesRef = useRef(new Map<string, CycloneDispatch['status']>());
   const contactStatusesRef = useRef(new Map<string, string>());
   const seatOutcomesRef = useRef(new Map<string, SeatRunnerOutcome>());
@@ -64,28 +78,63 @@ export function OrganizationWorkspace(props: Props) {
   );
 
   const reload = useCallback(async (signal?: AbortSignal) => {
-    setError('');
+    const workshopId = props.workshopId;
+    const request = requestGuard.current.begin();
     try {
-      const state = await loadOrganization(props.workshopId, signal);
-      setPendingOrganizationState({ workshopId: props.workshopId, state });
+      const state = await loadOrganization(workshopId, signal);
+      if (!request.isCurrent() || selectedWorkshopRef.current !== workshopId) return;
+      if (savedDraftRef.current
+        && state.organization?.revision === savedDraftRef.current.baseRevision) return;
+      setPendingOrganizationState({ workshopId, state, request });
     } catch (cause) {
-      if ((cause as Error).name !== 'AbortError') setError((cause as Error).message || t('cyclone.org.loadFailed'));
+      if (request.isCurrent() && selectedWorkshopRef.current === workshopId
+        && (cause as Error).name !== 'AbortError') {
+        setError((cause as Error).message || tRef.current('cyclone.org.loadFailed'));
+      }
     }
-  }, [props.workshopId, t]);
+  }, [props.workshopId]);
 
   useEffect(() => {
     const controller = new AbortController();
+    const guard = requestGuard.current;
+    guard.cancel();
+    savedDraftRef.current = null;
+    savingRef.current = false;
     setDraft(null); setSavedDraft(null); setPendingOrganizationState(null);
+    setSaving(false); setError('');
     void reload(controller.signal);
-    return () => controller.abort();
+    return () => { controller.abort(); guard.cancel(); };
   }, [reload]);
 
   useEffect(() => {
     if (!props.summaryReady || !pendingOrganizationState
-      || pendingOrganizationState.workshopId !== props.workshopId) return;
-    const loadedDraft = createEditableOrganization(pendingOrganizationState.state, props.seats);
-    setDraft(loadedDraft); setSavedDraft(loadedDraft); setPendingOrganizationState(null);
+      || pendingOrganizationState.workshopId !== props.workshopId
+      || !pendingOrganizationState.request.isCurrent()) return;
+    const authoritative = createEditableOrganization(pendingOrganizationState.state, props.seats);
+    const previousSaved = savedDraftRef.current;
+    savedDraftRef.current = authoritative;
+    setDraft(current => !current || current === previousSaved ? authoritative : current);
+    setSavedDraft(authoritative);
+    setPendingOrganizationState(null);
   }, [pendingOrganizationState, props.seats, props.summaryReady, props.workshopId]);
+
+  useEffect(() => {
+    if (!props.active || props.panel !== 'graph') return;
+    const guard = requestGuard.current;
+    if (subscribedWorkshopRef.current === props.workshopId) void reload();
+    subscribedWorkshopRef.current = props.workshopId;
+    const unsubscribe = subscribeCycloneChanges(event => {
+      const relevant = event.type === 'sync' || (event.type === 'change'
+        && event.workshopId === props.workshopId && event.scope === 'workshop');
+      if (!relevant) return;
+      if (savingRef.current) {
+        deferredChangeRef.current = true;
+        return;
+      }
+      void reload();
+    });
+    return () => { unsubscribe(); guard.cancel(); };
+  }, [props.active, props.panel, props.workshopId, reload]);
 
   useEffect(() => {
     setCompletedSignals({}); setContactReturnSignals({});
@@ -151,18 +200,40 @@ export function OrganizationWorkspace(props: Props) {
   }, [runtime.contactActivities]);
 
   const save = async () => {
-    if (!draft || saving || reconcilingSeats.blocked) return;
+    if (!draft || savingRef.current || reconcilingSeats.blocked) return;
     if (draft.activatesExplicitMode && !(await confirm({
       title: t('cyclone.org.activateTitle'), message: t('cyclone.org.activateMessage'),
       confirmText: t('cyclone.org.activate'),
     }))) return;
+    if (selectedWorkshopRef.current !== props.workshopId) return;
+    const workshopId = props.workshopId;
+    const submittedDraft = draft;
+    requestGuard.current.cancel();
+    setPendingOrganizationState(null);
+    deferredChangeRef.current = false;
+    savingRef.current = true;
     setSaving(true); setError('');
+    let succeeded = false;
     try {
-      const saved = await saveOrganization(props.workshopId, draft);
+      const saved = await saveOrganization(workshopId, submittedDraft);
+      if (selectedWorkshopRef.current !== workshopId) return;
       const savedState = createEditableOrganization({ mode: 'explicit', organization: saved }, props.seats);
-      setDraft(savedState); setSavedDraft(savedState);
-    } catch (cause) { setError((cause as Error).message || t('cyclone.org.saveFailed')); }
-    finally { setSaving(false); }
+      savedDraftRef.current = savedState;
+      setDraft(current => current === submittedDraft ? savedState
+        : current ? rebaseEditableOrganization(current, { mode: 'explicit', organization: saved }, props.seats) : current);
+      setSavedDraft(savedState);
+      succeeded = true;
+    } catch (cause) {
+      if (selectedWorkshopRef.current === workshopId) {
+        setError((cause as Error).message || t('cyclone.org.saveFailed'));
+      }
+    } finally {
+      if (selectedWorkshopRef.current === workshopId) {
+        savingRef.current = false;
+        setSaving(false);
+        if (!succeeded || deferredChangeRef.current) void reload();
+      }
+    }
   };
 
   const saveState = draft && savedDraft

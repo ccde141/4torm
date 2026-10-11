@@ -16,6 +16,8 @@ interface Runner {
   abandoned: boolean;
   /** 用户已要求停止；后续插话不得再进入正在收口的执行。 */
   userStopped: boolean;
+  /** 当前后端执行标识；用于统一控制面防止旧操作误伤新执行。 */
+  runId?: string;
 }
 
 /** 后台流上限（正在看的那条不计入） */
@@ -39,6 +41,8 @@ export function useStreamRunners(
     const r = runners.current.get(sessionId);
     if (r) {
       r.messages = msgs;
+      const active = msgs.findLast(message => message.streamingPhase && message.inputRunId);
+      if (active?.inputRunId) r.runId = active.inputRunId;
       if (msgs.at(-1)?.inputReady) r.markReady();
     }
     if (sessionId === getActiveId()) setMessages(msgs);

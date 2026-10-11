@@ -1,7 +1,7 @@
 /**
  * profile-store —— AutoProfile 的存取 + 到 LoopConfig 的映射
  *
- * 存储：data/tradewind/workflows/{workflowId}/profiles.json（与 graph.json 平级）。
+ * 存储：data/tradewind/workflows/{workflowId}/profiles.json（与 definition.json 平级）。
  * 图保持 mode-free；profile 是"auto 模式怎么循环"的独立档案。
  */
 
@@ -20,8 +20,9 @@ function profilesPath(dataDir: string, workflowId: string): string {
 export async function loadProfiles(dataDir: string, workflowId: string): Promise<AutoProfile[]> {
   try {
     const raw = await fs.readFile(profilesPath(dataDir, workflowId), 'utf-8');
-    const parsed = JSON.parse(raw) as { profiles?: AutoProfile[] };
-    return Array.isArray(parsed.profiles) ? parsed.profiles : [];
+    const parsed = JSON.parse(raw) as { workflowId?: unknown; profiles?: unknown };
+    if (!Array.isArray(parsed.profiles)) throw new Error('循环档案文件格式无效');
+    return parsed.profiles as AutoProfile[];
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
@@ -44,7 +45,7 @@ export function findProfile(profiles: AutoProfile[], id: string): AutoProfile | 
 
 /**
  * AutoProfile → LoopConfig（LoopController 的运行时契约）。
- * relative 才能映射；absolute（潮汐）本刀不支持循环执行，返回 null。
+ * 只映射 relative 配置；absolute 返回 null。
  */
 export function autoProfileToLoopConfig(p: AutoProfile): LoopConfig | null {
   if (p.cadence.kind !== 'relative') return null;

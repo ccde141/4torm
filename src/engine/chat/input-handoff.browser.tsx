@@ -12,11 +12,10 @@ const agent = { id: 'agent-test', name: 'Test' } as Agent;
 const mode = new URLSearchParams(location.search).get('mode') ?? 'closed';
 const answer: ChatMessage = { id: 'old', role: 'assistant', content: 'final old answer',
   timestamp: 'now', inputRunId: 'old', inputReady: true };
-const files = new Map<string, unknown>([
-  [`agents/agent-test/sessions/${sid}.json`, { id: sid, agentId: agent.id, agentName: 'Test',
-    title: 'Test', titleState: 'attempted', messages: [answer], model: '', createdAt: 'now', updatedAt: 'now' }],
-  ['agents/agent-test/sessions/_index.json', []],
-]);
+let session = { id: sid, agentId: agent.id, agentName: 'Test', title: 'Test',
+  titleState: 'attempted', messages: [answer], model: '', systemPrompt: '',
+  createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  revision: 1, messageRevision: 1 };
 const submitted: InputSubmission[] = [];
 let chats = 0;
 let finished = false;
@@ -47,15 +46,13 @@ window.fetch = async (target, init) => {
     return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''),
       { headers: { 'Content-Type': 'text/event-stream' } });
   }
-  if (url.pathname === '/api/storage/read') {
-    const value = files.get(url.searchParams.get('path')!);
-    return value === undefined ? new Response('', { status: 404 }) : Response.json(value);
+  if (url.pathname === `/api/conversation/sessions/agent-test/${sid}`) {
+    if (!init?.method || init.method === 'GET') return Response.json({ ...session, pendingRuns: [] });
+    const body = JSON.parse(String(init.body));
+    session = { ...body.session, revision: session.revision + 1,
+      messageRevision: session.messageRevision + (body.mode === 'content' ? 1 : 0) };
+    return Response.json(session);
   }
-  if (url.pathname === '/api/storage/write') {
-    files.set(url.searchParams.get('path')!, JSON.parse(String(init?.body)));
-    return Response.json({ ok: true });
-  }
-  if (url.pathname === '/api/storage/mkdir') return Response.json({ ok: true });
   throw new Error(`Unexpected fixture request: ${url.pathname}`);
 };
 
@@ -76,9 +73,8 @@ function Fixture() {
     clearText: value => setText(previous => previous === value ? '' : previous) });
   function finish(completed: boolean) {
     finished = true;
-    const value = files.get(`agents/agent-test/sessions/${sid}.json`) as { messages: ChatMessage[] };
-    value.messages = [{ ...answer, inputReady: false, inputClosed: true }];
-    runners.emit(sid, value.messages);
+    session.messages = [{ ...answer, inputReady: false, inputClosed: true }];
+    runners.emit(sid, session.messages);
     runners.finalize(sid, completed);
   }
   return <main>

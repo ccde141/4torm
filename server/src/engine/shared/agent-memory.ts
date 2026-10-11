@@ -1,15 +1,8 @@
 /**
  * Agent 长期记忆 —— 跨功能共享基建（季风/对流/气旋/信风通用）
  *
- * 定位：把长期记忆当「持续学习后的知识检索」问题。本文件是 MVP：
- * 文本条目存储 + 主动注入 + agent 自写，先打通读写链路。
- * 检索规模化（候选召回→重排→预算填充）见设计草案 §六，届时只换 rankEntries 后端。
- *
- * 存储位置：data/agents/{id}/memory/（**在 .workspace 沙箱之外**，引擎专管、
- * 经工具中介访问，避免被 agent 工作文件淹没或误删）。
+ * 存储位置：data/agents/{id}/memory/。
  * 一文件一条目（{slug}.md，frontmatter+正文），外加 index.md 召回索引（一行一条目）。
- *
- * 纯 IO + 文本，不含业务逻辑 → 不违反「模块间零业务交叉」。
  */
 
 import fs from 'node:fs/promises';
@@ -30,7 +23,7 @@ export interface MemoryEntry {
   detail: string;       // 全文正文
   created: string;      // ISO8601 带时区
   updated: string;
-  hits: number;         // 命中次数，反哺未来打分；MVP 只记不用
+  hits: number;         // 命中次数；当前不参与排序
   source: string;       // 学到该条目的功能区（tradewind/convection/chat/cyclone/human）
   /**
    * 摘要待精炼：true = summary 是系统从正文兜底截取的粗摘要（人只写了正文），
@@ -41,7 +34,7 @@ export interface MemoryEntry {
 
 /**
  * 从正文兜底生成一句话摘要（人只写正文时用）：取首行首句、压缩空白、截断。
- * 保证"存的瞬间就可召回、永不空白"，与 AI 精炼是否到位无关。
+ * 正文为空时返回「（空）」。
  */
 export function deriveSummary(detail: string): string {
   const firstLine = detail.trim().split('\n').map(l => l.trim()).find(Boolean) ?? '';
@@ -185,7 +178,6 @@ export interface WriteMemoryInput {
 
 /**
  * 写入一条记忆：生成唯一 slug → 原子写条目文件 → 更新 index.md。
- * MVP 全自动落库（人工闸见设计草案 §八，后续可在此加"待确认区"）。
  */
 export async function writeMemory(
   dataDir: string,
@@ -308,15 +300,13 @@ export async function updateMemory(
 
 // ── 召回（读注入） ────────────────────────────────────────────────
 
-/** 常驻档判定：MVP 按 category=feedback 一刀切（pinned 见设计草案 §八）。 */
+/** category=feedback 的记忆作为常驻档。 */
 function isPinned(row: MemoryIndexRow): boolean {
   return row.category === 'feedback';
 }
 
 /**
- * 情境相关性打分（**可插拔后端**）。
- * MVP：taskHint 与条目 tags+summary 的词重叠计数。
- * 未来换便宜模型打分 / 向量余弦时，只改此函数，上层排序+预算填充骨架不动。
+ * 按 taskHint 词项与条目 tags、summary 的包含关系计分。
  */
 function scoreRelevance(row: MemoryIndexRow, hintTokens: Set<string>): number {
   if (hintTokens.size === 0) return 0;

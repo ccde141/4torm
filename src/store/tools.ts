@@ -10,6 +10,11 @@ export interface ToolDef {
   executionMode?: 'sync' | 'detachable';
   source?: 'framework' | 'custom';
   readonly?: boolean;
+  frameworkCapability?: {
+    id: string;
+    title: string;
+    route: string;
+  };
 }
 
 export interface ToolDefForm {

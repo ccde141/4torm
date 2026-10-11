@@ -16,9 +16,9 @@
 import type { ContextMessage } from '../../shared/types';
 import type { SandboxLevel } from '../../shared/sandbox-prompt';
 import { atomicWriteFile } from '../../shared/atomic-io';
-import { callLLM } from '../../shared/llm-bridge';
+import { callLLM, type TokenUsage } from '../../shared/llm-bridge';
 import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
-import { execToolUnified } from '../../shared/exec-tool';
+import { execToolUnifiedOutcome } from '../../shared/exec-tool';
 import {
   runReActLoop,
   type LLMCaller,
@@ -26,26 +26,28 @@ import {
 } from './tradewind-react-adapter';
 import { runTradewindReActNative } from './native-adapter';
 import { buildVirtualToolDefs, buildEnvelopeToolDefs } from './virtual-tools';
-import { EnvelopeDraft, execEnvelopeTool, ENVELOPE_TOOL_NAMES, COMPLETE_TASK_TOOL, isEnvelopeRound, classifyRoundInterrupt } from './envelope-draft';
-import {
-  compactIfNeeded,
-  AGENT_COMPACT_THRESHOLD,
-  type CompactState,
-  type CompactorOpts,
-} from './context-compactor';
+import { EnvelopeDraft, execEnvelopeToolOutcome, ENVELOPE_TOOL_NAMES, COMPLETE_TASK_TOOL, isEnvelopeRound, classifyRoundInterrupt } from './envelope-draft';
+import { compactNodeManually, nodeCompactionCaller } from './node-context-compaction.js';
 import { execDelegate, execContact } from './node-runner-tools';
 import { execMemoryTool, MEMORY_TOOL_NAMES, buildMemoryToolDefs } from '../../shared/agent-memory';
 import { NodeEventEmitter } from '../streaming/node-event-emitter';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { normalizeSystemMessages } from '../../shared/system-messages.js';
+import { randomUUID } from 'node:crypto';
 import { resolveTradewindTermination } from './tradewind-outcome.js';
 import type { FrameworkErrorKind } from '../../shared/framework-error.js';
 import { frameworkTransportErrorFromUnknown } from '../../shared/framework-error-transport.js';
+import { TokenUsageRecorder, captureTokenUsage, type TokenUsageProgress } from './token-usage.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
 export type MessageSource = 'human' | 'envelope' | 'contact';
+
+export interface NodeRoundIdentity {
+  runId: string;
+  source: MessageSource;
+  startedAt: string;
+}
 
 export interface QueuedMessage {
   source: MessageSource;
@@ -71,8 +73,10 @@ export interface QueuedMessage {
 
 /** SSE 事件（推送给前端） */
 export type NodeRunnerEvent = (
+  | { type: 'round-start'; runId: string; source: MessageSource; startedAt: string }
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
+  | { type: 'usage'; usage: TokenUsage | null }
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
   | { type: 'delegate-start'; task: string; delegateId: string }
@@ -87,6 +91,8 @@ export type NodeRunnerEvent = (
   | { type: 'compact-start' }
   | { type: 'compact-done'; archivedRounds: number; summaryLength: number }
   | { type: 'compact-warn'; message: string }
+  | { type: 'compaction-notice'; message: string }
+  | { type: 'context-compacted'; messages: ContextMessage[] }
   | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind }
   | { type: 'done'; outcome?: 'completed' | 'stopped' | 'error' }
   | { type: 'paused' }
@@ -105,14 +111,29 @@ export interface NodeSnapshot {
   busy: boolean;
   /** 当前运行或暂停轮次的真实来源；旧客户端可忽略。 */
   roundSource?: MessageSource | null;
+  /** 当前真实运行轮次；空闲和已暂停时不存在。 */
+  runId?: string;
+  roundStartedAt?: string;
   /** 是否已暂停（扣住信封、待续跑） */
   paused?: boolean;
   /** 已派发的最大序号（前端只应用 seq > lastSeq 的增量） */
   lastSeq: number;
+  tokenUsage?: TokenUsageProgress;
+  compactionNotice?: string;
+}
+
+/** 高频运行探针只需状态，避免每次复制完整对话与轮次事件。 */
+export interface NodeRuntimeState {
+  busy: boolean;
+  paused: boolean;
+  roundSource: MessageSource | null;
+  runId?: string;
 }
 
 export interface NodeRunnerOpts {
   dataDir: string;
+  workflowId: string;
+  executionId: string;
   /** 本节点 ID（contact 防死锁用） */
   nodeId: string;
   agentId: string;
@@ -126,6 +147,7 @@ export interface NodeRunnerOpts {
   /** 沙箱级别（用于 sub-agent 继承） */
   sandboxLevel: SandboxLevel;
   systemPrompt: string;
+  compactionPrompt?: string;
   signal: AbortSignal;
   /** 持久化路径（每轮对话后写入 messages.json） */
   persistDir?: string;
@@ -153,26 +175,48 @@ export class NodeRunner {
   private busy = false;
   private processing = false;
   private readonly events: NodeEventEmitter;
-  private readonly compactState: CompactState = { disabled: false, archiveSeq: 0 };
   private roundAbort: AbortController | null = null;
   private currentRoundSource: MessageSource | null = null;
+  private roundIdentity: NodeRoundIdentity | null = null;
   /** 暂停中：pause() 置位，让 handle 的 catch 把本轮 abort 识别为"暂停"而非"停止/错误"。 */
   private pausing = false;
   /** 暂停时扣住的信封消息（连同 onComplete），续跑时重投。null=未暂停。 */
   private pausedMsg: QueuedMessage | null = null;
   /** 本轮正在服务的 contact 源节点 ID（非 contact 轮为 null）。反向联络死锁提示分流用。 */
   private currentContactFrom: string | null = null;
+  private readonly usage: TokenUsageRecorder;
+  private lastRequestEstimate?: number;
+  private compactionNotice?: string;
 
   constructor(opts: NodeRunnerOpts) {
     this.opts = opts;
-    this.events = new NodeEventEmitter(opts.nodeId);
+    this.events = new NodeEventEmitter(opts.nodeId,
+      { workflowId: opts.workflowId, executionId: opts.executionId });
+    this.usage = new TokenUsageRecorder(opts.persistDir
+      ? path.join(opts.persistDir, 'usage.json') : undefined);
     this.messages.push({ role: 'system', content: opts.systemPrompt });
   }
 
   isBusy(): boolean { return this.busy; }
+  getAgentId(): string { return this.opts.agentId; }
+  getIdentity(): { workflowId: string; executionId: string } {
+    return { workflowId: this.opts.workflowId, executionId: this.opts.executionId };
+  }
   getMessages(): readonly ContextMessage[] { return this.messages; }
+  getRoundIdentity(): NodeRoundIdentity | null {
+    return this.roundIdentity ? { ...this.roundIdentity } : null;
+  }
   /** 本轮正在服务的 contact 源节点 ID（非 contact 轮为 null）——反向联络死锁提示分流用。 */
   getCurrentContactFrom(): string | null { return this.currentContactFrom; }
+
+  getRuntimeState(): NodeRuntimeState {
+    return {
+      busy: this.busy,
+      paused: this.isPaused(),
+      roundSource: this.pausedMsg?.source ?? this.currentRoundSource,
+      ...(this.roundIdentity ? { runId: this.roundIdentity.runId } : {}),
+    };
+  }
 
   /**
    * 订阅对账快照：已提交 messages（去首条 system）+ 当前轮事件日志 + busy + lastSeq。
@@ -191,8 +235,14 @@ export class NodeRunner {
       roundLog: this.events.getRoundLog(),
       busy: this.busy,
       roundSource: this.pausedMsg?.source ?? this.currentRoundSource,
+      ...(this.roundIdentity ? {
+        runId: this.roundIdentity.runId,
+        roundStartedAt: this.roundIdentity.startedAt,
+      } : {}),
       paused: this.isPaused(),
       lastSeq: this.events.lastSeq,
+      tokenUsage: this.usage.state,
+      ...(this.compactionNotice ? { compactionNotice: this.compactionNotice } : {}),
     };
   }
 
@@ -205,8 +255,8 @@ export class NodeRunner {
     return this.busy && this.currentRoundSource === 'human' && this.roundAbort !== null;
   }
 
-  abortRound(): boolean {
-    if (!this.canAbortRound()) return false;
+  abortRound(runId: string): boolean {
+    if (!this.canAbortRound() || this.roundIdentity?.runId !== runId) return false;
     this.roundAbort!.abort();
     return true;
   }
@@ -217,8 +267,9 @@ export class NodeRunner {
    * 本轮已攒的 draft 条目丢失、token 沉没），不是断点续传。
    * @returns 是否成功进入暂停（仅 busy 时有效）
    */
-  pause(): boolean {
-    if (!this.busy || !this.roundAbort || this.currentRoundSource === 'human') return false;
+  pause(runId: string): boolean {
+    if (!this.busy || !this.roundAbort || this.currentRoundSource === 'human'
+      || this.roundIdentity?.runId !== runId) return false;
     this.pausing = true;
     this.roundAbort.abort();
     return true;
@@ -244,17 +295,13 @@ export class NodeRunner {
   async flush(): Promise<void> { await this.persist(); }
 
   /**
-   * 追加一条 system 消息到当前上下文末尾。
+   * 追加一条可压缩的运行事实到当前上下文末尾。
    * 用于运行时注入跨节点事件（例如：会议结束后广播纪要给已激活的参与者节点）。
    * 与 push() 不同：不进队列、不触发 LLM 调用、立刻可见于下一次对话。
    */
   appendSystemMessage(content: string): void {
-    const normalized = normalizeSystemMessages([
-      ...this.messages,
-      { role: 'system', content },
-    ]);
-    this.messages.length = 0;
-    this.messages.push(...normalized);
+    // Runtime facts belong to compactable history, not permanent system instructions.
+    this.messages.push({ role: 'user', content: `[系统信息：工作流记录]\n${content}` });
     void this.persist();
   }
 
@@ -293,18 +340,27 @@ export class NodeRunner {
   private async handle(msg: QueuedMessage): Promise<void> {
     this.busy = true;
     this.currentRoundSource = msg.source;
+    if (msg.source === 'human') this.compactionNotice = undefined;
     this.events.beginRound();
     this.roundAbort = new AbortController();
+    const roundIdentity: NodeRoundIdentity = {
+      runId: `tradewind-node-round-${randomUUID()}`,
+      source: msg.source,
+      startedAt: new Date().toISOString(),
+    };
+    this.roundIdentity = roundIdentity;
     // 本轮若在服务某方的 contact，记下其源节点——供反向联络的死锁提示区分措辞
     this.currentContactFrom = msg.source === 'contact' ? (msg.contactFrom ?? null) : null;
     let reasoningContent = '';
     const emit = (ev: NodeRunnerEvent) => {
+      if (ev.type === 'compaction-notice') this.compactionNotice = ev.message;
       if (ev.type === 'reasoning') reasoningContent += ev.content;
       this.events.emit(ev);
     };
+    emit({ type: 'round-start', ...roundIdentity });
 
     // 追加 user message 到上下文（续跑重投的消息除外——原消息已在上下文里）
-    if (!msg._resume) {
+    if (!msg._resume && !(msg.source === 'human' && msg.content.trim() === '/compact')) {
       this.messages.push({ role: 'user', content: msg.content });
       // 通知前端（人类消息由 send() 自行插入，无需重复推送）
       if (msg.source !== 'human') {
@@ -313,6 +369,11 @@ export class NodeRunner {
     }
 
     try {
+      if (msg.source === 'human' && msg.content.trim() === '/compact') {
+        await compactNodeManually(this.compactionOptions(emit));
+        emit({ type: 'done', outcome: 'completed' });
+        return;
+      }
       const result = await this.runReAct(emit, msg.source);
       resolveTradewindTermination(result.termination, result.autoOutcome);
       // 追加 assistant 回复到上下文
@@ -337,8 +398,6 @@ export class NodeRunner {
       // 实时持久化
       await this.persist();
 
-      // 压缩检查（轮次完整结束后）
-      await this.checkAndCompact(result.lastPromptTokens, emit);
     } catch (e) {
       const isAbort = (e as Error).name === 'AbortError';
       const carriesEnvelope = (msg.source === 'envelope' || msg.source === 'contact') && !!msg.onComplete;
@@ -369,6 +428,7 @@ export class NodeRunner {
       this.busy = false;
       this.currentRoundSource = null;
       this.roundAbort = null;
+      if (this.roundIdentity?.runId === roundIdentity.runId) this.roundIdentity = null;
     }
   }
 
@@ -382,32 +442,24 @@ export class NodeRunner {
     } catch { /* 持久化失败不阻塞 */ }
   }
 
-  /** 压缩检查 + 执行 */
-  private async checkAndCompact(
-    lastPromptTokens: number | undefined,
-    emit: (ev: NodeRunnerEvent) => void,
-  ): Promise<void> {
-    if (!this.opts.compactArchiveDir) return;
-
-    const compacted = await compactIfNeeded(
-      this.messages,
-      lastPromptTokens,
-      this.compactState,
-      {
-        dataDir: this.opts.dataDir,
-        model: this.opts.model,
-        archiveDir: this.opts.compactArchiveDir,
-        threshold: AGENT_COMPACT_THRESHOLD,
-        onEvent: (ev) => {
-          if (ev.type === 'compact-start') emit({ type: 'compact-start' });
-          if (ev.type === 'compact-done') emit({ type: 'compact-done', archivedRounds: ev.archivedRounds, summaryLength: ev.summaryLength });
-          if (ev.type === 'compact-warn') emit({ type: 'compact-warn', message: ev.message });
-        },
-      },
-    );
-
-    // 压缩后重新持久化
-    if (compacted) await this.persist();
+  private compactionOptions(emit: (ev: NodeRunnerEvent) => void) {
+    return { dataDir: this.opts.dataDir, model: this.opts.model,
+      scopeKey: `tradewind:${this.opts.executionId}:${this.opts.nodeId}`,
+      archiveDir: this.opts.compactArchiveDir ?? path.join(this.opts.persistDir
+        ?? path.join(this.opts.dataDir, 'tradewind', 'compaction'), 'bak'),
+      messages: this.messages, emit,
+      initialPromptTokens: this.usage.state.latest?.promptTokens,
+      initialEstimateTokens: this.lastRequestEstimate,
+      prompt: this.opts.compactionPrompt,
+      identity: { workflowId: this.opts.workflowId, executionId: this.opts.executionId,
+        nodeId: this.opts.nodeId, agentId: this.opts.agentId },
+      signal: this.roundAbort ? AbortSignal.any([this.opts.signal, this.roundAbort.signal]) : this.opts.signal,
+      recordEstimate: (estimate: number) => { this.lastRequestEstimate = estimate; },
+      persist: async (messages: ContextMessage[]) => {
+        if (!this.opts.persistDir) return;
+        await fs.mkdir(this.opts.persistDir, { recursive: true });
+        await atomicWriteFile(path.join(this.opts.persistDir, 'messages.json'), JSON.stringify(messages));
+      } };
   }
 
   /**
@@ -444,9 +496,9 @@ export class NodeRunner {
         // 自动模式信封工具（增/删/扫 + complete_task）：服务端内联执行，改本轮草稿
         if (draft && (ENVELOPE_TOOL_NAMES as readonly string[]).includes(tool)) {
           emit({ type: 'tool-call', tool, args });
-          const result = execEnvelopeTool(draft, tool, args);
-          emit({ type: 'tool-result', tool, result, ok: true });
-          return result;
+          const outcome = execEnvelopeToolOutcome(draft, tool, args);
+          emit({ type: 'tool-result', tool, result: outcome.result, ok: outcome.ok });
+          return outcome;
         }
         if (tool === 'delegate') {
           return execDelegate(this.opts, args, emit);
@@ -464,19 +516,19 @@ export class NodeRunner {
           } catch (e) {
             const err = `记忆工具执行失败: ${(e as Error).message}`;
             emit({ type: 'tool-result', tool, result: err, ok: false });
-            return err;
+            return { result: err, ok: false };
           }
         }
         emit({ type: 'tool-call', tool, args });
         try {
           let meta: unknown;
-          const result = await this.execTool(tool, args, (m) => { meta = m; });
-          emit({ type: 'tool-result', tool, result, ok: true, meta });
-          return result;
+          const outcome = await this.execTool(tool, args, (m) => { meta = m; });
+          emit({ type: 'tool-result', tool, result: outcome.result, ok: outcome.ok, meta });
+          return outcome;
         } catch (e) {
           const err = `工具执行失败: ${(e as Error).message}`;
           emit({ type: 'tool-result', tool, result: err, ok: false });
-          return err;
+          return { result: err, ok: false };
         }
       },
     };
@@ -505,15 +557,18 @@ export class NodeRunner {
           toolDefs: nativeToolDefs,
           toolCaller,
           onEvent: emit,
+          onUsageResolved: usage => this.usage.record(usage).then(() => undefined),
+          llmTransform: llm => nodeCompactionCaller(llm, this.compactionOptions(emit)),
           signal: combinedAbort.signal,
           completion: envelopeRound ? { tool: COMPLETE_TASK_TOOL } : undefined,
         });
       }
 
       // 文本路径（保持不变）
+      const usageRecorder = this.usage;
       const llm: LLMCaller = {
         async call(msgs, _options, onChunk, sig, onReasoning) {
-          return callLLM({
+          return captureTokenUsage(() => callLLM({
             dataDir,
             fullModelKey: model,
             messages: msgs,
@@ -521,13 +576,14 @@ export class NodeRunner {
             onChunk,
             signal: sig,
             onReasoning,
-          });
+          }), usage => usageRecorder.record(usage));
         },
       };
 
       return await runReActLoop({
         messages: [...this.messages],
         llm,
+        llmTransform: caller => nodeCompactionCaller(caller, this.compactionOptions(emit)),
         // 即使 Agent 没配置普通工具，信风仍有记忆、contact 和信封工具。
         tools: toolCaller,
         allowedTools: [
@@ -542,6 +598,7 @@ export class NodeRunner {
         onEvent: (ev) => {
           if (ev.type === 'token') emit({ type: 'token', content: ev.chunk });
           if (ev.type === 'reasoning') emit({ type: 'reasoning', content: ev.chunk });
+          if (ev.type === 'usage') emit({ type: 'usage', usage: ev.usage });
         },
         signal: combinedAbort.signal,
       });
@@ -551,8 +608,8 @@ export class NodeRunner {
   }
 
   /** 执行普通工具 */
-  private async execTool(tool: string, args: Record<string, string>, onMeta?: (meta: unknown) => void): Promise<string> {
-    return execToolUnified({
+  private async execTool(tool: string, args: Record<string, string>, onMeta?: (meta: unknown) => void) {
+    return execToolUnifiedOutcome({
       tool,
       args,
       agentId: this.opts.agentId,

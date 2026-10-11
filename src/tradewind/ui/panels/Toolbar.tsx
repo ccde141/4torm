@@ -17,6 +17,7 @@ const PHASE_KEY: Record<ExecutionPhase, MessageKey> = {
 interface ToolbarProps {
   workflowId: string;
   workflowName: string;
+  activeWorkflowId?: string | null;
   running: boolean;
   phase: ExecutionPhase;
   saveTime: number | null;
@@ -30,9 +31,9 @@ interface ToolbarProps {
 }
 
 export function Toolbar({
-  workflowId, workflowName, running, phase, saveTime, onRun, onOpenProfiles, onStop, onSave, onOpenWorkspace, onSetWorkflowName, onLoadList,
+  workflowId, workflowName, activeWorkflowId, running, phase, saveTime, onRun, onOpenProfiles, onStop, onSave, onOpenWorkspace, onSetWorkflowName, onLoadList,
 }: ToolbarProps) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(workflowName);
   const [showSaved, setShowSaved] = useState(false);
@@ -94,6 +95,11 @@ export function Toolbar({
         </button>
         {showSaved && saveTime && (
           <span className="tw-toolbar__saved-hint">{t('tradewind.toolbar.savedAt', { time: formatTime(saveTime) })}</span>
+        )}
+        {running && activeWorkflowId && activeWorkflowId !== workflowId && (
+          <span className="tw-toolbar__saved-hint" role="status">
+            {locale === 'zh-CN' ? `运行中：${activeWorkflowId}` : `Running: ${activeWorkflowId}`}
+          </span>
         )}
         {running ? (
           <button className="tw-toolbar__btn tw-toolbar__btn--stop" onClick={onStop}>

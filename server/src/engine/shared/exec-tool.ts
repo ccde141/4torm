@@ -9,8 +9,35 @@
  */
 
 import { readToolBridgeResponse } from './tool-bridge-response';
+import { readFileSync } from 'node:fs';
+import { Agent, fetch as undiciFetch } from 'undici';
+import type { McpToolOutcome } from './mcp-types.js';
 
-const TOOL_BRIDGE_URL = (process.env.TOOL_BRIDGE_URL || 'http://localhost:3001').replace(/\/+$/, '');
+let trustedBridge: { identity: string; agent: Agent } | undefined;
+
+function bridgeDispatcher(): Agent {
+  const certFile = process.env.FOURTORM_INTERNAL_CERT_FILE;
+  if (!certFile) throw new Error('内部工具桥接缺少 TLS 证书');
+  const servername = process.env.FOURTORM_INTERNAL_SERVERNAME || 'localhost';
+  const identity = `${certFile}\0${servername}`;
+  if (trustedBridge?.identity === identity) return trustedBridge.agent;
+  const agent = new Agent({ connect: { ca: readFileSync(certFile), servername } });
+  trustedBridge = { identity, agent };
+  return agent;
+}
+
+const bridgeFetch: typeof fetch = async (input, init) => {
+  if (init?.body !== undefined && typeof init.body !== 'string') {
+    throw new Error('内部工具桥接只接受 JSON 文本请求');
+  }
+  return undiciFetch(String(input), {
+    method: init?.method,
+    headers: Object.fromEntries(new Headers(init?.headers)),
+    body: init?.body ?? undefined,
+    signal: init?.signal ?? undefined,
+    dispatcher: bridgeDispatcher(),
+  }) as unknown as Promise<Response>;
+};
 
 export interface ExecToolOpts {
   tool: string;
@@ -28,6 +55,7 @@ export interface ExecToolOpts {
 
 export interface ExecToolDeps {
   callMcp: (tool: string, args: Record<string, string>) => Promise<string>;
+  callMcpOutcome?: (tool: string, args: Record<string, string>) => Promise<McpToolOutcome>;
   fetcher: typeof fetch;
 }
 
@@ -36,25 +64,32 @@ const defaultDeps: ExecToolDeps = {
     const { callMcpTool } = await import('./mcp-manager.js');
     return callMcpTool(tool, args);
   },
-  fetcher: fetch,
+  callMcpOutcome: async (tool, args) => {
+    const { callMcpToolOutcome } = await import('./mcp-manager.js');
+    return callMcpToolOutcome(tool, args);
+  },
+  fetcher: bridgeFetch,
 };
 
 export async function execToolUnified(
   opts: ExecToolOpts,
   deps: ExecToolDeps = defaultDeps,
 ): Promise<string> {
+  if (opts.tool.startsWith('mcp:')) return deps.callMcp(opts.tool, opts.args);
+  return (await execLocalToolBridge(opts, deps)).result;
+}
+
+async function execLocalToolBridge(
+  opts: ExecToolOpts, deps: ExecToolDeps,
+): Promise<McpToolOutcome> {
   const {
     tool, args, agentId, workspaceDir, sandboxLevel, signal,
     onMeta, onObservationId, observation,
   } = opts;
 
-  // MCP 工具：直接走 MCP client
-  if (tool.startsWith('mcp:')) {
-    return deps.callMcp(tool, args);
-  }
-
   // 本地工具：走 tool-bridge HTTP
-  const url = `${TOOL_BRIDGE_URL}/api/tools/exec`;
+  const baseUrl = (process.env.TOOL_BRIDGE_URL || `https://localhost:${process.env.PORT || '3001'}`).replace(/\/+$/, '');
+  const url = `${baseUrl}/api/tools/exec`;
   const body: Record<string, any> = { tool, args, agentId };
   if (workspaceDir) body.workspaceDirOverride = workspaceDir;
   if (sandboxLevel) body.sandboxLevelOverride = sandboxLevel;
@@ -70,5 +105,16 @@ export async function execToolUnified(
   const data = await readToolBridgeResponse(res);
   if (data.meta !== undefined && data.meta !== null) onMeta?.(data.meta);
   if (data.observationId) onObservationId?.(data.observationId);
-  return data.result;
+  return { result: data.result, ok: data.ok };
+}
+
+/** Status-aware route for ToolCaller; the string API above remains available. */
+export async function execToolUnifiedOutcome(
+  opts: ExecToolOpts, deps: ExecToolDeps = defaultDeps,
+): Promise<McpToolOutcome> {
+  if (opts.tool.startsWith('mcp:')) {
+    if (deps.callMcpOutcome) return deps.callMcpOutcome(opts.tool, opts.args);
+    return { result: await deps.callMcp(opts.tool, opts.args), ok: true };
+  }
+  return execLocalToolBridge(opts, deps);
 }

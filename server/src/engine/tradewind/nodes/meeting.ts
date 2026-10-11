@@ -32,12 +32,13 @@ import {
 } from '../execution/meeting-session';
 import type { MeetingEndResult } from '../execution/meeting-handlers';
 import { handleMeetingOpen } from '../execution/meeting-handlers';
-import { broadcastToMeeting } from '../streaming/meeting-broadcast';
+import { broadcastToMeeting, setMeetingIdentity, clearMeetingIdentity } from '../streaming/meeting-broadcast';
 import { appendNodeContext } from '../foundation/node-context-store';
 import { markEnvelopePending, markEnvelopeDone } from '../foundation/node-status-store';
 import { activeNodeRunners } from './agent';
 import { EnvelopeDraft } from '../execution/envelope-draft';
 import path from 'node:path';
+import { getMeetingUsageFileName, getMeetingsDir } from '../foundation/archive-paths.js';
 
 /** 活跃会议注册表：nodeId → { session, resolve } */
 export interface ActiveMeeting {
@@ -46,6 +47,7 @@ export interface ActiveMeeting {
   configuredParticipants: MeetingParticipant[];
   resolve: (result: MeetingEndResult) => void;
   executionId: string;
+  workflowId: string;
   dataDir: string;
   /** 执行归档目录 */
   runDir: string;
@@ -54,8 +56,8 @@ export interface ActiveMeeting {
   signal: AbortSignal;
   /** 当前轮次的 AbortController——中断当前 speak 用 */
   roundAbort: AbortController | null;
-  /** 压缩状态 */
-  compactState: { disabled: boolean; archiveSeq: number };
+  /** 当前公共发言轮次身份；用来阻止旧停止请求误伤新一轮。 */
+  roundIdentity: { runId: string; startedAt: string } | null;
   /** 压缩归档目录 */
   compactArchiveDir: string;
   /** 团队名册（纪要注入用） */
@@ -151,6 +153,7 @@ export class MeetingExecutor implements NodeExecutor {
       chairAgentId: config.chairAgentId,
       participants,
       topic,
+      usageFile: path.join(getMeetingsDir(ctx.runDir), getMeetingUsageFileName(ctx.nodeId)),
     });
 
     ctx.emit(BUILTIN_EVENT_IDS.MEETING_START, {
@@ -178,15 +181,17 @@ export class MeetingExecutor implements NodeExecutor {
       configuredParticipants: participants,
       resolve: endResolve!,
       executionId: ctx.executionId,
+      workflowId: ctx.workflowId,
       dataDir: ctx.dataDir,
       runDir: ctx.runDir,
       workspace: workspaceRel,
       signal: ctx.signal,
       roundAbort: null,
-      compactState: { disabled: false, archiveSeq: 0 },
+      roundIdentity: null,
       compactArchiveDir,
       teamRoster,
     });
+    setMeetingIdentity(ctx.nodeId, ctx.workflowId, ctx.executionId);
 
     // 入会摘要阶段（信封注入 + 全员摘要发言）
     // 通过 /events SSE 推送 token 级进度
@@ -206,12 +211,14 @@ export class MeetingExecutor implements NodeExecutor {
         },
       });
     } catch (e) {
-      activeMeetings.delete(ctx.nodeId);
+      if (activeMeetings.get(ctx.nodeId)?.executionId === ctx.executionId) activeMeetings.delete(ctx.nodeId);
+      clearMeetingIdentity(ctx.nodeId, ctx.executionId);
       if ((e as Error).name === 'AbortError') return;
       throw e;
     }
     if (ctx.signal.aborted) {
-      activeMeetings.delete(ctx.nodeId);
+      if (activeMeetings.get(ctx.nodeId)?.executionId === ctx.executionId) activeMeetings.delete(ctx.nodeId);
+      clearMeetingIdentity(ctx.nodeId, ctx.executionId);
       return;
     }
 

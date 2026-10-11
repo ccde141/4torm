@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { ToolCall } from '../../types';
 import { phaseFromExecutionStatus, phasePresentation, type ExecutionPhase } from '../../tradewind/ui/hooks/execution-phase';
+import { executionUpdateFromProbe } from '../../tradewind/ui/hooks/execution-sync';
 import { useLocale } from '../../i18n/LocaleContext';
+import { inspectOperation } from '../../api/collaboration';
 
 type Execution = NonNullable<ToolCall['workflowExecution']>;
 
@@ -18,14 +20,17 @@ export default function WorkflowExecutionCard({ execution, timestamp }: {
   }[phase];
 
   useEffect(() => {
+    if (phase !== 'running') return;
     let disposed = false;
     const sync = async () => {
       try {
-        const response = await fetch('/api/tradewind/status');
-        if (!response.ok) return;
-        const data = await response.json() as { running: boolean; executionId?: string; outcome?: 'done' | 'stopped' | 'error' };
-        if (!disposed && data.executionId === execution.executionId) {
-          setPhase(current => phaseFromExecutionStatus(data, current));
+        const fact = await inspectOperation(
+          'tradewind', execution.workflowId, execution.executionId,
+        );
+        if (!disposed) {
+          const update = executionUpdateFromProbe(fact);
+          setPhase(current => update.terminalPhase
+            ?? phaseFromExecutionStatus(update, current));
         }
       } catch {
         // 保留上一次真实状态，下一次轮询再对账。
@@ -34,7 +39,7 @@ export default function WorkflowExecutionCard({ execution, timestamp }: {
     void sync();
     const id = setInterval(() => { void sync(); }, 2_000);
     return () => { disposed = true; clearInterval(id); };
-  }, [execution.executionId]);
+  }, [execution.executionId, execution.workflowId, phase]);
 
   return (
     <div className="chat__message chat__message--assistant chat__message--tool">

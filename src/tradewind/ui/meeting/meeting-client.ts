@@ -8,6 +8,17 @@
  */
 
 import { errorFromResponse, type FrameworkErrorKind } from '../../../api/error-contract';
+import { invokeFeature } from '../../../api/collaboration';
+import { requirePanelIdentity } from '../stream/panel-identity';
+import type { ExecutionIdentity } from '../hooks/execution-visibility';
+import type { ProviderUsage } from '../token-usage';
+
+export interface MeetingTokenUsage {
+  calls: number;
+  reportedCalls: number;
+  latest: ProviderUsage | null;
+  total: ProviderUsage;
+}
 
 export type ToolStepStatus = 'running' | 'done' | 'error';
 
@@ -45,8 +56,11 @@ export interface MeetingChairMessage {
 
 export interface MeetingStatus {
   nodeId: string;
+  workflowId: string;
+  executionId: string;
   round: number;
   busy: boolean;
+  runId?: string;
   /** opening=入会摘要；discussion=讨论；ending=会议助理整理纪要；ended=会议结束 */
   phase?: 'opening' | 'discussion' | 'ending' | 'ended';
   messageCount: number;
@@ -57,13 +71,17 @@ export interface MeetingStatus {
   chairMessages?: MeetingChairMessage[];
   /** 正在流式产出的消息（面板关了再开时 replay 用） */
   streamingCurrent?: { speaker: string; content: string; reasoning?: string } | null;
+  tokenUsage?: MeetingTokenUsage;
+  compactionNotice?: string;
 }
 
 export type MeetingBroadcastEvent =
-  | { type: 'connected'; phase: string; round: number; messages: MeetingMessage[]; chairMessages: MeetingChairMessage[]; participants: MeetingParticipant[]; configuredParticipants: MeetingParticipant[] }
+  | { type: 'connected'; phase: string; round: number; runId?: string; messages: MeetingMessage[]; chairMessages: MeetingChairMessage[]; participants: MeetingParticipant[]; configuredParticipants: MeetingParticipant[]; tokenUsage?: MeetingTokenUsage; compactionNotice?: string }
+  | { type: 'round-start'; runId: string; startedAt: string }
   | { type: 'agent-start'; label: string }
   | { type: 'token'; label: string; chunk: string }
   | { type: 'reasoning'; label: string; chunk: string }
+  | { type: 'usage'; usage: ProviderUsage | null; tokenUsage: MeetingTokenUsage; label?: string }
   | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
   | { type: 'tool-result'; label: string; tool: string; result: string; meta?: { before?: string } }
   | { type: 'heartbeat'; label: string; phase?: string; elapsed?: number }
@@ -81,81 +99,58 @@ export type MeetingBroadcastEvent =
   | { type: 'compact-start' }
   | { type: 'compact-done'; archivedRounds?: number; summaryLength?: number }
   | { type: 'compact-warn'; message: string }
+  | { type: 'compaction-notice'; message: string }
+  | { type: 'compaction-notice-clear' }
+  | { type: 'history-updated'; messages: MeetingMessage[]; chairMessages: MeetingChairMessage[] }
   | { type: 'done'; messages: Array<{ role: string; content: string }> }
   | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind };
 
 
 /** 发送公共发言（fire-and-forget，事件通过 /events 流返回） */
-export async function sendSpeak(nodeId: string, message: string, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }> {
-  const res = await fetch(`/api/tradewind/meeting/${nodeId}/speak`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
-    signal,
-  });
-  if (res.ok) return { ok: true };
-  const error = await errorFromResponse(res);
-  return { ok: false, error: error.message };
+export async function sendSpeak(
+  executionId: string, nodeId: string, message: string,
+): Promise<{ ok: boolean; error?: string }> {
+  await invokeFeature('tradewind', 'speakMeeting', { executionId, nodeId, message });
+  return { ok: true };
 }
 
 /** 发送会议助理私聊（fire-and-forget，事件通过 /events 流返回） */
-export async function sendChair(nodeId: string, message: string, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }> {
-  const res = await fetch(`/api/tradewind/meeting/${nodeId}/chair`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
-    signal,
-  });
-  if (res.ok) return { ok: true };
-  const error = await errorFromResponse(res);
-  return { ok: false, error: error.message };
+export async function sendChair(
+  executionId: string, nodeId: string, message: string,
+): Promise<{ ok: boolean; error?: string }> {
+  await invokeFeature('tradewind', 'messageMeetingChair', { executionId, nodeId, message });
+  return { ok: true };
 }
 
 /** 人类结束会议 → 会议助理生成纪要 */
-export async function endMeeting(nodeId: string): Promise<{ minutes: string }> {
-  const res = await fetch(`/api/tradewind/meeting/${nodeId}/end`, {
-    method: 'POST',
-  });
-  if (!res.ok) throw await errorFromResponse(res);
-  return res.json();
+export function endMeeting(executionId: string, nodeId: string): Promise<{ minutes: string }> {
+  return invokeFeature('tradewind', 'endMeeting', { executionId, nodeId });
 }
 
 /** 获取会议状态 */
-export async function getStatus(nodeId: string): Promise<MeetingStatus> {
+export async function getStatus(nodeId: string, identity: ExecutionIdentity): Promise<MeetingStatus> {
   const res = await fetch(`/api/tradewind/meeting/${nodeId}/status`);
   if (!res.ok) throw await errorFromResponse(res);
-  return res.json();
+  return requirePanelIdentity(await res.json() as MeetingStatus, identity);
 }
 
 /** 动态加入参与者（按节点 ID） */
-export async function joinMeeting(nodeId: string, participantNodeId: string): Promise<{ participants: MeetingParticipant[] }> {
-  const res = await fetch(`/api/tradewind/meeting/${nodeId}/join`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ participantNodeId }),
-  });
-  if (!res.ok) throw await errorFromResponse(res);
-  return res.json();
+export function joinMeeting(
+  executionId: string, nodeId: string, participantNodeId: string,
+): Promise<{ participants: MeetingParticipant[] }> {
+  return invokeFeature('tradewind', 'joinMeeting', { executionId, nodeId, participantNodeId });
 }
 
 /** 动态移除参与者（按节点 ID） */
-export async function leaveMeeting(nodeId: string, participantNodeId: string): Promise<{ participants: MeetingParticipant[] }> {
-  const res = await fetch(`/api/tradewind/meeting/${nodeId}/leave`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ participantNodeId }),
-  });
-  if (!res.ok) throw await errorFromResponse(res);
-  return res.json();
+export function leaveMeeting(
+  executionId: string, nodeId: string, participantNodeId: string,
+): Promise<{ participants: MeetingParticipant[] }> {
+  return invokeFeature('tradewind', 'leaveMeeting', { executionId, nodeId, participantNodeId });
 }
 
 /** 调整参与者顺序（按节点 ID 数组） */
-export async function reorderMeeting(nodeId: string, order: string[]): Promise<{ participants: MeetingParticipant[] }> {
-  const res = await fetch(`/api/tradewind/meeting/${nodeId}/reorder`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ order }),
-  });
-  if (!res.ok) throw await errorFromResponse(res);
-  return res.json();
+export function reorderMeeting(
+  executionId: string, nodeId: string, order: string[],
+): Promise<{ participants: MeetingParticipant[] }> {
+  return invokeFeature('tradewind', 'reorderMeeting', { executionId, nodeId, order });
 }

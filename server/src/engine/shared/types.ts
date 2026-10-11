@@ -52,6 +52,8 @@ export interface ContextMessage {
   toolCalls?: NativeToolCall[];
   /** tool 结果消息携带的配对 id（role=tool 时） */
   toolCallId?: string;
+  /** tool 结果的真实执行状态；旧历史缺失时保持可选。 */
+  toolOk?: boolean;
 }
 
 /** LLM 调用选项（最小够用） */

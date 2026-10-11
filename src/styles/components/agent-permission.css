@@ -1,0 +1,24 @@
+.agent-permission__options { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.agent-permission__option,
+.agent-detail__content .agent-permission__option {
+  display: inline-flex; align-items: center; gap: 9px; min-height: 44px;
+  color: var(--color-text-secondary); background: rgba(255,255,255,.045);
+  border: 1px solid var(--glass-border); font-weight: 500;
+}
+.agent-permission__mark { display: grid; place-items: center; width: 17px; height: 17px;
+  flex: none; border: 1px solid rgba(171,188,211,.55); border-radius: 50%;
+  color: transparent; font: 700 11px var(--font-sans); }
+.agent-permission__option--selected,
+.agent-detail__content .agent-permission__option--selected {
+  color: #eaf3ff; border-color: #91bcfa;
+  background: rgba(70,129,215,.24);
+  box-shadow: inset 0 0 0 1px rgba(145,188,250,.23), 0 0 18px rgba(69,125,207,.12);
+  font-weight: 700;
+}
+.agent-permission__option--selected .agent-permission__mark {
+  color: #11213a; background: #a8cbff; border-color: #a8cbff;
+}
+.agent-permission__option--selected:hover,
+.agent-detail__content .agent-permission__option--selected:hover {
+  color: #fff; border-color: #b7d5ff; background: rgba(70,129,215,.3);
+}

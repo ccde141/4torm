@@ -8,7 +8,9 @@ export interface TeamReport {
   id: string; memberId: string; runId?: string; task: string; outcome: string; content: string; acknowledged: boolean;
   review?: { decision: 'accepted' | 'continue' | 'blocked'; reason: string };
 }
-export interface TeamSnapshot { revision: number; members: TeamMember[]; reports: TeamReport[] }
+export interface TeamSnapshot {
+  revision: number; members: TeamMember[]; reports: TeamReport[]; truncated: boolean;
+}
 export function memberStatus(member: TeamMember, reports: TeamReport[] = []): MemberStatus {
   if (member.lifecycle === 'dismissed') return 'dismissed';
   if (member.run?.status === 'running') return 'running';

@@ -1,13 +1,18 @@
 import { useLocale } from '../../i18n/LocaleContext';
 
-const AGENT_CONFIG_TABS = ['basic', 'prompt', 'skills'] as const;
+export const AGENT_CONFIG_TABS = ['basic', 'prompt', 'tools', 'skills'] as const;
 export type AgentConfigTab = typeof AGENT_CONFIG_TABS[number];
 
-const TAB_LABELS = {
+export const AGENT_CONFIG_TAB_LABELS = {
   basic: 'agent.tabBasic',
   prompt: 'agent.tabPrompt',
+  tools: 'agent.tabTools',
   skills: 'agent.tabSkills',
 } as const;
+
+export function isAgentConfigTab(value: string): value is AgentConfigTab {
+  return (AGENT_CONFIG_TABS as readonly string[]).includes(value);
+}
 
 interface Props {
   active: AgentConfigTab;
@@ -26,7 +31,7 @@ export default function AgentConfigTabs({ active, onChange }: Props) {
           color: active === tab ? 'var(--color-text)' : 'var(--color-text-tertiary)',
           fontSize: 'var(--text-sm)', fontWeight: active === tab ? 'var(--font-semibold)' : 'var(--font-normal)',
           cursor: 'pointer', marginBottom: '-1px',
-        }}>{t(TAB_LABELS[tab])}</button>
+        }}>{t(AGENT_CONFIG_TAB_LABELS[tab])}</button>
       ))}
     </div>
   );

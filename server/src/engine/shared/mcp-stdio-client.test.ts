@@ -14,7 +14,8 @@ input.on('line', line => {
   let result;
   if (message.method === 'initialize') result = { protocolVersion: '2024-11-05' };
   else if (message.method === 'tools/list') result = { tools: [{ name: 'inspect', description: 'Inspect', inputSchema: { type: 'object' } }] };
-  else result = { content: [{ type: 'text', text: process.argv[2] + '|' + process.cwd() }] };
+  else result = { content: [{ type: 'text', text: process.argv[2] + '|' + process.cwd() }],
+    isError: message.params.arguments.fail === true };
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\\n');
 });
 `;
@@ -35,4 +36,7 @@ test('stdio 保持含空格参数并使用配置的 cwd', async t => {
   await client.connect();
   const result = await client.callTool('inspect', {});
   assert.equal(result, `value with spaces|${directory}`);
+  assert.deepEqual(await client.callToolOutcome('inspect', { fail: true }), {
+    result: `value with spaces|${directory}`, ok: false,
+  });
 });

@@ -193,6 +193,20 @@
   object-fit: contain;
 }
 
+.chat__message-image-missing {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--border-radius-md);
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-secondary);
+  font-size: var(--text-xs);
+}
+
 /* 回到底部按钮：仅在用户上滑脱离跟随时出现 */
 .chat__jump-bottom {
   position: absolute;

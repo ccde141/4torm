@@ -89,11 +89,10 @@ data/
 ├── tradewind/
 │   ├── workflows/
 │   │   └── {workflowId}/
-│   │       ├── graph.json
-│   │       ├── meta.json
+│   │       ├── definition.json
 │   │       ├── profiles.json
 │   │       └── workspace/
-│   │               工作流画布、循环档案和共享文件
+│   │               原子工作流定义、循环档案和共享文件
 │   │
 │   └── runs/
 │       └── {workflowId}/
@@ -140,7 +139,7 @@ data/
 ├── providers.template.json
 │       提供商配置模板
 ├── labels.json
-│       用户自定义 Agent 标签
+│       旧版 Agent 分类标签遗留文件；当前版本不读取、不写入
 ├── skin-config.json
 │       当前界面外观配置
 └── skin-textures/

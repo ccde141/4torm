@@ -13,7 +13,7 @@
       "id": "pvd_example",
       "label": "示例服务商",
       "baseUrl": "https://api.example.com",
-      "apiKey": "sk-your-api-key-here",
+      "apiKey": "",
       "models": [
         "example-model-pro",
         "example-model-flash"

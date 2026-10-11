@@ -36,7 +36,9 @@ test('native steering lets the running tool finish, skips remaining calls and pa
       assert.deepEqual(messages.map(message => message.role), ['system', 'assistant', 'tool', 'tool', 'user', 'user']);
       assert.equal(messages[1].reasoningContent, 'original reasoning');
       assert.equal(messages[2].content, 'read finished');
+      assert.equal((messages[2] as ContextMessage & { toolOk?: boolean }).toolOk, true);
       assert.equal(messages[3].toolCallId, 'write');
+      assert.equal((messages[3] as ContextMessage & { toolOk?: boolean }).toolOk, false);
       assert.deepEqual(messages.slice(-2).map(message => message.content), ['Do not write', 'Explain first']);
       return final;
     } },

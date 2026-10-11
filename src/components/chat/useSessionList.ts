@@ -12,7 +12,7 @@ import type { Agent, ChatMessage } from '../../types';
 import type { ChatSession } from '../../store/chat';
 import { streamUrl } from '../../lib/apiBase';
 import { createLatestRequestGuard } from '../../lib/latest-request';
-import { shouldApplySessionRefresh } from './session-list-state';
+import { ensureSessionListRefresher } from './session-list-state';
 import { useLocale } from '../../i18n/LocaleContext';
 import { errorMessage } from '../../api/error-contract';
 
@@ -41,15 +41,16 @@ export function useSessionList(
   const titleInputRef = useRef<HTMLInputElement>(null);
   const sessionRequestGuard = useRef(createLatestRequestGuard());
   const visibleAgentIdRef = useRef<string | null>(selectedAgent?.id ?? null);
+  const listRefresher = useRef<((agentId: string) => Promise<void>) | null>(null);
+  // HMR may retain the old sequence ref in this slot without rerunning the id-based effect.
+  visibleAgentIdRef.current = selectedAgent?.id ?? null;
 
   useEffect(() => {
     visibleAgentIdRef.current = selectedAgent?.id ?? null;
   }, [selectedAgent?.id]);
 
-  const refreshSessions = useCallback(async (agent: Agent) => {
-    const next = await getSessionsByAgent(agent.id);
-    if (shouldApplySessionRefresh(agent.id, visibleAgentIdRef.current)) setSessions(next);
-  }, []);
+  const refreshSessions = useCallback((agent: Agent) => ensureSessionListRefresher(
+    listRefresher, getSessionsByAgent, () => visibleAgentIdRef.current, setSessions)(agent.id), []);
 
   const selectAgent = useCallback((agent: Agent) => {
     sessionRequestGuard.current.cancel();
@@ -92,7 +93,7 @@ export function useSessionList(
     setStreaming(false);
     // 优先从消息缓存上屏（上次完整加载过 —— 由 getSession/saveSession 维护）
     const cachedMsgs = getCachedMessages(sessionId);
-    if (cachedMsgs) setMessages(cachedMsgs);
+    setMessages(cachedMsgs ?? []);
     // 后台读最新磁盘版本校准
     getSession(sessionId).then(s => {
       if (!s || !request.isCurrent()) return;
@@ -122,8 +123,8 @@ export function useSessionList(
     setTimeout(() => titleInputRef.current?.focus(), 0);
   }, [sessions, activeSessionId]);
 
-  const newSession = useCallback(async (agentOverride?: Agent) => {
-    const agent = agentOverride ?? selectedAgent;
+  const newSession = useCallback(async () => {
+    const agent = selectedAgent;
     if (!agent) return;
     // 切走当前会话：其流转入后台继续跑
     if (activeSessionId) streamHooks?.background(activeSessionId);
@@ -185,7 +186,7 @@ export function useSessionList(
     );
 
     try {
-      const res = await fetch(streamUrl('/api/chat/compact'), {
+      const res = await fetch(streamUrl('/api/conversation/compact'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -209,6 +210,7 @@ export function useSessionList(
       let buffer = '';
       let summary = '';
       let compressedCount = 0;
+      let compactionNotice = '';
 
       let receivedDone = false;
 
@@ -232,12 +234,17 @@ export function useSessionList(
                 m.id === tempId ? { ...m, content: translate('chat.compact.generating', { summary }) } : m,
               );
               setMessages(updated);
+            } else if (evt.type === 'compaction-notice') {
+              compactionNotice = String(evt.message ?? '');
+              setMessages(msgsWithTemp.map(m => m.id === tempId
+                ? { ...m, compactionNotice } : m));
             } else if (evt.type === 'done') {
               receivedDone = true;
               const fresh = await getSession(session.id);
               if (fresh) {
-                await saveSession(fresh);
-                setMessages(fresh.messages);
+                setMessages(compactionNotice ? fresh.messages.map((message, index) =>
+                  index === fresh.messages.length - 1 ? { ...message, compactionNotice } : message)
+                  : fresh.messages);
                 setSessions(prev => prev.map(s =>
                   s.id === session.id ? { ...s, updatedAt: fresh.updatedAt, tokenUsage: fresh.tokenUsage } : s,
                 ));
@@ -266,7 +273,6 @@ export function useSessionList(
       if (!receivedDone) {
         const fresh = await getSession(session.id);
         if (fresh) {
-          await saveSession(fresh);
           setMessages(fresh.messages);
           setSessions(prev => prev.map(s =>
             s.id === session.id ? { ...s, updatedAt: fresh.updatedAt, tokenUsage: fresh.tokenUsage } : s,

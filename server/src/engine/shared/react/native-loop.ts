@@ -70,17 +70,30 @@ export interface LLMCaller {
 }
 
 /** 工具调用抽象——调用方注入具体实现 */
+export interface ToolCallOutcome {
+  result: string;
+  ok: boolean;
+  meta?: unknown;
+}
+
+export function normalizeToolCallResult(value: string | ToolCallOutcome): ToolCallOutcome {
+  return typeof value === 'string' ? { result: value, ok: true } : value;
+}
+
 export interface ToolCaller {
-  call(tool: string, args: Record<string, string>, onMeta?: (meta: unknown) => void): Promise<string>;
+  call(
+    tool: string, args: Record<string, string>, onMeta?: (meta: unknown) => void,
+  ): Promise<string | ToolCallOutcome>;
 }
 
 /** ReAct 循环事件（流式推送用） */
 export type ReActStreamEvent =
   | { type: 'token'; chunk: string }
   | { type: 'reasoning'; chunk: string }
+  | { type: 'usage'; usage: TokenUsage | null }
   | ({ type: 'tool-progress' } & ToolPreparationProgress)
   | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string; meta?: unknown }
+  | { type: 'tool-result'; tool: string; result: string; ok?: boolean; meta?: unknown }
   | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | { type: 'error'; message: string };
 
@@ -159,7 +172,7 @@ export interface ReActLoopResult {
   toolCalls: ToolCallRecord[];
   /** 循环轮次数 */
   turns: number;
-  /** 累计 token 用量（所有 LLM 调用之和） */
+  /** 最近一次模型请求的用量；累计消耗由上层逐次 usage 事件计算。 */
   usage?: TokenUsage;
   /** 机器可判定的终态；正文只负责展示，不能再被上层用于推断成功。 */
   termination: ReActTermination;
@@ -201,6 +214,10 @@ export interface ReActLoopResult {
  */
 function completeAnswer(parts: string[], current = ''): string {
   return [...parts, current].map(part => part.trim()).filter(Boolean).join('\n\n');
+}
+
+function toolMessage(toolCallId: string, content: string, toolOk: boolean): ContextMessage {
+  return { role: 'tool', toolCallId, content, toolOk };
 }
 
 export async function runReActLoopNative(params: NativeReActLoopParams): Promise<ReActLoopResult> {
@@ -265,8 +282,11 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       reasoningEnvelope = result.reasoningEnvelope;
       finishReason = result.finishReason;
       toolCalls = result.toolCalls;
-      if (result.usage) latestUsage = result.usage;
+      latestUsage = result.usage;
+      onEvent?.({ type: 'usage', usage: result.usage ?? null });
     } catch (e) {
+      latestUsage = undefined;
+      onEvent?.({ type: 'usage', usage: null });
       if (signal?.aborted) {
         return {
           content: '[中止]', rawContent: '', toolCalls: allToolCalls, turns: turn,
@@ -299,9 +319,9 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       continue;
     }
 
-    // ── 无工具调用 → 模型说完了，content 即交付（决策 3：finish_reason 隐式终结）──
+    // 无工具调用：普通模式交付文本；显式终结模式继续等待终结工具。
     if (!toolCalls || toolCalls.length === 0) {
-      // bug #2：length 截断且有内容 → 是被截断的半句，不能当最终交付，要续写
+      // length 截断且有内容时继续生成，不把半句当最终结果。
       if (finishReason === 'length' && content.trim() && continuations < MAX_CONTINUATIONS) {
         continuations++;
         answerParts.push(content);
@@ -313,7 +333,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
         continue; // 续写不计入 turn 收口
       }
       // 显式终结门（opt-in）：无 tool_call = 没有显式终结，绝不把文本当交付。
-      // 优雅降级三段式（决策修订）：
+      // 未显式终结时的三段处理：
       //   1) 配额内：温和提示继续，推模型自己调用 completion.tool。
       //   2) 配额耗尽：进入"强制总结"升级——命令模型立刻把进展写入信封并封口。此后收口一律判 anomaly。
       //   3) 强制总结后仍不封口：系统替它封口（把末轮文本塞进备注），照样交接下游，只打 anomaly 标记。
@@ -322,7 +342,8 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
           const note = content.trim()
             ? `【异常自动封口】模型多轮未显式调用 ${params.completion.tool}。以下为其最后输出，供下游参考：\n${content.trim()}`
             : `【异常自动封口】模型多轮未显式完成，且末轮无有效输出。已按当前信封内容强制封口。`;
-          const sealed = tools ? await tools.call(params.completion.tool, { note }) : note;
+          const sealed = tools
+            ? normalizeToolCallResult(await tools.call(params.completion.tool, { note })).result : note;
           const failure = reactErrorData(
             'REACT_COMPLETION_ANOMALY', 'protocol', '模型未显式完成任务，已异常封口', 'react.native.completion',
           );
@@ -409,7 +430,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       if (signal?.aborted) {
         // 为本轮剩余未执行的 tool_call 补占位，保持历史合法（每个 tool_call 必须配对）
         for (let rj = ti; rj < toolCalls.length; rj++) {
-          msgs.push({ role: 'tool', toolCallId: toolCalls[rj].id, content: '（已中止，未执行）' });
+          msgs.push(toolMessage(toolCalls[rj].id, '（已中止，未执行）', false));
         }
         return {
           content: '[中止]', rawContent: content, toolCalls: allToolCalls, turns: turn + 1,
@@ -434,28 +455,28 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
         argParseErr = `参数 JSON 解析失败：${tc.arguments?.slice(0, 200)}`;
       }
       if (argParseErr) {
-        msgs.push({ role: 'tool', toolCallId: tc.id, content: argParseErr });
+        msgs.push(toolMessage(tc.id, argParseErr, false));
         allToolCalls.push({ tool: tc.name, args: {}, result: argParseErr });
         onEvent?.({ type: 'tool-call', tool: tc.name, args: {} });
-        onEvent?.({ type: 'tool-result', tool: tc.name, result: argParseErr });
+        onEvent?.({ type: 'tool-result', tool: tc.name, result: argParseErr, ok: false });
         continue;
       }
 
       if (!tools) {
         const errMsg = '无可用工具执行器';
-        msgs.push({ role: 'tool', toolCallId: tc.id, content: errMsg });
+        msgs.push(toolMessage(tc.id, errMsg, false));
         allToolCalls.push({ tool: tc.name, args, result: errMsg });
         onEvent?.({ type: 'tool-call', tool: tc.name, args });
-        onEvent?.({ type: 'tool-result', tool: tc.name, result: errMsg });
+        onEvent?.({ type: 'tool-result', tool: tc.name, result: errMsg, ok: false });
         continue;
       }
 
       if (!allowedTools.has(tc.name)) {
         const errMsg = `工具未在本轮授权：${tc.name}`;
-        msgs.push({ role: 'tool', toolCallId: tc.id, content: errMsg });
+        msgs.push(toolMessage(tc.id, errMsg, false));
         allToolCalls.push({ tool: tc.name, args, result: errMsg });
         onEvent?.({ type: 'tool-call', tool: tc.name, args });
-        onEvent?.({ type: 'tool-result', tool: tc.name, result: errMsg });
+        onEvent?.({ type: 'tool-result', tool: tc.name, result: errMsg, ok: false });
         continue;
       }
 
@@ -465,17 +486,20 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
         : null;
 
       let result: string;
+      let resultOk = false;
       try {
-        result = await tools.call(tc.name, args);
+        const outcome = normalizeToolCallResult(await tools.call(tc.name, args));
+        result = outcome.result;
+        resultOk = outcome.ok;
       } catch (e) {
         // 业务挂起识别交由调用方注入的 hook 决策，core 不识别具体异常类型
         const decision = params.onToolError?.(e, { tool: tc.name, toolCallId: tc.id, args });
         if (decision) {
           // 挂起：当前 tool_call 的配对结果在 resume 时回填（带 pendingToolCallId）。
-          // bug #1：但本轮挂起之后若还有未执行的 tool_call，必须补占位 role:'tool'，
+          // 本轮挂起之后若还有未执行的 tool_call，补占位 role:'tool'，
           //         否则 assistant 消息里有 tool_call 缺配对结果，下一轮 API 直接 400。
           for (let rj = ti + 1; rj < toolCalls.length; rj++) {
-            msgs.push({ role: 'tool', toolCallId: toolCalls[rj].id, content: '（因等待用户回复而取消，未执行）' });
+            msgs.push(toolMessage(toolCalls[rj].id, '（因等待用户回复而取消，未执行）', false));
           }
           return {
             content: '',
@@ -492,7 +516,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
         if (toolHB) clearInterval(toolHB);
       }
 
-      msgs.push({ role: 'tool', toolCallId: tc.id, content: result });
+      msgs.push(toolMessage(tc.id, result, resultOk));
       allToolCalls.push({ tool: tc.name, args, result });
 
       // 显式终结门：模型调用了终结工具 → 其执行结果即最终交付，立刻收口。
@@ -525,9 +549,9 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
   // completion 门下耗尽 MAX_TURNS 仍未显式封口（如模型一直在调工具从不收口）：
   // 系统兜底强制封口，照样交接下游 + 打 anomaly 标记，绝不让下游因收不到信封而永久卡死。
   if (params.completion && tools) {
-    const sealed = await tools.call(params.completion.tool, {
+    const sealed = normalizeToolCallResult(await tools.call(params.completion.tool, {
       note: `【异常自动封口】达到最大轮次（${maxTurns}）仍未显式调用 ${params.completion.tool}，已按当前信封内容强制封口。`,
-    });
+    })).result;
     const failure = reactErrorData(
       'REACT_TURN_LIMIT', 'protocol', `工具循环达到 ${maxTurns} 轮上限`, 'react.native.loop',
     );

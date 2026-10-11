@@ -1,0 +1,17 @@
+.compaction-notice {
+  border: 1px solid color-mix(in srgb, #ef4444 28%, transparent);
+  border-left: 3px solid #ef4444;
+  border-radius: var(--radius-md, 12px);
+  padding: 14px 18px;
+  margin: 12px 0;
+  background: color-mix(in srgb, var(--color-surface, #17202e) 88%, transparent);
+  color: var(--color-text);
+  line-height: 1.65;
+  font-size: var(--text-sm, 14px);
+  animation: compaction-notice-in .32s cubic-bezier(.2, .8, .2, 1) both;
+}
+@keyframes compaction-notice-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) { .compaction-notice { animation: none; } }

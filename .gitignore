@@ -45,6 +45,7 @@ __pycache__/
 # API Key 敏感数据
 data/providers.json
 data/runtime/
+data/transport/
 
 # Agent 数据（全部本地为王，不入仓库：配置/工作区/提示词/注册表/会话/产出）
 data/agents/
@@ -57,7 +58,8 @@ data/sandbox/_index.json
 
 # 用户界面主题偏好
 data/skin-config.json
-data/skin-textures/
+data/skin-textures/*
+!data/skin-textures/custom-1780312588120.png
 data/skin-videos/
 
 # 用户自定义 Agent 标签
@@ -93,6 +95,9 @@ data/tools/executors/*
 # MCP 服务器配置（含用户本地路径/密钥）
 data/mcp/servers.json
 
+# Local, hot-switchable conversation settings belong to the current installation.
+data/compaction-policy.json
+
 # User-installed skills stay local. Built-in skills remain versioned.
 data/skills/*
 !data/skills/code-review/
@@ -108,6 +113,11 @@ data/tradewind/runs/
 
 # 信风工作流（定义 + workspace 产出，全部本地为王，不入仓库）
 data/tradewind/workflows/
+
+# 中心执行探针的本地运行记录（可能包含会话状态，不入仓库）
+data/monsoon/runs/
+data/convection/runs/
+data/tide/runtime/
 
 # 潮汐运行记录（测试期间持续产生，不入库）
 data/tide/runs/
@@ -127,6 +137,10 @@ data/cyclone/
 data/*.db
 data/*.db-shm
 data/*.db-wal
+
+# Future nested runtime databases and user-selected backgrounds.
+data/**/*.db*
+data/**/*.sqlite*
 
 # ���˲ݸ�
 docs/old/

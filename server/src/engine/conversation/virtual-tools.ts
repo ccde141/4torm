@@ -1,7 +1,7 @@
 /**
  * 季风虚拟工具 schema —— 原生工具调用模式专用
  *
- * 背景：ask / delegate / list_agents / create_workflow 不在 tools/registry.json，
+ * 背景：ask / delegate 等会话级能力不在 tools/registry.json，
  * 是 session-runner 的 toolCaller 按工具名拦截执行的「虚拟工具」。
  *
  * 文本模式：虚拟工具与普通工具共用 JSON 调用信封。
@@ -23,15 +23,14 @@ export function shouldAttachToolCaller(
 
 /**
  * 构建季风原生模式的虚拟工具定义。
- * @param allowWorkflow 是否注入工作流搭建工具（list_agents/create_workflow）
- * @param allowAutomation 是否注入潮汐自动化工具（create_automation）。仅在可交互会话（有 sessionId）注入；
- *        潮汐无人值守运行不注入，避免自我繁殖。
  */
 export function buildVirtualToolDefs(
-  allowWorkflow = true,
-  allowAutomation = false,
   allowToolRegistration = false,
-  capabilities: { allowAsk?: boolean; allowDelegate?: boolean } = {},
+  capabilities: {
+    allowAsk?: boolean;
+    allowDelegate?: boolean;
+    allowFrameworkStatus?: boolean;
+  } = {},
 ): ToolDef[] {
   const defs: ToolDef[] = [
     {
@@ -80,106 +79,27 @@ export function buildVirtualToolDefs(
     },
   ];
 
+  if (capabilities.allowFrameworkStatus) {
+    defs.push({
+      name: 'framework_status',
+      description: '读取 4torm 中心路由的统一只读快照：季风、对流、气旋、信风、潮汐的真实运行状态。可调用能力以本轮工具定义和能力路由卡为准；启动持续工作后核对状态，或继续旧任务前判断是否已有执行时使用。',
+      parameters: { type: 'object', properties: {}, required: [] },
+    });
+    defs.push({
+      name: 'framework_guide',
+      description: '按需读取一项当前可用框架能力的完整使用协议和工具字段。先从主提示词的能力路由卡选择 capability；能力已关闭时会明确拒绝。',
+      parameters: {
+        type: 'object',
+        properties: {
+          capability: { type: 'string', description: '能力路由卡中的 ID，例如 team、tradewind、tide' },
+          action: { type: 'string', description: '分层能力指南中的操作名；先只传 capability 查操作目录' },
+        },
+        required: ['capability'],
+      },
+    });
+  }
+
   if (allowToolRegistration) defs.push(buildRegisterToolDef());
-
-  if (allowAutomation) {
-    defs.push(
-      {
-        name: 'create_automation',
-        description: '为自己创建一个潮汐定时自动化任务。仅在用户明确想让某事「定时/自动重复」执行时使用。创建后任务处于「未启用」状态——你无法自行启动，须用户到潮汐页审阅后手动启用。返回值含任务 id，后续可用 update_automation 调整。',
-        parameters: {
-          type: 'object',
-          properties: {
-            name: { type: 'string', description: '任务名（简短）' },
-            schedule: { type: 'string', description: '执行间隔，格式 "every 5m" / "every 1h" / "every 1h30m"，最小 60 秒（every 1m 起）' },
-            prompt: { type: 'string', description: '每次触发执行的指令（清晰、可独立执行）' },
-            repeatCount: { type: 'string', description: '可选。重复次数：正整数=跑 N 次；-1=永续。默认 -1' },
-            windowN: { type: 'string', description: '可选。滚动上下文窗口：1=每次无历史；≥2 须偶数。默认 1' },
-            selfLoop: { type: 'string', description: "可选。'true'=自循环（每轮可自改下轮目标，将强制永续+窗口2）。默认 false" },
-          },
-          required: ['name', 'schedule', 'prompt'],
-        },
-      },
-      {
-        name: 'update_automation',
-        description: '修改一个已存在的潮汐任务（按 id）。仅传要改的字段，其余保留。注意：无法改动启用状态（enabled 归用户在潮汐页控制）。改前若不知道 id 先调 list_automations。',
-        parameters: {
-          type: 'object',
-          properties: {
-            taskId: { type: 'string', description: '要修改的任务 id（必须已存在）' },
-            name: { type: 'string', description: '可选。新任务名' },
-            schedule: { type: 'string', description: '可选。新间隔（最小 60 秒）' },
-            prompt: { type: 'string', description: '可选。新指令' },
-            repeatCount: { type: 'string', description: '可选。-1 永续 / ≥1' },
-            windowN: { type: 'string', description: '可选。1 或 ≥2 偶数' },
-            selfLoop: { type: 'string', description: "可选。'true'/'false'" },
-          },
-          required: ['taskId'],
-        },
-      },
-      {
-        name: 'list_automations',
-        description: '列出现有的潮汐任务（id / 名称 / 间隔 / 次数 / 是否启用 / 执行 agent）。修改任务前先调用它拿到 id。无参数。',
-        parameters: { type: 'object', properties: {}, required: [] },
-      },
-    );
-  }
-
-  if (allowWorkflow) {
-    defs.push(
-      {
-        name: 'list_agents',
-        description: '列出框架内所有可用的 Agent 实体（id + 名称 + 角色）。搭建信风工作流前先调用确认可用 Agent。',
-        parameters: { type: 'object', properties: {}, required: [] },
-      },
-      {
-        name: 'create_workflow',
-        description: '创建一个完整的信风工作流。必须先 list_agents 确认 agentId 真实存在。',
-        parameters: {
-          type: 'object',
-          properties: {
-            params: { type: 'string', description: 'JSON 字符串，包含 name、nodes、edges。节点类型 entry/agent/meeting/human-gate/note/output；边 {source,target} 须构成 DAG（无环）' },
-          },
-          required: ['params'],
-        },
-      },
-      {
-        name: 'list_workflows',
-        description: '查看已有的信风工作流。不传参数=列出所有工作流（id/名称/节点数）；传 workflowId=返回该工作流的完整结构（节点+边）。修改工作流前必须先调用它拿到当前结构。',
-        parameters: {
-          type: 'object',
-          properties: {
-            workflowId: { type: 'string', description: '可选。要查看详情的工作流 id；不填则列出全部。' },
-          },
-          required: [],
-        },
-      },
-      {
-        name: 'update_workflow',
-        description: '修改已有的信风工作流（整图替换）。仅当用户明确要求修改某个工作流或编辑其节点内容时才使用，且修改前应先向用户确认改动方案。必须先 list_workflows 拿到完整结构，在其基础上改动后提交完整的 nodes/edges。',
-        parameters: {
-          type: 'object',
-          properties: {
-            workflowId: { type: 'string', description: '要修改的工作流 id（必须已存在，不会新建）' },
-            params: { type: 'string', description: 'JSON 字符串，包含完整的 name、nodes、edges（整图替换，不是增量）。结构与 create_workflow 一致。未改动的节点也要原样带上。' },
-          },
-          required: ['workflowId', 'params'],
-        },
-      },
-      {
-        name: 'start_workflow',
-        description: '启动一个已经保存的信风工作流。只有用户明确要求执行，或已经通过 ask 确认执行时才能调用；讨论、设计或修改工作流时不得擅自启动。',
-        parameters: {
-          type: 'object',
-          properties: {
-            workflowId: { type: 'string', description: '要启动的工作流 id；不确定时先调用 list_workflows。' },
-            initialInput: { type: 'string', description: '可选。交给 Entry 节点的本次任务输入。' },
-          },
-          required: ['workflowId'],
-        },
-      },
-    );
-  }
 
   return defs.filter(def => {
     if (def.name === 'ask') return capabilities.allowAsk !== false;

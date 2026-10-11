@@ -3,7 +3,7 @@ import type { InputSubmission } from './input-submission';
 
 interface Ports {
   load: (sessionId: string) => Promise<ChatSession | null>;
-  save: (session: ChatSession) => Promise<void>;
+  save: (session: ChatSession) => Promise<ChatSession>;
   canStart: () => boolean;
   start: (session: ChatSession, runId: string) => void;
 }
@@ -22,7 +22,7 @@ export async function continueInputTurn(input: InputSubmission, ports: Ports): P
   if (!existing) messages.push({ id: input.id, role: 'user', content: input.content,
     agentId: input.agentId, timestamp: new Date().toISOString() });
   const updated = { ...session, messages };
-  await ports.save(updated);
+  const saved = await ports.save(updated);
   if (!ports.canStart()) throw new Error('会话状态已改变，消息已保存 / Conversation changed; message saved');
-  ports.start(updated, runId);
+  ports.start(saved, runId);
 }

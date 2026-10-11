@@ -1,24 +1,57 @@
 import type { ToolDef } from './prompt.js';
 
+const MAX_TOOL_DESCRIPTION_CHARS = 500;
+const MAX_PARAMETER_DESCRIPTION_CHARS = 160;
+
+function compactSchema(schema: Record<string, unknown>): string {
+  return JSON.stringify(schema, (key, value: unknown) => (
+    key === 'description' && typeof value === 'string'
+      ? value.slice(0, MAX_PARAMETER_DESCRIPTION_CHARS) : value
+  ));
+}
+
+function needsFullSchema(schema: Record<string, unknown>): boolean {
+  if (schema.type !== undefined && schema.type !== 'object') return true;
+  if (Object.keys(schema).some(key => !['type', 'properties', 'required'].includes(key))) return true;
+  if (schema.properties === undefined) return false;
+  if (!schema.properties || typeof schema.properties !== 'object'
+    || Array.isArray(schema.properties)) return true;
+  return Object.values(schema.properties).some(value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return true;
+    const property = value as Record<string, unknown>;
+    return Object.keys(property).some(key => !['type', 'description'].includes(key))
+      || (property.type !== undefined && typeof property.type !== 'string')
+      || (property.description !== undefined && typeof property.description !== 'string');
+  });
+}
+
 function renderTool(tool: ToolDef): string {
   const schema = tool.parameters ?? {};
+  const header = `### ${tool.name}\n  描述: ${tool.description.slice(0, MAX_TOOL_DESCRIPTION_CHARS)}`;
+  if (needsFullSchema(schema)) return `${header}\n  参数 JSON Schema: ${compactSchema(schema)}`;
   const required = new Set(
     Array.isArray((schema as { required?: unknown }).required)
       ? (schema as { required: string[] }).required
       : [],
   );
   const properties = (schema as {
-    properties?: Record<string, { type?: string; description?: string }>;
+    properties?: Record<string, unknown>;
   }).properties ?? {};
   const parameters = Object.entries(properties).map(([name, value]) => {
+    const property = value && typeof value === 'object'
+      ? value as Record<string, unknown> : {};
     const mark = required.has(name) ? ' [必填]' : ' [可选]';
-    return `    ${name}: ${value.type ?? 'string'}${mark} — ${value.description ?? ''}`;
+    const type = typeof property.type === 'string' ? property.type : 'string';
+    const description = typeof property.description === 'string'
+      ? property.description.slice(0, MAX_PARAMETER_DESCRIPTION_CHARS) : '';
+    return `    ${name}: ${type}${mark} — ${description}`;
   }).join('\n') || '    无参数';
 
-  return `### ${tool.name}\n  描述: ${tool.description}\n  参数:\n${parameters}`;
+  return `${header}\n  参数:\n${parameters}`;
 }
 
 export function buildTextToolProtocol(tools: ToolDef[]): string {
+  const definitions = tools.map(renderTool).join('\n\n');
   const examples = tools[0]
     ? `例如调用 ${tools[0].name}：\n\`\`\`json\n{"type":"tool_call","name":"${tools[0].name}","arguments":{}}\n\`\`\``
     : '';
@@ -41,5 +74,5 @@ ${examples}
 
 ## 可用工具
 
-${tools.map(renderTool).join('\n\n')}`;
+${definitions}`;
 }

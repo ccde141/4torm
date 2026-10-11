@@ -3,9 +3,8 @@
  *
  * 行为：
  * - waitForInputs() 等待所有 handoff 入线到齐
- * - 收集所有节点对话历史 + 会议记录 → 生成 Markdown 归档
- * - 写入 workspace/transcripts/{archiveName}.md
- * - emit WORK_DONE（orchestrator 在 handleNodeDone 里触发 workflow-end）
+ * - 尝试写入 output.json 和 workspace/transcripts/{archiveName}.md
+ * - 归档失败不阻止 emit WORK_DONE（orchestrator 随后触发 workflow-end）
  *
  * 配置项：
  * - archiveName: string（可选，归档文件名，默认时间戳）
@@ -70,7 +69,7 @@ export class OutputExecutor implements NodeExecutor {
     ctx.setState('active');
     const envelopes = await ctx.waitForInputs();
 
-    // 归档输出内容（保留原有逻辑）
+    // 写入本轮输出信封。
     const outputData = envelopes.map(e => ({
       source: e.source,
       content: e.content,
@@ -80,7 +79,7 @@ export class OutputExecutor implements NodeExecutor {
     try {
       await fs.mkdir(path.dirname(outputPath), { recursive: true });
       await fs.writeFile(outputPath, JSON.stringify(outputData, null, 2));
-    } catch { /* 静默 */ }
+    } catch { /* output.json 写入失败不阻止完成事件 */ }
 
     // Checkpoint 归档：收集所有节点历史 → Markdown
     await this.writeCheckpoint(ctx, envelopes);
