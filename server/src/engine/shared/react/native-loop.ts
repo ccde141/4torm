@@ -8,10 +8,11 @@
  * 不依赖任何 session/workflow 概念，纯粹的 ReAct 执行器。
  */
 
-import type { ContextMessage, LLMOptions, ProviderReasoningEnvelope } from '../types';
+import type { ContextMessage, LLMOptions, ProviderReasoningEnvelope, ToolImageRef } from '../types';
 import type { TokenUsage } from '../llm-bridge';
 import type { ToolPreparationProgress } from '../tool-progress';
 import { salvageToolArgs } from '../tool-bridge';
+import type { ToolArguments } from '../tool-arguments.js';
 import { createAssistantContextMessage } from '../provider-messages.js';
 import { SuspendSignal } from '../suspend-signal.js';
 import { applyPendingInput, skipNativeTools, type ReActSteering } from './steering.js';
@@ -19,6 +20,7 @@ import {
   abortedTermination,
   anomalyTermination,
   failedTermination,
+  modelOutputLimitError,
   reactError,
   reactErrorData,
   succeededTermination,
@@ -44,16 +46,17 @@ export const HEARTBEAT_INTERVAL_MS = 5_000;
 
 export interface ParsedAction {
   tool: string;
-  args: Record<string, string>;
+  args: ToolArguments;
   parseError?: string;
   start: number;
   end: number;
 }
 export interface ToolCallRecord {
   tool: string;
-  args: Record<string, string>;
+  args: ToolArguments;
   result: string;
   meta?: unknown;
+  toolImages?: ToolImageRef[];
 }
 
 /** LLM 调用抽象——调用方注入具体实现 */
@@ -74,6 +77,8 @@ export interface ToolCallOutcome {
   result: string;
   ok: boolean;
   meta?: unknown;
+  toolImages?: ToolImageRef[];
+  structuredContent?: Record<string, unknown>;
 }
 
 export function normalizeToolCallResult(value: string | ToolCallOutcome): ToolCallOutcome {
@@ -82,7 +87,7 @@ export function normalizeToolCallResult(value: string | ToolCallOutcome): ToolCa
 
 export interface ToolCaller {
   call(
-    tool: string, args: Record<string, string>, onMeta?: (meta: unknown) => void,
+    tool: string, args: ToolArguments, onMeta?: (meta: unknown) => void,
   ): Promise<string | ToolCallOutcome>;
 }
 
@@ -92,8 +97,8 @@ export type ReActStreamEvent =
   | { type: 'reasoning'; chunk: string }
   | { type: 'usage'; usage: TokenUsage | null }
   | ({ type: 'tool-progress' } & ToolPreparationProgress)
-  | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string; ok?: boolean; meta?: unknown }
+  | { type: 'tool-call'; tool: string; args: ToolArguments }
+  | { type: 'tool-result'; tool: string; result: string; ok?: boolean; meta?: unknown; toolImages?: ToolImageRef[] }
   | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | { type: 'error'; message: string };
 
@@ -136,7 +141,7 @@ export interface NativeReActLoopParams extends ReActLoopParams {
    */
   onToolError?: (
     err: unknown,
-    ctx: { tool: string; toolCallId: string; args: Record<string, string> },
+    ctx: { tool: string; toolCallId: string; args: ToolArguments },
   ) => SuspendDecision | null | undefined;
 
   /**
@@ -236,8 +241,9 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (signal?.aborted) {
+      const partial = completeAnswer(answerParts);
       return {
-        content: '[中止]', rawContent: '', toolCalls: allToolCalls, turns: turn,
+        content: partial || '[中止]', rawContent: partial, toolCalls: allToolCalls, turns: turn,
         usage: latestUsage, termination: abortedTermination(),
       };
     }
@@ -252,13 +258,14 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     signal?.addEventListener('abort', onAbort, { once: true });
 
     let tokenReceived = false;
+    let streamedContent = '';
     const hbInterval = onEvent
       ? setInterval(() => {
           if (!tokenReceived) onEvent({ type: 'heartbeat', phase: 'llm-waiting', elapsed: Date.now() - llmStart });
         }, HEARTBEAT_INTERVAL_MS)
       : null;
     const onChunk = onEvent
-      ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'token', chunk }); }
+      ? (chunk: string) => { streamedContent += chunk; tokenReceived = true; onEvent({ type: 'token', chunk }); }
       : undefined;
     const onReasoning = onEvent
       ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'reasoning', chunk }); }
@@ -287,9 +294,10 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     } catch (e) {
       latestUsage = undefined;
       onEvent?.({ type: 'usage', usage: null });
+      const partial = completeAnswer(answerParts, streamedContent);
       if (signal?.aborted) {
         return {
-          content: '[中止]', rawContent: '', toolCalls: allToolCalls, turns: turn,
+          content: partial || '[中止]', rawContent: partial, toolCalls: allToolCalls, turns: turn,
           usage: latestUsage, termination: abortedTermination(),
         };
       }
@@ -299,7 +307,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       const failure = reactError(e, fallback);
       onEvent?.({ type: 'error', message: failure.message });
       return {
-        content: `[错误] ${failure.message}`, rawContent: '', toolCalls: allToolCalls, turns: turn,
+        content: partial || `[错误] ${failure.message}`, rawContent: partial, toolCalls: allToolCalls, turns: turn,
         usage: latestUsage, termination: failedTermination(failure),
       };
     } finally {
@@ -308,8 +316,9 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       signal?.removeEventListener('abort', onAbort);
     }
 
-    if (params.steering && signal?.aborted) {
-      return { content: '[中止]', rawContent: content, toolCalls: allToolCalls,
+    if (signal?.aborted) {
+      const partial = completeAnswer(answerParts, content);
+      return { content: partial || '[中止]', rawContent: partial, toolCalls: allToolCalls,
         turns: turn + 1, usage: latestUsage, termination: abortedTermination() };
     }
     if (params.steering?.hasPending()) {
@@ -317,6 +326,22 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       skipNativeTools(params, toolCalls ?? [], allToolCalls);
       if (content.trim()) answerParts.push(content);
       continue;
+    }
+
+    // Exhaustion never turns a truncated answer or tool batch into a successful delivery.
+    // A reasoning-only limited response has no body to continue from, so do not retry it blindly.
+    if (finishReason === 'length' && (continuations >= MAX_CONTINUATIONS
+      || (!toolCalls?.length && !content.trim()))) {
+      const failure = modelOutputLimitError('react.native.output');
+      const partial = completeAnswer(answerParts, content);
+      if (content.trim() || reasoningContent || reasoningEnvelope) {
+        msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
+      }
+      onEvent?.({ type: 'error', message: failure.message });
+      return { content: partial || `[错误] ${failure.message}`, rawContent: partial,
+        toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage,
+        ...(params.completion ? { autoOutcome: 'anomaly' as const } : {}),
+        termination: failedTermination(failure) };
     }
 
     // 无工具调用：普通模式交付文本；显式终结模式继续等待终结工具。
@@ -374,8 +399,11 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       if (content.trim()) {
         if (params.beforeFinish) {
           const notices = await params.beforeFinish();
-          if (signal?.aborted) return { content: '[中止]', rawContent: '', toolCalls: allToolCalls,
-            turns: turn + 1, usage: latestUsage, termination: abortedTermination() };
+          if (signal?.aborted) {
+            const partial = completeAnswer(answerParts, content);
+            return { content: partial || '[中止]', rawContent: partial, toolCalls: allToolCalls,
+              turns: turn + 1, usage: latestUsage, termination: abortedTermination() };
+          }
           if (notices.length || params.steering?.hasPending()) {
             msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
             msgs.push(...notices.map(content => ({ role: 'user' as const, content })));
@@ -405,14 +433,15 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     //    被 max_tokens 截断，参数大概率残缺。绝不拿残缺 JSON 去执行——否则 parse 失败→回填错误→
     //    模型重试→再截，陷入烧 token 的死循环。丢弃本次调用，提示模型缩短/分块后重发。
     //    注意：不把带 toolCalls 的 assistant 入历史（那会要求配对 tool 结果），只 push 纯文本。
-    if (finishReason === 'length' && continuations < MAX_CONTINUATIONS) {
+    if (finishReason === 'length') {
       continuations++;
+      if (content.trim()) answerParts.push(content);
       msgs.push(createAssistantContextMessage(
         content || '（工具调用因输出长度上限被截断）', undefined, reasoningContent, reasoningEnvelope,
       ));
       msgs.push({
         role: 'user',
-        content: '【系统提示】你上一次的工具调用因输出长度上限被截断、参数不完整，已丢弃未执行。请重新发起该次调用，并缩短单次参数体量——需要写入大段内容时，改用分块/多次写入（如分多次 write_file，或把长命令拆成几条）。',
+        content: '【系统提示】你上一次的工具调用因输出长度上限被截断、参数不完整，已丢弃未执行。请重新发起该次调用，并缩短单次参数体量。需要写入长文件时，先建立文件骨架，再使用本轮可用的局部编辑或追加工具分段补齐，并回读校验；覆盖写入不是追加，不得重复覆盖同一路径来拼接内容。长命令应拆成可独立验证的小步骤；若没有适用工具，请明确说明限制。',
       });
       continue;
     }
@@ -432,8 +461,9 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
         for (let rj = ti; rj < toolCalls.length; rj++) {
           msgs.push(toolMessage(toolCalls[rj].id, '（已中止，未执行）', false));
         }
+        const partial = completeAnswer(answerParts);
         return {
-          content: '[中止]', rawContent: content, toolCalls: allToolCalls, turns: turn + 1,
+          content: partial || '[中止]', rawContent: partial, toolCalls: allToolCalls, turns: turn + 1,
           usage: latestUsage, termination: abortedTermination(),
         };
       }
@@ -441,7 +471,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
         skipNativeTools(params, toolCalls.slice(ti), allToolCalls);
         break;
       }
-      let args: Record<string, string> = {};
+      let args: ToolArguments = {};
       let argParseErr: string | undefined;
       // 参数救回：本地模型常吐脏 JSON（fence/前后垃圾/尾逗号）。salvageToolArgs
       // 按代价递增尝试救回，救不回才回填错误让模型自纠。
@@ -487,10 +517,12 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
 
       let result: string;
       let resultOk = false;
+      let toolImages: ToolImageRef[] | undefined;
       try {
         const outcome = normalizeToolCallResult(await tools.call(tc.name, args));
         result = outcome.result;
         resultOk = outcome.ok;
+        toolImages = outcome.toolImages;
       } catch (e) {
         // 业务挂起识别交由调用方注入的 hook 决策，core 不识别具体异常类型
         const decision = params.onToolError?.(e, { tool: tc.name, toolCallId: tc.id, args });
@@ -516,13 +548,18 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
         if (toolHB) clearInterval(toolHB);
       }
 
-      msgs.push(toolMessage(tc.id, result, resultOk));
-      allToolCalls.push({ tool: tc.name, args, result });
+      msgs.push({ ...toolMessage(tc.id, result, resultOk),
+        ...(toolImages?.length ? { toolImages } : {}) });
+      allToolCalls.push({ tool: tc.name, args, result,
+        ...(toolImages?.length ? { toolImages } : {}) });
 
       // 显式终结门：模型调用了终结工具 → 其执行结果即最终交付，立刻收口。
       // （同轮终结工具之后的其它 tool_call 不再处理——任务已声明完成。）
       // 若是被"强制总结"逼出来的封口（escalated），仍照常交接下游，但打 anomaly 标记。
-      if (params.completion && tc.name === params.completion.tool) {
+      if (params.completion && tc.name === params.completion.tool && resultOk) {
+        for (const skipped of toolCalls.slice(ti + 1)) {
+          msgs.push(toolMessage(skipped.id, '（任务已完成，未执行）', false));
+        }
         const autoOutcome = escalated ? 'anomaly' : 'completed';
         const termination = escalated
           ? anomalyTermination(reactErrorData(

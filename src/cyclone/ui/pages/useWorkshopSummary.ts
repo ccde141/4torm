@@ -1,3 +1,4 @@
+import { backendFetch } from '../../../lib/backend-client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocale } from '../../../i18n/LocaleContext';
 import { createLatestRequestGuard } from '../../../lib/latest-request';
@@ -20,7 +21,7 @@ export function useWorkshopSummary(workshopId: string | null, active: boolean) {
   const refresh = useCallback(async (id: string) => {
     const request = guard.current.begin();
     try {
-      const response = await fetch(`/api/cyclone/workshop/${id}/summary`);
+      const response = await backendFetch(`/api/cyclone/workshop/${id}/summary`);
       if (!response.ok) throw new Error(await readCycloneError(response, tRef.current('cyclone.shell.loadWorkshopFailed')));
       const result = await response.json() as Omit<WorkshopSnapshot, 'workshopId' | 'bulletin'> & {
         bulletin?: { entries: BulletinEntry[] };

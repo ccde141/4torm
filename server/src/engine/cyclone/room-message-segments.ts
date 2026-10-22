@@ -10,7 +10,7 @@ export function createRoomMessageSegments() {
       if (current?.kind === 'text') current.content += content;
       else segments.push({ kind: 'text', content });
     },
-    toolCall(tool: string, args: Record<string, string>) {
+    toolCall(tool: string, args: Record<string, unknown>) {
       const current = segments.at(-1);
       const item = { tool, args, status: 'running' as const };
       if (current?.kind === 'tools') current.tools.push(item);

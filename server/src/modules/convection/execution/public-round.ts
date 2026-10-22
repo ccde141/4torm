@@ -26,6 +26,7 @@ export async function handleSpeak(
   // 人类输入已开启新一轮；即使压缩前进程退出，也不展示上一轮的最近请求。
   session.publicLatestTokenUsage = undefined;
   session.compactionNotice = undefined;
+  session.compactionProgress = undefined;
   session.publicMessages.push({ speaker: '人类', content: humanMessage, timestamp: Date.now(),
     ...(runId ? { runId } : {}) });
   await saveSession(dataDir, session);
@@ -120,6 +121,7 @@ function forwardParticipantEvent(
     tool: event.tool!, args: event.args! });
   else if (event.type === 'tool-result') emit({ type: 'tool-result', agentId, label: event.label,
     tool: event.tool!, result: event.result!,
+    ...(event.toolImages?.length ? { toolImages: event.toolImages } : {}),
     ...(event.ok !== undefined ? { ok: event.ok } : {}) });
   else if (event.type === 'heartbeat') emit({ type: 'heartbeat', agentId, label: event.label,
     phase: event.phase!, elapsed: event.elapsed! });

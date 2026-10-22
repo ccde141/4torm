@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import net from 'node:net';
+import path from 'node:path';
 import type { BrowserEvent, BrowserSnapshot } from './browser-protocol.js';
 import type { DesktopBrowserTransport } from './desktop-browser-driver.js';
 
@@ -35,6 +36,7 @@ export class DesktopBrowserTransportClient implements DesktopBrowserTransport {
 }
 
 function requestBridge(input: { endpoint: string; timeoutMs: number; body: string }): Promise<BridgeResponse> {
+  validateEndpoint(input.endpoint);
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(input.endpoint);
     let received = '';
@@ -59,6 +61,13 @@ function requestBridge(input: { endpoint: string; timeoutMs: number; body: strin
     socket.once('error', error => settle(error));
     socket.once('close', () => { if (!settled) settle(new Error('desktop browser bridge disconnected before responding')); });
   });
+}
+
+function validateEndpoint(endpoint: string): void {
+  const valid = typeof endpoint === 'string' && !endpoint.includes('\0')
+    && (process.platform === 'win32' ? endpoint.startsWith('\\\\.\\pipe\\')
+      : path.isAbsolute(endpoint) && Buffer.byteLength(endpoint) <= 103);
+  if (!valid) throw new Error('desktop browser bridge endpoint is invalid for this platform');
 }
 
 function parseResponse(value: string): BridgeResponse {

@@ -21,6 +21,8 @@ export interface ExecutionMeta {
   endTime?: string;
   status: 'running' | 'done' | 'error' | 'stopped' | 'crashed';
   trigger?: { source: 'user' | 'conversation'; sessionId?: string; agentId?: string };
+  errorCode?: string;
+  errorMessage?: string;
 }
 
 export class ArchiveManager {
@@ -29,6 +31,7 @@ export class ArchiveManager {
   private meta: ExecutionMeta;
   /** 首个成功提交的终态锁定；失败不能阻止明确的后续持久化调用。 */
   private ended = false;
+  private started = false;
   private endCommit: Promise<void> | null = null;
 
   constructor(runDir: string, executionId: string, workflowId: string, trigger?: ExecutionMeta['trigger']) {
@@ -43,11 +46,14 @@ export class ArchiveManager {
     };
   }
 
+  hasStarted(): boolean { return this.started; }
+
   /** 写入初始 meta.json，创建 runDir */
   async writeStart(): Promise<void> {
     try {
       await fs.mkdir(this.runDir, { recursive: true });
       await atomicWriteFile(this.metaPath, JSON.stringify(this.meta, null, 2));
+      this.started = true;
     } catch (err) {
       throw this.writeError('start', err);
     }
@@ -60,6 +66,16 @@ export class ArchiveManager {
     this.endCommit = current;
     try { await current; }
     finally { if (this.endCommit === current) this.endCommit = null; }
+  }
+
+  /** 条件交接收尾的事实提交失败可将已写终态降级，避免磁盘仍冒充正常完成。 */
+  async recordFailure(error: FrameworkError): Promise<void> {
+    const next: ExecutionMeta = { ...this.meta, status: 'error', endTime: new Date().toISOString(),
+      errorCode: error.data.code, errorMessage: error.message };
+    try { await atomicWriteFile(this.metaPath, JSON.stringify(next, null, 2)); }
+    catch (cause) { throw this.writeError('end', cause); }
+    this.meta = next;
+    this.ended = true;
   }
 
   private async commitEnd(status: 'done' | 'error' | 'stopped'): Promise<void> {

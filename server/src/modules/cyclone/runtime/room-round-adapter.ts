@@ -1,3 +1,4 @@
+import { prepareCycloneExecution, trackCyclonePreparationStart } from '../application/execution-preparation.js';
 import { speakInRoom } from '../../../engine/cyclone/room-runner.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
 import type { CycloneRoomService } from '../application/room-service.js';
@@ -21,7 +22,7 @@ export function createCycloneRoomRoundPort(
   changes?: CycloneChangeFeed,
 ): CycloneRoomRoundPort {
   return {
-    prepare: async input => {
+    prepare: input => trackCyclonePreparationStart(commands, async () => {
       const execution = await commands.begin({
         workshopId: input.workshopId, targetKind: 'room', targetId: input.roomId,
         phase: 'room-speak',
@@ -41,14 +42,11 @@ export function createCycloneRoomRoundPort(
         changes?.publish(input.workshopId, 'activity', input.roomId);
         throw error;
       }
-      return {
-        execution,
-        run: onEvent => runPreparedRoom(
+      return prepareCycloneExecution(execution, commands, onEvent => runPreparedRoom(
           dataDir, input, room, execution, commands, executions, onEvent,
           executeRoom, changes,
-        ),
-      };
-    },
+        ), () => changes?.publish(input.workshopId, 'activity', input.roomId));
+    }),
   };
 }
 

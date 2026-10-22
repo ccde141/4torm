@@ -1,3 +1,4 @@
+import { backendFetch } from '../../../lib/backend-client';
 import { useEffect, useRef, useState } from 'react';
 import { applySeatEvent, emptyLive, type Live } from './seat-stream-events';
 import { subscribeCycloneChanges } from './cyclone-change-client';
@@ -25,7 +26,7 @@ interface SeatExternalActivityView {
 }
 
 export async function fetchSeatExternalActivity(
-  workshopId: string, seatId: string, since: number, request: typeof fetch = fetch,
+  workshopId: string, seatId: string, since: number, request: typeof fetch = backendFetch,
 ): Promise<ActivityResponse | null> {
   const response = await request(
     `/api/cyclone/workshop/${workshopId}/seat/${seatId}/activity?since=${since}`,

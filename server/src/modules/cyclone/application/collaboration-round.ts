@@ -12,6 +12,7 @@ export interface StartCollaborationRoundInput {
 export interface PreparedCycloneRoomRound {
   execution: CycloneExecutionSnapshot;
   run(onEvent?: (event: unknown) => void): Promise<void>;
+  dispose(cause?: unknown): Promise<void>;
 }
 
 export interface CycloneRoomRoundPort {

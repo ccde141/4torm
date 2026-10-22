@@ -33,3 +33,29 @@ test('压缩预检失败保存 failed 并释放已取得的工位执行身份', 
     error: '该工位存在挂起提问，请先完成回答' }]);
   assert.deepEqual(signals, ['activity', 'activity']);
 });
+
+test('未执行的压缩准备可重复释放，仅提交一次终态，释放后不再调用模型', async () => {
+  const finishes: unknown[] = [];
+  let modelCalls = 0;
+  const commands = {
+    begin: async input => ({ ...input, operationId: 'seat:cyc-1:seat-1', runId: 'run-1', startedAt: 'now' }),
+    finish: async input => { finishes.push(input); return { ...input, finished: true as const }; },
+  } as CycloneCommands;
+  const seats = Object.create(null) as CycloneSeatService;
+  seats.require = async () => ({ id: 'seat-1', agentId: 'agent-a', messages: [] }) as never;
+  const runtime = {
+    plan: () => ({ ok: true as const, archivedMessages: [], keptMessages: [], summaryInput: '原文',
+      estimatedTokens: 100, keptTurnCount: 0 }),
+    resolveModel: async () => 'p:model',
+    summarize: async () => { modelCalls++; return '摘要'; },
+  } as CycloneSeatCompactionRuntime;
+  const port = createCycloneSeatCompactionPort('data', seats, commands,
+    {} as CycloneExecutionPort, runtime);
+  const prepared = await port.prepare({ workshopId: 'cyc-1', seatId: 'seat-1' });
+  const first = prepared.dispose();
+  assert.equal(prepared.dispose(new Error('late cleanup')), first);
+  await first;
+  await assert.rejects(prepared.run(), /压缩准备已结束/);
+  assert.equal(modelCalls, 0);
+  assert.deepEqual(finishes, [{ operationId: 'seat:cyc-1:seat-1', runId: 'run-1', status: 'aborted', agentIds: [] }]);
+});

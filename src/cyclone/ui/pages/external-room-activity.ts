@@ -1,3 +1,4 @@
+import type { CompactionActivity } from '../../../components/common/compaction-activity';
 import type { Locale } from '../../../i18n/locale';
 import type { CollaborationProbeItem } from '../../../api/collaboration';
 import { applyRoomEvent, type FeedMsg } from './room-stream-events';
@@ -22,7 +23,9 @@ export interface ExternalRoomActivity {
   roundFeed: FeedMsg[];
   activeSpeaker: string;
   tokenUsage: CycloneUsage | null;
+  lastKnownTokenUsage?: CycloneUsage;
   compactionNotice?: string | null;
+  compaction?: CompactionActivity | null;
 }
 
 export function publicRoomFact(fact: CollaborationProbeItem | null): CollaborationProbeItem | null {

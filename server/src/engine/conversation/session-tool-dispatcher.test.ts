@@ -35,8 +35,8 @@ test('session dispatcher forwards task board conflict status without adding dupl
     guideToolDefs: [], ledger: new FileChangeLedger(), sessionId: 'session-a',
     setPendingRegistration: () => undefined, emit: event => events.push(event),
   });
-  const args = { action: 'set', expectedRevision: '0',
-    tasks: '[{"title":"Step","status":"todo"}]' };
+  const args = { action: 'set', expectedRevision: 0,
+    tasks: [{ title: 'Step', status: 'todo' }] };
   await caller.call('task_board', args);
   const conflict = await caller.call('task_board', args);
 

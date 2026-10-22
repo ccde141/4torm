@@ -6,6 +6,9 @@ import { frameworkError } from '../../../engine/shared/framework-error.js';
 import { tideRuntimeDir } from '../../../services/data-paths.js';
 import { OperationNotifier } from '../../../engine/collaboration/operation-notifier.js';
 import type { TokenUsage } from '../../../engine/shared/llm-bridge.js';
+import type { CompactionProgress } from '../../../engine/shared/compaction/index.js';
+import { parseTideCompactionProgress } from '../domain/compaction-progress.js';
+import { recoverTideCompaction } from './compaction-recovery.js';
 import { advanceTideUsage } from '../domain/token-usage.js';
 import type { TideChangeFeed } from '../application/change-feed.js';
 import { staleState, corruptState, runtimeIoError } from './run-state-errors.js';
@@ -25,6 +28,8 @@ export interface TideRunStateRepository {
   markRunning(taskId: string, runId: string, agentId?: string): Promise<TideRunState>;
   recordUsage(taskId: string, runId: string, usage: TokenUsage | null): Promise<TideRunState>;
   recordCompactionNotice(taskId: string, runId: string, message: string): Promise<TideRunState>;
+  recordCompactionProgress(taskId: string, runId: string, event: CompactionProgress,
+    sessionId?: string, sourceRevision?: number): Promise<TideRunState>;
   acknowledgeCompactionNotice(taskId: string): Promise<void>;
   finish(
     taskId: string,
@@ -125,6 +130,15 @@ export class FileTideRunStateRepository implements TideRunStateRepository {
       compactionNotice: message, updatedAt: new Date().toISOString() }));
   }
 
+  recordCompactionProgress(taskId: string, runId: string, event: CompactionProgress,
+    sessionId?: string, sourceRevision?: number): Promise<TideRunState> {
+    const compaction = parseTideCompactionProgress(event);
+    return this.update(taskId, runId, state => ({ ...state, compaction,
+      ...(sessionId ? { compactionSessionId: sessionId } : {}),
+      ...(event.type === 'compact-start' && sourceRevision !== undefined
+        ? { compactionSourceRevision: sourceRevision } : {}), updatedAt: new Date().toISOString() }));
+  }
+
   acknowledgeCompactionNotice(taskId: string): Promise<void> {
     return this.serial(taskId, async () => {
       const current = await this.get(taskId);
@@ -143,9 +157,14 @@ export class FileTideRunStateRepository implements TideRunStateRepository {
     status: 'completed' | 'failed' | 'aborted',
     error?: { code: string; message: string },
   ): Promise<TideRunState> {
+    const current = await this.getRun(taskId, runId);
+    const settled = current && await recoverTideCompaction(this.dataDir, current, new Date().toISOString());
     return this.update(taskId, runId, state => {
       const now = new Date().toISOString();
       const finished: TideRunState = { ...state, status, updatedAt: now, finishedAt: now };
+      if (state.compaction?.type === 'compact-start' && settled?.compaction?.id === state.compaction.id) {
+        finished.compaction = settled.compaction;
+      }
       if (error) {
         finished.errorCode = error.code;
         finished.errorMessage = error.message;
@@ -160,7 +179,8 @@ export class FileTideRunStateRepository implements TideRunStateRepository {
       const state = await this.readFile(file);
       if (state.status !== 'queued' && state.status !== 'running') continue;
       const now = new Date().toISOString();
-      await this.writeAt(file, { ...state, status: 'crashed', updatedAt: now, finishedAt: now });
+      const recoveredState = await recoverTideCompaction(this.dataDir, state, now);
+      await this.writeAt(file, { ...recoveredState, status: 'crashed', updatedAt: now, finishedAt: now });
       this.notifier.publish({ operationId: state.taskId, runId: state.runId });
       this.changes?.publish({ scope: 'run', taskId: state.taskId,
         runId: state.runId, agentId: state.agentId });

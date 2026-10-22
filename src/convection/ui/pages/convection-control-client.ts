@@ -65,20 +65,21 @@ export function deleteConvectionMessage(sessionId: string, index: number): Promi
 export function resetConvectionContext(
   sessionId: string,
   mode: 'clean' | 'summary',
+  signal?: AbortSignal,
 ): Promise<ResetContextReceipt> {
-  return invokeFeature('convection', 'resetContext', { sessionId, mode });
+  return invokeFeature('convection', 'resetContext', { sessionId, mode }, undefined, { signal });
 }
 
-export function compactConvectionContext(sessionId: string): Promise<ResetContextReceipt> {
-  return invokeFeature('convection', 'compactContext', { sessionId });
+export function compactConvectionContext(sessionId: string, signal?: AbortSignal): Promise<ResetContextReceipt> {
+  return invokeFeature('convection', 'compactContext', { sessionId }, undefined, { signal });
 }
 
-export function compactConvectionChairContext(sessionId: string): Promise<ResetContextReceipt> {
-  return invokeFeature('convection', 'compactChairContext', { sessionId });
+export function compactConvectionChairContext(sessionId: string, signal?: AbortSignal): Promise<ResetContextReceipt> {
+  return invokeFeature('convection', 'compactChairContext', { sessionId }, undefined, { signal });
 }
 
-export function resetConvectionChairContext(sessionId: string): Promise<ResetContextReceipt> {
-  return invokeFeature('convection', 'resetChairContext', { sessionId });
+export function resetConvectionChairContext(sessionId: string, signal?: AbortSignal): Promise<ResetContextReceipt> {
+  return invokeFeature('convection', 'resetChairContext', { sessionId }, undefined, { signal });
 }
 
 export function openConvectionWorkspace(

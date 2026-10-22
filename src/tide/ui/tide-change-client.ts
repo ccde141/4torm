@@ -1,4 +1,4 @@
-import { streamUrl } from '../../lib/apiBase';
+import { createBackendEventSource } from '../../lib/backend-client';
 
 export type TideChangeEvent = { type: 'change'; revision: number } & (
   | { scope: 'task'; agentId: string; taskId: string }
@@ -41,7 +41,7 @@ function parseChange(value: unknown): TideChangeEvent | null {
 export function subscribeTideChanges(listener: Listener): () => void {
   listeners.add(listener);
   if (!source) {
-    source = new EventSource(streamUrl('/api/tide/changes'), { withCredentials: true });
+    source = createBackendEventSource('/api/tide/changes');
     source.onopen = () => { lastRevision = 0; publish({ type: 'sync' }); };
     source.onerror = () => publish({ type: 'disconnected' });
     source.onmessage = message => {

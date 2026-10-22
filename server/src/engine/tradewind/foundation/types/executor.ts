@@ -13,6 +13,8 @@ import type { EventTypeDef } from './events';
 import type { ContextMessage } from './context';
 import type { NodeSnapshot } from './archive';
 import type { InputKind, OutputKind, WorkflowMode } from './workflow';
+import type { WorkflowOrchestration } from './workflow';
+import type { HandoffSelection, HandoffRoute } from '../handoff-target.js';
 
 // ── 辅助类型 ─────────────────────────────────────────────────────────
 
@@ -44,6 +46,8 @@ export interface BaseContext {
   readonly signal: AbortSignal;
   /** 运行模式：'manual'（人类在场）/ 'auto'（全自动）。节点据此走对应执行路径。 */
   readonly mode: WorkflowMode;
+  readonly orchestration?: WorkflowOrchestration;
+  readonly handoffRoutes?: readonly HandoffRoute[];
   /** nodeId → agentId 映射（仅 type=agent 的节点） */
   readonly nodeAgentMap: Readonly<Record<string, string>>;
   /** nodeId → label 映射（所有节点） */
@@ -60,11 +64,12 @@ export interface BaseContext {
    *                   传入时只投到 sourcePort 匹配的出线（用于 Human Gate 区分 approve/rework）
    * @param header 可选信封皮（循环/触发元数据：lap / loopNote / idempotencyKey）
    */
-  sendHandoff(content: string, eventTypeId: string, sourcePort?: number, header?: EnvelopeHeader): Promise<void>;
+  sendHandoff(content: string, eventTypeId: string, sourcePort?: number, header?: EnvelopeHeader,
+    selection?: HandoffSelection): Promise<void>;
   /** 设置节点状态（机械动作，引擎记账用） */
   setState(state: NodeState): void;
   /** 发射业务事件（写日志 + SSE 推送） */
-  emit(eventTypeId: string, payload?: unknown): void;
+  emit(eventTypeId: string, payload?: unknown): void | Promise<void>;
   /** 推送流式 token */
   pushToken(chunk: string): void;
 }

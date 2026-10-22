@@ -1,3 +1,4 @@
+import { backendFetch, backendUrl, reportBackendStatus } from '../lib/backend-client';
 const VIDEO_ID = /^background-[a-f0-9-]+\.(mp4|webm)$/;
 
 interface VideoFileInfo { name: string; type: string; size: number }
@@ -13,7 +14,7 @@ export function validateBackgroundVideoFile(file: VideoFileInfo): 'video/mp4' | 
 }
 
 export function backgroundVideoUrl(id: string | undefined): string | undefined {
-  return id && VIDEO_ID.test(id) ? `/api/skin-video/${id}` : undefined;
+  return id && VIDEO_ID.test(id) ? backendUrl(`/api/skin-video/${id}`) : undefined;
 }
 
 function parseVideoUploadResponse(status: number, text: string): string {
@@ -36,10 +37,13 @@ function uploadWithProgress(file: File, type: string, options: VideoUploadOption
       if (error) reject(error); else resolve(id!);
     };
     const onAbort = () => { xhr.abort(); finish(new Error('视频上传已取消')); };
-    xhr.open('PUT', '/api/skin-video');
+    xhr.open('PUT', backendUrl('/api/skin-video'));
+    xhr.withCredentials = true;
     xhr.setRequestHeader('Content-Type', type);
     xhr.upload.onprogress = event => options.onProgress?.(Math.min(event.loaded, file.size));
     xhr.onload = () => {
+      reportBackendStatus(xhr.status, xhr.status === 401
+        && xhr.getResponseHeader('x-4torm-auth-required') === '1');
       try { finish(undefined, parseVideoUploadResponse(xhr.status, xhr.responseText)); }
       catch (error) { finish(error as Error); }
     };
@@ -53,12 +57,12 @@ function uploadWithProgress(file: File, type: string, options: VideoUploadOption
 export async function uploadBackgroundVideoFile(file: File, options?: VideoUploadOptions): Promise<string> {
   const type = validateBackgroundVideoFile(file);
   if (options?.signal || options?.onProgress) return uploadWithProgress(file, type, options);
-  const response = await fetch('/api/skin-video', { method: 'PUT', headers: { 'Content-Type': type }, body: file });
+  const response = await backendFetch('/api/skin-video', { method: 'PUT', headers: { 'Content-Type': type }, body: file });
   return parseVideoUploadResponse(response.status, await response.text());
 }
 
 export async function deleteBackgroundVideoFile(id: string): Promise<void> {
   if (!backgroundVideoUrl(id)) throw new Error('视频标识无效');
-  const response = await fetch(`/api/skin-video/${id}`, { method: 'DELETE' });
+  const response = await backendFetch(`/api/skin-video/${id}`, { method: 'DELETE' });
   if (!response.ok) throw new Error(`视频删除失败：HTTP ${response.status}`);
 }

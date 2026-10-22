@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DEFAULT_DEEPSEEK_CONFIG, normalizeDeepSeekConfig } from './deepseek-config.js';
+import { DEEPSEEK_CONFIG_LIMITS, DEFAULT_DEEPSEEK_CONFIG, normalizeDeepSeekConfig,
+  normalizeDeepSeekRuntimeConfig } from './deepseek-config.js';
 
 test('DeepSeek defaults leave optional API fields under provider control', () => {
   assert.deepEqual(normalizeDeepSeekConfig(undefined), DEFAULT_DEEPSEEK_CONFIG);
@@ -42,4 +43,25 @@ test('DeepSeek rejects invalid and unknown formal fields truthfully', () => {
     () => normalizeDeepSeekConfig({ generationDefaults: { beta_magic: true } }),
     /未知 DeepSeek 配置字段：generationDefaults\.beta_magic/,
   );
+});
+
+test('DeepSeek output cap accepts 393216 and rejects larger configuration values', () => {
+  assert.equal(DEEPSEEK_CONFIG_LIMITS.maxOutputTokens.max, 393_216);
+  assert.equal(normalizeDeepSeekConfig({ generationDefaults: { maxOutputTokens: 393_216 } })
+    .generationDefaults.maxOutputTokens, 393_216);
+  for (const maxOutputTokens of [0, -1, 393_217, 1_000_000, 1.5, Infinity]) {
+    assert.throws(() => normalizeDeepSeekConfig({ generationDefaults: { maxOutputTokens } }), /maxOutputTokens/);
+  }
+});
+
+test('DeepSeek runtime keeps older excessive budgets usable without mutating stored settings', () => {
+  const input = { generationDefaults: { maxOutputTokens: 1_000_000, temperature: 1.2 } };
+  assert.equal(normalizeDeepSeekRuntimeConfig(input).generationDefaults.maxOutputTokens, 393_216);
+  assert.equal(input.generationDefaults.maxOutputTokens, 1_000_000);
+  assert.equal(normalizeDeepSeekRuntimeConfig({ generationDefaults: { maxOutputTokens: 1024 } })
+    .generationDefaults.maxOutputTokens, 1024);
+  for (const maxOutputTokens of [-1, 0, NaN, Infinity, 1.5, '1000000']) {
+    assert.throws(() => normalizeDeepSeekRuntimeConfig({ generationDefaults: { maxOutputTokens } }), /maxOutputTokens/);
+  }
+  assert.throws(() => normalizeDeepSeekRuntimeConfig({ generationDefaults: { maxOutputTokens: 1_000_000, topP: 2 } }), /topP/);
 });

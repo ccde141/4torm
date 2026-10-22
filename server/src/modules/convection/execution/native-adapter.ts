@@ -23,6 +23,7 @@ import {
 import { callToolOutcome } from './tool-bridge';
 import type { ToolCallRecord, ConvectionReActEvent } from './convection-react-adapter';
 import { executeConvectionMemoryTool } from './convection-memory.js';
+import { legacyToolArguments } from '../../../engine/shared/tool-arguments.js';
 import type { ReActTermination } from '../../../engine/shared/react/outcome.js';
 
 /**
@@ -62,7 +63,7 @@ export interface NativeAdapterParams {
 
 export interface ConvectionNativeDependencies {
   callModel: LLMCaller['call'];
-  callAgentTool(tool: string, args: Record<string, string>): Promise<string | ToolCallOutcome>;
+  callAgentTool(tool: string, args: Record<string, unknown>): Promise<string | ToolCallOutcome>;
 }
 
 function defaultDependencies(params: NativeAdapterParams): ConvectionNativeDependencies {
@@ -80,9 +81,10 @@ function defaultDependencies(params: NativeAdapterParams): ConvectionNativeDepen
       onReasoning,
     }),
     callAgentTool: async (tool, args) => {
-      const memoryResult = await executeConvectionMemoryTool(params.dataDir, params.agentId, tool, args);
+      const memoryResult = await executeConvectionMemoryTool(params.dataDir, params.agentId, tool, legacyToolArguments(args));
       if (memoryResult !== null) return memoryResult;
       return callToolOutcome({ tool, args, agentId: params.agentId,
+        mediaAccess: { dataDir: params.dataDir, feature: 'convection', target: { sessionId: params.sessionId } },
         workspaceDir: `data/convection/sessions/${params.sessionId}/workspace`, signal: params.signal });
     },
   };
@@ -137,7 +139,7 @@ export async function runConvectionReActNativeWith(
         onEvent?.({ type: 'tool-result', label, tool, result: errMsg, ok: false });
         throw e;
       }
-      onEvent?.({ type: 'tool-result', label, tool, result: outcome.result, ok: outcome.ok });
+      onEvent?.({ type: 'tool-result', label, tool, ...outcome });
       return outcome;
     },
   };

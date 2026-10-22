@@ -145,6 +145,8 @@ test('内部收口、记忆与执行能力名称不可注册，旧冲突可诊�
     executorFile: name, parameters: { type: 'object' } });
   const reserved = [
     'done', 'memory_write', 'memory_list', 'memory_read', 'browser',
+    'seat_memory_read', 'seat_memory_write',
+    'seat_activity_read', 'seat_dispatch_read',
     'inspect_execution', 'wait_execution', 'terminate_execution',
     'team_start', 'team_create', 'team_dispatch', 'team_read', 'team_wait',
     'team_ack', 'team_review', 'team_dismiss',

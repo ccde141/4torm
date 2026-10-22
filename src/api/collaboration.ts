@@ -1,3 +1,4 @@
+import { backendFetch } from '../lib/backend-client';
 import { errorFromResponse } from './error-contract';
 
 export type CollaborationFeature = 'monsoon' | 'convection' | 'cyclone' | 'tradewind' | 'tide';
@@ -111,11 +112,13 @@ export async function invokeFeature<T = unknown>(
   method: string,
   input: unknown,
   fallback?: string,
+  options?: { signal?: AbortSignal },
 ): Promise<T> {
-  const response = await fetch('/api/collaboration/invoke', {
+  const response = await backendFetch('/api/collaboration/invoke', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ feature, method, input }),
+    signal: options?.signal,
   });
   if (!response.ok) throw await errorFromResponse(response,
     fallback ? `${fallback} (HTTP ${response.status})` : `${response.status} ${response.statusText}`);
@@ -126,7 +129,7 @@ export async function observeFeature(
   feature: CollaborationFeature,
   query: ObservationQuery,
 ): Promise<ObservationEnvelope> {
-  const response = await fetch('/api/collaboration/observe', {
+  const response = await backendFetch('/api/collaboration/observe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ feature, query }),
@@ -138,7 +141,7 @@ export async function observeFeature(
 export async function readCollaborationSnapshot(
   query: Omit<ObservationQuery, 'cursor'>,
 ): Promise<CollaborationSnapshot> {
-  const response = await fetch('/api/collaboration/snapshot', {
+  const response = await backendFetch('/api/collaboration/snapshot', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query }),
@@ -152,7 +155,7 @@ export async function inspectOperation(
   operationId: string,
   runId: string,
 ): Promise<CollaborationProbeItem> {
-  const response = await fetch('/api/collaboration/operation', {
+  const response = await backendFetch('/api/collaboration/operation', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ feature, operationId, runId }),
@@ -162,7 +165,7 @@ export async function inspectOperation(
 }
 
 async function postCollaboration<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(`/api/collaboration/${path}`, {
+  const response = await backendFetch(`/api/collaboration/${path}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal,
   });

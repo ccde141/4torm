@@ -1,3 +1,4 @@
+import { backendFetch } from '../../../lib/backend-client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CycloneDispatch } from './dispatch-timeline';
 import {
@@ -27,7 +28,7 @@ export async function readDispatchError(response: Response, fallback: string): P
 const requestFallback = (template: string, status: number) => template.replace('{status}', String(status));
 
 async function fetchWorkshopDispatches(workshopId: string, fallbackTemplate: string): Promise<CycloneDispatch[]> {
-  const response = await fetch(`/api/cyclone/workshop/${workshopId}/dispatches`);
+  const response = await backendFetch(`/api/cyclone/workshop/${workshopId}/dispatches`);
   if (!response.ok) throw await readDispatchError(response, requestFallback(fallbackTemplate, response.status));
   return response.json();
 }

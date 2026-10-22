@@ -78,3 +78,12 @@ run('text agent（native=false）→ JSON 工具信封，普通自然语言自�
 });
 
 console.log('ok');
+
+run('human/contact 轮不要求调用未开放的信封工具', () => {
+  for (const source of ['human', 'contact'] as const) for (const orchestration of ['strict', 'handoff'] as const) {
+    const p = buildTradewindSystemPrompt({ ...base, source, orchestration,
+      teamRoster: [...base.teamRoster, { label: '乙', role: '执行', isSelf: false }] });
+    assert.doesNotMatch(p, /当前你处于信封轮|complete_task|envelope_add/);
+    assert.match(p, /本轮没有信封工具/);
+  }
+});

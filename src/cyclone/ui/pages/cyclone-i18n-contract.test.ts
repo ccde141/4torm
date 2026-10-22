@@ -73,7 +73,7 @@ test('cyclone room panel localizes actions without changing reset protocol', () 
   assert.match(source, /cyclone\.roomPanel\.deleteTitle/);
   assert.match(source, /cyclone\.roomPanel\.resetTitle/);
   assert.match(source, /text === '\/reset all summary'/);
-  assert.match(source, /resetRoomContextThroughCenter\(workshopId, roomId, mode, scope\)/);
+  assert.match(source, /resetRoomContextThroughCenter\(workshopId, roomId, mode, scope, signal\)/);
 });
 
 test('cyclone seat chat localizes controls without changing chat and resume actions', () => {

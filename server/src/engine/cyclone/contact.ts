@@ -1,11 +1,13 @@
+import { SUB_AGENT_MAX_ROUNDS } from '../shared/sub-agent-budget.js';
+import { subAgentReport } from '../shared/sub-agent-result.js';
 /**
- * 气旋 Contact 执行器 —— 工位间同步联络的投递层
+ * 气旋 Contact 执行器 —— 工位间联络的投递层
  *
  * 拿目标工位锁 → 加载会话 → 追加联络消息 → 跑一轮 ReAct → 落盘 → 回传回复。
  * 目标回复写进目标工位会话。
  *
  * 防护：waitGraph 环检测 + 嵌套深度上限 + abort 处理；
- *   目标锁被占（人类正私聊 / 已被别的 contact 占用）→ 返回「正忙」，非阻塞。
+ *   最多等待30秒接入；接入后超过回复窗口，执行继续，发起方凭记录查询。
  *
  * 依赖 shared/ 与本目录模块。
  */
@@ -15,6 +17,7 @@ import { resolveNativeMode } from '../shared/llm-bridge';
 import { loadAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execToolUnifiedOutcome } from '../shared/exec-tool';
+import { legacyToolArguments } from '../shared/tool-arguments.js';
 import { runReActLoopNative, type ToolCaller, type ToolCallOutcome, type LLMCaller, type ReActLoopResult } from '../shared/react/native-loop';
 import { runReActLoop } from '../shared/react/text-loop';
 import { callLLM } from '../shared/llm-bridge';
@@ -27,6 +30,8 @@ import {
 } from './cyclone-memory.js';
 import { execBulletin } from './bulletin';
 import { buildContactToolCatalog } from './seat-tool-catalog';
+import { assertSeatCollaborationTool, seatCollaborationPolicy } from './seat-collaboration.js';
+import { beginSeatContact } from './seat-event-journal.js';
 import { withNativeContactToolEvents } from './contact-tool-events.js';
 import { loadSeat, saveSeat, tryAcquireSeatLock } from './seat-store';
 import { listOtherSeats, tryRegisterWait, clearWait } from './contact-registry';
@@ -38,6 +43,12 @@ import { beginExternalSeatActivity } from './seat-activity.js';
 import { toSeatProgressEvent, type LoopProgressEvent } from './loop-event-forwarder.js';
 import path from 'node:path';
 import { createSeatCompactionCaller } from './conversation-compaction-caller.js';
+import { executeSeatFactTool, isSeatFactTool } from './seat-fact-tools.js';
+import { runContactCommunication, readContactCommunicationOutcome,
+  type ContactEndpoint, type ContactTiming } from './contact-communication.js';
+import type { ContactPartyKind } from './contact-communication-store.js';
+import { SUPERVISOR_REPORT_TOOL, reportToSupervisor } from './supervisor-tools.js';
+import { loadSupervisor } from './supervisor-store.js';
 
 /** 嵌套联络深度上限（A→B→C→…），超过即拒绝，防失控递归 */
 const MAX_CONTACT_DEPTH = 5;
@@ -52,14 +63,20 @@ export interface ContactCtx {
   /** 当前嵌套深度（顶层=0） */
   depth: number;
   signal?: AbortSignal;
+  sourceKind?: ContactPartyKind;
+  /** Framework-owned authorization and execution adapter for other local roles. */
+  resolveEndpoint?: (target: string, message: string) => Promise<ContactEndpoint | undefined>;
 }
 
 export async function persistContactMessage(
   dataDir: string, workshopId: string, seat: SeatData,
   fromTitle: string, message: string,
+  signal?: AbortSignal,
 ): Promise<void> {
+  signal?.throwIfAborted();
   seat.messages.push({ role: 'user', content: `[系统信息：来自工位「${fromTitle}」的联络]\n\n${message}` });
-  await saveSeat(dataDir, workshopId, seat);
+  seat.compaction = undefined;
+  await saveSeat(dataDir, workshopId, seat, signal);
 }
 
 function wsRel(dataDir: string, workshopId: string): string {
@@ -86,8 +103,8 @@ export function forwardContactEvent(
   if (progress) emit({ ...progress });
   if (event.type === 'tool-call') emit({ type: 'tool-call', tool: event.tool, args: event.args });
   if (event.type === 'tool-result') emit({ type: 'tool-result', tool: event.tool,
-    result: event.result, ok: event.ok ?? true });
-  if (event.type === 'error') emit({ type: 'error', message: event.message });
+    result: event.result, ok: event.ok ?? true,
+    ...(event.toolImages?.length ? { toolImages: event.toolImages } : {}) });
 }
 
 /**
@@ -100,6 +117,7 @@ export async function execContact(ctx: ContactCtx, target: string, message: stri
 
 export async function execContactOutcome(
   ctx: ContactCtx, target: string, message: string,
+  timing?: ContactTiming,
 ): Promise<ToolCallOutcome> {
   const { dataDir, workshopId, fromSeatId, depth } = ctx;
 
@@ -108,11 +126,14 @@ export async function execContactOutcome(
   }
 
   // 1. 寻址：title → seatId
-  let targetSeatId: string;
+  let endpoint: ContactEndpoint;
   try {
-    targetSeatId = (await resolveAuthorizedTarget(
-      dataDir, workshopId, fromSeatId, target, 'contact',
-    )).id;
+    const custom = await ctx.resolveEndpoint?.(target, message);
+    if (custom) endpoint = custom;
+    else {
+      const resolved = await resolveAuthorizedTarget(dataDir, workshopId, fromSeatId, target, 'contact');
+      endpoint = createSeatContactEndpoint(ctx, resolved, message);
+    }
   } catch (error) {
     if (error instanceof FrameworkError && ['not_found', 'permission'].includes(error.data.kind)) {
       return { result: `联络失败：${error.message}`, ok: false };
@@ -121,41 +142,62 @@ export async function execContactOutcome(
   }
 
   // 2. waitGraph 环检测
-  if (!tryRegisterWait(workshopId, fromSeatId, targetSeatId)) {
+  if (!tryRegisterWait(workshopId, fromSeatId, endpoint.id)) {
     return { result: `联络被系统拒绝：「${target}」当前正在等待你的回复，反向联络会造成死锁。请直接在当前回复中处理。`, ok: false };
   }
 
-  // 3. 拿目标锁（非阻塞）。被占即返回「正忙」，不排队
-  const release = tryAcquireSeatLock(workshopId, targetSeatId);
-  if (!release) {
-    clearWait(workshopId, fromSeatId);
-    return { result: `联络失败：「${target}」当前正忙（正在被其他会话占用），请稍后再试或改由人类协调。`, ok: false };
-  }
+  try { return await runContactCommunication(ctx, endpoint, timing); }
+  finally { clearWait(workshopId, fromSeatId); }
+}
 
-  return completeContact(ctx, target, message, targetSeatId, release);
+/** The framework authorizes the resolved destination before constructing this adapter. */
+export function createSeatContactEndpoint(
+  ctx: ContactCtx, target: { id: string; title: string }, message: string,
+): ContactEndpoint {
+  return { id: target.id, title: target.title, kind: 'seat',
+    tryAcquire: async () => {
+      const release = tryAcquireSeatLock(ctx.workshopId, target.id);
+      if (!release) return null;
+      try {
+        const seat = await loadSeat(ctx.dataDir, ctx.workshopId, target.id);
+        if (!seat) throw new Error('目标工位会话不存在');
+        if (seat.pending) { release(); return null; }
+        return release;
+      } catch (error) { release(); throw error; }
+    },
+    execute: (signal, contactId) => completeContact({ ...ctx, signal }, target.title, message, target.id, contactId),
+  };
 }
 
 async function completeContact(
   ctx: ContactCtx, target: string, message: string,
-  targetSeatId: string, release: () => void,
+  targetSeatId: string, contactId: string,
 ): Promise<ToolCallOutcome> {
   const { workshopId, fromSeatId, fromTitle } = ctx;
   const activity = beginExternalSeatActivity(
     workshopId, targetSeatId, 'contact', `正在处理来自「${fromTitle}」的联络`,
     fromSeatId,
   );
+  let journal: Awaited<ReturnType<typeof beginSeatContact>> | undefined;
   try {
+    const targetSeat = await loadSeat(ctx.dataDir, workshopId, targetSeatId);
+    if (!targetSeat) throw new Error('目标工位会话不存在');
+    journal = await beginSeatContact(ctx.dataDir, { workshopId, seatId: targetSeatId,
+      agentId: targetSeat.agentId, sourceSeatId: fromSeatId, sourceTitle: fromTitle,
+      title: `处理来自「${fromTitle}」的联络`, communicationId: contactId });
     const answer = await runContactedTurn(ctx, targetSeatId, message, activity.emit);
+    await journal.finish(answer.ok ? 'completed' : ctx.signal?.aborted ? 'aborted' : 'failed',
+      answer.ok ? undefined : answer.result);
     return answer.ok
       ? { result: `[系统信息：来自工位「${target}」的回复]\n\n${answer.result}`, ok: true }
       : { result: `联络「${target}」失败：${answer.result}`, ok: false };
   } catch (e) {
+    // journal 的提交错误必须返回给调用方，不能将已执行但未记录的工作报为成功。
+    if (journal) await journal.finish(ctx.signal?.aborted ? 'aborted' : 'failed', (e as Error).message);
     activity.emit({ type: 'error', message: (e as Error).message });
     return { result: `联络「${target}」失败：${(e as Error).message}`, ok: false };
   } finally {
     activity.finish();
-    release();
-    clearWait(workshopId, fromSeatId);
   }
 }
 
@@ -174,7 +216,7 @@ function contactTurnOutcome(result: ReActLoopResult): ToolCallOutcome {
  * 目标工位被联络后的一轮处理：加载会话 → 追加联络消息 → 跑一轮 → 落盘 → 返回干净回复。
  * 目标在本轮可继续 contact（嵌套深度 +1），其工具调用器内含 contact 分支。
  */
-async function runContactedTurn(
+export async function runContactedTurn(
   ctx: ContactCtx,
   targetSeatId: string,
   message: string,
@@ -191,8 +233,10 @@ async function runContactedTurn(
 
   const toolDefs = withCycloneMemoryTools(
     await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode),
+    { workshopId, seatId: targetSeatId },
   );
-  const memorySection = await buildCycloneMemoryPrompt(dataDir, agent.id, message);
+  if ((await loadSupervisor(dataDir, workshopId)).agentId) toolDefs.push(SUPERVISOR_REPORT_TOOL);
+  const memorySection = await buildCycloneMemoryPrompt(dataDir, agent.id, message, { workshopId, seatId: targetSeatId });
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
   const wsDir = wsRel(dataDir, workshopId);
 
@@ -200,13 +244,24 @@ async function runContactedTurn(
   const contactTargets = await listOtherSeats(dataDir, workshopId, targetSeatId);
 
   const toolCaller: ToolCaller = {
-    async call(tool, args) {
+    async call(tool, rawArgs) {
+      const args = legacyToolArguments(rawArgs);
+      try { await assertSeatCollaborationTool(dataDir, workshopId, targetSeatId, tool); }
+      catch (error) { return { result: (error as Error).message, ok: false }; }
+      if (tool === 'contact_read') return readContactCommunicationOutcome({
+        dataDir, workshopId, fromSeatId: targetSeatId,
+      }, args);
+      if (tool === 'supervisor_message') return reportToSupervisor(dataDir, workshopId, targetSeatId, args);
       if (isCycloneMemoryTool(tool)) {
         try {
-          return (await executeCycloneMemoryTool(dataDir, agent.id, tool, args))!;
+          return (await executeCycloneMemoryTool(dataDir, agent.id, tool, args, { workshopId, seatId: targetSeatId }))!;
         } catch (error) {
           return { result: `记忆工具执行失败: ${(error as Error).message}`, ok: false };
         }
+      }
+      if (isSeatFactTool(tool)) {
+        try { return await executeSeatFactTool(dataDir, { workshopId, seatId: targetSeatId }, tool, args); }
+        catch (error) { return { result: `工位事实查询失败：${(error as Error).message}`, ok: false }; }
       }
       if (tool === 'bulletin') {
         return execBulletin(dataDir, workshopId, args, seat.title);
@@ -220,17 +275,16 @@ async function runContactedTurn(
       }
       if (tool === 'delegate') {
         const { runSubAgent } = await import('../shared/sub-agent-runner');
-        const abortCtrl = new AbortController();
-        signal?.addEventListener('abort', () => abortCtrl.abort(), { once: true });
         const r = await runSubAgent({
           task: args.task || '', context: args.context || '', systemPrompt: args.systemPrompt || '',
-          agentId: agent.id, dataDir, signal: abortCtrl.signal, timeout: 1_200_000, maxRounds: 100,
+          agentId: agent.id, dataDir, signal: signal ?? new AbortController().signal, timeout: 1_200_000, maxRounds: SUB_AGENT_MAX_ROUNDS,
           parentSandboxLevel: agent.sandboxLevel,
         });
-        return { result: `[${r.status}] ${r.summary}`, ok: r.status === 'success' };
+        return { result: `[${r.status}] ${subAgentReport(r)}`, ok: r.status === 'success' };
       }
       try {
-        return await execToolUnifiedOutcome({ tool, args, agentId: agent.id, workspaceDir: wsDir, sandboxLevel: agent.sandboxLevel, signal });
+        return await execToolUnifiedOutcome({ tool, args: rawArgs, agentId: agent.id, workspaceDir: wsDir, sandboxLevel: agent.sandboxLevel, signal,
+          mediaAccess: { dataDir, feature: 'cyclone', target: { workshopId, kind: 'seat', targetId: seat.id } } });
       } catch (e) {
         return { result: `工具执行失败: ${(e as Error).message}`, ok: false };
       }
@@ -239,20 +293,21 @@ async function runContactedTurn(
 
   // 联络消息进目标会话（收件箱语义）
   // 先落盘入站气泡，再启动模型；目标工位页面可在处理期间看到消息。
-  await persistContactMessage(dataDir, workshopId, seat, fromTitle, message);
+  await persistContactMessage(dataDir, workshopId, seat, fromTitle, message, signal);
 
-  const runtimeToolDefs = buildContactToolCatalog(toolDefs, contactTargets);
+  const runtimeToolDefs = buildContactToolCatalog(toolDefs, contactTargets, seatCollaborationPolicy(seat));
   const system: ContextMessage = {
     role: 'system',
     content: buildSeatContactSystemPrompt({
       dataDir, workshopId, seat, agent,
-      toolDefs: native ? toolDefs : runtimeToolDefs,
+      toolDefs: runtimeToolDefs,
       native, wsRelPath: wsDir, fromTitle, memorySection,
     }),
   };
   const messages = [system, ...seat.messages];
   const llm = createSeatCompactionCaller({ dataDir, workshopId, seat, messages, agent,
-    llm: makeLLM(dataDir, agent.model, agent.temperature), onNotice: notice => emit({ ...notice }) });
+    llm: makeLLM(dataDir, agent.model, agent.temperature), onNotice: notice => emit({ ...notice }),
+    onProgress: progress => emit({ ...progress }) });
   // 被联络方剥 ask（无人类在场），保留 delegate + 嵌套 contact
 
   const onEvent = (event: LoopProgressEvent) => forwardContactEvent(event, emit);

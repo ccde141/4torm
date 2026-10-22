@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { deleteSession, getSession, getSessionSnapshot, getSessionsByAgent,
-  saveSession, type ChatSession } from './chat.js';
+  markSessionRead, saveSession, type ChatSession } from './chat.js';
 
 const value: ChatSession = {
   id: 'session-a', agentId: 'agent-a', agentName: 'A', title: 'New', messages: [],
@@ -84,4 +84,24 @@ test('a cached newer revision cannot authorize an older message payload', async 
   await assert.rejects(saveSession(stale), /会话已被其他操作更新/);
   assert.equal(body?.expectedRevision, 3);
   assert.deepEqual(body?.session.messages.map(message => message.id), ['old']);
+});
+
+test('marking a recovered conversation read sends metadata without saving the journal projection', async t => {
+  const current = { ...value, id: 'session-read-only', messageRevision: 4,
+    messages: [{ id: 'run-a', inputRunId: 'run-a', role: 'assistant' as const, content: '',
+      timestamp: value.createdAt, runCommitted: false }] };
+  let written: { mode: string; session: ChatSession } | undefined;
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    if (init?.method === 'PUT') {
+      written = JSON.parse(String(init.body));
+      return Response.json({ ...current, revision: 2, lastReadAt: written?.session.lastReadAt });
+    }
+    return Response.json({ ...current, pendingRuns: [{ runId: 'run-a', truncated: false,
+      events: [{ type: 'reasoning', content: 'recovered reasoning' }] }] });
+  });
+  await getSession(current.id, current.agentId);
+  await markSessionRead(current.id);
+  assert.equal(written?.mode, 'read');
+  assert.deepEqual(written?.session.messages, []);
+  assert.ok(written?.session.lastReadAt);
 });

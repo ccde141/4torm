@@ -4,7 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createWorkshop } from './workshop-store.js';
-import { addSeat, loadSeat, saveSeat, updateSeatRole } from './seat-store.js';
+import { addSeat, deleteSeat, loadSeat, saveSeat, updateSeatRole } from './seat-store.js';
+import { loadWorkshop } from './workshop-store.js';
+import { workshopBakDir } from './paths.js';
 
 test('工位换绑 Agent 时完整保留原有工位上下文与配置', async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-seat-rebind-'));
@@ -37,4 +39,38 @@ test('工位换绑 Agent 时完整保留原有工位上下文与配置', async (
   assert.equal(updated?.duty, '实现后端');
   assert.equal(updated?.createdAt, seat.createdAt);
   assert.equal((await loadSeat(dataDir, workshop.id, seat.id))?.agentId, 'agent-b');
+});
+
+test('岗位历史归档失败时不移除活动工位与原始会话', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-seat-retire-io-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const workshop = await createWorkshop(dataDir);
+  const seat = await addSeat(dataDir, workshop.id, { agentId: 'agent-a', title: '资料员' });
+  seat.messages.push({ role: 'user', content: '原会话不能丢失' });
+  await saveSeat(dataDir, workshop.id, seat);
+  const parent = path.join(workshopBakDir(dataDir, workshop.id), 'retired-seats');
+  await fs.mkdir(parent, { recursive: true });
+  await fs.writeFile(path.join(parent, seat.id), '阻止归档目录创建');
+  await assert.rejects(() => deleteSeat(dataDir, workshop.id, seat.id));
+  assert.ok((await loadWorkshop(dataDir, workshop.id))?.seatIds.includes(seat.id));
+  assert.deepEqual((await loadSeat(dataDir, workshop.id, seat.id))?.messages, seat.messages);
+});
+
+test('并行创建与改名共享工作室名称事务，旧快照不能写回已退休工位', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-seat-title-transaction-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const workshop = await createWorkshop(dataDir);
+  const creates = await Promise.allSettled(Array.from({ length: 4 }, () => addSeat(dataDir, workshop.id,
+    { agentId: 'agent-a', title: '同名岗位' })));
+  assert.equal(creates.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal((await loadWorkshop(dataDir, workshop.id))?.seatIds.length, 1);
+  const first = await addSeat(dataDir, workshop.id, { agentId: 'agent-a', title: '岗位甲' });
+  const second = await addSeat(dataDir, workshop.id, { agentId: 'agent-a', title: '岗位乙' });
+  const renames = await Promise.allSettled([first, second].map(seat =>
+    updateSeatRole(dataDir, workshop.id, seat.id, { title: '唯一新名' })));
+  assert.equal(renames.filter(result => result.status === 'fulfilled').length, 1);
+  await deleteSeat(dataDir, workshop.id, first.id);
+  first.messages.push({ role: 'assistant', content: '迟到的执行快照' });
+  await assert.rejects(saveSeat(dataDir, workshop.id, first), /已移除/);
+  assert.equal(await loadSeat(dataDir, workshop.id, first.id), null);
 });

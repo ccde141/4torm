@@ -7,11 +7,14 @@
  * 信风独立副本，可自主演进。
  */
 
+import { backendFetch } from '../../../lib/backend-client';
+import type { CompactionEvent } from '../compaction-events';
 import { errorFromResponse, type FrameworkErrorKind } from '../../../api/error-contract';
 import { invokeFeature } from '../../../api/collaboration';
-import { requirePanelIdentity } from '../stream/panel-identity';
+import { requirePanelIdentity, panelReadUrl } from '../stream/panel-identity';
 import type { ExecutionIdentity } from '../hooks/execution-visibility';
 import type { ProviderUsage } from '../token-usage';
+import type { ToolImageRef } from '../../../engine/tool-media';
 
 export interface MeetingTokenUsage {
   calls: number;
@@ -24,8 +27,9 @@ export type ToolStepStatus = 'running' | 'done' | 'error';
 
 export interface ToolStep {
   tool: string;
-  args: Record<string, string>;
+  args: Record<string, unknown>;
   result?: string;
+  toolImages?: ToolImageRef[];
   status?: ToolStepStatus;
   diff?: { before?: string };
   meta?: { before?: string };
@@ -73,17 +77,18 @@ export interface MeetingStatus {
   streamingCurrent?: { speaker: string; content: string; reasoning?: string } | null;
   tokenUsage?: MeetingTokenUsage;
   compactionNotice?: string;
+  compactions?: { public?: CompactionEvent; chair?: CompactionEvent };
 }
 
 export type MeetingBroadcastEvent =
-  | { type: 'connected'; phase: string; round: number; runId?: string; messages: MeetingMessage[]; chairMessages: MeetingChairMessage[]; participants: MeetingParticipant[]; configuredParticipants: MeetingParticipant[]; tokenUsage?: MeetingTokenUsage; compactionNotice?: string }
+  | { type: 'connected'; phase: string; round: number; runId?: string; messages: MeetingMessage[]; chairMessages: MeetingChairMessage[]; participants: MeetingParticipant[]; configuredParticipants: MeetingParticipant[]; tokenUsage?: MeetingTokenUsage; compactionNotice?: string; compactions?: MeetingStatus['compactions'] }
   | { type: 'round-start'; runId: string; startedAt: string }
   | { type: 'agent-start'; label: string }
   | { type: 'token'; label: string; chunk: string }
   | { type: 'reasoning'; label: string; chunk: string }
   | { type: 'usage'; usage: ProviderUsage | null; tokenUsage: MeetingTokenUsage; label?: string }
-  | { type: 'tool-call'; label: string; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; label: string; tool: string; result: string; meta?: { before?: string } }
+  | { type: 'tool-call'; label: string; tool: string; args: Record<string, unknown> }
+  | { type: 'tool-result'; label: string; tool: string; result: string; toolImages?: ToolImageRef[]; meta?: { before?: string } }
   | { type: 'heartbeat'; label: string; phase?: string; elapsed?: number }
   | { type: 'contact-start'; label: string; target: string }
   | { type: 'contact-done'; label: string; target: string; result: string; ok: boolean }
@@ -96,29 +101,28 @@ export type MeetingBroadcastEvent =
   | { type: 'summary-chunk'; chunk: string }
   | { type: 'summary-done'; minutes: string }
   | { type: 'phase-change'; phase: string }
-  | { type: 'compact-start' }
-  | { type: 'compact-done'; archivedRounds?: number; summaryLength?: number }
+  | CompactionEvent
   | { type: 'compact-warn'; message: string }
   | { type: 'compaction-notice'; message: string }
   | { type: 'compaction-notice-clear' }
-  | { type: 'history-updated'; messages: MeetingMessage[]; chairMessages: MeetingChairMessage[] }
+  | { type: 'history-updated'; messages: MeetingMessage[]; chairMessages: MeetingChairMessage[]; target?: 'public' | 'chair' }
   | { type: 'done'; messages: Array<{ role: string; content: string }> }
-  | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind };
+  | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind; target?: 'public' | 'chair' };
 
 
 /** 发送公共发言（fire-and-forget，事件通过 /events 流返回） */
 export async function sendSpeak(
-  executionId: string, nodeId: string, message: string,
+  executionId: string, nodeId: string, message: string, signal?: AbortSignal,
 ): Promise<{ ok: boolean; error?: string }> {
-  await invokeFeature('tradewind', 'speakMeeting', { executionId, nodeId, message });
+  await invokeFeature('tradewind', 'speakMeeting', { executionId, nodeId, message }, undefined, { signal });
   return { ok: true };
 }
 
 /** 发送会议助理私聊（fire-and-forget，事件通过 /events 流返回） */
 export async function sendChair(
-  executionId: string, nodeId: string, message: string,
+  executionId: string, nodeId: string, message: string, signal?: AbortSignal,
 ): Promise<{ ok: boolean; error?: string }> {
-  await invokeFeature('tradewind', 'messageMeetingChair', { executionId, nodeId, message });
+  await invokeFeature('tradewind', 'messageMeetingChair', { executionId, nodeId, message }, undefined, { signal });
   return { ok: true };
 }
 
@@ -129,7 +133,7 @@ export function endMeeting(executionId: string, nodeId: string): Promise<{ minut
 
 /** 获取会议状态 */
 export async function getStatus(nodeId: string, identity: ExecutionIdentity): Promise<MeetingStatus> {
-  const res = await fetch(`/api/tradewind/meeting/${nodeId}/status`);
+  const res = await backendFetch(panelReadUrl(`/api/tradewind/meeting/${encodeURIComponent(nodeId)}/status`, identity));
   if (!res.ok) throw await errorFromResponse(res);
   return requirePanelIdentity(await res.json() as MeetingStatus, identity);
 }

@@ -40,11 +40,21 @@ export function extractNextPrompt(answer: string): {
   next: string | null;
   cleaned: string;
 } {
-  // 匹配 [NEXT: ...] — 贪婪到行尾或闭合 ]
-  const re = /\[NEXT:\s*(.+?)\]\s*$/im;
-  const m = re.exec(answer);
-  if (!m) return { next: null, cleaned: answer };
-  const next = m[1].trim();
-  const cleaned = answer.slice(0, m.index).trimEnd();
-  return { next: next || null, cleaned };
+  const lines = answer.split(/\r?\n/);
+  let last = lines.length - 1;
+  while (last >= 0 && !lines[last]!.trim()) last--;
+  if (last < 0) return { next: null, cleaned: answer };
+  // A marker inside an example/code block is data, not the next task.
+  let fence: { char: string; length: number } | undefined;
+  for (const line of lines.slice(0, last)) {
+    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!match) continue;
+    const run = match[1]!;
+    if (!fence) fence = { char: run[0]!, length: run.length };
+    else if (run[0] === fence.char && run.length >= fence.length && !match[2]!.trim()) fence = undefined;
+  }
+  const match = /^[ \t]*\[NEXT:[ \t]*([^\r\n]+)\][ \t]*$/i.exec(lines[last]!);
+  const next = match?.[1]?.trim();
+  if (fence || !next) return { next: null, cleaned: answer };
+  return { next, cleaned: answer.slice(0, answer.trimEnd().length - lines[last]!.trimEnd().length).trimEnd() };
 }

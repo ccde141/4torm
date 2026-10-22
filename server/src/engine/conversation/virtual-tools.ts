@@ -1,3 +1,4 @@
+import { SUB_AGENT_MAX_ROUNDS } from '../shared/sub-agent-budget.js';
 /**
  * 季风虚拟工具 schema —— 原生工具调用模式专用
  *
@@ -47,7 +48,7 @@ export function buildVirtualToolDefs(
     },
     {
       name: 'delegate',
-      description: '将子任务委托给独立 SubAgent 执行。SubAgent 在隔离上下文中完成任务后返回结果摘要。涉及阅读/探索/调查/对比、或需读取2个以上文件时优先使用。单个 SubAgent 工具调用上限约25轮，任务过大需拆分为多个 delegate。',
+      description: `将子任务委托给独立 SubAgent 执行。SubAgent 在隔离上下文中完成任务后返回结果摘要。涉及阅读/探索/调查/对比时可使用。单个 SubAgent 工具调用上限为${SUB_AGENT_MAX_ROUNDS}轮，按任务复杂度拆分。`,
       parameters: {
         type: 'object',
         properties: {

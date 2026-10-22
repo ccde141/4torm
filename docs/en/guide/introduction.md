@@ -10,7 +10,7 @@
 | **Convection · Meeting Rooms** | Bring several Agents together to discuss a topic in order, with a private meeting assistant available to you. |
 | **Cyclone · Workshops** | Give a long-term project stable seats, shared files, and collaboration relationships, with private seat chats and group rooms. |
 | **Tradewind · Workflows** | Arrange repeatable steps for Agents to hand work along, with points for human review. |
-| **Tide · Automated Tasks** | Run an Agent at set intervals and save results in an independent conversation or a chosen Monsoon conversation. |
+| **Tide · Automated Tasks** | Run an Agent at set intervals or a fixed time each day and save results in an independent conversation or a chosen Monsoon conversation. |
 
 For a new conversation, start in Monsoon. Use Convection when several Agents should discuss one topic; use Cyclone when you need a group of long-term collaborators. Tradewind defines handoff order in advance, while Tide repeats work over time.
 

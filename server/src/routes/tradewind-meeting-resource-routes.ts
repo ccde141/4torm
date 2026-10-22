@@ -1,11 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { queryTradewind, type TradewindRouteOptions } from './tradewind-route-support.js';
+import { tradewindReadIdentity } from './tradewind-read-identity.js';
 
 export async function registerTradewindMeetingResourceRoutes(
   app: FastifyInstance, options: TradewindRouteOptions,
 ): Promise<void> {
   app.get('/meeting/:nodeId/status', async (request, reply) => {
     const { nodeId } = request.params as { nodeId: string };
-    return reply.send(await queryTradewind(options, 'readMeetingStatus', { nodeId }, request));
+    return reply.send(await queryTradewind(options, 'readMeetingStatus', { nodeId, ...tradewindReadIdentity(request.query) }, request));
   });
 }

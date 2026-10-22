@@ -1,9 +1,9 @@
 import type { SeatEvent } from './seat-runner.js';
 import type { DispatchActivity } from './dispatch-store.js';
 
-function activityTarget(args: Record<string, string>): string | undefined {
+function activityTarget(args: Record<string, unknown>): string | undefined {
   for (const key of ['path', 'filePath', 'file', 'command', 'cmd', 'url', 'query']) {
-    const value = args[key]?.trim();
+    const value = typeof args[key] === 'string' ? args[key].trim() : '';
     if (value) return value.slice(0, 240);
   }
   return undefined;

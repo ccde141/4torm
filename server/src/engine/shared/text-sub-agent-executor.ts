@@ -67,8 +67,8 @@ export async function runTextSubAgent(params: TextSubAgentParams): Promise<SubAg
         );
       },
       onToolCall: (tool, args) => params.emitEvent({ type: 'tool_call', data: { tool, args } }),
-      onToolResult: (tool, result, ok) => params.emitEvent({
-        type: 'tool_result', data: { tool, result, ok },
+      onToolResult: (tool, result, ok, toolImages) => params.emitEvent({
+        type: 'tool_result', data: { tool, result, ok, ...(toolImages?.length ? { toolImages } : {}) },
       }),
     });
     params.emitEvent({ type: result.status === 'error' ? 'error' : 'done', data: result });

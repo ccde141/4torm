@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import BoundedText from '../../engine/text-display/BoundedText';
 import type { ChatMessage } from '../../types';
 import { formatTimestamp } from '../../utils/time';
 import { computeDiffView, type DiffLine } from '../../utils/diff';
@@ -99,7 +100,7 @@ export default function FileDiffCard({ toolCall, edit, actions, timestamp }: {
             )}
             {toolCall.result && (
               <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--text-xs)', color: isError ? '#f85149' : 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' }}>
-                {toolCall.result}
+                <BoundedText text={toolCall.result} />
               </div>
             )}
           </div>

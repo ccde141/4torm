@@ -57,12 +57,16 @@ test('task board localizes presentation and stays below the feature file limit',
 test('monsoon page and session hooks localize controls and framework notices', () => {
   const page = source('ChatPage') + source('MonsoonConversation') + source('MonsoonSidebar');
   const sessions = fs.readFileSync('src/components/chat/useSessionList.ts', 'utf8');
+  const compaction = fs.readFileSync('src/components/chat/useMonsoonCompaction.ts', 'utf8');
   const editor = fs.readFileSync('src/components/chat/useMessageEditor.ts', 'utf8');
   assert.match(page, /useLocale/);
   assert.match(page, /chat\.page\.inputPlaceholder/);
   assert.match(page, /chat\.page\.deleteSessionTitle/);
   assert.match(sessions, /useLocale/);
-  assert.match(sessions, /chat\.compact\.progress/);
+  assert.match(sessions, /useMonsoonCompaction/);
+  assert.match(compaction, /useLocale/);
+  assert.match(compaction, /compaction\.status\.unconfirmed/);
+  assert.match(page, /CompactionStatus/);
   assert.match(editor, /useLocale/);
   assert.match(editor, /chat\.page\.deleteMessageTitle/);
 });

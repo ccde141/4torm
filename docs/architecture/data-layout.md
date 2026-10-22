@@ -1,6 +1,6 @@
 # 数据目录
 
-4torm 将 Agent 配置、会话、任务、工作流和运行记录保存在项目的 `data/` 目录中。部分正在运行的状态只存在于服务端进程内，不会写入文件
+4torm 将 Agent 配置、会话、任务、工作流和运行记录保存在后端的数据目录中，默认是项目的 `data/`；独立部署时也可以另行指定。部分正在运行的状态只存在于服务端进程内，不会写入文件
 
 Agent 还可以使用项目外部的工作区。此类工作区不属于 `data/`，备份或迁移时需要单独处理
 
@@ -52,13 +52,19 @@ data/
 │       │           季风会话、索引和任务板；附件目录保存季风会话中发送的图片附件
 │       │
 │       └── sessions-tide/
-│           └── {taskName}_{taskId}/
+│           └── task-{taskIdHash}/
 │               ├── _index.json
 │               ├── {sessionId}.json
 │               └── bak/
 │                       独立潮汐会话与滚动归档
 │
+├── monsoon/
+│   └── runs/
+│           季风执行状态与恢复记录
+│
 ├── convection/
+│   ├── runs/
+│   │       会议执行状态与恢复记录
 │   └── sessions/
 │       ├── _index.json
 │       ├── {sessionId}.json
@@ -69,6 +75,8 @@ data/
 │
 ├── cyclone/
 │   ├── _index.json
+│   ├── runtime/
+│   │       工位、群聊及主管的执行状态与履历
 │   └── {workshopId}/
 │       ├── meta.json
 │       ├── organization.json
@@ -76,15 +84,22 @@ data/
 │       ├── workspace/
 │       ├── bulletin.json
 │       ├── bulletin-history.json
+│       ├── supervisor.json
+│       ├── supervisor-inbox.json
+│       ├── supervisor.taskboard.json
+│       │       主管单一会话、项目记忆、信息收件箱与任务板
 │       ├── seats/
 │       │   ├── {seatId}.json
+│       │   ├── {seatId}.memory.json
 │       │   └── {seatId}.taskboard.json
 │       ├── rooms/
 │       │   └── {roomId}.json
 │       ├── dispatches/
 │       │   └── {dispatchId}.json
+│       ├── contacts/
+│       │   └── {contactId}.json
 │       └── bak/
-│               工作室、协作结构、工位、群聊、公告板、异步派发和归档
+│               会话归档；retired-seats/ 保留退出工位的资料快照
 │
 ├── tradewind/
 │   ├── workflows/
@@ -98,6 +113,7 @@ data/
 │       └── {workflowId}/
 │           └── {executionId}/
 │               ├── meta.json
+│               ├── graph-snapshot.json
 │               ├── events.jsonl
 │               ├── output.json
 │               ├── nodes/
@@ -108,9 +124,11 @@ data/
 ├── tide/
 │   ├── tasks.json
 │   ├── tasks.template.json
+│   ├── runtime/
+│   │       按任务与执行编号保存运行状态、用量及压缩进度
 │   └── runs/
 │       └── {taskId}/
-│           └── {timestamp}.json
+│           └── {timestamp}-{runId}.json
 │                   潮汐任务和每次运行记录
 │
 ├── tools/
@@ -127,8 +145,10 @@ data/
 │               技能说明及可选的专用工具
 │
 ├── mcp/
-│   └── servers.json
-│           MCP Server 配置、环境变量和请求头
+│   ├── servers.json
+│   │       MCP Server 配置、环境变量和请求头
+│   └── media/
+│           MCP 工具返回的图片文件；会话中只保存引用
 │
 ├── runtime/
 │   └── execution-observations.json
@@ -138,6 +158,8 @@ data/
 │       模型提供商、地址和 API Key
 ├── providers.template.json
 │       提供商配置模板
+├── transport/
+│       后端本机 HTTPS 证书与私钥
 ├── labels.json
 │       旧版 Agent 分类标签遗留文件；当前版本不读取、不写入
 ├── skin-config.json
@@ -154,6 +176,8 @@ data/
 2. Agent 配置中指向项目外部的工作区
 3. 由 MCP Server 自己管理的数据目录
 
-只迁移某个功能区时，可以复制对应目录；例如气旋工作室位于 `data/cyclone/`，信风工作流位于 `data/tradewind/`
+气旋的业务资料位于 `data/cyclone/`，信风工作流位于 `data/tradewind/`。单独复制这些目录只带走对应资料；要在新环境继续执行，还需保留其引用的池化 Agent、模型提供商、工具与技能配置，以及外部工作区文件。完整迁移应按上面的清单备份。
+
+涉及 MCP 工具图片时，还需保留 `data/mcp/media/`，否则旧会话中的图片引用无法解析。工位配置与绑定履历保存在工位主文件，记忆变更履历保存在对应的 `.memory.json` 中。旧版潮汐目录与不带 `runId` 的运行记录仍可能存在，应连同当前目录一起保留。
 
 复制前应先正常关闭 4torm，避免文件在复制期间继续变化。恢复时保持原有目录层级，再启动服务读取

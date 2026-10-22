@@ -17,5 +17,5 @@ const graph: WorkflowGraph = {
 
 test('frontend validation keeps manual-only nodes out of automatic runs', () => {
   assert.deepEqual(validateGraph(graph, 'manual', t), []);
-  assert.match(validateGraph(graph, 'auto', t).join('\n'), /自动模式不支持会议室/);
+  assert.match(validateGraph(graph, 'auto', t).join('\n'), /无人值守运行不支持会议节点/);
 });

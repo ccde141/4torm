@@ -4,6 +4,7 @@ import type { ContextMessage } from '../types.js';
 import { frameworkError } from '../framework-error.js';
 import { parseTextToolResult } from '../text-tool-protocol.js';
 import { runReActLoop } from './text-loop.js';
+import { MAX_CONTINUATIONS } from './native-loop.js';
 
 function reply(content: string) {
   return { content, finishReason: 'stop' as const };
@@ -15,7 +16,7 @@ test('text loop executes a JSON tool call and accepts a natural-language answer'
     reply('{"type":"tool_call","name":"read_file","arguments":{"filePath":"a.txt"}}'),
     reply('The file contains hello.'),
   ];
-  const calls: Array<{ name: string; args: Record<string, string> }> = [];
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
 
   const result = await runReActLoop({
     messages,
@@ -34,6 +35,9 @@ test('text loop executes a JSON tool call and accepts a natural-language answer'
   assert.equal(messages.at(-2)?.content, JSON.stringify({
     type: 'tool_result', name: 'read_file', ok: true, content: 'hello',
   }));
+  assert.equal(messages.at(-3)?.role, 'assistant');
+  assert.equal(messages.at(-3)?.content, '{"type":"tool_call","name":"read_file","arguments":{"filePath":"a.txt"}}');
+  assert.deepEqual(messages.at(-1), { role: 'assistant', content: 'The file contains hello.' });
 });
 
 test('text loop writes explicit tool failure status into tool_result without parsing error words', async () => {
@@ -190,4 +194,141 @@ test('text loop refuses a tool that was not offered this turn', async () => {
   assert.equal(executions, 0);
   assert.equal(result.content, 'I cannot use that tool.');
   assert.match(String(result.toolCalls[0]?.result), /not authorized/);
+});
+
+test('text exhausted continuation preserves readable body and completed side effects, then removes temporary frames', async () => {
+  const messages: ContextMessage[] = [{ role: 'user', content: 'write then explain' }];
+  const tokens: string[] = [];
+  let requests = 0; let executions = 0;
+  const result = await runReActLoop({ messages,
+    llm: { call: async (_messages, _options, onChunk) => {
+      requests++;
+      const content = requests === 1 ? '{"type":"tool_call","name":"write","arguments":{}}' : `正文-${requests}`;
+      onChunk?.(content);
+      if (requests === 3) messages.push({ role: 'system', content: '运行中新增事实' });
+      return { content, finishReason: requests === 1 ? 'stop' : 'length',
+        usage: { promptTokens: requests, completionTokens: 1, totalTokens: requests + 1 } };
+    } },
+    tools: { call: async () => { executions++; return '原件已保存'; } },
+    onEvent: event => { if (event.type === 'token') tokens.push(event.chunk); },
+  });
+  assert.equal(requests, MAX_CONTINUATIONS + 2);
+  assert.equal(executions, 1);
+  assert.equal(result.toolCalls[0]?.result, '原件已保存');
+  assert.equal(result.termination.status, 'failed');
+  if (result.termination.status === 'failed') assert.equal(result.termination.error.code, 'MODEL_OUTPUT_LIMIT');
+  for (let index = 2; index <= requests; index++) assert.match(result.content, new RegExp(`正文-${index}`));
+  assert.equal(tokens.join(''), result.content);
+  assert.equal(result.usage?.promptTokens, requests);
+  assert.ok(messages.some(message => message.content === '运行中新增事实'));
+  assert.equal(messages.filter(message => message.role === 'assistant').length, 2);
+  assert.ok(!messages.some(message => message.content.startsWith('[System: continuation]')));
+});
+
+for (const variant of ['complete', 'incomplete', 'early-type', 'early-fence'] as const) {
+  test(`text exhausted continuation never executes or displays tool protocol (${variant})`, async () => {
+    const messages: ContextMessage[] = [{ role: 'user', content: 'write' }];
+    const tokens: string[] = [];
+    let requests = 0; let executions = 0;
+    const result = await runReActLoop({ messages,
+      llm: { call: async (_messages, _options, onChunk) => {
+        requests++;
+        const prefix = variant === 'early-type' ? '{"type":"tool_ca' : variant === 'early-fence' ? '```tool_ca'
+          : '{"type":"tool_call","name":"write","arguments":{';
+        const content = requests === 1 ? prefix
+          : requests === MAX_CONTINUATIONS + 1 && variant === 'complete' ? '}}' : ' ';
+        onChunk?.(content);
+        return { content, finishReason: 'length' };
+      } },
+      tools: { call: async () => { executions++; return '不得执行'; } },
+      onEvent: event => { if (event.type === 'token') tokens.push(event.chunk); },
+    });
+    assert.equal(requests, MAX_CONTINUATIONS + 1);
+    assert.equal(executions, 0);
+    assert.equal(result.termination.status, 'failed');
+    if (result.termination.status === 'failed') assert.equal(result.termination.error.code, 'MODEL_OUTPUT_LIMIT');
+    assert.doesNotMatch(result.content, /tool_call|arguments/);
+    assert.ok(result.rawContent.startsWith(variant === 'early-type' ? '{"type":"tool_ca'
+      : variant === 'early-fence' ? '```tool_ca' : '{"type":"tool_call"'));
+    assert.deepEqual(tokens, []);
+    assert.deepEqual(messages, [{ role: 'user', content: 'write' }]);
+  });
+}
+
+test('text output exhaustion still hands pending human input to steering before returning a limit failure', async () => {
+  const pending: string[] = [];
+  const messages: ContextMessage[] = [{ role: 'user', content: 'old task' }];
+  let requests = 0;
+  const result = await runReActLoop({ messages,
+    steering: { hasPending: () => pending.length > 0, drain: () => pending.splice(0) },
+    llm: { call: async () => {
+      requests++;
+      if (requests === MAX_CONTINUATIONS + 1) pending.push('new task');
+      if (requests > MAX_CONTINUATIONS + 1) {
+        assert.equal(messages.at(-1)?.content, 'new task');
+        return reply('new answer');
+      }
+      return { content: requests === 1 ? '{"type":"tool_call","name":"write","arguments":' : ' ',
+        finishReason: 'length' };
+    } }, tools: { call: async () => { assert.fail('Old partial tool call must not run'); } },
+  });
+  assert.equal(requests, MAX_CONTINUATIONS + 2);
+  assert.equal(result.content, 'new answer');
+  assert.equal(result.termination.status, 'succeeded');
+  assert.ok(!messages.some(message => message.content.startsWith('[System: continuation]')));
+});
+
+for (const abort of [false, true]) {
+  test(`text retains completed body fragments when continuation fails (aborted: ${abort})`, async () => {
+    const controller = new AbortController();
+    const messages: ContextMessage[] = [{ role: 'user', content: 'long answer' }];
+    const pending: string[] = [];
+    let requests = 0;
+    const result = await runReActLoop({ messages, signal: controller.signal,
+      steering: { hasPending: () => pending.length > 0, drain: () => pending.splice(0) },
+      llm: { call: async (_messages, _options, onChunk) => {
+        requests++;
+        if (requests <= 2) return { content: `正文-${requests}`, finishReason: 'length' };
+        onChunk?.('本次已生成部分');
+        pending.push('new input stays pending');
+        if (abort) controller.abort();
+        throw new Error('secret upstream interruption');
+      } },
+    });
+    assert.equal(requests, 3);
+    assert.equal(result.termination.status, abort ? 'aborted' : 'failed');
+    assert.equal(result.content, '正文-1正文-2本次已生成部分');
+    assert.equal(result.rawContent, result.content);
+    assert.equal(messages.at(-1)?.content, result.content);
+    assert.doesNotMatch(result.content, /secret upstream/);
+    assert.deepEqual(pending, ['new input stays pending']);
+    assert.ok(!messages.some(message => message.content.startsWith('[System: continuation]')));
+  });
+}
+
+test('text continuation failure does not expose or execute a partial tool envelope', async () => {
+  const messages: ContextMessage[] = [{ role: 'user', content: 'write' }];
+  let requests = 0; let executions = 0;
+  const result = await runReActLoop({ messages,
+    llm: { call: async () => {
+      if (++requests === 1) return { content: '{"type":"tool_call","name":"write","arguments":', finishReason: 'length' };
+      throw new Error('upstream disconnected');
+    } }, tools: { call: async () => { executions++; return 'must not execute'; } },
+  });
+  assert.equal(requests, 2);
+  assert.equal(executions, 0);
+  assert.equal(result.termination.status, 'failed');
+  assert.doesNotMatch(result.content, /tool_call|arguments/);
+  assert.equal(result.rawContent, '{"type":"tool_call","name":"write","arguments":');
+  assert.deepEqual(messages, [{ role: 'user', content: 'write' }]);
+});
+
+test('text undecided long JSON is retained as raw evidence without claiming a delivered answer', async () => {
+  let requests = 0;
+  const result = await runReActLoop({ messages: [{ role: 'user', content: 'JSON report' }],
+    llm: { call: async () => ({ content: ++requests === 1 ? '{"items":[' : '1,', finishReason: 'length' }) },
+  });
+  assert.equal(result.termination.status, 'failed');
+  assert.doesNotMatch(result.content, /items/);
+  assert.equal(result.rawContent, '{"items":[' + '1,'.repeat(MAX_CONTINUATIONS));
 });

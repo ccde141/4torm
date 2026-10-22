@@ -32,6 +32,7 @@ import path from 'node:path';
 import { agentRegistryFile } from '../../../services/data-paths.js';
 import type { WorkflowGraph, WorkflowEdge, WorkflowNode, WorkflowMode } from './types';
 import { autoModeSyncRules, checkAgentsNativeCapable } from './workflow-validator-auto';
+import { validateHandoffTopology } from './workflow-validator-handoff.js';
 
 export interface ValidationError {
   code: string;
@@ -66,6 +67,8 @@ export async function validateWorkflow(
   knownNodeTypes: Set<string>,
   mode: WorkflowMode = 'manual',
 ): Promise<ValidationError[]> {
+  if (graph.orchestration !== undefined && graph.orchestration !== 'strict'
+    && graph.orchestration !== 'handoff') return [{ code: 'unknown-orchestration', message: '工作流编排类型无效' }];
   const ctx = await buildContext(graph, dataDir, knownNodeTypes);
 
   // 规则按依赖顺序排列：先基础（节点/边引用），再拓扑（Entry/Output），再边语义（note/rework）
@@ -83,7 +86,6 @@ export async function validateWorkflow(
     checkNonEntryHasInput,       // R11
     checkNoteEdges,              // R12
     checkReworkEdges,             // R13
-    checkNoCycles,                // R14
     checkNoteNodeIO,              // R15
   ];
 
@@ -92,9 +94,12 @@ export async function validateWorkflow(
   if (mode === 'auto') rules.push(...autoModeSyncRules);
 
   const errors = rules.flatMap(rule => rule(ctx));
+  errors.push(...(graph.orchestration === 'handoff' ? validateHandoffTopology(graph) : checkNoCycles(ctx)));
 
   // native 能力校验是异步的（需读 provider 配置 + 探测缓存），单列于同步规则之后。
-  if (mode === 'auto') errors.push(...await checkAgentsNativeCapable(ctx, dataDir));
+  if (mode === 'auto' && graph.orchestration !== 'handoff') {
+    errors.push(...await checkAgentsNativeCapable(ctx, dataDir));
+  }
 
   return errors;
 }

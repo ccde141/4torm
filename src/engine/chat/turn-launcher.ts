@@ -3,6 +3,7 @@ import type { Agent, ChatMessage } from '../../types';
 import type { TaskBoard } from '../../utils/taskboard';
 import { buildConversationHistory } from './conversation-history';
 import { runStreamLoop, type StreamCtx } from './streamLoop';
+import type { MonsoonBrowserEvent } from './sse-events';
 
 export interface TurnLaunchInput {
   session: ChatSession;
@@ -25,6 +26,7 @@ export interface TurnLauncherPorts {
   generateMessageId(): string;
   run?(context: StreamCtx): Promise<void>;
   reportError(error: unknown): void;
+  onCompaction?(sessionId: string, event: MonsoonBrowserEvent): void;
 }
 
 export function launchMonsoonTurn(
@@ -74,6 +76,7 @@ function createStreamContext(
     abortController: controller,
     isAbandoned: () => ports.isAbandoned(input.session.id),
     onTaskboard: board => ports.applyTaskboard(input.session.id, board),
+    onCompaction: event => ports.onCompaction?.(input.session.id, event),
     onFinish: finish,
   };
 }

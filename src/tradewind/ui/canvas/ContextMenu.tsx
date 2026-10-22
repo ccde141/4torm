@@ -3,7 +3,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { CANVAS_NODE_ITEMS, contextMenuKind } from './context-menu-model';
+import { nodeItemsForMode, contextMenuKind } from './context-menu-model';
 import { useLocale } from '../../../i18n/LocaleContext';
 
 export interface ContextMenuState {
@@ -16,6 +16,7 @@ export interface ContextMenuState {
 }
 
 interface ContextMenuProps {
+  orchestration?: 'strict' | 'handoff';
   menu: ContextMenuState;
   onClose: () => void;
   onDelete: (nodeId: string) => void;
@@ -25,7 +26,7 @@ interface ContextMenuProps {
   onAddNode: (type: string, position: { x: number; y: number }) => void;
 }
 
-export function ContextMenu({ menu, onClose, onDelete, onDeleteEdge, onClone, onEdit, onAddNode }: ContextMenuProps) {
+export function ContextMenu({ menu, orchestration = 'strict', onClose, onDelete, onDeleteEdge, onClone, onEdit, onAddNode }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -58,6 +59,7 @@ export function ContextMenu({ menu, onClose, onDelete, onDeleteEdge, onClone, on
         <EdgeMenu edgeId={menu.edgeId!} onDelete={onDeleteEdge} onClose={onClose} />
       ) : (
         <PaneMenu
+          orchestration={orchestration}
           position={menu.flowPosition!}
           onAddNode={onAddNode}
           onClose={onClose}
@@ -111,8 +113,9 @@ function NodeMenu({ nodeId, onDelete, onClone, onEdit, onClose }: {
 
 // ── 画布空白右键菜单 ──────────────────────────────────────────────
 
-function PaneMenu({ position, onAddNode, onClose }: {
+function PaneMenu({ position, orchestration, onAddNode, onClose }: {
   position: { x: number; y: number };
+  orchestration: 'strict' | 'handoff';
   onAddNode: (type: string, pos: { x: number; y: number }) => void;
   onClose: () => void;
 }) {
@@ -120,7 +123,7 @@ function PaneMenu({ position, onAddNode, onClose }: {
   return (
     <>
       <div className="tw-ctxmenu__title">{t('tradewind.canvas.menu.addNode')}</div>
-      {CANVAS_NODE_ITEMS.map((item) => (
+      {nodeItemsForMode(orchestration).map((item) => (
         <button
           key={item.type}
           className="tw-ctxmenu__item"

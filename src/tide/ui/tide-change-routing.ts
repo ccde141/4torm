@@ -8,7 +8,8 @@ export function tideRefreshTargets(identity: TidePageIdentity, event: TideChange
     sessions: (event.scope === 'task' || event.scope === 'session')
       && event.agentId === identity.agentId,
     task: selection?.kind === 'task' && event.taskId === selection.taskId,
-    session: selection?.kind === 'session' && event.scope === 'session'
-      && event.agentId === selection.agentId && event.sessionId === selection.sessionId,
+    session: selection?.kind === 'session' && (
+      event.scope === 'session' && event.agentId === selection.agentId && event.sessionId === selection.sessionId
+      || event.scope === 'run' && event.agentId === selection.agentId),
   };
 }

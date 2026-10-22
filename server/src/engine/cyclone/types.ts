@@ -66,11 +66,18 @@ export interface SeatData {
   overrideAgentRole?: boolean;
   /** 绑定的框架内 agent 实体 id（data/agents/registry.json） */
   agentId: string;
+  /** 本工位的工作室内协作工具策略；缺省沿用全开，不修改池中 Agent。 */
+  collaboration?: import('./seat-collaboration.js').SeatCollaborationPolicy;
+  /** 配置与绑定变更的元数据，随工位主文件一同原子提交。旧工位可缺省。 */
+  history?: import('./seat-history.js').SeatHistoryRecord[];
+  /** 已随成功模型请求提供的接续提醒；与工位文件一同提交，旧工位可缺省。 */
+  historySeen?: { configurationId?: string; roomConfigurationId?: string; compactedAt?: string };
   /** 私聊会话历史（= 该工位的 contact 收件箱） */
   messages: SeatContextMessage[];
   tokenUsage?: CycloneTokenUsage;
   compactState?: CycloneCompactState;
   compactionNotice?: import('../shared/compaction/contracts.js').CompactionNotice;
+  compaction?: import('../shared/compaction/contracts.js').CompactionProgress;
   /** 本工位上次已读到的工作室公告板 updatedAt（变更注意力：晚于它的条目在下一轮标 🆕） */
   bulletinSeenAt?: number;
   /**
@@ -122,7 +129,7 @@ export interface WorkshopSummary {
 /** 群聊一条公共消息（发言者 = 工位 title 或「人类」） */
 export type RoomMessageSegment =
   | { kind: 'text'; content: string }
-  | { kind: 'tools'; tools: Array<{ tool: string; args: Record<string, string>; result?: string; status: 'running' | 'success' | 'error' }> }
+  | { kind: 'tools'; tools: Array<{ tool: string; args: Record<string, unknown>; result?: string; status: 'running' | 'success' | 'error' }> }
   | { kind: 'dispatch'; dispatchId: string };
 
 export interface RoomMessage {
@@ -145,7 +152,8 @@ export interface RoomMessage {
   /** 外置内容校验值，也用于避免每次保存重复写入大文件。 */
   reasoningHash?: string;
   /** 本轮工具调用记录 */
-  toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }>;
+  toolCalls?: Array<{ tool: string; args: Record<string, unknown>; result: string;
+    toolImages?: import('../shared/types.js').ToolImageRef[] }>;
   /** 可选展示分段；旧消息缺省时继续使用 content/toolCalls。 */
   segments?: RoomMessageSegment[];
   /** 时间线中的特殊系统对象。 */
@@ -204,6 +212,8 @@ export interface RoomData {
   compactState?: CycloneCompactState;
   compactionNotice?: import('../shared/compaction/contracts.js').CompactionNotice;
   chairCompactionNotice?: import('../shared/compaction/contracts.js').CompactionNotice;
+  compaction?: import('../shared/compaction/contracts.js').CompactionProgress;
+  chairCompaction?: import('../shared/compaction/contracts.js').CompactionProgress;
   /** 公共上下文代次；reset 后旧代次的异步派发不再进入当前讨论。 */
   dispatchContextVersion?: number;
   /** 已完整结束的人类发言轮次；中止轮次不递增。 */

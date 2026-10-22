@@ -10,6 +10,8 @@ import path from 'node:path';
 import { agentMemoryDir } from '../../services/data-paths.js';
 import { atomicWriteFile } from './atomic-io';
 import type { ToolDef } from './tool-defs-loader';
+import { withAgentMemoryMutation } from './agent-memory-lock.js';
+import { FrameworkError } from './framework-error.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -60,7 +62,15 @@ function indexPath(dataDir: string, agentId: string): string {
   return path.join(memoryDir(dataDir, agentId), 'index.md');
 }
 function entryPath(dataDir: string, agentId: string, slug: string): string {
+  if (typeof slug !== 'string' || !/^[\p{L}\p{N}_-]+$/u.test(slug) || slug.toLowerCase() === 'index') {
+    throw new Error('记忆条目 slug 无效');
+  }
   return path.join(memoryDir(dataDir, agentId), `${slug}.md`);
+}
+
+function memoryCorrupt(): FrameworkError {
+  return new FrameworkError({ code: 'AGENT_MEMORY_CORRUPT', kind: 'io',
+    message: '长期记忆数据损坏，原文件已保留，请修复后再继续。', source: 'agent.memory', retryable: false });
 }
 
 // ── slug 生成 ──────────────────────────────────────────────────────
@@ -106,12 +116,25 @@ function parseIndexRow(line: string): MemoryIndexRow | null {
 }
 
 async function readIndex(dataDir: string, agentId: string): Promise<MemoryIndexRow[]> {
+  let raw: string;
   try {
-    const raw = await fs.readFile(indexPath(dataDir, agentId), 'utf-8');
-    return raw.split('\n').map(parseIndexRow).filter((r): r is MemoryIndexRow => r !== null);
-  } catch {
-    return [];
+    raw = await fs.readFile(indexPath(dataDir, agentId), 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
   }
+  const rows: MemoryIndexRow[] = [];
+  if (!raw.trim()) throw memoryCorrupt();
+  const slugs = new Set<string>();
+  for (const line of raw.split(/\r?\n/).map(value => value.trim())) {
+    if (!line || line.startsWith('#')) continue;
+    const row = parseIndexRow(line);
+    if (!row || !/^[\p{L}\p{N}_-]+$/u.test(row.slug) || row.slug.toLowerCase() === 'index' || !CATEGORIES.includes(row.category)
+      || slugs.has(row.slug)) throw memoryCorrupt();
+    slugs.add(row.slug);
+    rows.push(row);
+  }
+  return rows;
 }
 
 async function writeIndex(dataDir: string, agentId: string, rows: MemoryIndexRow[]): Promise<void> {
@@ -141,6 +164,7 @@ function serializeEntry(e: MemoryEntry): string {
 }
 
 function parseEntry(raw: string): MemoryEntry | null {
+  raw = raw.replace(/\r\n/g, '\n');
   const m = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!m) return null;
   const [, fm, detail] = m;
@@ -184,6 +208,12 @@ export async function writeMemory(
   agentId: string,
   input: WriteMemoryInput,
 ): Promise<{ slug: string }> {
+  return withAgentMemoryMutation(dataDir, agentId, () => writeMemoryMutation(dataDir, agentId, input));
+}
+
+async function writeMemoryMutation(
+  dataDir: string, agentId: string, input: WriteMemoryInput,
+): Promise<{ slug: string }> {
   await fs.mkdir(memoryDir(dataDir, agentId), { recursive: true });
   const rows = await readIndex(dataDir, agentId);
 
@@ -191,7 +221,10 @@ export async function writeMemory(
   const given = input.summary?.trim();
   const summary = given || deriveSummary(input.detail);
   const summaryPending = !given;
-  const slug = uniqueSlug(slugify(summary), new Set(rows.map(r => r.slug)));
+  const diskNames = (await fs.readdir(memoryDir(dataDir, agentId)))
+    .filter(name => name.endsWith('.md')).map(name => name.slice(0, -3));
+  const slug = uniqueSlug(slugify(summary), new Set(['index', ...rows.map(r => r.slug), ...diskNames]
+    .map(name => name.toLowerCase())));
 
   const entry: MemoryEntry = {
     slug,
@@ -234,18 +267,26 @@ export async function readMemory(
   agentId: string,
   slug: string,
 ): Promise<MemoryEntry | null> {
+  const file = entryPath(dataDir, agentId, slug);
+  let raw: string;
   try {
-    return parseEntry(await fs.readFile(entryPath(dataDir, agentId, slug), 'utf-8'));
-  } catch {
-    return null;
+    raw = await fs.readFile(file, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
   }
+  const entry = parseEntry(raw);
+  if (!entry || entry.slug !== slug || !CATEGORIES.includes(entry.category)) throw memoryCorrupt();
+  return entry;
 }
 
 /** 删一条（人类在面板操作）：删条目文件 + 从 index 摘除。不存在则静默。 */
 export async function deleteMemory(dataDir: string, agentId: string, slug: string): Promise<void> {
-  await fs.rm(entryPath(dataDir, agentId, slug), { force: true });
-  const rows = (await readIndex(dataDir, agentId)).filter(r => r.slug !== slug);
-  await writeIndex(dataDir, agentId, rows);
+  await withAgentMemoryMutation(dataDir, agentId, async () => {
+    const rows = (await readIndex(dataDir, agentId)).filter(r => r.slug !== slug);
+    await fs.rm(entryPath(dataDir, agentId, slug), { force: true });
+    await writeIndex(dataDir, agentId, rows);
+  });
 }
 
 export interface UpdateMemoryInput {
@@ -263,6 +304,13 @@ export async function updateMemory(
   slug: string,
   patch: UpdateMemoryInput,
 ): Promise<MemoryEntry | null> {
+  return withAgentMemoryMutation(dataDir, agentId, () => updateMemoryMutation(dataDir, agentId, slug, patch));
+}
+
+async function updateMemoryMutation(
+  dataDir: string, agentId: string, slug: string, patch: UpdateMemoryInput,
+): Promise<MemoryEntry | null> {
+  const rows = await readIndex(dataDir, agentId);
   const cur = await readMemory(dataDir, agentId, slug);
   if (!cur) return null;
   const detail = patch.detail ?? cur.detail;
@@ -290,7 +338,6 @@ export async function updateMemory(
     updated: patch.now,
   };
   await atomicWriteFile(entryPath(dataDir, agentId, slug), serializeEntry(next));
-  const rows = await readIndex(dataDir, agentId);
   const i = rows.findIndex(r => r.slug === slug);
   const row: MemoryIndexRow = { slug, category: next.category, tags: next.tags, summary: next.summary };
   if (i >= 0) rows[i] = row; else rows.push(row);

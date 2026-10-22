@@ -2,11 +2,14 @@ import type { FeedMsg } from './room-stream-events';
 import type { RoomReplySegment } from './room-reply-segments';
 import type { CycloneUsage } from './cyclone-token-usage';
 import type { StoredCompactionFeedback } from '../../../components/common/compaction-feedback';
+import { isCompactionHistory } from '../../../components/common/compaction-history';
+import type { ToolImageRef } from '../../../engine/tool-media';
 
 export interface RoomToolCall {
   tool: string;
-  args: Record<string, string>;
+  args: Record<string, unknown>;
   result: string;
+  toolImages?: ToolImageRef[];
 }
 
 export interface RoomMsg {
@@ -35,6 +38,7 @@ export interface RoomData {
   tokenUsage?: CycloneUsage;
   publicLatestTokenUsage?: CycloneUsage;
   compactionNotice?: StoredCompactionFeedback;
+  compaction?: unknown;
 }
 
 export async function readRoomError(response: Response, fallback: string): Promise<string> {
@@ -45,7 +49,7 @@ export async function readRoomError(response: Response, fallback: string): Promi
 export function publicToFeed(messages: RoomMsg[]): FeedMsg[] {
   return messages.map((message, sourceIndex) => {
     const system = message.speaker === 'system' || message.speaker === '系统';
-    const archive = !message.kind && (system || message.content.includes('重置前的群聊摘要'));
+    const archive = !message.kind && system && isCompactionHistory(message.content);
     return {
       key: message.id || `history-${sourceIndex}`,
       sourceIndex,
@@ -61,7 +65,7 @@ export function publicToFeed(messages: RoomMsg[]): FeedMsg[] {
       reasoning: message.reasoning,
       segments: message.segments,
       tools: (message.toolCalls || []).map(tool => ({
-        tool: tool.tool, args: tool.args, result: tool.result, status: 'success' as const,
+        tool: tool.tool, args: tool.args, result: tool.result, toolImages: tool.toolImages, status: 'success' as const,
       })),
     };
   });

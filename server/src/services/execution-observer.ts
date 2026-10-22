@@ -170,6 +170,7 @@ export class ExecutionObserver {
       if (!isObservation(entry)) continue;
       entry.kind ??= 'terminal';
       entry.viewer ??= 'terminal';
+      this.trimOutput(entry);
       if (isActive(entry.status)) {
         entry.status = 'crashed';
         entry.finishedAt = now;
@@ -215,8 +216,20 @@ export class ExecutionObserver {
 
   private trimOutput(entry: ExecutionObservation): void {
     let total = entry.output.reduce((sum, chunk) => sum + chunk.text.length, 0);
-    while (total > MAX_OUTPUT_CHARS && entry.output.length > 1) {
-      total -= entry.output.shift()!.text.length;
+    while (total > MAX_OUTPUT_CHARS) {
+      const first = entry.output[0];
+      const excess = total - MAX_OUTPUT_CHARS;
+      if (first.text.length <= excess) {
+        total -= first.text.length;
+        entry.output.shift();
+      } else {
+        // Keep the newest evidence even when a process writes one oversized chunk.
+        let offset = excess;
+        const code = first.text.charCodeAt(offset);
+        if (code >= 0xdc00 && code <= 0xdfff) offset += 1;
+        first.text = first.text.slice(offset);
+        total -= offset;
+      }
       entry.outputTruncated = true;
     }
   }

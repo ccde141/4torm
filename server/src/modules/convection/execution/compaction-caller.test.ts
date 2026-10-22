@@ -89,6 +89,32 @@ test('压缩模型失效保留旧会议与已接受输入，失败通知落盘�
   assert.equal((await fs.readdir(path.join(sessionWorkspace(dataDir, session.id), 'bak'))).length, 1);
 });
 
+test('公共会议自动压缩被停止时原始历史仍在，进度不会停留在 running', async t => {
+  const { dataDir, session } = await fixture(t);
+  const original = structuredClone(session.publicMessages);
+  const controller = new AbortController();
+  const previous = globalThis.fetch;
+  const events: import('./stream-events.js').ConvectionStreamEvent[] = [];
+  let calls = 0;
+  globalThis.fetch = async (_input, init) => {
+    calls++;
+    assert.ok(isCompactionRequest(JSON.parse(String(init?.body))));
+    controller.abort();
+    throw new DOMException('Stopped', 'AbortError');
+  };
+  t.after(() => { globalThis.fetch = previous; });
+  await handleSpeak(dataDir, session, '保留当前问题', event => events.push(event), controller.signal);
+  const saved = await loadSession(dataDir, session.id);
+  assert.equal(calls, 1);
+  assert.deepEqual(saved?.publicMessages.slice(0, original.length), original);
+  assert.equal(saved?.publicMessages.at(-1)?.content, '保留当前问题');
+  assert.equal(saved?.compactionProgress?.type, 'compact-failed');
+  assert.equal(saved?.compactionProgress?.aborted, true);
+  assert.ok(events.some(event => event.type === 'compact-start'));
+  assert.ok(events.some(event => event.type === 'compact-failed' && event.aborted));
+  assert.ok(!events.some(event => event.type === 'compact-done'));
+});
+
 test('助理压缩公共快照后保留两类原文，后续私聊只追加新记录且不重复历史', async t => {
   const { dataDir, session } = await fixture(t);
   session.chairMessages = [{ role: 'user', content: '先前私聊' }, { role: 'assistant', content: '私人判断' }];

@@ -40,8 +40,22 @@ import type { CycloneAgentDispatchService } from '../application/agent-dispatch-
 import { cycloneAgentManagementHandlers, cycloneAgentManagementManifests } from './agent-management-methods.js';
 import { cycloneAgentBulletinHandlers, cycloneAgentBulletinManifests } from './agent-bulletin-methods.js';
 import { cycloneAgentDispatchHandlers, cycloneAgentDispatchManifests } from './agent-dispatch-methods.js';
+import type { CycloneConsoleService } from '../application/console-service.js';
+import { cycloneConsoleHandlers, cycloneConsoleManifests } from './console-methods.js';
+import type { CycloneSeatMemoryService } from '../application/seat-memory-service.js';
+import { cycloneSeatMemoryHandlers, cycloneSeatMemoryManifests } from './seat-memory-methods.js';
+import type { CycloneAgentObservationService } from '../application/agent-observation-service.js';
+import { cycloneAgentObservationHandlers, cycloneAgentObservationManifests } from './agent-observation-methods.js';
+import type { CycloneSupervisorService } from '../application/supervisor-service.js';
+import { cycloneSupervisorHandlers, cycloneSupervisorManifests,
+  cycloneSupervisorStreams, cycloneSupervisorTransports } from './supervisor-methods.js';
+import { cycloneContactHandlers, cycloneContactManifests } from './contact-methods.js';
+import type { CycloneAgentSupervisorService } from '../application/agent-supervisor-service.js';
+import { cycloneAgentSupervisorHandlers, cycloneAgentSupervisorManifests } from './agent-supervisor-methods.js';
 
 export function createCycloneModule(dependencies: {
+  dataDir?: string;
+  supervisor?: CycloneSupervisorService;
   source: CycloneRuntimeSource;
   commands: CycloneCommands;
   workshops: CycloneWorkshopService;
@@ -62,6 +76,10 @@ export function createCycloneModule(dependencies: {
   operations?: FeatureOperationHandler;
   records?: FeatureRecordHandler;
   streams?: CycloneStreamPorts;
+  console?: CycloneConsoleService;
+  seatMemory?: CycloneSeatMemoryService;
+  agentObservation?: CycloneAgentObservationService;
+  agentSupervisor?: CycloneAgentSupervisorService;
 }): FeatureModule {
   const catalog = new CycloneOperationCatalog(dependencies.source);
   return {
@@ -71,19 +89,28 @@ export function createCycloneModule(dependencies: {
       operation: { inspect: true, wait: Boolean(dependencies.operations?.subscribe),
         ...(dependencies.records ? { records: true as const } : {}) },
       methods: [
+        ...(dependencies.supervisor ? cycloneSupervisorManifests() : []),
+        ...(dependencies.agentSupervisor ? cycloneAgentSupervisorManifests() : []),
+        ...(dependencies.dataDir ? cycloneContactManifests() : []),
         ...cycloneReadManifests(dependencies.activity, dependencies.roomActivity, dependencies.privateActivity),
         ...(dependencies.agentRead ? cycloneAgentReadManifests() : []),
         ...(dependencies.agentExecution ? cycloneAgentExecutionManifests() : []),
         ...(dependencies.agentManagement ? cycloneAgentManagementManifests() : []),
         ...(dependencies.agentBulletin ? cycloneAgentBulletinManifests() : []),
         ...(dependencies.agentDispatch ? cycloneAgentDispatchManifests() : []),
+        ...(dependencies.console ? cycloneConsoleManifests() : []),
+        ...(dependencies.seatMemory ? cycloneSeatMemoryManifests() : []),
+        ...(dependencies.agentObservation ? cycloneAgentObservationManifests() : []),
         ...cycloneControlManifests(), ...cycloneWorkshopManifests(), ...cycloneSeatManifests(),
         ...cycloneRoomManifests(),
         ...cycloneChairManifests(),
         ...cycloneCollaborationManifests(Boolean(dependencies.collaborationRounds)),
         ...cycloneDispatchManifests(),
       ],
-      ...(dependencies.streams ? { transports: cycloneStreamManifests() } : {}),
+      ...((dependencies.streams || dependencies.supervisor) ? { transports: [
+        ...(dependencies.streams ? cycloneStreamManifests() : []),
+        ...(dependencies.supervisor ? cycloneSupervisorTransports() : []),
+      ] } : {}),
       observation: {
         permission: 'observe', audiences: ['human', 'agent', 'internal'], views: ['summary'],
         budget: {
@@ -93,12 +120,18 @@ export function createCycloneModule(dependencies: {
       },
     },
     handlers: {
+      ...(dependencies.supervisor ? cycloneSupervisorHandlers(dependencies.supervisor) : {}),
+      ...(dependencies.agentSupervisor ? cycloneAgentSupervisorHandlers(dependencies.agentSupervisor) : {}),
+      ...(dependencies.dataDir ? cycloneContactHandlers(dependencies.dataDir) : {}),
       ...cycloneReadHandlers(dependencies),
       ...(dependencies.agentRead ? cycloneAgentReadHandlers(dependencies.agentRead) : {}),
       ...(dependencies.agentExecution ? cycloneAgentExecutionHandlers(dependencies.agentExecution) : {}),
       ...(dependencies.agentManagement ? cycloneAgentManagementHandlers(dependencies.agentManagement) : {}),
       ...(dependencies.agentBulletin ? cycloneAgentBulletinHandlers(dependencies.agentBulletin) : {}),
       ...(dependencies.agentDispatch ? cycloneAgentDispatchHandlers(dependencies.agentDispatch) : {}),
+      ...(dependencies.console ? cycloneConsoleHandlers(dependencies.console) : {}),
+      ...(dependencies.seatMemory ? cycloneSeatMemoryHandlers(dependencies.seatMemory) : {}),
+      ...(dependencies.agentObservation ? cycloneAgentObservationHandlers(dependencies.agentObservation) : {}),
       ...cycloneControlHandlers(dependencies.commands),
       ...cycloneWorkshopHandlers(dependencies.workshops),
       ...cycloneSeatHandlers(dependencies.seats),
@@ -107,7 +140,10 @@ export function createCycloneModule(dependencies: {
       ...cycloneCollaborationHandlers(dependencies.collaborations, dependencies.collaborationRounds),
       ...cycloneDispatchHandlers(dependencies.dispatches),
     },
-    ...(dependencies.streams ? { transports: cycloneStreamHandlers(dependencies.streams) } : {}),
+    ...((dependencies.streams || dependencies.supervisor) ? { transports: {
+      ...(dependencies.streams ? cycloneStreamHandlers(dependencies.streams) : {}),
+      ...(dependencies.supervisor ? cycloneSupervisorStreams(dependencies.supervisor) : {}),
+    } } : {}),
     observation: { query: (context, query) => catalog.observe(query, context.audience) },
     operations: dependencies.operations
       ?? snapshotOperationHandler(() => dependencies.source.snapshots()),

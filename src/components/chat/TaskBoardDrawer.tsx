@@ -1,3 +1,4 @@
+import { backendFetch } from '../../lib/backend-client';
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { STATUS_ORDER, type Task, type TaskBoard, type TaskStatus } from '../../utils/taskboard';
 import { useConfirm } from '../common/ConfirmDialog';
@@ -117,7 +118,7 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
     try {
       if (!await confirm({ title, message, confirmText, danger: true })) return;
       const query = new URLSearchParams({ scope: observationScope, ownerId: observationOwnerId }).toString();
-      const response = await fetch(`/api/tools/observations/${encodeURIComponent(id)}/${lifecycle.endpoint}?${query}`, { method: 'POST' });
+      const response = await backendFetch(`/api/tools/observations/${encodeURIComponent(id)}/${lifecycle.endpoint}?${query}`, { method: 'POST' });
       if (!response.ok) throw new Error((await response.json() as { error?: string }).error || failure);
     } catch (error) { setExecutionError((error as Error).message); }
     finally { setClosingObservation(current => current === id ? null : current); }

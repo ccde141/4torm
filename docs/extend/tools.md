@@ -33,7 +33,7 @@
 
 ## 创建和管理工具
 
-![全局工具注册表](/images/extend/tool-registry.webp)
+![全局工具注册表](/images/extend/tool-registry-current.png)
 
 在 Tools 管理页面中点击「注册工具」，可以填写工具名称、用途、参数格式、危险标记和执行方式。
 

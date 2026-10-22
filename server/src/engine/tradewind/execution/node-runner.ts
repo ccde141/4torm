@@ -19,6 +19,7 @@ import { atomicWriteFile } from '../../shared/atomic-io';
 import { callLLM, type TokenUsage } from '../../shared/llm-bridge';
 import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
 import { execToolUnifiedOutcome } from '../../shared/exec-tool';
+import { legacyToolArguments } from '../../shared/tool-arguments.js';
 import {
   runReActLoop,
   type LLMCaller,
@@ -38,6 +39,10 @@ import { resolveTradewindTermination } from './tradewind-outcome.js';
 import type { FrameworkErrorKind } from '../../shared/framework-error.js';
 import { frameworkTransportErrorFromUnknown } from '../../shared/framework-error-transport.js';
 import { TokenUsageRecorder, captureTokenUsage, type TokenUsageProgress } from './token-usage.js';
+import type { HandoffSelection, HandoffRoute } from '../foundation/handoff-target.js';
+import { resolveHandoffCompletion } from './handoff-completion.js';
+import type { CompactionProgress } from '../../shared/compaction/index.js';
+import { projectNodeHistory, type NodeHistoryMessage } from './node-history-view.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -50,13 +55,17 @@ export interface NodeRoundIdentity {
 }
 
 export interface QueuedMessage {
+  messageId?: string;
+  actor?: { type: 'human' | 'agent' | 'system'; id?: string };
+  envelopeId?: string;
+  activationId?: string;
   source: MessageSource;
   content: string;
   /**
    * 信封处理完成后的回调（只有 envelope/contact 来源有）。
    * info.autoOutcome：自动模式终结门结果（'completed'/'anomaly'），手动/普通为 undefined。
    */
-  onComplete?: (output: string, info?: { autoOutcome?: 'completed' | 'anomaly' }) => void;
+  onComplete?: (output: string, info?: { autoOutcome?: 'completed' | 'anomaly'; target?: HandoffSelection }) => void;
   /** 信封/contact 轮真实失败时拒绝等待方，不把错误文本当交付。 */
   onFailure?: (error: Error) => void;
   /**
@@ -77,22 +86,22 @@ export type NodeRunnerEvent = (
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
   | { type: 'usage'; usage: TokenUsage | null }
-  | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
+  | { type: 'tool-call'; tool: string; args: Record<string, unknown> }
+  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown;
+      toolImages?: import('../../shared/types.js').ToolImageRef[] }
   | { type: 'delegate-start'; task: string; delegateId: string }
   | { type: 'delegate-token'; delegateId: string; content: string }
-  | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
-  | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
+  | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, unknown> }
+  | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean; toolImages?: import('../../shared/types.js').ToolImageRef[] }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
   | { type: 'contact-start'; target: string }
   | { type: 'contact-done'; target: string; result: string; ok: boolean }
-  | { type: 'user-message'; content: string; source: string }
+  | { type: 'user-message'; content: string; source: string; messageId?: string; timestamp?: string; actor?: QueuedMessage['actor'] }
   | { type: 'answer'; content: string; rawContent: string }
-  | { type: 'compact-start' }
-  | { type: 'compact-done'; archivedRounds: number; summaryLength: number }
+  | CompactionProgress
   | { type: 'compact-warn'; message: string }
   | { type: 'compaction-notice'; message: string }
-  | { type: 'context-compacted'; messages: ContextMessage[] }
+  | { type: 'context-compacted'; messages: NodeHistoryMessage[] }
   | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind }
   | { type: 'done'; outcome?: 'completed' | 'stopped' | 'error' }
   | { type: 'paused' }
@@ -104,7 +113,7 @@ export type NodeRunnerEvent = (
 /** Agent 节点快照（REST /snapshot 返回，订阅时对账用） */
 export interface NodeSnapshot {
   /** 已提交的对话历史（不含首条 system prompt） */
-  messages: Array<{ role: string; content: string; reasoningContent?: string }>;
+  messages: NodeHistoryMessage[];
   /** 当前轮进行中的有序事件日志（前端用同一 reducer 回放） */
   roundLog: NodeRunnerEvent[];
   /** 当前是否正在处理 */
@@ -116,10 +125,13 @@ export interface NodeSnapshot {
   roundStartedAt?: string;
   /** 是否已暂停（扣住信封、待续跑） */
   paused?: boolean;
+  /** 被扣住的交付轮身份；恢复时核对，区别于可能同时进行的普通发话轮。 */
+  pausedRunId?: string;
   /** 已派发的最大序号（前端只应用 seq > lastSeq 的增量） */
   lastSeq: number;
   tokenUsage?: TokenUsageProgress;
   compactionNotice?: string;
+  compaction?: CompactionProgress;
 }
 
 /** 高频运行探针只需状态，避免每次复制完整对话与轮次事件。 */
@@ -128,9 +140,13 @@ export interface NodeRuntimeState {
   paused: boolean;
   roundSource: MessageSource | null;
   runId?: string;
+  pausedRunId?: string;
 }
 
 export interface NodeRunnerOpts {
+  orchestration?: 'strict' | 'handoff';
+  handoffRoutes?: readonly HandoffRoute[];
+  recordEvent?: (type: string, payload: Record<string, unknown>) => Promise<void>;
   dataDir: string;
   workflowId: string;
   executionId: string;
@@ -147,6 +163,7 @@ export interface NodeRunnerOpts {
   /** 沙箱级别（用于 sub-agent 继承） */
   sandboxLevel: SandboxLevel;
   systemPrompt: string;
+  buildSystemPrompt?: (source: MessageSource) => string;
   compactionPrompt?: string;
   signal: AbortSignal;
   /** 持久化路径（每轮对话后写入 messages.json） */
@@ -172,6 +189,8 @@ export class NodeRunner {
   private readonly opts: NodeRunnerOpts;
   private readonly queue: QueuedMessage[] = [];
   private readonly messages: ContextMessage[] = [];
+  // UI identity stays out of model messages and provider request payloads.
+  private readonly messageIds = new WeakMap<ContextMessage, string>();
   private busy = false;
   private processing = false;
   private readonly events: NodeEventEmitter;
@@ -182,11 +201,14 @@ export class NodeRunner {
   private pausing = false;
   /** 暂停时扣住的信封消息（连同 onComplete），续跑时重投。null=未暂停。 */
   private pausedMsg: QueuedMessage | null = null;
+  private pausedRoundIdentity: NodeRoundIdentity | null = null;
   /** 本轮正在服务的 contact 源节点 ID（非 contact 轮为 null）。反向联络死锁提示分流用。 */
   private currentContactFrom: string | null = null;
   private readonly usage: TokenUsageRecorder;
   private lastRequestEstimate?: number;
   private compactionNotice?: string;
+  private compaction?: CompactionProgress;
+  private contextWrites: Promise<void> = Promise.resolve();
 
   constructor(opts: NodeRunnerOpts) {
     this.opts = opts;
@@ -199,6 +221,7 @@ export class NodeRunner {
 
   isBusy(): boolean { return this.busy; }
   getAgentId(): string { return this.opts.agentId; }
+  getDataDir(): string { return this.opts.dataDir; }
   getIdentity(): { workflowId: string; executionId: string } {
     return { workflowId: this.opts.workflowId, executionId: this.opts.executionId };
   }
@@ -213,8 +236,9 @@ export class NodeRunner {
     return {
       busy: this.busy,
       paused: this.isPaused(),
-      roundSource: this.pausedMsg?.source ?? this.currentRoundSource,
+      roundSource: this.busy ? this.currentRoundSource : this.pausedMsg?.source ?? this.currentRoundSource,
       ...(this.roundIdentity ? { runId: this.roundIdentity.runId } : {}),
+      ...(this.pausedRoundIdentity ? { pausedRunId: this.pausedRoundIdentity.runId } : {}),
     };
   }
 
@@ -223,26 +247,27 @@ export class NodeRunner {
    * 前端订阅时拉一次，用同一 reducer 回放 roundLog，再按 seq 应用增量。
    */
   getSnapshot(): NodeSnapshot {
-    const msgs = this.messages
+    const msgs = projectNodeHistory(this.messages
       .filter((_, i) => i !== 0) // 去掉首条 system prompt
       .map(m => ({
-        role: m.role,
-        content: m.content,
-        reasoningContent: m.reasoningContent,
-      }));
+        ...m,
+        ...(this.messageIds.has(m) ? { messageId: this.messageIds.get(m) } : {}),
+      })));
     return {
       messages: msgs,
       roundLog: this.events.getRoundLog(),
       busy: this.busy,
-      roundSource: this.pausedMsg?.source ?? this.currentRoundSource,
+      roundSource: this.busy ? this.currentRoundSource : this.pausedMsg?.source ?? this.currentRoundSource,
       ...(this.roundIdentity ? {
         runId: this.roundIdentity.runId,
         roundStartedAt: this.roundIdentity.startedAt,
       } : {}),
       paused: this.isPaused(),
+      ...(this.pausedRoundIdentity ? { pausedRunId: this.pausedRoundIdentity.runId } : {}),
       lastSeq: this.events.lastSeq,
       tokenUsage: this.usage.state,
       ...(this.compactionNotice ? { compactionNotice: this.compactionNotice } : {}),
+      ...(this.compaction ? { compaction: this.compaction } : {}),
     };
   }
 
@@ -252,7 +277,8 @@ export class NodeRunner {
    * 只能 pause()（暂停后续跑）或 orchestrator.stop()（停整个工作流）。
    */
   canAbortRound(): boolean {
-    return this.busy && this.currentRoundSource === 'human' && this.roundAbort !== null;
+    return this.busy && this.currentRoundSource === 'human' && this.roundAbort !== null
+      && !this.roundAbort.signal.aborted;
   }
 
   abortRound(runId: string): boolean {
@@ -268,7 +294,8 @@ export class NodeRunner {
    * @returns 是否成功进入暂停（仅 busy 时有效）
    */
   pause(runId: string): boolean {
-    if (!this.busy || !this.roundAbort || this.currentRoundSource === 'human'
+    if (!this.busy || !this.roundAbort || this.roundAbort.signal.aborted || this.pausedMsg
+      || this.currentRoundSource === 'human'
       || this.roundIdentity?.runId !== runId) return false;
     this.pausing = true;
     this.roundAbort.abort();
@@ -283,10 +310,12 @@ export class NodeRunner {
    * 真封口（complete_task/anomaly）才会触发原 onComplete → 正常投递下游。
    * @returns 是否成功续跑（仅存在扣住消息时有效）
    */
-  resume(): boolean {
-    if (!this.pausedMsg) return false;
+  resume(runId?: string): boolean {
+    if (!this.pausedMsg || this.opts.signal.aborted
+      || (runId !== undefined && this.pausedRoundIdentity?.runId !== runId)) return false;
     const msg = this.pausedMsg;
     this.pausedMsg = null;
+    this.pausedRoundIdentity = null;
     this.push(msg);
     return true;
   }
@@ -317,7 +346,7 @@ export class NodeRunner {
 
   /** 投入消息（人类或信封），自动触发处理 */
   push(msg: QueuedMessage): void {
-    this.queue.push(msg);
+    this.queue.push({ ...msg, messageId: msg.messageId ?? `tradewind-message-${randomUUID()}` });
     this.drain();
   }
 
@@ -341,6 +370,7 @@ export class NodeRunner {
     this.busy = true;
     this.currentRoundSource = msg.source;
     if (msg.source === 'human') this.compactionNotice = undefined;
+    this.compaction = undefined;
     this.events.beginRound();
     this.roundAbort = new AbortController();
     const roundIdentity: NodeRoundIdentity = {
@@ -352,8 +382,12 @@ export class NodeRunner {
     // 本轮若在服务某方的 contact，记下其源节点——供反向联络的死锁提示区分措辞
     this.currentContactFrom = msg.source === 'contact' ? (msg.contactFrom ?? null) : null;
     let reasoningContent = '';
+    const readCompaction = (): CompactionProgress | undefined => this.compaction;
     const emit = (ev: NodeRunnerEvent) => {
       if (ev.type === 'compaction-notice') this.compactionNotice = ev.message;
+      if (ev.type === 'compact-start' || ev.type === 'compact-done' || ev.type === 'compact-failed') {
+        this.compaction = ev;
+      }
       if (ev.type === 'reasoning') reasoningContent += ev.content;
       this.events.emit(ev);
     };
@@ -361,14 +395,18 @@ export class NodeRunner {
 
     // 追加 user message 到上下文（续跑重投的消息除外——原消息已在上下文里）
     if (!msg._resume && !(msg.source === 'human' && msg.content.trim() === '/compact')) {
-      this.messages.push({ role: 'user', content: msg.content });
-      // 通知前端（人类消息由 send() 自行插入，无需重复推送）
-      if (msg.source !== 'human') {
-        emit({ type: 'user-message', content: msg.content, source: msg.source });
-      }
+      const message: ContextMessage = { role: 'user', content: msg.content };
+      this.messages.push(message);
+      if (msg.messageId) this.messageIds.set(message, msg.messageId);
+      // Every sender uses this event; ACK/SSE/snapshot share one ID for reconciliation.
+      emit({ type: 'user-message', content: msg.content, source: msg.source,
+        messageId: msg.messageId, timestamp: roundIdentity.startedAt, actor: msg.actor });
     }
 
     try {
+      await this.opts.recordEvent?.('agent-round-started', { ...roundIdentity, activationId: msg.activationId ?? roundIdentity.runId,
+        envelopeId: msg.envelopeId, source: msg.source, actor: msg.actor, messageId: msg.messageId,
+        sourceNodeId: msg.contactFrom, target: this.opts.nodeId });
       if (msg.source === 'human' && msg.content.trim() === '/compact') {
         await compactNodeManually(this.compactionOptions(emit));
         emit({ type: 'done', outcome: 'completed' });
@@ -376,12 +414,15 @@ export class NodeRunner {
       }
       const result = await this.runReAct(emit, msg.source);
       resolveTradewindTermination(result.termination, result.autoOutcome);
-      // 追加 assistant 回复到上下文
-      this.messages.push({
-        role: 'assistant',
-        content: result.rawContent,
-        ...(reasoningContent ? { reasoningContent } : {}),
-      });
+      // The loop already committed its exact assistant/tool history. A sealed envelope is a
+      // separate delivery projection rather than a replacement for that evidence.
+      if (result.autoOutcome) this.messages.push({ role: 'assistant', content: result.content });
+      const lastAssistant = [...this.messages].reverse().find(message => message.role === 'assistant');
+      if (lastAssistant && reasoningContent && !lastAssistant.reasoningContent) lastAssistant.reasoningContent = reasoningContent;
+      if (this.opts.orchestration === 'handoff') await this.persist();
+      await this.opts.recordEvent?.('agent-round-finished', { ...roundIdentity, activationId: msg.activationId ?? roundIdentity.runId,
+        envelopeId: msg.envelopeId, source: msg.source, actor: msg.actor, messageId: msg.messageId,
+        target: this.opts.nodeId, finishedAt: new Date().toISOString() });
 
       emit({ type: 'answer', content: result.content, rawContent: result.rawContent });
       emit({ type: 'done', outcome: 'completed' });
@@ -392,14 +433,20 @@ export class NodeRunner {
       // 信封/contact 来源：回调通知系统拿走输出（含自动模式终结门结果）
       if ((msg.source === 'envelope' || msg.source === 'contact') && msg.onComplete) {
         const autoOutcome = (result as { autoOutcome?: 'completed' | 'anomaly' }).autoOutcome;
-        msg.onComplete(result.content, { autoOutcome });
+        msg.onComplete(result.content, { autoOutcome, target: result.target });
       }
 
       // 实时持久化
       await this.persist();
 
     } catch (e) {
-      const isAbort = (e as Error).name === 'AbortError';
+      const compaction = readCompaction();
+      const isAbort = (e as Error).name === 'AbortError'
+        || (compaction?.type === 'compact-failed' && compaction.aborted === true);
+      if (compaction?.type === 'compact-start') {
+        emit({ ...compaction, type: 'compact-failed', updatedAt: Date.now(),
+          aborted: isAbort, message: e instanceof Error ? e.message : String(e) });
+      }
       const carriesEnvelope = (msg.source === 'envelope' || msg.source === 'contact') && !!msg.onComplete;
       const disposition = classifyRoundInterrupt(isAbort, this.pausing, carriesEnvelope);
       this.pausing = false;
@@ -407,6 +454,7 @@ export class NodeRunner {
       // ── 暂停：扣住信封消息，绝不 onComplete（否则投垃圾下游）。续跑时重跑本轮。
       if (disposition === 'pause') {
         this.pausedMsg = { ...msg, _resume: true };
+        this.pausedRoundIdentity = roundIdentity;
         emit({ type: 'paused' });
         this.busy = false;
         return;
@@ -434,15 +482,28 @@ export class NodeRunner {
 
   /** 持久化 messages 到磁盘 */
   private async persist(): Promise<void> {
-    if (!this.opts.persistDir) return;
+    const directory = this.opts.persistDir;
+    if (!directory) return;
     try {
-      await fs.mkdir(this.opts.persistDir, { recursive: true });
-      const target = path.join(this.opts.persistDir, 'messages.json');
-      await atomicWriteFile(target, JSON.stringify(this.messages, null, 2));
-    } catch { /* 持久化失败不阻塞 */ }
+      await this.serializeContextWrite(async () => {
+        await fs.mkdir(directory, { recursive: true });
+        const target = path.join(directory, 'messages.json');
+        await atomicWriteFile(target, JSON.stringify(this.messages, null, 2));
+      });
+    } catch (error) {
+      if (this.opts.orchestration === 'handoff') throw error;
+    }
+  }
+
+  /** Read the owner at the write boundary so an appended fact cannot persist an obsolete context. */
+  private serializeContextWrite(write: () => Promise<void>): Promise<void> {
+    const current = this.contextWrites.catch(() => {}).then(write);
+    this.contextWrites = current;
+    return current;
   }
 
   private compactionOptions(emit: (ev: NodeRunnerEvent) => void) {
+    const signal = this.roundAbort ? AbortSignal.any([this.opts.signal, this.roundAbort.signal]) : this.opts.signal;
     return { dataDir: this.opts.dataDir, model: this.opts.model,
       scopeKey: `tradewind:${this.opts.executionId}:${this.opts.nodeId}`,
       archiveDir: this.opts.compactArchiveDir ?? path.join(this.opts.persistDir
@@ -453,12 +514,14 @@ export class NodeRunner {
       prompt: this.opts.compactionPrompt,
       identity: { workflowId: this.opts.workflowId, executionId: this.opts.executionId,
         nodeId: this.opts.nodeId, agentId: this.opts.agentId },
-      signal: this.roundAbort ? AbortSignal.any([this.opts.signal, this.roundAbort.signal]) : this.opts.signal,
+      signal,
+      serialize: (write: () => Promise<void>) => this.serializeContextWrite(write),
       recordEstimate: (estimate: number) => { this.lastRequestEstimate = estimate; },
-      persist: async (messages: ContextMessage[]) => {
+      persist: async (messages: ContextMessage[], commitSignal?: AbortSignal) => {
         if (!this.opts.persistDir) return;
         await fs.mkdir(this.opts.persistDir, { recursive: true });
-        await atomicWriteFile(path.join(this.opts.persistDir, 'messages.json'), JSON.stringify(messages));
+        (commitSignal ?? signal).throwIfAborted();
+        await atomicWriteFile(path.join(this.opts.persistDir, 'messages.json'), JSON.stringify(messages), commitSignal ?? signal);
       } };
   }
 
@@ -472,27 +535,25 @@ export class NodeRunner {
     const toolDefs = await loadAgentToolDefs(dataDir, this.opts.toolNames, this.opts.skillIds, this.opts.toolMode);
 
     // 是否信封轮：决定挂不挂信封工具 + 终结门（见 isEnvelopeRound 的双平面分离说明）
-    const envelopeRound = isEnvelopeRound(source, this.opts.native);
+    const handoff = this.opts.orchestration === 'handoff';
+    const envelopeRound = isEnvelopeRound(source, this.opts.native, handoff);
 
     // 组合信号：orchestrator 全局 abort 或本轮 abort 均可中断
     const roundSignal = this.roundAbort!.signal;
-    const combinedAbort = new AbortController();
-    const onGlobal = () => combinedAbort.abort();
-    const onRound = () => combinedAbort.abort();
-    signal.addEventListener('abort', onGlobal, { once: true });
-    roundSignal.addEventListener('abort', onRound, { once: true });
-    const cleanup = () => {
-      signal.removeEventListener('abort', onGlobal);
-      roundSignal.removeEventListener('abort', onRound);
-    };
+    const effectiveSignal = AbortSignal.any([signal, roundSignal]);
+    const roundOpts = { ...this.opts, signal: effectiveSignal };
+    if (this.opts.buildSystemPrompt) this.messages[0].content = this.opts.buildSystemPrompt(source);
+    const workingContext = [...this.messages];
 
     // 信封轮：本轮信封草稿（每次 runReAct 一份，随 complete_task 封口交付）。
     // 非信封轮（human/contact）为 null——不攒信封、不投递。
-    const draft = envelopeRound ? new EnvelopeDraft() : null;
+    const draft = envelopeRound ? new EnvelopeDraft(handoff ? this.opts.handoffRoutes ?? [] : undefined) : null;
 
     // 构建 toolCaller（文本/native 共用同一个执行器）
     const toolCaller: ToolCaller = {
-      call: async (tool, args) => {
+      call: async (tool, rawArgs) => {
+        effectiveSignal.throwIfAborted();
+        const args = legacyToolArguments(rawArgs);
         // 自动模式信封工具（增/删/扫 + complete_task）：服务端内联执行，改本轮草稿
         if (draft && (ENVELOPE_TOOL_NAMES as readonly string[]).includes(tool)) {
           emit({ type: 'tool-call', tool, args });
@@ -501,10 +562,10 @@ export class NodeRunner {
           return outcome;
         }
         if (tool === 'delegate') {
-          return execDelegate(this.opts, args, emit);
+          return execDelegate(roundOpts, args, emit);
         }
         if (tool === 'contact') {
-          return execContact(this.opts, args, emit, this.currentContactFrom);
+          return execContact(roundOpts, args, emit, this.currentContactFrom);
         }
         // 长期记忆工具（每轮可用）：引擎侧内联执行，补 source+时间戳
         if ((MEMORY_TOOL_NAMES as readonly string[]).includes(tool)) {
@@ -519,11 +580,11 @@ export class NodeRunner {
             return { result: err, ok: false };
           }
         }
-        emit({ type: 'tool-call', tool, args });
+        emit({ type: 'tool-call', tool, args: rawArgs });
         try {
           let meta: unknown;
-          const outcome = await this.execTool(tool, args, (m) => { meta = m; });
-          emit({ type: 'tool-result', tool, result: outcome.result, ok: outcome.ok, meta });
+          const outcome = await this.execTool(tool, rawArgs, effectiveSignal, (m) => { meta = m; });
+          emit({ type: 'tool-result', tool, ...outcome, meta });
           return outcome;
         } catch (e) {
           const err = `工具执行失败: ${(e as Error).message}`;
@@ -546,22 +607,24 @@ export class NodeRunner {
         // 信封轮：叠加信封四件套 + 启用显式终结门（complete_task）。
         // human/contact 轮：仅基础工具 + 虚拟工具，纯对话、无终结门。
         const nativeToolDefs = envelopeRound
-          ? [...toolDefs, ...virtualDefs, ...memoryDefs, ...buildEnvelopeToolDefs()]
+          ? [...toolDefs, ...virtualDefs, ...memoryDefs, ...buildEnvelopeToolDefs(handoff ? this.opts.handoffRoutes ?? [] : undefined)]
           : [...toolDefs, ...virtualDefs, ...memoryDefs];
 
-        return await runTradewindReActNative({
+        const result = await runTradewindReActNative({
           dataDir,
           model,
           temperature,
-          messages: [...this.messages],
+          messages: workingContext,
           toolDefs: nativeToolDefs,
           toolCaller,
+          retainFinalContext: true,
           onEvent: emit,
           onUsageResolved: usage => this.usage.record(usage).then(() => undefined),
           llmTransform: llm => nodeCompactionCaller(llm, this.compactionOptions(emit)),
-          signal: combinedAbort.signal,
+          signal: effectiveSignal,
           completion: envelopeRound ? { tool: COMPLETE_TASK_TOOL } : undefined,
         });
+        return resolveHandoffCompletion(result, draft, handoff && envelopeRound);
       }
 
       // 文本路径（保持不变）
@@ -580,8 +643,8 @@ export class NodeRunner {
         },
       };
 
-      return await runReActLoop({
-        messages: [...this.messages],
+      const result = await runReActLoop({
+        messages: workingContext,
         llm,
         llmTransform: caller => nodeCompactionCaller(caller, this.compactionOptions(emit)),
         // 即使 Agent 没配置普通工具，信风仍有记忆、contact 和信封工具。
@@ -593,29 +656,38 @@ export class NodeRunner {
             contactTargets: this.opts.contactTargets ?? [],
           }),
           ...buildMemoryToolDefs(),
-          ...(envelopeRound ? buildEnvelopeToolDefs() : []),
+          ...(envelopeRound ? buildEnvelopeToolDefs(handoff ? this.opts.handoffRoutes ?? [] : undefined) : []),
         ].map(tool => tool.name),
         onEvent: (ev) => {
           if (ev.type === 'token') emit({ type: 'token', content: ev.chunk });
           if (ev.type === 'reasoning') emit({ type: 'reasoning', content: ev.chunk });
           if (ev.type === 'usage') emit({ type: 'usage', usage: ev.usage });
         },
-        signal: combinedAbort.signal,
+        signal: effectiveSignal,
+        completion: handoff && envelopeRound ? { tool: COMPLETE_TASK_TOOL } : undefined,
       });
+      return resolveHandoffCompletion(result, draft, handoff && envelopeRound);
     } finally {
-      cleanup();
+      // Compaction commits replacement prefixes itself. Retain every new exact message,
+      // while preserving runtime facts appended independently during this round.
+      const committed = new Set(this.messages);
+      this.messages.push(...workingContext.filter(message => !committed.has(message)));
+      await this.persist();
     }
   }
 
   /** 执行普通工具 */
-  private async execTool(tool: string, args: Record<string, string>, onMeta?: (meta: unknown) => void) {
+  private async execTool(tool: string, args: Record<string, unknown>, signal: AbortSignal, onMeta?: (meta: unknown) => void) {
     return execToolUnifiedOutcome({
       tool,
       args,
+      mediaAccess: { dataDir: this.opts.dataDir, feature: 'tradewind', target: {
+        workflowId: this.opts.workflowId, executionId: this.opts.executionId,
+        nodeId: this.opts.nodeId, kind: 'node' } },
       agentId: this.opts.agentId,
       workspaceDir: this.opts.workspace,
       sandboxLevel: this.opts.sandboxLevel,
-      signal: this.opts.signal,
+      signal,
       onMeta,
     });
   }

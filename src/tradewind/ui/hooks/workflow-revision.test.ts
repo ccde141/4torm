@@ -4,6 +4,13 @@ import { WorkflowRevisionTracker } from './workflow-revision';
 
 const draft = (workflowId = 'wf-1') => ({ workflowId, name: 'Draft', graph: { nodes: [{}], edges: [] } });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
 test('new workflow saves with create-only revision, then becomes clean', async () => {
   const tracker = new WorkflowRevisionTracker();
   tracker.load('wf-1', null);
@@ -175,4 +182,114 @@ test('copy waiting for an earlier save cannot adopt a graph captured before newe
   assert.equal(adopted, false);
   assert.equal(tracker.state.workflowId, 'wf-1');
   assert.equal(tracker.state.dirty, true);
+});
+
+test('three overlapping saves use successive revisions and waiting includes the whole queue', async () => {
+  const tracker = new WorkflowRevisionTracker();
+  tracker.load('wf-1', 'r0');
+  tracker.edit();
+  const writes = [deferred<{ revision: string }>(), deferred<{ revision: string }>(), deferred<{ revision: string }>()];
+  const revisions: Array<string | null> = [];
+  const write = (input: { expectedRevision: string | null }) => {
+    revisions.push(input.expectedRevision);
+    return writes[revisions.length - 1].promise;
+  };
+  const first = tracker.save(() => draft(), write);
+  let finished = false;
+  const waiting = tracker.waitForSave().then(() => { finished = true; });
+  const second = tracker.save(() => draft(), write);
+  const third = tracker.save(() => draft(), write);
+  assert.deepEqual(revisions, ['r0']);
+  writes[0].resolve({ revision: 'r1' });
+  await first;
+  assert.deepEqual(revisions, ['r0', 'r1']);
+  assert.equal(finished, false);
+  writes[1].resolve({ revision: 'r2' });
+  await second;
+  assert.deepEqual(revisions, ['r0', 'r1', 'r2']);
+  assert.equal(finished, false);
+  writes[2].resolve({ revision: 'r3' });
+  await third;
+  await waiting;
+  assert.equal(finished, true);
+  assert.equal(tracker.state.revision, 'r3');
+  assert.equal(tracker.state.conflict, false);
+});
+
+test('copy shares the save queue and cannot replay an older save after adopting another workflow', async () => {
+  const tracker = new WorkflowRevisionTracker();
+  tracker.load('wf-1', 'r0');
+  tracker.edit();
+  const firstWrite = deferred<{ revision: string }>();
+  const copyWrite = deferred<{ revision: string }>();
+  const first = tracker.save(() => draft(), () => firstWrite.promise);
+  let copying = false;
+  const copy = tracker.saveCopy(draft('wf-copy'), input => {
+    assert.equal(input.expectedRevision, null);
+    copying = true;
+    return copyWrite.promise;
+  }, revision => tracker.load('wf-copy', revision));
+  let staleDraftReads = 0;
+  const stale = tracker.save(() => { staleDraftReads += 1; return draft('wf-copy'); }, async () => {
+    throw new Error('old workflow save must not run');
+  });
+  let finished = false;
+  const waiting = tracker.waitForSave().then(() => { finished = true; });
+  firstWrite.resolve({ revision: 'r1' });
+  await first;
+  assert.equal(copying, true);
+  assert.equal(finished, false);
+  copyWrite.resolve({ revision: 'r-copy' });
+  assert.deepEqual(await copy, { saved: true, adopted: true });
+  assert.equal(await stale, false);
+  await waiting;
+  assert.equal(staleDraftReads, 0);
+  assert.equal(tracker.state.workflowId, 'wf-copy');
+  assert.equal(tracker.state.revision, 'r-copy');
+});
+
+test('a failed save rejects queued writes without replay and permits a later explicit save', async () => {
+  const tracker = new WorkflowRevisionTracker();
+  tracker.load('wf-1', 'r0');
+  tracker.edit();
+  const firstWrite = deferred<{ revision: string }>();
+  const first = tracker.save(() => draft(), () => firstWrite.promise);
+  let queuedWrites = 0;
+  const second = tracker.save(() => draft(), async () => { queuedWrites += 1; return { revision: 'r1' }; });
+  const copy = tracker.saveCopy(draft('wf-copy'), async () => {
+    queuedWrites += 1;
+    return { revision: 'r-copy' };
+  }, () => { throw new Error('failed queue must not adopt'); });
+  const settled = Promise.allSettled([first, second, copy, tracker.waitForSave()]);
+  firstWrite.reject(new Error('write unavailable'));
+  assert.deepEqual((await settled).map(result => result.status), ['rejected', 'rejected', 'rejected', 'rejected']);
+  assert.equal(queuedWrites, 0);
+  assert.equal(tracker.state.dirty, true);
+  assert.equal(await tracker.save(() => draft(), async input => {
+    assert.equal(input.expectedRevision, 'r0');
+    return { revision: 'r1' };
+  }), true);
+});
+
+test('an earlier confirmed self-event stays unchanged after queued saves while a new external revision conflicts', async () => {
+  const tracker = new WorkflowRevisionTracker();
+  tracker.load('wf-1', 'r0');
+  tracker.edit();
+  const firstWrite = deferred<{ revision: string }>();
+  const secondWrite = deferred<{ revision: string }>();
+  const first = tracker.save(() => draft(), () => firstWrite.promise);
+  const second = tracker.save(() => draft(), () => secondWrite.promise);
+  const observing = tracker.observeAfterSave('wf-1', 'r1');
+  firstWrite.resolve({ revision: 'r1' });
+  await first;
+  tracker.edit();
+  secondWrite.resolve({ revision: 'r2' });
+  await second;
+  assert.equal(await observing, 'unchanged');
+  assert.equal(tracker.state.dirty, true);
+  assert.equal(tracker.state.conflict, false);
+  assert.equal(await tracker.observeAfterSave('wf-1', 'external-r3'), 'conflict');
+  tracker.load('wf-1', 'r2');
+  tracker.edit();
+  assert.equal(await tracker.observeAfterSave('wf-1', 'r1'), 'conflict');
 });

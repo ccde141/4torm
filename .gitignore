@@ -16,6 +16,7 @@ opencode.json
 __pycache__/
 *.py[cod]
 /.workspace/
+/.linux-runtime/
 
 # Environment files
 .env
@@ -94,6 +95,7 @@ data/tools/executors/*
 
 # MCP 服务器配置（含用户本地路径/密钥）
 data/mcp/servers.json
+data/mcp/media/
 
 # Local, hot-switchable conversation settings belong to the current installation.
 data/compaction-policy.json

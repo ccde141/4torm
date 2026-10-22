@@ -1,4 +1,5 @@
 import { memo, type KeyboardEvent, type RefObject } from 'react';
+import BoundedText from '../../../engine/text-display/BoundedText';
 import { createPortal } from 'react-dom';
 import type { ChatMessage } from '../../../types';
 import ToolCallMessage from './ToolCallMessage';
@@ -10,11 +11,17 @@ import { useLocale } from '../../../i18n/LocaleContext';
 import type { MessageKey } from '../../../i18n/locale';
 import type { ProviderUsage } from '../token-usage';
 import { CompactionNotice } from '../../../components/common/CompactionNotice';
+import { CompactionStatus } from '../../../components/common/CompactionStatus';
+import type { CompactionActivity } from '../../../components/common/compaction-activity';
+import { CompactedHistory } from '../CompactedHistory';
+import { isCompactedHistory } from '../compaction-events';
+import type { ToolMediaScope } from '../../../engine/tool-media';
 
 export type AgentChatActivity = 'idle' | 'waiting' | 'reasoning' | 'responding'
   | 'tool' | 'delegate' | 'contact' | 'failed';
 
 interface Props {
+  mediaScope?: ToolMediaScope;
   visible: boolean;
   sealed: boolean;
   paused: boolean;
@@ -24,6 +31,7 @@ interface Props {
   nodeLabel: string;
   latestUsage?: ProviderUsage | null;
   compactionNotice?: string | null;
+  compaction?: CompactionActivity;
   messages: ChatMessage[];
   error: string | null;
   input: string;
@@ -55,7 +63,7 @@ const activityBadgeKeys: Record<AgentChatActivity, MessageKey> = {
 export default function AgentChatView(props: Props) {
   const { t } = useLocale();
   const { visible, sealed, paused, streaming, isEnvelopeRound, activity, nodeLabel,
-    latestUsage, compactionNotice, messages, error, input, messagesContainerRef, messagesEndRef, onClose, onInput,
+    latestUsage, compactionNotice, compaction, messages, error, input, messagesContainerRef, messagesEndRef, onClose, onInput,
     onKeyDown, onSend, onStop, onPauseRound, onResumeRound, onStopWorkflow } = props;
   const statusText = sealed ? t('tradewind.chat.sealedStatus')
     : paused ? t('tradewind.chat.pausedStatus') : t(activityLabelKeys[activity]);
@@ -79,11 +87,13 @@ export default function AgentChatView(props: Props) {
         </div>
         <div className="tw-chat-window__messages" ref={messagesContainerRef}>
           {messages.map((msg) => <AgentChatMessage key={msg.id} message={msg}
+            mediaScope={props.mediaScope}
             isStreaming={streaming && msg === messages[messages.length - 1]} />)}
           {error && <div className="tw-chat-msg tw-chat-msg--error">{error}</div>}
           {compactionNotice && <CompactionNotice message={compactionNotice} />}
           <div ref={messagesEndRef} />
         </div>
+        <CompactionStatus activity={compaction} />
         <div className={`tw-chat-status tw-chat-status--${activity}${streaming ? ' tw-chat-status--active' : ''}${paused ? ' tw-chat-status--paused' : ''}`}>
           <span className="tw-chat-status__pulse" /><span>{statusText}</span>
         </div>
@@ -94,9 +104,9 @@ export default function AgentChatView(props: Props) {
                 onInput(event.target.value);
                 event.target.style.height = 'auto';
                 event.target.style.height = `${Math.min(event.target.scrollHeight, 120)}px`;
-              }} onKeyDown={onKeyDown} placeholder={t('tradewind.chat.placeholder')} disabled={streaming || paused} rows={1} />
+              }} onKeyDown={onKeyDown} placeholder={t('tradewind.chat.placeholder')} disabled={streaming || paused || compaction?.phase === 'running'} rows={1} />
               <AgentChatControls paused={paused} streaming={streaming} isEnvelopeRound={isEnvelopeRound}
-                input={input} onSend={onSend} onStop={onStop} onPauseRound={onPauseRound}
+                input={input} compaction={compaction} onSend={onSend} onStop={onStop} onPauseRound={onPauseRound}
                 onResumeRound={onResumeRound} onStopWorkflow={onStopWorkflow} />
             </div>
           )}
@@ -107,38 +117,39 @@ export default function AgentChatView(props: Props) {
   );
 }
 
-const AgentChatMessage = memo(function AgentChatMessage({ message, isStreaming }: { message: ChatMessage; isStreaming: boolean }) {
+const AgentChatMessage = memo(function AgentChatMessage({ message, isStreaming, mediaScope }: { message: ChatMessage; isStreaming: boolean; mediaScope?: ToolMediaScope }) {
   const { t } = useLocale();
-  if (message.toolCall?.toolName === 'delegate') return <DelegateCard toolCall={message.toolCall as any} content={message.content} />;
+  if (message.toolCall?.toolName === 'delegate') return <DelegateCard toolCall={message.toolCall as any} content={message.content} mediaScope={mediaScope} />;
   if (message.toolCall?.toolName === 'contact') return <ContactCard toolCall={message.toolCall} />;
-  if (message.toolCall) return <ToolCallMessage toolCall={message.toolCall} />;
-  if (message.role === 'system') return <div className="tw-chat-msg tw-chat-msg--system">{message.content}</div>;
+  if (message.toolCall) return <ToolCallMessage toolCall={message.toolCall} mediaScope={mediaScope} />;
+  if (message.role === 'system' && isCompactedHistory(message.content)) return <CompactedHistory content={message.content} />;
+  if (message.role === 'system') return <div className="tw-chat-msg tw-chat-msg--system"><BoundedText text={message.content} /></div>;
   if (message.role === 'user') return <div className="tw-chat-row tw-chat-row--user">
-    <div className="tw-chat-avatar tw-chat-avatar--user">{t('tradewind.chat.you')}</div><div className="tw-chat-bubble">{message.content}</div>
+    <div className="tw-chat-avatar tw-chat-avatar--user">{t('tradewind.chat.you')}</div><div className="tw-chat-bubble"><BoundedText text={message.content} /></div>
   </div>;
   const toolSteps = message.toolSteps || [];
   if (toolSteps.length) return <div className="tw-chat-row tw-chat-row--assistant">
     <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div><div className="tw-chat-bubble">
       {message.reasoningContent && <TwReasoningBlock content={message.reasoningContent} streaming={isStreaming} />}
       <TwToolActivityGroup items={toolSteps} renderItem={(step, index) => <ToolCallMessage key={index} toolCall={{
-        toolName: step.tool, params: step.args, result: step.result,
+        toolName: step.tool, params: step.args, result: step.result, toolImages: step.toolImages,
         status: step.status === 'running' ? 'pending' : step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending', diff: step.diff,
-      }} />}/>
-      {message.content && <div className="tw-chat-content">{message.content}</div>}
+      }} mediaScope={mediaScope} />}/>
+      {message.content && <div className="tw-chat-content"><BoundedText text={message.content} followTail={isStreaming} /></div>}
     </div>
   </div>;
   return <div className="tw-chat-row tw-chat-row--assistant">
     <div className="tw-chat-avatar tw-chat-avatar--assistant">AI</div><div className="tw-chat-bubble">
       {message.reasoningContent && <TwReasoningBlock content={message.reasoningContent} streaming={isStreaming} />}
       {isStreaming && !message.content.trim() ? <><span className="tw-chat-streaming-dot" />{t('tradewind.chat.waitingModel')}</>
-        : <>{message.content}{isStreaming && <span className="tw-chat-cursor" />}</>}
+        : <><BoundedText text={message.content} followTail={isStreaming} />{isStreaming && <span className="tw-chat-cursor" />}</>}
     </div>
   </div>;
 });
 
-function AgentChatControls({ paused, streaming, isEnvelopeRound, input, onSend, onStop,
+function AgentChatControls({ paused, streaming, isEnvelopeRound, input, compaction, onSend, onStop,
   onPauseRound, onResumeRound, onStopWorkflow }: Pick<Props, 'paused' | 'streaming' | 'isEnvelopeRound' |
-    'input' | 'onSend' | 'onStop' | 'onPauseRound' | 'onResumeRound' | 'onStopWorkflow'>) {
+    'input' | 'compaction' | 'onSend' | 'onStop' | 'onPauseRound' | 'onResumeRound' | 'onStopWorkflow'>) {
   const { t } = useLocale();
   if (paused) return <>
     <button className="tw-chat-window__resume" onClick={onResumeRound}>{t('tradewind.chat.resume')}</button>
@@ -149,5 +160,5 @@ function AgentChatControls({ paused, streaming, isEnvelopeRound, input, onSend, 
     <button className="tw-chat-window__stop tw-chat-window__stop--wide" onClick={onStopWorkflow}>{t('tradewind.chat.stopWorkflow')}</button>
   </>;
   if (streaming) return <button className="tw-chat-window__stop" onClick={onStop} aria-label={t('tradewind.chat.stopGeneration')}>■</button>;
-  return <button className="tw-chat-window__send" onClick={onSend} disabled={!input.trim()} aria-label={t('tradewind.chat.sendMessage')}>➤</button>;
+  return <button className="tw-chat-window__send" onClick={onSend} disabled={!input.trim() || compaction?.phase === 'running'} aria-label={t('tradewind.chat.sendMessage')}>➤</button>;
 }

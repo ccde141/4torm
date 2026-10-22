@@ -18,7 +18,7 @@ export interface CycloneRuntimeSource {
   snapshots(): Promise<CycloneOperationSnapshot[]>;
 }
 
-export type CycloneTargetKind = 'seat' | 'room';
+export type CycloneTargetKind = 'seat' | 'room' | 'supervisor';
 
 export function cycloneOperationId(
   targetKind: CycloneTargetKind,
@@ -30,6 +30,7 @@ export function cycloneOperationId(
 
 export type CycloneExecutionPhase =
   | 'seat-chat' | 'seat-resume' | 'seat-compact'
+  | 'supervisor-chat' | 'supervisor-resume' | 'supervisor-compact'
   | 'chair-chat' | 'room-intro' | 'room-speak';
 
 export interface CycloneExecutionTarget {

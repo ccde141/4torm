@@ -47,23 +47,28 @@ test('native/text recovery at next model call never repeats an already executed 
   });
 });
 
-test('text continuation keeps its temporary answer/hint tail through compaction and removes it afterward', async () => {
+test('text continuation removes only its temporary pair after compaction appends an independent runtime fact', async () => {
   await fixture(async dataDir => {
     const active = messages();
     let requests = 0;
     const llm = createCompactionCaller({ dataDir, area: 'monsoon', kind: 'conversation',
       model: 'p:model', protectedPrefixCount: 1, resolveSummaryBudget: async () => 16_000,
-      summarize: async () => 'verified earlier facts', llm: { call: async current => {
+      summarize: async () => 'verified earlier facts',
+      commit: async plan => { plan.messages.push({ role: 'user', content: 'independent runtime fact' }); },
+      llm: { call: async current => {
         requests++;
         if (requests === 1) return { content: 'begin', finishReason: 'length' };
         if (requests === 2) throw overflow();
-        assert.match(current.at(-1)!.content, /continuation/);
-        assert.equal(current.at(-2)!.content, 'begin');
+        assert.equal(current.at(-1)!.content, 'independent runtime fact');
+        assert.match(current.at(-2)!.content, /continuation/);
+        assert.equal(current.at(-3)!.content, 'begin');
         return { content: ' end', finishReason: 'stop' };
       } } });
     const result = await runReActLoop({ messages: active, llm, maxTurns: 5 });
     assert.equal(result.content, 'begin end');
     assert.equal(active.some(message => message.content.includes('[System: continuation]')), false);
+    assert.equal(active.filter(message => message.content === 'begin').length, 0);
+    assert.equal(active.filter(message => message.content === 'independent runtime fact').length, 1);
     assert.equal(active.at(-1)!.content, 'begin end');
   });
 });

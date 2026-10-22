@@ -142,6 +142,7 @@ test('恢复轮次只接受当前 waiting runId，旧卡不得抢占新问题', 
 
 function runtime(runner: MonsoonTurn, events: string[]) {
   return {
+    trackPreparation: <T>(work: () => Promise<T>) => Promise.resolve().then(work),
     get: () => runner,
     getWaitingRunId: () => 'waiting-new',
     claimResume: () => { events.push('claim'); return true; },

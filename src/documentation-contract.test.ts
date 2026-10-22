@@ -265,7 +265,8 @@ test('潮汐开篇说明真实的配置来源与调度边界', async () => {
   );
 
   assert.match(tide, /使用该 Agent 当时在控制台中的模型、工具、技能和执行权限/);
-  assert.match(tide, /4torm 关闭时，潮汐不会在后台执行/);
+  assert.match(tide, /4torm 后端关闭时，潮汐不会在后台执行/);
+  assert.match(tide, /仅关闭连接独立后端的客户端，不会停止调度/);
 });
 
 test('潮汐创建说明明确保留轮数与首次触发语义', async () => {
@@ -300,7 +301,7 @@ test('气旋文档说明协作关系、会议设置与成员边界', async () =>
   assert.match(cyclone, /完整私聊带进会议/);
 });
 
-test('信风文档说明信封交接、人工介入与自动运行边界', async () => {
+test('信风文档区分流转方式、运行方式与信封交接', async () => {
   const tradewind = await fs.readFile(
     new URL('../docs/modes/tradewind.md', import.meta.url),
     'utf8',
@@ -308,8 +309,12 @@ test('信风文档说明信封交接、人工介入与自动运行边界', async
 
   assert.match(tradewind, /信封.*并非把上一个节点的完整对话搬过去/);
   assert.match(tradewind, /会议室结束后.*会议助理整理纪要/s);
-  assert.match(tradewind, /自动运行不能包含会议室或暂停点/);
-  assert.match(tradewind, /等待本次所有应到达的信封完成交接/);
+  assert.match(tradewind, /严格依赖.*等这些分支的信封都到达/s);
+  assert.match(tradewind, /条件交接.*选择一个交接/s);
+  assert.match(tradewind, /一次处理一封信封/);
+  assert.match(tradewind, /交互运行/);
+  assert.match(tradewind, /无人值守.*不能包含会议室或暂停点/s);
+  assert.match(tradewind, /不同工作流可以同时执行/);
 });
 
 test('核心概念只描述两档文件工具权限及真实边界', async () => {
@@ -418,7 +423,7 @@ test('public docs exclude temporary implementation snapshots and use canonical f
     fs.readFile(new URL('../README.md', import.meta.url), 'utf8'),
   ]);
   assert.doesNotMatch(overview, /behavior-freeze|行为冻结/);
-  for (const label of ['季风 · 对话', '对流 · 会议室', '气旋 · 工作室', '信风 · 工作流', '潮汐 · 自动化任务']) {
+  for (const label of ['季风 · 智能体对话', '对流 · 多方会议室', '气旋 · 团队协作室', '信风 · 工作流编排', '潮汐 · 自动化任务']) {
     assert.ok(config.includes(label), label);
   }
   assert.doesNotMatch(home, /^## 一批人，五种协作方式$/m);

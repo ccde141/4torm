@@ -3,6 +3,8 @@
  * 内置文件工具权限说明。旧 strict/relaxed 按项目级兼容。
  */
 
+import { buildExecutionEnvironmentSection } from './execution-environment-prompt.js';
+
 export type SandboxLevel = 'project' | 'unrestricted' | 'strict' | 'relaxed';
 
 export interface SandboxPromptParams {
@@ -20,7 +22,9 @@ export function buildSandboxSection(params: SandboxPromptParams): string {
     ? '- 当前为无限制：内置文件工具可以访问外部路径'
     : '- 当前为项目级：内置文件工具只能访问项目目录和当前工作区';
 
-  return `## 工作区（基地）
+  return `${buildExecutionEnvironmentSection()}
+
+## 工作区（基地）
 
 - ${label}: \`${workspaceAbs}\`
 - 项目根目录: \`${projectDir}\`

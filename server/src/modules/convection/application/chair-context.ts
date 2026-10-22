@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { atomicWriteFile } from '../../../engine/shared/atomic-io.js';
 import { compactMessages } from '../../../engine/shared/compaction/index.js';
+import type { CompactionProgress } from '../../../engine/shared/compaction/contracts.js';
 import { loadAgent } from '../../../engine/shared/agent-loader.js';
 import { sessionWorkspace, type ConvectionSessionData } from '../infrastructure/session-store.js';
 import { buildConvectionChairContext, clearConvectionChairContext, rememberChairContextBoundary } from '../execution/chair-context.js';
@@ -10,7 +11,8 @@ import { buildConvectionChairContext, clearConvectionChairContext, rememberChair
 /** Called only while the session's mutation lease is held. Public history is independent. */
 export async function changeConvectionChairContext(
   dataDir: string, session: ConvectionSessionData, mode: 'clean' | 'summary',
-  save: (next: ConvectionSessionData) => Promise<void>,
+  save: (next: ConvectionSessionData, signal?: AbortSignal) => Promise<void>,
+  signal?: AbortSignal, completed?: CompactionProgress,
 ): Promise<{ ok: true; archived: string; summary?: string }> {
   const archived = `${Date.now()}-${randomUUID()}-chair-${mode}.json`;
   const directory = path.join(sessionWorkspace(dataDir, session.id), 'bak');
@@ -19,15 +21,17 @@ export async function changeConvectionChairContext(
     publicMessages: session.publicMessages, chairMessages: session.chairMessages,
     chairActiveContext: session.chairActiveContext, chairTokenUsage: session.chairTokenUsage, mode,
   }));
-  const summary = mode === 'summary' ? await summarizeChair(dataDir, session, save) : undefined;
-  const next: ConvectionSessionData = { ...session, chairTokenUsage: undefined,
+  const summary = mode === 'summary' ? await summarizeChair(dataDir, session, save, signal) : undefined;
+  signal?.throwIfAborted();
+  if (completed) completed.updatedAt = Date.now();
+  const next: ConvectionSessionData = { ...session, chairTokenUsage: undefined, chairCompactionProgress: completed,
     chairMessages: summary ? [{ role: 'system', content: `[历史压缩记录]\n${summary}` }] : [],
   };
   if (summary) {
     next.chairActiveContext = structuredClone(next.chairMessages);
     rememberChairContextBoundary(next);
   } else clearConvectionChairContext(next);
-  await save(next);
+  await save(next, signal);
   Object.assign(session, next);
   return { ok: true, archived, ...(summary ? { summary } : {}) };
 }
@@ -35,13 +39,14 @@ export async function changeConvectionChairContext(
 async function summarizeChair(
   dataDir: string, session: ConvectionSessionData,
   save: (next: ConvectionSessionData) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<string> {
   const chair = await loadAgent(dataDir, session.chairAgentId);
   if (!chair?.model) throw new Error('会议助理未配置可用模型');
   const plan = await compactMessages({ dataDir, area: 'convection', kind: 'meeting',
     model: chair.model, chairModel: chair.model, prompt: chair.compactionPrompt, protectedPrefixCount: 1,
     messages: buildConvectionChairContext(session, { role: 'system', content: '' }),
-    reason: 'manual', mode: 'full', onNotice: async notice => {
+    reason: 'manual', mode: 'full', signal, onNotice: async notice => {
       session.chairCompactionNotice = notice;
       await save(session);
     },

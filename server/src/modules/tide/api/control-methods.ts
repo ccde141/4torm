@@ -20,6 +20,10 @@ export function tideControlManifests(): ModuleMethodManifest[] {
       audiences: ['human', 'agent', 'internal'],
       agentTool: { name: 'run_automation',
         description: '立即运行一次潮汐任务，返回任务 ID 与运行 ID，可继续检查、等待并读取记录。' } },
+    { ...command('abortTaskRun', 'intervene', taskRunSchema(), 'inline'),
+      audiences: ['human', 'agent', 'internal'],
+      agentTool: { name: 'abort_automation',
+        description: '中止指定 taskId/runId 的当前一轮潮汐执行，不暂停后续计划。accepted 仅表示中止请求已接收，随后检查或等待该 runId；保存已开始时不再接受中止。' } },
   ];
 }
 
@@ -72,6 +76,13 @@ export function tideControlHandlers(service: TideTaskService): Record<string, Mo
         return { operationId: taskId, taskId, runId, accepted: true };
       },
     },
+    abortTaskRun: {
+      parse: parseTaskRun,
+      invoke: (_context, input) => {
+        const value = input as TaskIdInput & { runId: string };
+        return service.abortRun(value.taskId, value.runId);
+      },
+    },
   };
 }
 
@@ -112,6 +123,13 @@ function parseTaskPatch(value: unknown): TaskPatchInput {
   return { taskId: nonEmptyText(value.taskId), patch: value.patch as Partial<TideTask> };
 }
 
+function parseTaskRun(value: unknown): TaskIdInput & { runId: string } {
+  if (!isRecord(value) || Object.keys(value).some(key => key !== 'taskId' && key !== 'runId')) {
+    throw invalidControlInput();
+  }
+  return { taskId: nonEmptyText(value.taskId), runId: nonEmptyText(value.runId) };
+}
+
 function nonEmptyText(value: unknown): string {
   if (typeof value !== 'string' || value.trim().length === 0) throw invalidControlInput();
   return value;
@@ -133,6 +151,11 @@ function taskPatchSchema(): Record<string, unknown> {
     type: 'object', additionalProperties: false, required: ['taskId', 'patch'],
     properties: { taskId: { type: 'string', minLength: 1 }, patch: objectSchema() },
   };
+}
+
+function taskRunSchema(): Record<string, unknown> {
+  return { type: 'object', additionalProperties: false, required: ['taskId', 'runId'],
+    properties: { taskId: { type: 'string', minLength: 1 }, runId: { type: 'string', minLength: 1 } } };
 }
 
 function invalidControlInput() {

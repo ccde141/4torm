@@ -66,6 +66,7 @@ async function prepareLoop(input: SessionLoopInput,
   ) : undefined;
   const toolCaller = createSessionToolCaller({
     dataDir: opts.dataDir, agentId: opts.agentId, model: opts.model,
+    toolMediaScope: opts.toolMediaScope,
     workspace: opts.workspace, sandboxLevel: opts.sandboxLevel,
     sessionId: opts.sessionId, mainAgent: opts.mainAgent,
     allowAsk: opts.allowAsk, allowDelegate: opts.allowDelegate,
@@ -154,8 +155,7 @@ function finishLoop(
   input.emit({
     type: 'answer', content: result.content, rawContent: result.rawContent,
     native: !!input.options.native,
-    nativeContext: input.options.native
-      ? input.messages.slice(generatedContextStart) : undefined,
+    nativeContext: input.messages.slice(generatedContextStart),
   });
   input.emit({ type: 'done' });
   return { content: result.content, rawContent: result.rawContent };

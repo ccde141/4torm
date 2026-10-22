@@ -1,5 +1,6 @@
 import type { ModuleMethodHandler, ModuleMethodManifest } from '../../../engine/collaboration/contracts.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
+import type { SeatHistorySource } from '../../../engine/cyclone/seat-history.js';
 import type {
   CycloneWorkshopService,
   WorkshopBulletinOperation,
@@ -35,11 +36,11 @@ export function cycloneWorkshopHandlers(
     generateSeatDuty: handler(parseDuty, async input => ({
       duty: await workshops.generateDuty(input),
     })),
-    mutateWorkshopBulletin: handler(parseBulletin, input => (
-      workshops.mutateBulletin(input.workshopId, input.operations)
+    mutateWorkshopBulletin: handler(parseBulletin, (input, source) => (
+      workshops.mutateBulletin(input.workshopId, input.operations, source)
     )),
-    revertWorkshopBulletin: handler(parseRevert, input => (
-      workshops.revertBulletin(input.workshopId, input.sequence)
+    revertWorkshopBulletin: handler(parseRevert, (input, source) => (
+      workshops.revertBulletin(input.workshopId, input.sequence, source)
     )),
     saveWorkshopOrganization: handler(parseOrganization, input => (
       workshops.saveOrganization(input.workshopId, input.organization)
@@ -55,8 +56,10 @@ function method(id: string, permission: ModuleMethodManifest['permission']): Mod
     inputSchema: { type: 'object', additionalProperties: false }, output: { mode: 'inline' } };
 }
 
-function handler<T>(parse: (value: unknown) => T, invoke: (value: T) => Promise<unknown>): ModuleMethodHandler {
-  return { parse, invoke: async (_context, input) => invoke(input as T) };
+function handler<T>(parse: (value: unknown) => T, invoke: (value: T, source: SeatHistorySource) => Promise<unknown>): ModuleMethodHandler {
+  return { parse, invoke: async (context, input) => invoke(input as T,
+    context.actor.type === 'agent' && context.audience === 'internal' && context.requestId.startsWith('supervisor:')
+      ? 'supervisor' : context.actor.type === 'human' ? 'human' : 'unknown') };
 }
 
 function parseCreate(value: unknown): { title?: string; chairAgentId?: string } {

@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import BoundedText from '../../../engine/text-display/BoundedText';
+import { useMemo, useState } from 'react';
+import { toolOutputSummary } from '../../../engine/text-display/tool-output';
 import type { ChatMessage } from '../../../types';
 import FileDiffCard, { parseFileEdit } from './FileDiffCard';
 import { useLocale } from '../../../i18n/LocaleContext';
+import type { ToolMediaScope } from '../../../engine/tool-media';
+import ToolResultImages from '../../../components/common/ToolResultImages';
 
 /**
  * ToolCallMessage — 信风工具调用卡片
@@ -9,21 +13,22 @@ import { useLocale } from '../../../i18n/LocaleContext';
  * 对齐季风：avatar(🔧) + bubble 结构，嵌在消息流中。
  * 折叠时显示工具名 + 摘要，展开后显示参数和结果。
  */
-export default function ToolCallMessage({ toolCall }: {
+export default function ToolCallMessage({ toolCall, mediaScope }: {
   toolCall: NonNullable<ChatMessage['toolCall']>;
+  mediaScope?: ToolMediaScope;
 }) {
   const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
+  const output = useMemo(() => toolOutputSummary(toolCall.result ?? ''), [toolCall.result]);
   const fileEdit = parseFileEdit(toolCall);
 
   if (fileEdit) {
     return <FileDiffCard toolCall={toolCall} edit={fileEdit} />;
   }
 
-  const resultLines = (toolCall.result || '').split('\n');
-  const summary = resultLines.length > 1
-    ? t('tradewind.chat.tools.lines', { count: resultLines.length })
-    : (resultLines[0]?.slice(0, 60) || t('tradewind.chat.tools.noOutput'));
+  const summary = output.lines > 1
+    ? t('tradewind.chat.tools.lines', { count: output.lines })
+    : (output.preview || t('tradewind.chat.tools.noOutput'));
 
   return (
     <div className="tw-chat-row tw-chat-row--assistant">
@@ -41,13 +46,14 @@ export default function ToolCallMessage({ toolCall }: {
             <span className="tw-tool-card__summary">{summary}</span>
           )}
         </button>
+        {mediaScope && !!toolCall.toolImages?.length && <ToolResultImages images={toolCall.toolImages} scope={mediaScope} />}
         {expanded && (
           <div className="tw-tool-card__body">
             {toolCall.params && Object.keys(toolCall.params).length > 0 && (
               <div>
                 <div className="tw-tool-card__section-label">{t('tradewind.chat.tools.params')}</div>
                 <pre className="tw-tool-card__pre">
-                  {JSON.stringify(toolCall.params, null, 2)}
+                  <BoundedText text={(JSON.stringify(toolCall.params, null, 2)) ?? ''} />
                 </pre>
               </div>
             )}
@@ -57,7 +63,7 @@ export default function ToolCallMessage({ toolCall }: {
                   {t('tradewind.chat.tools.result')}{toolCall.durationMs ? ` (${toolCall.durationMs}ms)` : ''} {toolCall.status === 'error' ? '✗' : '✓'}
                 </div>
                 <pre className="tw-tool-card__pre">
-                  {toolCall.result}
+                  <BoundedText text={(toolCall.result) ?? ''} />
                 </pre>
               </div>
             )}

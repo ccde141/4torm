@@ -44,7 +44,8 @@ function mapSingleToolCall(message: ChatMessage): NativeContextMessage[] {
         arguments: JSON.stringify(message.toolCall!.params),
       }],
     },
-    { role: 'tool', content: toolResult(message.toolCall!), toolCallId: id },
+    { role: 'tool', content: toolResult(message.toolCall!), toolCallId: id,
+      ...(message.toolCall!.toolImages?.length ? { toolImages: message.toolCall!.toolImages } : {}) },
   ];
 }
 
@@ -80,7 +81,8 @@ function mapLegacyToolSteps(message: ChatMessage): NativeContextMessage[] {
       role: 'assistant', content: '',
       toolCalls: [{ id, name: step.tool, arguments: JSON.stringify(step.args) }],
     });
-    output.push({ role: 'tool', content: toolResult(step), toolCallId: id });
+    output.push({ role: 'tool', content: toolResult(step), toolCallId: id,
+      ...(step.toolImages?.length ? { toolImages: step.toolImages } : {}) });
   });
   if (message.content.trim()) output.push(assistantMessage(message.content, message.reasoningContent));
   return output;

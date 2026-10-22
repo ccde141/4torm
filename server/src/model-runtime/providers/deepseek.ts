@@ -1,6 +1,6 @@
 import { providerHost } from './host.js';
 import type { ProviderAdapter, ProviderGenerationLimits, ProviderModelIdentity } from '../contracts/provider-adapter.js';
-import { normalizeDeepSeekConfig } from '../config/deepseek-config.js';
+import { DEEPSEEK_CONFIG_LIMITS, normalizeDeepSeekRuntimeConfig } from '../config/deepseek-config.js';
 import { mergeCustomRequestParameters } from './custom-request-parameters.js';
 
 export const deepSeekAdapter: ProviderAdapter = {
@@ -12,13 +12,19 @@ export const deepSeekAdapter: ProviderAdapter = {
     reasoningHistory: 'reasoning_content',
   },
   generationLimits: deepSeekGenerationLimits,
+  constrainOutputTokens: tokens => {
+    if (!Number.isSafeInteger(tokens) || tokens < 1) {
+      throw new Error('DeepSeek max_tokens 必须是正整数');
+    }
+    return Math.min(tokens, DEEPSEEK_CONFIG_LIMITS.maxOutputTokens.max);
+  },
   disableThinking: body => {
     body.thinking = { type: 'disabled' };
     delete body.reasoning_effort;
     return true;
   },
   normalizeRequest: (body, identity) => {
-    const defaults = normalizeDeepSeekConfig({ generationDefaults: identity.generationDefaults })
+    const defaults = normalizeDeepSeekRuntimeConfig({ generationDefaults: identity.generationDefaults })
       .generationDefaults;
     const thinking = effectiveThinking(identity.model, defaults.thinkingMode);
     if (defaults.thinkingMode !== 'auto') {
@@ -39,7 +45,7 @@ export const deepSeekAdapter: ProviderAdapter = {
 };
 
 function deepSeekGenerationLimits(identity: ProviderModelIdentity): ProviderGenerationLimits {
-  const defaults = normalizeDeepSeekConfig({ generationDefaults: identity.generationDefaults })
+  const defaults = normalizeDeepSeekRuntimeConfig({ generationDefaults: identity.generationDefaults })
     .generationDefaults;
   const model = identity.model.toLowerCase();
   const knownV4 = model.startsWith('deepseek-v4') || model === 'deepseek-flash';
@@ -57,7 +63,8 @@ function deepSeekGenerationLimits(identity: ProviderModelIdentity): ProviderGene
           : model === 'deepseek-chat' ? false : undefined;
   // https://api-docs.deepseek.com/api/create-chat-completion/ (V4 total output includes thinking).
   return {
-    ...(knownV4 ? { contextWindowTokens: 1_048_576, maxOutputTokens: 393_216 } : {}),
+    maxOutputTokens: DEEPSEEK_CONFIG_LIMITS.maxOutputTokens.max,
+    ...(knownV4 ? { contextWindowTokens: 1_048_576 } : {}),
     ...(reasoning === undefined ? {} : { reasoning }),
   };
 }

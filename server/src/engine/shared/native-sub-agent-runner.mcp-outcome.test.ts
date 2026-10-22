@@ -8,7 +8,7 @@ import { initMcpManager, shutdownMcpManager } from './mcp-manager.js';
 import { writeMcpConfigs } from './mcp-config-store.js';
 import { runNativeSubAgent, type NativeSubAgentEvent } from './native-sub-agent-runner.js';
 
-function toolStream(name: string, id: string, args: Record<string, string>): string {
+function toolStream(name: string, id: string, args: Record<string, unknown>): string {
   const payload = { choices: [{ delta: { tool_calls: [{
     index: 0, id, type: 'function', function: { name, arguments: JSON.stringify(args) },
   }] }, finish_reason: 'tool_calls' }] };
@@ -20,6 +20,8 @@ test('native SubAgent forwards MCP isError once without masking it as success', 
   const dataDir = path.join(root, 'data');
   let modelCalls = 0;
   let mcpCalls = 0;
+  const args = { enabled: false, count: 2, items: ['one'], nullable: null, viewport: { width: 1280 } };
+  let received: unknown;
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -28,7 +30,7 @@ test('native SubAgent forwards MCP isError once without masking it as success', 
       modelCalls++;
       response.setHeader('Content-Type', 'text/event-stream');
       response.end(modelCalls === 1
-        ? toolStream('mcp:test:inspect', 'call_mcp', {})
+        ? toolStream('mcp:test:inspect', 'call_mcp', args)
         : toolStream('done', 'call_done', { summary: 'MCP failed' }));
       return;
     }
@@ -38,7 +40,7 @@ test('native SubAgent forwards MCP isError once without masking it as success', 
       : body.method === 'tools/list'
         ? { tools: [{ name: 'inspect', inputSchema: { type: 'object' } }] }
         : { isError: true, content: [{ type: 'text', text: 'permission denied' }] };
-    if (body.method === 'tools/call') mcpCalls++;
+    if (body.method === 'tools/call') { mcpCalls++; received = body.params.arguments; }
     response.setHeader('Content-Type', 'application/json');
     response.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
   });
@@ -79,6 +81,10 @@ test('native SubAgent forwards MCP isError once without masking it as success', 
   });
   assert.equal(result.status, 'success');
   assert.equal(mcpCalls, 1);
+  assert.deepEqual(received, args);
+  assert.deepEqual(events.find(event => event.type === 'tool_call'), {
+    type: 'tool_call', data: { tool: 'mcp:test:inspect', args },
+  });
   assert.deepEqual(events.filter(event => event.type === 'tool_result'), [{
     type: 'tool_result', data: { tool: 'mcp:test:inspect', result: 'permission denied', ok: false },
   }]);

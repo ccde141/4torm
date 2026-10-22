@@ -96,22 +96,23 @@ export function WorkflowListPanel({
               className="tw-wflist__item-main"
               onClick={() => { onLoad(wf.workflowId); onClose(); }}
             >
-              <span className="tw-wflist__item-name">{wf.name}</span>
-              <span className="tw-wflist__item-id">{wf.workflowId}</span>
+              <span className="tw-wflist__item-name" title={wf.name}>{wf.name}</span>
               <span className="tw-wflist__item-meta">
                 {t('tradewind.workflowList.nodeCount', { count: wf.nodeCount, time: formatTime(wf.updatedAt, locale, t) })}
               </span>
             </div>
             {confirmingDeleteId === wf.workflowId ? (
               <button
-                className="tw-wflist__item-del"
-                style={{ color: '#fff', background: '#ef4444', borderRadius: '4px', fontSize: '11px', padding: '1px 6px' }}
+                type="button"
+                className="tw-wflist__item-del tw-wflist__item-del--confirm"
                 onClick={(e) => { e.stopPropagation(); void deleteItem(wf.workflowId, wf.revision); }}
                 title={t('tradewind.workflowList.deleteWarning')}
               >{t('tradewind.workflowList.confirm')}</button>
             ) : (
               <button
+                type="button"
                 className="tw-wflist__item-del"
+                aria-label={t('tradewind.workflowList.delete')}
                 onClick={(e) => { e.stopPropagation(); setConfirmingDeleteId(wf.workflowId); setTimeout(() => setConfirmingDeleteId(prev => prev === wf.workflowId ? null : prev), 3000); }}
                 title={t('tradewind.workflowList.delete')}
               >✕</button>

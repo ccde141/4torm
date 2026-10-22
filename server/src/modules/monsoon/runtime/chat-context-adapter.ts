@@ -7,6 +7,7 @@ import { loadAgent } from '../../../engine/shared/agent-loader.js';
 import { loadAgentToolDefs } from '../../../engine/shared/tool-defs-loader.js';
 import { resolveNativeMode } from '../../../engine/shared/llm-bridge.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
+import { readToolImageRefs } from '../../../engine/shared/tool-media-store.js';
 import type {
   MonsoonChatMessage, MonsoonChatPorts, MonsoonContextRequest, MonsoonPreparedContext,
 } from '../application/chat-preparation.js';
@@ -83,7 +84,10 @@ async function resolveMessage(
     ...(resolved?.images.length ? { images: resolved.images } : {}),
     ...(message.toolCalls ? { toolCalls: message.toolCalls } : {}),
     ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+    ...(message.toolOk !== undefined ? { toolOk: message.toolOk } : {}),
+    ...(message.toolImages !== undefined ? { toolImages: readToolImageRefs(message.toolImages) } : {}),
     ...(message.reasoningContent ? { reasoningContent: message.reasoningContent } : {}),
+    ...(message.reasoningEnvelope ? { reasoningEnvelope: message.reasoningEnvelope } : {}),
   };
 }
 

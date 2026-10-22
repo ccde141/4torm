@@ -36,3 +36,11 @@ test('空闲节点不伪造当前回复，长内容明确截断', () => {
   assert.equal(result.messages[0].content.length, 4000);
   assert.equal(result.messages[0].truncated, true);
 });
+
+test('已暂停交付轮公开 pausedRunId，不冒充正在输出的普通发话轮', () => {
+  const result = projectAgentNodeConversation({ messages: [], roundLog: [], busy: true,
+    paused: true, pausedRunId: 'envelope-round', runId: 'message-round', roundSource: 'human', lastSeq: 5 },
+  { workflowId: 'wf', executionId: 'exec', nodeId: 'writer', limit: 8 });
+  assert.equal(result.pausedRunId, 'envelope-round');
+  assert.equal(result.currentReply?.runId, 'message-round');
+});

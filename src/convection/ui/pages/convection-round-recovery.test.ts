@@ -1,6 +1,39 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { reconcileConvectionRound } from './convection-round-recovery.js';
+import { reconcileConvectionCompaction, reconcileConvectionRound } from './convection-round-recovery.js';
+
+test('manual context verification stops after three unreachable reads without claiming rollback', async () => {
+  let reads = 0;
+  const delays: number[] = [];
+  const result = await reconcileConvectionCompaction({ scope: 'public',
+    readContext: async () => { reads++; throw new TypeError('offline'); },
+    waitForRetry: async ms => { delays.push(ms); },
+  });
+  assert.deepEqual(result, { status: 'unconfirmed' });
+  assert.equal(reads, 3);
+  assert.deepEqual(delays, [500, 1500, 3000]);
+});
+
+test('manual context verification consumes the committed terminal after a lost response', async () => {
+  let reads = 0;
+  const committed = { chairCompactionProgress: { type: 'compact-done', id: 'chair-a' } };
+  const result = await reconcileConvectionCompaction({ scope: 'chair',
+    readContext: async () => {
+      reads++;
+      if (reads === 1) return undefined;
+      if (reads === 2) return { chairCompactionProgress: { type: 'compact-start', id: 'chair-a' } };
+      return committed;
+    }, waitForRetry: async () => undefined,
+  });
+  assert.deepEqual(result, { status: 'settled', context: committed });
+});
+
+test('a verified running compression keeps waiting for its normal terminal feed', async () => {
+  const context = { compactionProgress: { type: 'compact-start', id: 'public-a' } };
+  const result = await reconcileConvectionCompaction({ scope: 'public',
+    readContext: async () => context, waitForRetry: async () => undefined });
+  assert.deepEqual(result, { status: 'running', context });
+});
 
 test('a completed server round releases a stranded local stream after committed messages load', async () => {
   const calls: string[] = [];

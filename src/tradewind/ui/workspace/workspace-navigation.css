@@ -1,0 +1,36 @@
+.tw-workspace-tabs { display: flex; align-items: center; gap: 8px; padding: 7px; flex: none; overflow-x: auto;
+  border: 1px solid var(--glass-border); border-radius: 9px; background: var(--glass-bg-soft); }
+.tw-workspace-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex: none;
+  min-height: 38px; padding: 8px 16px; border: 1px solid var(--glass-border-hover); border-radius: 7px;
+  background: var(--glass-bg); color: var(--color-text-secondary); font-size: 13px; font-weight: 500;
+  white-space: nowrap; cursor: pointer; transition: background 180ms ease, color 180ms ease, border-color 180ms ease; }
+.tw-workspace-tabs button svg { flex: none; }
+.tw-workspace-tabs button:hover { background: var(--glass-bg-hover); border-color: var(--color-text-tertiary);
+  color: var(--color-text-primary); }
+.tw-workspace-tabs button.is-active { background: color-mix(in srgb, var(--color-text-primary) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-text-primary) 34%, var(--glass-border));
+  color: var(--color-text-primary); box-shadow: var(--shadow-sm); }
+.tw-workspace-tabs button:focus-visible, .tw-run-dock button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.tw-run-dock { display: flex; align-items: center; gap: 15px; flex: none; padding: 11px 16px;
+  border-top: 1px solid var(--glass-border); background: var(--glass-bg-soft); backdrop-filter: blur(var(--glass-blur)); }
+.tw-run-dock__label { display: flex; align-items: center; gap: 8px; white-space: nowrap;
+  color: var(--color-text-secondary); font-size: 11px; }
+.tw-run-dock__label b { min-width: 18px; padding: 2px 5px; border-radius: 5px; background: var(--glass-bg);
+  font-size: 10px; font-weight: 500; text-align: center; }
+.tw-run-dock__items { display: flex; gap: 7px; flex: 1; min-width: 0; overflow-x: auto; padding: 3px; }
+.tw-run-dock__item { flex: none; display: flex; align-items: center; gap: 7px; max-width: 250px;
+  padding: 7px 10px; border: 1px solid var(--glass-border); border-radius: 7px; background: var(--glass-bg);
+  color: var(--color-text-primary); font-size: 11px; cursor: pointer; transition: background 180ms ease, border-color 180ms ease; }
+.tw-run-dock__item:hover { background: var(--glass-bg-hover); border-color: var(--glass-border-hover); }
+.tw-run-dock__item.is-active { border-color: color-mix(in srgb, var(--color-text-primary) 40%, var(--glass-border)); }
+.tw-run-dock__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tw-run-dock__item small { flex: none; font-size: 10px; color: var(--color-text-tertiary); }
+.tw-run-state { display: inline-block; width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--color-text-tertiary); }
+.tw-run-state--running { background: var(--color-success); }
+.tw-run-state--queued, .tw-run-state--waiting { background: var(--color-warning); }
+.tw-run-state--paused { background: var(--color-info); }
+.tw-run-state--failed, .tw-run-state--crashed { background: var(--color-error); }
+.tw-run-state--completed { background: var(--color-success); }
+@media (max-width: 850px) { .tw-run-dock { gap: 8px; padding: 8px; }
+  .tw-run-dock__label { display: none; } .tw-workspace-tabs button { padding: 8px 12px; } }
+@media (prefers-reduced-motion: reduce) { .tw-workspace-tabs button, .tw-run-dock__item { transition: none; } }

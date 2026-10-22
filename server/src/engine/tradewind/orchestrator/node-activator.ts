@@ -35,6 +35,8 @@ export interface NodeActivatorDeps {
 export class NodeActivator {
   private readonly states = new Map<string, NodeState>();
   private readonly activeLocks = new Set<string>();
+  private readonly tasks = new Set<Promise<void>>();
+  private failure?: Error;
   private readonly deps: NodeActivatorDeps;
 
   constructor(deps: NodeActivatorDeps) {
@@ -56,7 +58,9 @@ export class NodeActivator {
     if (this.activeLocks.has(nodeId)) return false;
     this.activeLocks.add(nodeId);
     this.states.set(nodeId, 'active');
-    this.runNode(nodeId);
+    const task = this.runNode(nodeId);
+    this.tasks.add(task);
+    void task.then(() => this.tasks.delete(task), () => this.tasks.delete(task));
     return true;
   }
 
@@ -85,6 +89,7 @@ export class NodeActivator {
     this.activeLocks.delete(nodeId);
     this.states.set(nodeId, 'idle');
     if (error) {
+      this.failure ??= error;
       this.deps.onError?.(nodeId, error);
     } else {
       this.deps.onDone?.(nodeId);
@@ -94,5 +99,10 @@ export class NodeActivator {
   /** 是否所有节点都回到 idle */
   allIdle(): boolean {
     return this.activeLocks.size === 0;
+  }
+
+  async whenIdle(): Promise<void> {
+    await Promise.all([...this.tasks]);
+    if (this.failure) throw this.failure;
   }
 }

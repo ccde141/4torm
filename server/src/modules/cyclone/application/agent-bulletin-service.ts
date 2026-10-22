@@ -26,14 +26,15 @@ export class CycloneAgentBulletinService {
       ...(next < board.entries.length ? { nextCursor: `${revision}:${next}` } : {}) };
   }
 
-  post(workshopId: string, text: string, agentId: string): Promise<{ entry: BulletinEntry }> {
+  post(workshopId: string, text: string, agentId: string,
+    source: 'agent' | 'supervisor' = 'agent'): Promise<{ entry: BulletinEntry }> {
     return this.serialize(workshopId, async () => {
       if (!text.trim() || text.length > MAX_TEXT) throw invalid();
       await this.workshops.require(workshopId);
       const before = await readBulletin(this.dataDir, workshopId);
       if (before.entries.length >= MAX_ENTRIES) throw bulletinError(
         'CYCLONE_BULLETIN_FULL', 'conflict', '公告板已满，请人类整理后再追加');
-      const author = `Agent:${agentId}`;
+      const author = source === 'supervisor' ? '工作室主管' : `Agent:${agentId}`;
       const after = await applyBulletinOps(this.dataDir, workshopId,
         [{ op: 'add', text, author }], author);
       const previousIds = new Set(before.entries.map(entry => entry.id));

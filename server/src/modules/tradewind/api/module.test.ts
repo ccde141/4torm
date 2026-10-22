@@ -254,6 +254,8 @@ function designs(calls: string[]): TradewindDesignPort {
     listAgents: async () => { calls.push('agents'); return '[]'; },
     createWorkflow: async () => { calls.push('create'); return 'created'; },
     listWorkflows: async () => { calls.push('list'); return '[]'; },
+    readWorkflow: async workflowId => ({ schemaVersion: 1, workflowId, name: '发布',
+      updatedAt: '2026-10-21T00:00:00Z', revision: 'a'.repeat(64), graph: { nodes: [], edges: [] } }),
     updateWorkflow: async (workflowId) => { calls.push(`update:${workflowId}`); return 'updated'; },
   };
 }

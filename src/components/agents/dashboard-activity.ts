@@ -64,8 +64,8 @@ export function projectAgentActivity(
     const surfaceName = surface === 'conversation' ? '季风'
       : surface && surface in FEATURE_LABELS ? FEATURE_LABELS[surface as CollaborationFeature]
         : undefined;
-    const feature = surface && surface in FEATURE_LABELS
-      ? surface as CollaborationFeature : undefined;
+    const feature = surface === 'conversation' ? 'monsoon'
+      : surface && surface in FEATURE_LABELS ? surface as CollaborationFeature : undefined;
     return { kind: 'running', label: surfaceName ? `工作中 · ${surfaceName}` : '工作中',
       summary: '活动已确认，尚无可关联的运行详情', source: 'Agent 活动状态',
       ...common, feature };

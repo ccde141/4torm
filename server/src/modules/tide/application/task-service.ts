@@ -1,10 +1,11 @@
 import { frameworkError } from '../../../engine/shared/framework-error.js';
-import { parseTideInterval } from '../domain/schedule.js';
+import { nextTideRun, parseTideSchedule } from '../domain/schedule.js';
 import { parseTideTask, type TidePushMode, type TideTask } from '../domain/task.js';
 import type { TideRunRepository } from '../infrastructure/run-repository.js';
 import type { TideRunStateRepository } from '../infrastructure/run-state-repository.js';
 import type { TideTaskRepository } from '../infrastructure/task-repository.js';
 import type { TideScheduler } from '../runtime/scheduler.js';
+import type { TideRunAbortReceipt } from '../runtime/run-control.js';
 import {
   deleteTaskSessionDir,
   deleteTideSession,
@@ -14,6 +15,10 @@ import {
 } from '../sessions/session-store.js';
 import { migrateOldTideSessions } from '../sessions/session-migration.js';
 import type { TideChangeFeed } from './change-feed.js';
+import { isTideSessionCompacting } from './session-compaction.js';
+import { parseTideCompactionProgress } from '../domain/compaction-progress.js';
+import type { SeasonSessionPort } from '../sessions/season-session-port.js';
+import { prepareTaskReassignment } from './task-reassignment.js';
 
 export interface CreateTideTaskInput {
   name: string;
@@ -28,6 +33,8 @@ export interface CreateTideTaskInput {
 }
 
 export class TideTaskService {
+  private readonly mutations = new Map<string, Promise<void>>();
+
   constructor(
     private readonly dataDir: string,
     private readonly tasks: TideTaskRepository,
@@ -35,6 +42,7 @@ export class TideTaskService {
     private readonly runStates: TideRunStateRepository,
     private readonly scheduler: TideScheduler,
     private readonly changes?: TideChangeFeed,
+    private readonly seasonSessions?: SeasonSessionPort,
   ) {}
 
   async list(): Promise<TideTask[]> {
@@ -61,7 +69,7 @@ export class TideTaskService {
       enabled: options.enabled ?? true,
       createdAt: now.toISOString(),
       ...(options.enabled === false ? {} : {
-        nextRun: new Date(now.getTime() + parseTideInterval(input.schedule)).toISOString(),
+        nextRun: nextTideRun(input.schedule, now.getTime()),
       }),
     });
     applySelfLoop(task);
@@ -70,16 +78,24 @@ export class TideTaskService {
   }
 
   async update(taskId: string, patch: Partial<TideTask>, acknowledgeNotice = false): Promise<TideTask> {
-    const task = await this.requireTask(taskId);
     validatePatch(patch);
-    if (patch.name !== undefined && patch.name !== task.name) {
-      await migrateOldTideSessions(this.dataDir, task.agentId, task.id, task.name);
-    }
-    applyTaskPatch(task, patch);
-    parseTideTask(task);
-    await this.tasks.upsert(task);
-    if (acknowledgeNotice) await this.runStates.acknowledgeCompactionNotice(taskId);
-    return task;
+    const updated = await this.scheduler.exclusive(taskId, () => this.mutate(taskId, async () => {
+      const current = await this.requireTask(taskId);
+      const task = structuredClone(current);
+      applyTaskPatch(task, patch);
+      const release = await prepareTaskReassignment(this.dataDir, current, task, patch, this.seasonSessions);
+      try {
+        parseTideTask(task);
+        if (patch.name !== undefined && patch.name !== current.name) {
+          await migrateOldTideSessions(this.dataDir, current.agentId, current.id, current.name);
+        }
+        await this.tasks.upsert(task);
+        if (acknowledgeNotice) await this.runStates.acknowledgeCompactionNotice(taskId);
+        return task;
+      } finally { release(); }
+    }));
+    if (!updated) throw taskBusy(taskId);
+    return updated;
   }
 
   async toggle(taskId: string): Promise<TideTask> {
@@ -88,14 +104,17 @@ export class TideTaskService {
   }
 
   async setEnabled(taskId: string, enabled: boolean): Promise<TideTask> {
-    const task = await this.requireTask(taskId);
-    if (task.enabled === enabled) return task;
-    task.enabled = enabled;
-    if (enabled) {
-      task.nextRun = new Date(Date.now() + parseTideInterval(task.schedule)).toISOString();
-    }
-    await this.tasks.upsert(task);
-    return task;
+    return this.mutate(taskId, async () => {
+      const task = await this.tasks.mutate(taskId, current => {
+        if (current.enabled !== enabled) {
+          current.enabled = enabled;
+          if (enabled) current.nextRun = nextTideRun(current.schedule);
+        }
+        return current;
+      });
+      if (!task) throw taskNotFound(taskId);
+      return task;
+    });
   }
 
   async runNow(taskId: string, acknowledgeNotice = false): Promise<string> {
@@ -104,15 +123,20 @@ export class TideTaskService {
     return runId;
   }
 
+  async abortRun(taskId: string, runId: string): Promise<TideRunAbortReceipt> {
+    await this.requireTask(taskId);
+    return this.scheduler.abortRun(taskId, runId);
+  }
+
   async remove(taskId: string): Promise<void> {
-    const task = await this.requireTask(taskId);
-    const result = await this.scheduler.exclusive(taskId, async () => {
+    const result = await this.scheduler.exclusive(taskId, () => this.mutate(taskId, async () => {
+      const task = await this.requireTask(taskId);
       await deleteTaskSessionDir(this.dataDir, task.agentId, task.id, task.name);
       await this.runs.removeTask(taskId);
       await this.runStates.removeTask(taskId);
       await this.tasks.remove(taskId);
       return true;
-    });
+    }));
     if (result !== true) throw taskBusy(taskId);
   }
 
@@ -130,31 +154,62 @@ export class TideTaskService {
 
   async readSession(agentId: string, sessionId: string) {
     const session = await readTideSession(this.dataDir, agentId, sessionId)
-      ?? await readSeasonSession(this.dataDir, agentId, sessionId);
+      ?? (this.seasonSessions ? await readSeasonSession(this.seasonSessions, agentId, sessionId) : null);
     if (!session) throw sessionNotFound();
-    return session;
+    const owners = (await this.tasks.read()).tasks.filter(task => task.agentId === agentId
+      && task.targetSessionId === sessionId);
+    const facts = await Promise.all(owners.map(task => this.runStates.get(task.id)));
+    const latest = facts.filter(state => state?.compaction && state.compactionSessionId === sessionId)
+      .sort((left, right) => right!.compaction!.updatedAt - left!.compaction!.updatedAt)[0];
+    let compaction = session.compaction && parseTideCompactionProgress(session.compaction);
+    if (latest?.compaction && (!compaction || latest.compaction.updatedAt >= compaction.updatedAt)) {
+      compaction = latest.compaction;
+    } else if (compaction?.type === 'compact-start' && compaction.reason === 'manual'
+      && !isTideSessionCompacting(this.dataDir, agentId, sessionId)) {
+      // Keep the original timestamp: reopening a stale snapshot must not replay feedback forever.
+      compaction = { ...compaction, type: 'compact-failed', aborted: true, message: '压缩已中断，原始记录已保留' };
+    }
+    return { ...session, ...(compaction ? { compaction } : {}),
+      ...(latest?.compactionNotice ? { compactionNotice: latest.compactionNotice } : {}) };
   }
 
   async removeSession(taskId: string): Promise<void> {
-    const task = await this.requireTask(taskId);
-    if (task.enabled) throw invalidTaskState('请先暂停任务再删除会话');
-    if (!task.targetSessionId) throw invalidTaskState('该任务没有绑定的会话');
-    const deletedSessionId = task.targetSessionId;
-    const deleted = await deleteTideSession(
-      this.dataDir, task.agentId, deletedSessionId, task.id, task.name,
-    );
-    if (!deleted) throw sessionNotFound();
-    task.targetSessionId = undefined;
-    task.roundSeq = 0;
-    await this.tasks.upsert(task);
-    this.changes?.publish({ scope: 'session', agentId: task.agentId,
-      taskId, sessionId: deletedSessionId });
+    const removed = await this.scheduler.exclusive(taskId, () => this.mutate(taskId, async () => {
+      const task = await this.requireTask(taskId);
+      if (task.enabled) throw invalidTaskState('请先暂停任务再删除会话');
+      if (!task.targetSessionId) throw invalidTaskState('该任务没有绑定的会话');
+      const deletedSessionId = task.targetSessionId;
+      const deleted = await deleteTideSession(
+        this.dataDir, task.agentId, deletedSessionId, task.id, task.name,
+      );
+      if (!deleted) throw sessionNotFound();
+      task.targetSessionId = undefined;
+      task.roundSeq = 0;
+      await this.tasks.upsert(task);
+      this.changes?.publish({ scope: 'session', agentId: task.agentId,
+        taskId, sessionId: deletedSessionId });
+      return true;
+    }));
+    if (!removed) throw taskBusy(taskId);
   }
 
   private async requireTask(taskId: string): Promise<TideTask> {
     const task = await this.tasks.get(taskId);
     if (!task) throw taskNotFound(taskId);
     return task;
+  }
+
+  private async mutate<T>(taskId: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.mutations.get(taskId) ?? Promise.resolve();
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    this.mutations.set(taskId, pending);
+    await previous;
+    try { return await work(); }
+    finally {
+      release();
+      if (this.mutations.get(taskId) === pending) this.mutations.delete(taskId);
+    }
   }
 }
 
@@ -166,7 +221,7 @@ function validateCreate(input: CreateTideTaskInput): void {
   validateOptionalTypes(input);
   assertIdentifier(input.agentId, 'agentId');
   if (input.targetSessionId) assertIdentifier(input.targetSessionId, 'targetSessionId');
-  parseTideInterval(input.schedule);
+  validateSchedule(input.schedule);
   validateWindow(input.windowN ?? 1);
   validateRepeatCount(input.repeatCount ?? -1);
   if (input.pushMode === 'designated' && !input.targetSessionId) {
@@ -175,13 +230,14 @@ function validateCreate(input: CreateTideTaskInput): void {
 }
 
 function validatePatch(patch: Partial<TideTask>): void {
-  for (const key of ['name', 'prompt', 'schedule'] as const) {
+  for (const key of ['name', 'prompt', 'schedule', 'agentId'] as const) {
     const value = patch[key];
     if (value !== undefined && (typeof value !== 'string' || value.trim().length === 0)) {
       throw invalidTaskInput(`${key} 必须是非空字符串`);
     }
   }
   validateOptionalTypes(patch);
+  if (patch.agentId !== undefined) assertIdentifier(patch.agentId, 'agentId');
   if (patch.targetSessionId) assertIdentifier(patch.targetSessionId, 'targetSessionId');
 }
 
@@ -218,7 +274,9 @@ function assertOptionalInteger(value: unknown, field: string): void {
 
 function applyTaskPatch(task: TideTask, patch: Partial<TideTask>): void {
   const wasDesignated = task.pushMode === 'designated';
+  const wasEnabled = task.enabled;
   if (patch.name !== undefined) task.name = patch.name;
+  if (patch.agentId !== undefined) task.agentId = patch.agentId;
   if (patch.prompt !== undefined) task.prompt = patch.prompt;
   if (patch.repeatCount !== undefined) task.repeatCount = patch.repeatCount;
   if (patch.enabled !== undefined) task.enabled = patch.enabled;
@@ -231,9 +289,11 @@ function applyTaskPatch(task: TideTask, patch: Partial<TideTask>): void {
     task.roundSeq = 0;
   }
   if (patch.schedule !== undefined) {
-    parseTideInterval(patch.schedule);
+    validateSchedule(patch.schedule);
     task.schedule = patch.schedule;
-    task.nextRun = new Date(Date.now() + parseTideInterval(task.schedule)).toISOString();
+    task.nextRun = task.enabled ? nextTideRun(task.schedule) : undefined;
+  } else if (!wasEnabled && task.enabled) {
+    task.nextRun = nextTideRun(task.schedule);
   }
   validateWindow(task.windowN);
   validateRepeatCount(task.repeatCount);
@@ -262,6 +322,11 @@ function validateRepeatCount(value: number): void {
   if (!Number.isInteger(value) || value < -1) {
     throw invalidTaskInput('repeatCount 必须为 -1 或非负整数');
   }
+}
+
+function validateSchedule(schedule: string): void {
+  try { parseTideSchedule(schedule); }
+  catch { throw invalidTaskInput('schedule 必须是有效间隔（如 every 5m）或每天时分（如 daily 08:00）'); }
 }
 
 function generateTaskId(): string {

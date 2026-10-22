@@ -46,7 +46,7 @@ test('model settings localizes UI without changing provider configuration values
   assert.doesNotMatch(files[0]!, /onCustom/);
   assert.doesNotMatch(files[0]!, /customLabel/);
   assert.match(source, /p\.baseUrl/);
-  assert.match(source, /p\.apiKey/);
+  assert.match(source, /p\.hasApiKey/);
 });
 
 test('capability probes do not inject custom chat request parameters', async () => {

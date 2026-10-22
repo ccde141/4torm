@@ -19,3 +19,16 @@ test('潮汐每次 ReAct 模型返回即串行发布并累计，未知调用清�
     latest: { promptTokens: 30, completionTokens: 3, totalTokens: 33 },
     total: { promptTokens: 50, completionTokens: 5, totalTokens: 55 } });
 });
+
+test('Tide keeps generated MCP media context and ordered display references', () => {
+  const toolImages = [{ id: 'f4f82d73-4c42-4b3f-95b5-a8646ab58d9f', name: 'screen.png', mimeType: 'image/png', size: 8 }];
+  const nativeContext = [{ role: 'tool' as const, content: 'metadata', toolCallId: 'call-a', toolImages }];
+  const state = createTideEventState();
+  state.onEvent({ type: 'tool-call', tool: 'mcp:demo:observe', args: {} });
+  state.onEvent({ type: 'tool-result', tool: 'mcp:demo:observe', result: 'metadata', ok: true, toolImages });
+  state.onEvent({ type: 'answer', content: 'done', rawContent: 'done', native: false, nativeContext });
+  assert.deepEqual(state.snapshot().toolContext, nativeContext);
+  assert.deepEqual(state.snapshot().toolCalls[0].toolImages, toolImages);
+  assert.deepEqual(JSON.parse(state.snapshot().intermediate[1].content).toolImages, toolImages);
+  assert.notEqual(state.snapshot().toolContext, nativeContext);
+});

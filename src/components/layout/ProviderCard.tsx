@@ -37,15 +37,52 @@ function ProviderHeader({ provider: p, onChange, onRemove }: {
   </div>;
 }
 
-function ProviderConnection({ provider: p, catalog, onChange, onRefresh }: {
+function ProviderConnection({ provider: p, catalog, onRefresh }: {
   provider: ProviderEntry; catalog: ProviderCatalog | null;
   onChange: (id: string, field: keyof ProviderEntry, value: string) => void;
   onRefresh: () => void;
 }) {
   const { t } = useLocale();
   const descriptor = catalog?.providers.find(provider => provider.id === p.providerType);
-  return <><div className="provider-basic-fields">{catalog && <ProviderTypeField provider={p} catalog={catalog} onRefresh={onRefresh} />}<label style={fieldLabel}>{t('model.provider.apiUrl')}</label><input value={p.baseUrl} onChange={event => onChange(p.id, 'baseUrl', event.target.value)} style={inputStyle} placeholder="http://localhost:1234/v1" /><label style={fieldLabel}>API Key</label><input type="password" value={p.apiKey} onChange={event => onChange(p.id, 'apiKey', event.target.value)} style={inputStyle} placeholder={t('model.provider.apiKeyEmpty')} /></div>
-    <SchemaDisclosure provider={p} providerLabel={descriptor?.label ?? p.label} configuration={descriptor?.configuration} onRefresh={onRefresh} /></>;
+  const [baseUrl, setBaseUrl] = useState(p.baseUrl);
+  const lastSavedUrl = useRef(p.baseUrl);
+  const [apiKey, setApiKey] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    const previous = lastSavedUrl.current;
+    lastSavedUrl.current = p.baseUrl;
+    setBaseUrl(current => current === previous ? p.baseUrl : current);
+  }, [p.baseUrl]);
+  const save = async (patch: Partial<ProviderEntry>) => {
+    setSaving(true); setError('');
+    try {
+      await updateProvider(p.id, patch);
+      if (Object.hasOwn(patch, 'apiKey')) setApiKey(current => current === patch.apiKey ? '' : current);
+      onRefresh();
+    }
+    catch (cause) { setError(cause instanceof Error ? cause.message : t('model.provider.configurationSaveFailed')); }
+    finally { setSaving(false); }
+  };
+  return <><div className="provider-basic-fields">
+    {catalog && <ProviderTypeField provider={p} catalog={catalog} onRefresh={onRefresh} />}
+    <label style={fieldLabel}>{t('model.provider.apiUrl')}</label>
+    <input value={baseUrl} onChange={event => setBaseUrl(event.target.value)}
+      onBlur={() => { if (baseUrl !== p.baseUrl) void save({ baseUrl }); }}
+      style={inputStyle} placeholder="http://localhost:1234/v1" />
+    <p style={fieldLabel}>{t('model.provider.serverAddressHint')}</p>
+    <label style={fieldLabel}>API Key</label>
+    <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+      <input type="password" autoComplete="off" value={apiKey} onChange={event => setApiKey(event.target.value)}
+        onBlur={() => { if (apiKey) void save({ apiKey }); }} style={{ ...inputStyle, flex: 1, minWidth: 0, width: 'auto' }}
+        placeholder={t(p.hasApiKey ? 'model.provider.apiKeyStored' : 'model.provider.apiKeyEmpty')} />
+      {p.hasApiKey && <button type="button" className="capability-button capability-button--secondary"
+        style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={saving}
+        onClick={() => void save({ apiKey: '' })}>{t('model.provider.clearKey')}</button>}
+    </div>
+    {error && <div role="alert" style={errorStyle}>{error}</div>}
+  </div><SchemaDisclosure provider={p} providerLabel={descriptor?.label ?? p.label}
+    configuration={descriptor?.configuration} onRefresh={onRefresh} /></>;
 }
 
 function ProviderModelsAndTests({ provider: p, onRefresh }: { provider: ProviderEntry; onRefresh: () => void }) {
@@ -70,7 +107,7 @@ function useProviderModels(p: ProviderEntry, onRefresh: () => void) {
   const remove = async (model: string) => { const models = p.models.filter(item => item !== model); await updateProvider(p.id, { models, modelProfiles: retainModelProfiles(p.modelProfiles, models), ...retainProviderCapabilities(p, models) }); onRefresh(); };
   const fetchModels = async () => {
     if (!p.baseUrl) return; setTesting(true); setError('');
-    try { const response = await listModels({ baseUrl: p.baseUrl, apiKey: p.apiKey, headers: p.customHeaders, protocol: p.protocol }); const ids = response.data.map(model => model.id); setFetched(ids); setChecked(new Set(ids)); }
+    try { const response = await listModels({ providerId: p.id }); const ids = response.data.map(model => model.id); setFetched(ids); setChecked(new Set(ids)); }
     catch (cause) { setFetched([]); setChecked(new Set()); setError(cause instanceof Error ? cause.message : t('model.provider.fetchFailed')); }
     finally { setTesting(false); }
   };

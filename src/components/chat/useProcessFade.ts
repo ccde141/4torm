@@ -9,6 +9,7 @@ export function useProcessFade(present: boolean, expanded: boolean, followLatest
     const inner = content.current;
     if (!present || !element || !inner) return;
     let pinned = true;
+    let pagePaused = false;
     let lastTop = element.scrollTop;
     const update = () => {
       element.dataset.fadeTop = String(!expanded && element.scrollTop > 1);
@@ -21,16 +22,21 @@ export function useProcessFade(present: boolean, expanded: boolean, followLatest
       update();
     };
     const onResize = () => {
-      if (followLatest && !expanded && pinned) element.scrollTop = element.scrollHeight;
+      const paused = Boolean(inner.querySelector('[data-text-follow="paused"]'));
+      if (pagePaused && !paused) pinned = true;
+      pagePaused = paused;
+      if (followLatest && !expanded && pinned && !paused) element.scrollTop = element.scrollHeight;
       lastTop = element.scrollTop;
       update();
     };
     const observer = new ResizeObserver(onResize);
     observer.observe(element);
     observer.observe(inner);
+    const paging = new MutationObserver(onResize);
+    paging.observe(inner, { attributes: true, subtree: true, attributeFilter: ['data-text-follow'] });
     element.addEventListener('scroll', onScroll, { passive: true });
     onResize();
-    return () => { observer.disconnect(); element.removeEventListener('scroll', onScroll); };
+    return () => { observer.disconnect(); paging.disconnect(); element.removeEventListener('scroll', onScroll); };
   }, [present, expanded, followLatest]);
   return { viewport, content };
 }

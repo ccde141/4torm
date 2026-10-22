@@ -1,3 +1,4 @@
+import { backendFetch } from '../../lib/backend-client';
 import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 import type { Agent, ChatMessage } from '../../types';
 import { IMAGE_ACCEPT } from '../../engine/chat/image-attachments';
@@ -18,6 +19,8 @@ import type { useMonsoonImages } from './useMonsoonImages';
 import type { AskReplyFeedback } from './useAskReplyFeedback';
 import { decidePendingAskInputRoute, findLatestAnswerableAsk } from '../../engine/chat/pending-ask';
 import { historyWindow } from './history-window';
+import { CompactionStatus } from '../common/CompactionStatus';
+import type { CompactionActivity } from '../common/compaction-activity';
 
 const HISTORY_BATCH = 24;
 
@@ -28,6 +31,7 @@ interface MonsoonConversationProps {
   onAskCheck(): void;
   streaming: boolean;
   compacting: boolean;
+  compaction?: CompactionActivity;
   input: string;
   setInput(value: string): void;
   models: { key: string; label: string }[];
@@ -116,6 +120,7 @@ export function MonsoonConversation(props: MonsoonConversationProps) {
             askStatusDetail={props.askFeedback?.askId === message.id ? props.askFeedback.detail : undefined}
             onAskCheck={message.id === latestAsk?.id ? props.onAskCheck : undefined}
             isStreaming={props.streaming && message === props.messages.at(-1)}
+            compacting={props.compaction?.phase === 'running' && message === props.messages.at(-1)}
             isEditing={props.editor.editingMsgId === message.id} editContent={props.editor.editContent}
             setEditContent={props.editor.setEditContent} onSaveEdit={props.editor.saveEdit}
             onCancelEdit={props.editor.cancelEdit} onStartEdit={props.editor.startEdit}
@@ -144,7 +149,9 @@ function Composer(props: MonsoonConversationProps) {
   const route = decidePendingAskInputRoute(ask, props.askFeedback, props.streaming);
   const answerMode = route === 'answer' || route === 'blocked';
   return <div className="chat__input-area">
-    <ExecutionStatusBar message={props.streaming ? props.messages.at(-1) : undefined} />
+    <CompactionStatus activity={props.compaction} />
+    <ExecutionStatusBar message={props.streaming && props.compaction?.phase !== 'running'
+      ? props.messages.at(-1) : undefined} />
     <ImageDrafts images={props.images.drafts}
       onRemove={key => props.images.setDrafts(values => values.filter(image => image.key !== key))} />
     {props.images.error && <div className="chat__image-error" role="alert">{props.images.error}</div>}
@@ -180,8 +187,9 @@ function Composer(props: MonsoonConversationProps) {
 function ComposerActions(props: MonsoonConversationProps & {
   english: boolean; route: ReturnType<typeof decidePendingAskInputRoute> }) {
   const { t } = useLocale();
-  if (props.compacting) return <button className="chat__send-btn" disabled title={t('chat.page.compacting')}>
-    <LoadingIcon /></button>;
+  if (props.compacting) return <button className="chat__stop-btn" onClick={props.stop}
+    title={props.english ? 'Stop compaction' : '中止压缩'} aria-label={props.english ? 'Stop compaction' : '中止压缩'}>
+    <StopIcon /></button>;
   if (props.route === 'blocked') return <>
     <button className="chat__send-btn" disabled title={t('chat.ask.checking')}
       aria-label={t('chat.ask.sendAnswer')}><SendIcon /></button>
@@ -217,7 +225,7 @@ function AgentWorkspaceButton({ agent }: { agent: Agent | null }) {
   const { t } = useLocale();
   const open = async () => {
     if (!agent) return;
-    const response = await fetch(`/api/chat/agent/${agent.id}/open-workspace`, { method: 'POST' });
+    const response = await backendFetch(`/api/chat/agent/${agent.id}/open-workspace`, { method: 'POST' });
     if (!response.ok) alert((await response.json().catch(() => ({})))?.error
       || t('chat.page.workspaceOpenFailed', { status: response.status }));
   };
@@ -230,7 +238,6 @@ function AgentWorkspaceButton({ agent }: { agent: Agent | null }) {
 const EmptyIcon = () => <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.3"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /></svg>;
 const SendIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>;
 const StopIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>;
-const LoadingIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>;
 const AttachIcon = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.4 11.6 12 21a6 6 0 0 1-8.5-8.5l10-10a4 4 0 0 1 5.7 5.7l-10 10a2 2 0 0 1-2.8-2.8l9.3-9.3" /></svg>;
 
 const headerStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-3) var(--space-6)', borderBottom: '1px solid var(--border-color)', fontSize: 'var(--text-sm)' };

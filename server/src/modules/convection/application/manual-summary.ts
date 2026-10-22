@@ -5,6 +5,7 @@ import { loadAgent } from '../../../engine/shared/agent-loader.js';
 export async function summarizeConvectionSession(
   dataDir: string,
   session: ConvectionSessionData,
+  signal?: AbortSignal,
 ): Promise<string> {
   const chair = await loadAgent(dataDir, session.chairAgentId);
   if (!chair) throw new Error('会长 Agent 不存在');
@@ -14,7 +15,7 @@ export async function summarizeConvectionSession(
     messages: session.publicMessages.map(record => ({ role: 'user',
       content: `[${record.speaker}] ${record.content}`
         + (record.toolCalls?.length ? `\n工具事实：${JSON.stringify(record.toolCalls)}` : ''),
-    })), mode: 'full', reason: 'manual',
+    })), mode: 'full', reason: 'manual', signal,
     onNotice: async notice => {
       session.compactionNotice = notice;
       await saveSession(dataDir, session);

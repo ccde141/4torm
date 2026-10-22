@@ -25,6 +25,7 @@ export async function handleChair(
 ): Promise<void> {
   const previousPromptTokens = session.chairTokenUsage?.promptTokens;
   session.chairCompactionNotice = undefined;
+  session.chairCompactionProgress = undefined;
   session.chairMessages.push({ role: 'user', content: humanMessage,
     ...(runId ? { runId } : {}) });
   recordChairUsage(session, null);

@@ -56,19 +56,43 @@ function encodeResult(action, result) {
   return encodeCapture(result);
 }
 
-function createDesktopBrowserBridgeServer({ bridge, endpoint }) {
+function createDesktopBrowserBridgeServer({ bridge, endpoint, secure = () => {}, cleanup = () => {} }) {
   if (!bridge || typeof bridge.handle !== 'function') throw new Error('desktop browser bridge handler is invalid');
   if (typeof endpoint !== 'string' || !endpoint) throw new Error('desktop browser bridge endpoint is invalid');
-  const server = net.createServer(socket => bindConnection(socket, bridge));
+  const connections = new Set();
+  let closing;
+  const server = net.createServer(socket => {
+    connections.add(socket);
+    socket.once('close', () => connections.delete(socket));
+    socket.on('error', () => socket.destroy());
+    bindConnection(socket, bridge);
+  });
+
+  const close = () => closing ??= new Promise((resolve, reject) => {
+    for (const socket of connections) socket.destroy();
+    const finished = error => {
+      try { cleanup(); }
+      catch (failure) { reject(failure); return; }
+      if (error && error.code !== 'ERR_SERVER_NOT_RUNNING') reject(error);
+      else resolve();
+    };
+    server.close(finished);
+  });
 
   return {
     listen: () => new Promise((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(endpoint, () => { server.off('error', reject); resolve(); });
+      if (closing) { reject(new Error('desktop browser bridge is closed')); return; }
+      const failed = error => { void close().then(() => reject(error), reject); };
+      server.once('error', failed);
+      try {
+        server.listen(endpoint, () => {
+          server.off('error', failed);
+          try { secure(); resolve(); }
+          catch (error) { failed(error); }
+        });
+      } catch (error) { server.off('error', failed); failed(error); }
     }),
-    close: () => new Promise((resolve, reject) => {
-      server.close(error => error ? reject(error) : resolve());
-    }),
+    close,
   };
 }
 

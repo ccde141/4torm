@@ -32,6 +32,8 @@ An agent's console card and details help you find recent activity. The full cont
 
 **Long-term memory** belongs to an agent and preserves preferences, agreements, and experience that remain useful across tasks. It is not a complete conversation record; information is not automatically written to memory merely because it appeared in a conversation. Each agent has its own memory.
 
+A Cyclone seat also has its own **seat memory** for this project's role experience, facts, and material references. It stays with the seat when its bound Agent changes, and does not automatically become the Agent's general experience in other workspaces.
+
 Starting work, receiving a successful tool response, or getting a team member's report does not mean the overall goal is complete. To confirm the outcome, check the run status and actual deliverables in the relevant area. You can also continue observing work that is still running there.
 
 To get started, see [Monsoon Chat](../modes/chat), [Convection Meeting Rooms](../modes/convection), [Cyclone Workshops](../modes/cyclone), [Tradewind Workflows](../modes/tradewind), or [Tide Automation](../modes/tide).

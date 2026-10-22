@@ -1,9 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { frameworkError, FrameworkError } from '../../../engine/shared/framework-error.js';
-import { getActiveTradewindOrchestrator, isTradewindExecutionRunning } from '../../../services/tradewind-execution.js';
+import { isTradewindExecutionRunning } from '../../../services/tradewind-execution.js';
+import { forgetTradewindExecution } from '../../../services/tradewind-execution-registry.js';
 import { tradewindRunsDir, tradewindWorkflowDir } from '../../../services/data-paths.js';
+import { openHostDirectory } from '../../../services/host-directory-opener.js';
 import { loadProfiles as readProfiles, saveProfiles } from '../../../engine/tradewind/foundation/profile-store.js';
 import type { AutoProfile } from '../../../engine/tradewind/foundation/types/index.js';
 import type { SaveWorkflowCommand, TradewindWorkflowAdmin } from '../application/workflow-admin.js';
@@ -11,6 +13,7 @@ import type { TradewindWorkflowStore } from '../application/workflow-store.js';
 import type { TradewindWorkflowWrites } from '../application/workflow-writes.js';
 import { createTradewindWorkflowStore } from './workflow-store.js';
 import { createTradewindWorkflowWrites } from './workflow-writes.js';
+import { parseWorkflowProfile } from '../domain/workflow-profile.js';
 
 export interface WorkspaceLauncher { open(workspacePath: string): Promise<void> }
 
@@ -31,14 +34,44 @@ export function createTradewindWorkflowAdmin(
       () => openWorkspace(store, dataDir, workflowId, launcher)),
     loadProfiles: async workflowId => {
       await store.read(workflowId);
-      try { return await readProfiles(dataDir, workflowId); }
+      try { return await validatedProfiles(dataDir, workflowId); }
       catch (error) { throw ioError('TRADEWIND_PROFILES_READ_FAILED', '读取循环档案失败', error); }
     },
+    readProfileCatalog: async workflowId => {
+      await store.read(workflowId);
+      const profiles = await validatedProfiles(dataDir, workflowId);
+      return { workflowId, revision: profileRevision(profiles), profiles };
+    },
+    saveProfile: (workflowId, profile, expectedRevision) => withLock(locks, workflowId, async () => {
+      await store.read(workflowId);
+      const profiles = await validatedProfiles(dataDir, workflowId);
+      if (profileRevision(profiles) !== expectedRevision) throw workflowError(
+        'TRADEWIND_PROFILES_CONFLICT', 'conflict', '循环档案已变化，请重新读取后再保存');
+      const parsed = parseWorkflowProfile(profile);
+      if (parsed.cadence.kind !== 'relative') throw workflowError(
+        'TRADEWIND_PROFILE_CADENCE_UNSUPPORTED', 'validation', '当前循环执行仅支持相对间隔档案');
+      const next = profiles.filter(item => item.id !== parsed.id);
+      next.push(parsed);
+      await replaceProfiles(store, dataDir, workflowId, next);
+      return { saved: true as const, workflowId, profileId: parsed.id, revision: profileRevision(next) };
+    }),
     saveProfiles: (workflowId, profiles) => withLock(locks, workflowId,
       () => replaceProfiles(store, dataDir, workflowId, profiles)),
     deleteProfile: (workflowId, profileId) => withLock(locks, workflowId,
       () => removeProfile(store, dataDir, workflowId, profileId)),
   };
+}
+
+async function validatedProfiles(dataDir: string, workflowId: string): Promise<AutoProfile[]> {
+  try {
+    const profiles = (await readProfiles(dataDir, workflowId)).map(parseWorkflowProfile);
+    if (new Set(profiles.map(item => item.id)).size !== profiles.length) throw new Error('重复循环档案 ID');
+    return profiles;
+  } catch (error) { throw ioError('TRADEWIND_PROFILES_READ_FAILED', '读取循环档案失败', error); }
+}
+
+function profileRevision(profiles: AutoProfile[]): string {
+  return createHash('sha256').update(JSON.stringify(profiles)).digest('hex');
 }
 
 async function replaceProfiles(
@@ -79,6 +112,7 @@ async function save(writes: TradewindWorkflowWrites, input: SaveWorkflowCommand)
   try {
     const definition = await writes.save(input);
     return { saved: true as const, workflowId: input.workflowId,
+      ...(definition.graph.orchestration === undefined ? {} : { orchestration: definition.graph.orchestration }),
       name: input.name, revision: definition.revision };
   } catch (error) {
     if (error instanceof FrameworkError) throw error;
@@ -90,8 +124,7 @@ async function remove(
   writes: TradewindWorkflowWrites, dataDir: string, workflowId: string, expectedRevision: string,
 ) {
   requireWorkflowId(workflowId);
-  if (isTradewindExecutionRunning()
-    && getActiveTradewindOrchestrator()?.getWorkflowId() === workflowId) {
+  if (isTradewindExecutionRunning({ workflowId, dataDir })) {
     throw workflowError('TRADEWIND_WORKFLOW_RUNNING', 'conflict', '当前工作流正在运行，请先停止后再删除');
   }
   try {
@@ -99,6 +132,7 @@ async function remove(
       throw workflowError('TRADEWIND_WORKFLOW_NOT_FOUND', 'not_found', '工作流不存在');
     }
     await fs.rm(path.join(tradewindRunsDir(dataDir), workflowId), { recursive: true, force: true });
+    forgetTradewindExecution(workflowId, dataDir);
     return { deleted: true as const, workflowId };
   } catch (error) {
     if (error instanceof FrameworkError) throw error;
@@ -153,11 +187,5 @@ function ioError(code: string, message: string, cause: unknown) {
 }
 
 const systemLauncher: WorkspaceLauncher = {
-  open: workspacePath => new Promise<void>((resolve, reject) => {
-    const command = process.platform === 'win32' ? 'explorer.exe'
-      : process.platform === 'darwin' ? 'open' : 'xdg-open';
-    const child = spawn(command, [workspacePath], { detached: true, stdio: 'ignore' });
-    child.once('error', reject);
-    child.once('spawn', () => { child.unref(); resolve(); });
-  }),
+  open: openHostDirectory,
 };

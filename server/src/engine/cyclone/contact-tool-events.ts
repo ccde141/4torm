@@ -16,7 +16,7 @@ export function withNativeContactToolEvents(
         throw error;
       }
       const outcome = normalizeToolCallResult(value);
-      emit({ type: 'tool-result', tool, result: outcome.result, ok: outcome.ok });
+      emit({ type: 'tool-result', tool, ...outcome });
       return value;
     },
   };

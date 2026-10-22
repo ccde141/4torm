@@ -8,6 +8,12 @@ When an error appears, read its full message before relying on the HTTP status. 
 - **The interface opens, but a model request fails:** Check the provider type, API URL, key, exact model ID, and per-model parameters. Fetching a model list successfully does not prove that the service accepts the parameters used for a full conversation.
 - **A file or attachment operation fails:** Read that operation's message, then check format, size, and the Agent's execution permissions.
 
+## An Endpoint Is Missing After an Update
+
+If a new screen reports `Route ... not found`, check which backend the client uses and whether that backend has been updated. Reloading the page does not update an older server process. In source development, `tsx watch` restarts when server source changes. For a production service, stop the old process and start the updated version, then reload the client.
+
+Remote Electron loads the webpage served by the backend, so update and build that backend's source checkout. See [Independent Backend and Remote Clients](https://github.com/ccde141/4torm/blob/master/REMOTE.md) (Chinese) for deployment and address configuration.
+
 ## Check the Error Details
 
 | Status or message | Common cause | Check first |

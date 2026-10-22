@@ -10,13 +10,12 @@
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import type { TokenUsage } from '../../../engine/shared/llm-bridge.js';
 import type { TideTask } from '../domain/task.js';
-import { SeasonSessionPort } from './season-session-port.js';
+import { requireSeasonSessionPort, type SeasonSessionPort } from './season-session-port.js';
 import { activeTideContext } from './active-context.js';
 import { advanceTideUsage, mergeTideUsage, type TideUsageProgress } from '../domain/token-usage.js';
 import { migrateOldTideSessions } from './session-migration.js';
 import {
-  readTideSession, readSeasonSession,
-  writeTideSession, appendSeasonTurn,
+  readTideSession, writeTideSession,
   archiveIfNeeded,
   type TideSession, type TideMessage,
 } from './session-store.js';
@@ -44,20 +43,24 @@ export interface ResolvedTarget {
   /** Number of this run's calls already written to an accumulate session. */
   liveUsageCalls?: number;
   compactedContext?: ContextMessage[];
+  /** Current generated tool chain retained when MCP media must survive the next run. */
+  turnContext?: ContextMessage[];
+  seasonSessions?: SeasonSessionPort;
 }
 
 /** 加载阶段：决定 sessionId + 历史上下文 */
 export async function resolveTarget(
-  dataDir: string, task: TideTask,
+  dataDir: string, task: TideTask, seasonSessions?: SeasonSessionPort,
 ): Promise<ResolvedTarget> {
-  // designated：读季风会话（已删则降级重建）
+  // designated: Monsoon owns context projection and persistence constraints.
   if (task.pushMode === 'designated') {
     const sid = resolveTargetSessionId(task);
+    const port = requireSeasonSessionPort(seasonSessions);
     const existing = task.targetSessionId
-      ? await readSeasonSession(dataDir, task.agentId, sid)
+      ? await port.read(task.agentId, sid)
       : null;
     if (!existing) throw new Error('指定季风会话不存在');
-    return { sessionId: sid, history: await new SeasonSessionPort(dataDir).activeContext(existing), existing };
+    return { sessionId: sid, history: await port.activeContext(existing), existing, seasonSessions: port };
   }
 
   // accumulate（含旧 'new' 任务，统一降级到这里）
@@ -74,6 +77,7 @@ export async function resolveTarget(
 export interface SaveResult {
   // 需要回写到 task 的字段变更
   targetSessionId: string;
+  sessionState: 'retained' | 'archived';
   roundSeq?: number;
   archiveBatch?: number;
 }
@@ -95,7 +99,7 @@ export async function recordTargetUsage(
   }
   const revision = resolved.existing?.revision;
   if (revision === undefined) throw new Error('指定季风会话缺少版本');
-  resolved.existing = await new SeasonSessionPort(dataDir).recordUsage(
+  resolved.existing = await requireSeasonSessionPort(resolved.seasonSessions).recordUsage(
     task.agentId, resolved.sessionId, revision, usage);
   return true;
 }
@@ -114,8 +118,13 @@ export async function saveTurn(
   const now = new Date().toISOString();
   const userMsg: TideMessage = { id: msgId(), role: 'user', content: userText, timestamp: now };
   const botMsg: TideMessage = { id: msgId(), role: 'assistant', content: answer, timestamp: now };
+  if (resolved.turnContext) {
+    botMsg.contextExact = true;
+    botMsg.nativeContext = structuredClone(resolved.turnContext);
+  }
   // 完整消息链：user → [tool-call, tool-result, ...] → assistant
-  const turnMsgs: TideMessage[] = [userMsg, ...intermediate, botMsg];
+  const turnMsgs: TideMessage[] = [userMsg, ...intermediate.map(message =>
+    botMsg.contextExact ? { ...message, contextOmitted: true } : message), botMsg];
 
   const base: TideSession = resolved.existing ?? {
     id: resolved.sessionId, agentId: task.agentId, agentName,
@@ -127,9 +136,9 @@ export async function saveTurn(
   // designated：裸 append 写季风（仅 user+assistant，不污染季风会话格式）
   if (task.pushMode === 'designated') {
     if (resolved.existing?.revision === undefined) throw new Error('指定季风会话缺少版本');
-    await appendSeasonTurn(dataDir, task.agentId, resolved.sessionId,
+    await requireSeasonSessionPort(resolved.seasonSessions).append(task.agentId, resolved.sessionId,
       resolved.existing.revision, userMsg, botMsg, resolved.compactedContext);
-    return { targetSessionId: resolved.sessionId };
+    return { targetSessionId: resolved.sessionId, sessionState: 'retained' };
   }
 
   // accumulate（N=1 或 N≥2 统一路径）：追加本轮 → 归档检查
@@ -153,6 +162,7 @@ export async function saveTurn(
   const result = await archiveIfNeeded(dataDir, base, roundSeq, task.windowN, batch, task.id, task.name);
   return {
     targetSessionId: resolved.sessionId,
+    sessionState: base.messages.includes(botMsg) ? 'retained' : 'archived',
     roundSeq: result.newRoundSeq,
     archiveBatch: result.newBatch,
   };

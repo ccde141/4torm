@@ -1,9 +1,10 @@
+import BoundedText from '../../../engine/text-display/BoundedText';
 import { useState, type ReactNode } from 'react';
 import { useLocale } from '../../../i18n/LocaleContext';
 
 interface ToolStep {
   tool: string;
-  args: Record<string, string>;
+  args: Record<string, unknown>;
   result?: string;
   status: 'pending' | 'running' | 'done' | 'error';
 }
@@ -49,7 +50,7 @@ export default function StructuredMessage({ think, tools, answer, note, actions 
               <span className="tw-meeting-think__label">{t('tradewind.chat.reasoning.title')}</span>
             </button>
             {showThink && (
-              <div className="tw-meeting-think__body">{think}</div>
+              <div className="tw-meeting-think__body"><BoundedText text={think} /></div>
             )}
           </div>
         )}
@@ -81,12 +82,12 @@ export default function StructuredMessage({ think, tools, answer, note, actions 
                 <div className="tw-tool-card__body">
                   <div>
                     <div className="tw-tool-card__section-label">{t('tradewind.chat.tools.params')}</div>
-                    <pre className="tw-tool-card__pre">{JSON.stringify(toolStep.args, null, 2)}</pre>
+                    <pre className="tw-tool-card__pre"><BoundedText text={(JSON.stringify(toolStep.args, null, 2)) ?? ''} /></pre>
                   </div>
                   {toolStep.result && (
                     <div>
                       <div className="tw-tool-card__section-label">{t('tradewind.chat.tools.result')}</div>
-                      <pre className="tw-tool-card__pre">{toolStep.result}</pre>
+                      <pre className="tw-tool-card__pre"><BoundedText text={(toolStep.result) ?? ''} /></pre>
                     </div>
                   )}
                 </div>
@@ -96,13 +97,13 @@ export default function StructuredMessage({ think, tools, answer, note, actions 
         })}
 
         {/* 最终回答 */}
-        {answer && <div className="tw-stmsg__answer">{answer}</div>}
+        {answer && <div className="tw-stmsg__answer"><BoundedText text={answer} /></div>}
 
         {/* 提醒 */}
         {note && (
           <div className="tw-meeting-note">
             <div className="tw-meeting-note__header">{t('tradewind.chat.structured.note')}</div>
-            <div className="tw-meeting-note__body">{note}</div>
+            <div className="tw-meeting-note__body"><BoundedText text={note} /></div>
           </div>
         )}
 

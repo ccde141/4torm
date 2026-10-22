@@ -10,6 +10,7 @@ export interface StartCycloneSeatChatInput {
 export interface PreparedCycloneSeatChat {
   execution: CycloneExecutionSnapshot;
   run(onEvent?: (event: unknown) => void): Promise<void>;
+  dispose(cause?: unknown): Promise<void>;
 }
 
 export interface CycloneSeatChatPort {

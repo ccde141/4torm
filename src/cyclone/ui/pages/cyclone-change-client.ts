@@ -1,4 +1,4 @@
-import { streamUrl } from '../../../lib/apiBase';
+import { createBackendEventSource } from '../../../lib/backend-client';
 
 export type CycloneChangeScope = 'workshop' | 'room' | 'bulletin' | 'activity' | 'dispatch';
 export type CycloneChangeEvent = { type: 'change'; workshopId: string;
@@ -28,7 +28,7 @@ function parseChange(value: unknown): CycloneChangeEvent | null {
 export function subscribeCycloneChanges(listener: Listener): () => void {
   listeners.add(listener);
   if (!source) {
-    source = new EventSource(streamUrl('/api/cyclone/changes'), { withCredentials: true });
+    source = createBackendEventSource('/api/cyclone/changes');
     source.onopen = () => publish({ type: 'sync' });
     source.onerror = () => publish({ type: 'disconnected' });
     source.onmessage = message => {

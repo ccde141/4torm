@@ -3,7 +3,7 @@ import test from 'node:test';
 import cors from '@fastify/cors';
 import Fastify from 'fastify';
 import { FrameworkError } from '../engine/shared/framework-error.js';
-import { enforceLocalBrowserOrigin, initSSE, isAllowedLocalOrigin, localCorsOrigin,
+import { enforceBrowserOrigin, initSSE, isAllowedBrowserOrigin, browserCorsOrigin,
   pushSSE, pushSSEError, sseResponseHeaders } from './sse.js';
 
 test('HTTP/2 SSE headers omit the forbidden Connection field', () => {
@@ -39,15 +39,15 @@ test('a configured desktop renderer may use another loopback port, never a remot
     else process.env.ELECTRON_RENDERER_URL = previous;
   });
   process.env.ELECTRON_RENDERER_URL = 'http://localhost:5174/view';
-  assert.equal(isAllowedLocalOrigin('http://localhost:5174'), true);
+  assert.equal(isAllowedBrowserOrigin('http://localhost:5174'), true);
   process.env.ELECTRON_RENDERER_URL = 'https://remote.example/view';
-  assert.equal(isAllowedLocalOrigin('https://remote.example'), false);
+  assert.equal(isAllowedBrowserOrigin('https://remote.example'), false);
 });
 
 test('ordinary HTTP CORS rejects foreign origins without blocking local or origin-less requests', async t => {
   const app = Fastify();
-  app.addHook('onRequest', enforceLocalBrowserOrigin);
-  await app.register(cors, { origin: localCorsOrigin });
+  app.addHook('onRequest', enforceBrowserOrigin);
+  await app.register(cors, { origin: browserCorsOrigin });
   app.get('/health', async () => ({ ok: true }));
   let writes = 0;
   app.post('/write', async () => ({ writes: ++writes }));
@@ -72,6 +72,60 @@ test('ordinary HTTP CORS rejects foreign origins without blocking local or origi
     origin: 'http://localhost:5173',
   } })).statusCode, 200);
   assert.equal((await app.inject('/health')).statusCode, 200);
+});
+
+test('one explicit public HTTPS origin is shared by HTTP, CORS and SSE', async t => {
+  const previous = process.env.FOURTORM_PUBLIC_ORIGIN;
+  const origin = 'https://4torm.home.arpa:8443';
+  process.env.FOURTORM_PUBLIC_ORIGIN = origin;
+  const app = Fastify();
+  t.after(async () => {
+    if (previous === undefined) delete process.env.FOURTORM_PUBLIC_ORIGIN;
+    else process.env.FOURTORM_PUBLIC_ORIGIN = previous;
+    await app.close();
+  });
+  app.addHook('onRequest', enforceBrowserOrigin);
+  await app.register(cors, { origin: browserCorsOrigin });
+  let writes = 0;
+  app.post('/write', async () => ({ writes: ++writes }));
+  const preflight = await app.inject({ method: 'OPTIONS', url: '/write', headers: {
+    origin, 'access-control-request-method': 'POST',
+  } });
+  assert.equal(preflight.statusCode, 204);
+  assert.equal(preflight.headers['access-control-allow-origin'], origin);
+  const allowed = await app.inject({ method: 'POST', url: '/write', headers: { origin } });
+  assert.equal(allowed.statusCode, 200);
+  assert.equal(writes, 1);
+  const sse = sseResponseHeaders(2, origin);
+  assert.equal(sse['Access-Control-Allow-Origin'], origin);
+  assert.equal(sse['Access-Control-Allow-Credentials'], 'true');
+  assert.equal(sse.Connection, undefined);
+  for (const foreign of ['http://4torm.home.arpa:8443', 'https://4torm.home.arpa:8444',
+    'https://4torm.home.arpa.evil.example:8443', `${origin}/path`, 'null']) {
+    const response = await app.inject({ method: 'POST', url: '/write', headers: { origin: foreign } });
+    assert.equal(response.statusCode, 403);
+    assert.equal(sseResponseHeaders(2, foreign)['Access-Control-Allow-Origin'], undefined);
+  }
+  assert.equal(writes, 1);
+  assert.equal((await app.inject({ method: 'POST', url: '/write' })).statusCode, 200);
+});
+
+test('invalid public-origin configuration fails explicitly instead of widening the boundary', t => {
+  const previous = process.env.FOURTORM_PUBLIC_ORIGIN;
+  t.after(() => {
+    if (previous === undefined) delete process.env.FOURTORM_PUBLIC_ORIGIN;
+    else process.env.FOURTORM_PUBLIC_ORIGIN = previous;
+  });
+  for (const invalid of ['', '*', 'null', 'http://4torm.home.arpa:8443',
+    'https://*.home.arpa:8443', 'https://owner:secret@4torm.home.arpa:8443',
+    'https://@4torm.home.arpa:8443', 'https://4torm.home.arpa:8443/',
+    'https://4torm.home.arpa:8443/path', 'https://4torm.home.arpa:8443?query=1',
+    'https://4torm.home.arpa:8443#fragment', 'https:4torm.home.arpa:8443',
+    'https://4torm.home.arpa:8443\\path', ' https://4torm.home.arpa:8443 ']) {
+    process.env.FOURTORM_PUBLIC_ORIGIN = invalid;
+    assert.throws(() => isAllowedBrowserOrigin('https://4torm.home.arpa:8443'),
+      /FOURTORM_PUBLIC_ORIGIN/);
+  }
 });
 
 test('pushSSE 按调用顺序写入完整 JSON data 帧', () => {

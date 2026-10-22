@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildChairContext, finishChairContext } from './chair-context-compaction.js';
+import { buildChairContext, captureChairContextBoundary, finishChairContext } from './chair-context-compaction.js';
 import { createMeetingSession } from './meeting-session.js';
 
 test('chair private projection carries the exact summary plus newly observed public and private messages', () => {
@@ -26,4 +26,20 @@ test('chair private projection carries the exact summary plus newly observed pub
     [...messages.map(message => message.content), '私聊答复', '下一次提问']);
   assert.deepEqual(session.publicMessages, publicBefore);
   assert.equal(session.chairMessages[0].content, '旧私聊');
+});
+
+test('public messages arriving during a private reply remain unseen until the next chair input', () => {
+  const session = createMeetingSession({ nodeId: 'meeting', meetingLabel: '评审',
+    chairAgentId: 'chair', participants: [], topic: '方案' });
+  session.publicMessages = [{ speaker: '人类', content: '已经看到的公开问题', timestamp: 1 }];
+  session.chairActiveContext = [{ role: 'system', content: '先前摘要' }];
+  const boundary = captureChairContextBoundary(session);
+  const messages = buildChairContext({ role: 'system', content: '职责' }, session);
+  session.publicMessages.push({ speaker: '审计员', content: '回复期间新增的关键发现', timestamp: 2 });
+  const answer = { role: 'assistant' as const, content: '这次私聊答复' };
+  session.chairMessages.push(answer);
+  finishChairContext(session, messages, answer, boundary);
+  const next = buildChairContext(messages[0], session);
+  assert.equal(next.filter(message => message.content.includes('回复期间新增的关键发现')).length, 1);
+  assert.equal(session.chairContextPublicAnchor?.timestamp, 1);
 });

@@ -139,3 +139,141 @@ test('reply acknowledgement also finds a legacy ask without sourceRunId', () => 
   }]);
   assert.equal(restored.messages.find(message => message.id === 'ask-a')?.ask?.answered, true);
 });
+
+test('replaying a full pending journal replaces its partial snapshot instead of accumulating it', () => {
+  const value = session();
+  Object.assign(value.messages[0]!, { runCommitted: false, reasoningContent: 'before',
+    toolSteps: [{ tool: 'read_file', args: { path: 'a' }, status: 'done', result: 'A' }] });
+  const run = { runId: 'run-a', truncated: false, events: [
+    { type: 'reasoning', content: 'before' },
+    { type: 'tool-call', tool: 'read_file', args: { path: 'a' } },
+    { type: 'tool-result', result: 'A' },
+    { type: 'reasoning', content: 'after' },
+    { type: 'ask', question: 'Continue?', options: ['Yes'] },
+    { type: 'input-context', runId: 'run-a', checkpoint: {
+      context: [{ role: 'assistant', content: 'snapshot' }], includedIds: [], closed: true,
+    } }, { type: 'done' },
+  ] };
+  const first = hydratePendingRuns(value, [run]);
+  const second = hydratePendingRuns(first, [run]);
+  assert.equal(first.messages[0]?.reasoningContent, 'beforeafter');
+  assert.equal(first.messages[0]?.toolSteps?.length, 1);
+  assert.equal(first.messages[0]?.runCommitted, false);
+  assert.deepEqual(second, first);
+});
+
+test('recovery retains the saved identity and human reply of a journal question', () => {
+  const value = waitingSession();
+  value.messages[1]!.ask!.answered = true;
+  const run = { runId: 'run-a', truncated: false,
+    events: [{ type: 'ask', question: '继续？' }, { type: 'done' }] };
+  const first = hydratePendingRuns(value, [run]);
+  const second = hydratePendingRuns(first, [run]);
+  assert.equal(first.messages.filter(message => message.ask).length, 1);
+  assert.equal(first.messages.find(message => message.ask)?.id, 'ask-a');
+  assert.equal(first.messages.find(message => message.ask)?.ask?.answered, true);
+  assert.equal(first.messages.find(message => message.ask)?.ask?.reply, '继续');
+  assert.deepEqual(second, first);
+});
+
+test('committed human edits are not overwritten by an obsolete pending journal', () => {
+  const value = session();
+  Object.assign(value.messages[0]!, { runCommitted: true, content: 'human edit',
+    nativeContext: [{ role: 'assistant', content: 'human edit' }] });
+  const restored = hydratePendingRuns(value, [{ runId: 'run-a', truncated: false,
+    events: [{ type: 'token', content: 'original' }, { type: 'answer', content: 'original' }] }]);
+  assert.deepEqual(restored, value);
+});
+
+test('a torn journal never discards a newer saved snapshot and does not repeat its warning', () => {
+  const value = session();
+  Object.assign(value.messages[0]!, { content: 'partial later', reasoningContent: 'reasoning tail',
+    toolSteps: [{ tool: 'read_file', args: { path: 'a' }, status: 'done', result: 'saved result' }],
+    humanInputs: [{ id: 'human-a', content: 'insert', runId: 'run-a', sequence: 1,
+      receivedAt: value.createdAt, state: 'received' }] });
+  const run = { runId: 'run-a', truncated: true, events: [
+    { type: 'reasoning', content: 'reasoning' }, { type: 'token', content: 'partial' },
+    { type: 'tool-call', tool: 'read_file', args: { path: 'a' } },
+  ] };
+  const first = hydratePendingRuns(value, [run]);
+  const second = hydratePendingRuns(first, [run]);
+  assert.equal(first.messages[0]?.reasoningContent, 'reasoning tail');
+  assert.match(first.messages[0]?.content ?? '', /^partial later/);
+  assert.equal(first.messages[0]?.toolSteps?.[0]?.result, 'saved result');
+  assert.equal(first.messages[0]?.humanInputs?.length, 1);
+  assert.deepEqual(second, first);
+});
+
+test('a human edit of the exact retained context survives failed-run recovery', () => {
+  const value = session();
+  Object.assign(value.messages[0]!, { runCommitted: false, content: 'human edit',
+    inputClosed: true, contextExact: true,
+    nativeContext: [{ role: 'assistant', content: 'human edit' }] });
+  const run = { runId: 'run-a', truncated: false, events: [
+    { type: 'token', content: 'original' },
+    { type: 'input-context', runId: 'run-a', checkpoint: {
+      context: [{ role: 'assistant', content: 'original' }], includedIds: [], closed: true,
+    } }, { type: 'error', message: 'model failure' },
+  ] };
+  const restored = hydratePendingRuns(value, [run]);
+  assert.match(restored.messages[0]?.content ?? '', /^human edit/);
+  assert.equal(restored.messages[0]?.nativeContext?.at(-1)?.content, 'human edit');
+  assert.deepEqual(hydratePendingRuns(restored, [run]), restored);
+});
+
+test('an empty or torn journal retains evidence saved during a running compaction', () => {
+  const value = session();
+  Object.assign(value.messages[0]!, { reasoningContent: 'saved reasoning', inputRecoveryError: 'retained',
+    compactionNotice: 'retained compaction notice' });
+  assert.deepEqual(hydratePendingRuns(value, [{ runId: 'run-a', truncated: false, events: [] }]), value);
+  const torn = hydratePendingRuns(value, [{ runId: 'run-a', truncated: true, events: [] }]);
+  assert.equal(torn.messages[0]?.reasoningContent, 'saved reasoning');
+  assert.equal(torn.messages[0]?.compactionNotice, 'retained compaction notice');
+  assert.match(torn.messages[0]?.content ?? '', /日志尾部不完整/);
+});
+
+test('legacy questions retain their identity, answer and position before later conversation', () => {
+  const value = waitingSession();
+  delete value.messages[1]!.ask!.sourceRunId;
+  value.messages[1]!.ask!.answered = true;
+  value.messages.push({ id: 'user-b', role: 'user', content: 'later', timestamp: value.createdAt },
+    { id: 'run-b', role: 'assistant', content: 'later reply', timestamp: value.createdAt, runCommitted: true });
+  const run = { runId: 'run-a', truncated: false,
+    events: [{ type: 'ask', question: '继续？' }, { type: 'done' }] };
+  const first = hydratePendingRuns(value, [run]);
+  assert.deepEqual(first.messages.map(message => message.id), ['run-a', 'ask-a', 'user-b', 'run-b']);
+  assert.equal(first.messages[1]?.ask?.answered, true);
+  assert.equal(first.messages[1]?.ask?.reply, '继续');
+  assert.deepEqual(hydratePendingRuns(first, [run]), first);
+});
+
+test('recovery retains exact saved native tool context when the journal has no context replacement', () => {
+  const value = session();
+  const nativeContext = [{ role: 'assistant' as const, content: '', toolCalls: [
+    { id: 'call-a', name: 'read_file', arguments: '{}' }],
+  }, { role: 'tool' as const, content: 'result', toolCallId: 'call-a' }];
+  Object.assign(value.messages[0]!, { runCommitted: false, inputClosed: true, contextExact: true, nativeContext });
+  const restored = hydratePendingRuns(value, [{ runId: 'run-a', truncated: false,
+    events: [{ type: 'reasoning', content: 'thinking' }, { type: 'error', message: 'failed' }] }]);
+  assert.deepEqual(restored.messages[0]?.nativeContext, nativeContext);
+  assert.equal(restored.messages[0]?.contextExact, true);
+});
+
+test('a torn journal checkpoint cannot replace a newer saved native context', () => {
+  for (const inputClosed of [false, true]) {
+    const value = session();
+    const nativeContext = [{ role: 'assistant' as const, content: '', toolCalls: [
+      { id: 'call-a', name: 'read_file', arguments: '{}' }],
+    }, { role: 'tool' as const, content: 'result', toolCallId: 'call-a' }];
+    Object.assign(value.messages[0]!, { inputClosed, contextExact: true, nativeContext,
+      inputIncludedIds: ['human-a'] });
+    const restored = hydratePendingRuns(value, [{ runId: 'run-a', truncated: true, events: [
+      { type: 'input-context', runId: 'run-a', checkpoint: {
+        context: nativeContext.slice(0, 1), includedIds: [], closed: false,
+      } },
+    ] }]);
+    assert.deepEqual(restored.messages[0]?.nativeContext, nativeContext);
+    assert.equal(restored.messages[0]?.inputClosed, inputClosed);
+    assert.deepEqual(restored.messages[0]?.inputIncludedIds, ['human-a']);
+  }
+});

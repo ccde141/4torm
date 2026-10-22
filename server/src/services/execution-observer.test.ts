@@ -84,6 +84,26 @@ test('observations report when earlier output was trimmed at the storage limit',
   assert.equal(observer.get(run.id)?.outputTruncated, true);
 });
 
+test('one oversized output chunk keeps only the newest bounded tail', () => {
+  const observer = createObserver();
+  const run = observer.start({ scope: 'conversation', ownerId: 'session-a', command: 'large output' });
+  observer.append(run.id, 'stdout', 'old'.repeat(40_000) + '\nlatest progress');
+  const entry = observer.get(run.id)!;
+  assert.equal(entry.output.reduce((size, chunk) => size + chunk.text.length, 0), 60_000);
+  assert.equal(entry.outputTruncated, true);
+  assert.equal(entry.progress, 'latest progress');
+  assert.equal(entry.output[0].text.endsWith('latest progress'), true);
+});
+
+test('tail trimming never starts on the second half of a Unicode character', () => {
+  const observer = createObserver();
+  const run = observer.start({ scope: 'conversation', ownerId: 'session-a', command: 'unicode output' });
+  observer.append(run.id, 'stdout', 'x'.repeat(20) + '😀' + 'z'.repeat(59_999));
+  const entry = observer.get(run.id)!;
+  assert.equal(entry.output[0].text, 'z'.repeat(59_999));
+  assert.equal(entry.outputTruncated, true);
+});
+
 test('completed long commands remain visible to their owning taskboard', () => {
   let now = 10_000;
   const observer = new ExecutionObserver(() => now);

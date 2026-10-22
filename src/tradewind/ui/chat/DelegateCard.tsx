@@ -1,15 +1,19 @@
+import BoundedText from '../../../engine/text-display/BoundedText';
 import { useState } from 'react';
 import type { ChatMessage } from '../../../types';
 import { visibleDelegateProgress } from '../../../engine/chat/delegate-progress';
 import { useLocale } from '../../../i18n/LocaleContext';
+import type { ToolImageRef, ToolMediaScope } from '../../../engine/tool-media';
+import ToolResultImages from '../../../components/common/ToolResultImages';
 
 type Step = {
   type: 'tool' | 'thought';
   tool?: string;
-  args?: Record<string, string>;
+  args?: Record<string, unknown>;
   result?: string;
   ok?: boolean;
   text?: string;
+  toolImages?: ToolImageRef[];
 };
 
 /**
@@ -18,9 +22,10 @@ type Step = {
  * 对齐季风：无 avatar，缩进 + 左边色条 + 圆形状态图标。
  * 折叠时显示任务摘要、步骤计数；展开后显示步骤列表与结果。
  */
-export default function DelegateCard({ toolCall, content }: {
+export default function DelegateCard({ toolCall, content, mediaScope }: {
   toolCall: NonNullable<ChatMessage['toolCall']> & { steps?: Step[] };
   content?: string;
+  mediaScope?: ToolMediaScope;
 }) {
   const { t } = useLocale();
   const [expanded, setExpanded] = useState(false);
@@ -101,6 +106,7 @@ export default function DelegateCard({ toolCall, content }: {
                             {s.result.slice(0, 60)}
                           </span>
                         )}
+                        {mediaScope && !!s.toolImages?.length && <ToolResultImages images={s.toolImages} scope={mediaScope} />}
                       </div>
                     );
                   })}
@@ -113,7 +119,7 @@ export default function DelegateCard({ toolCall, content }: {
               <div>
                 <div className="tw-tool-card__section-label">{t('tradewind.chat.reasoning.title')}</div>
                 <pre className="tw-tool-card__pre" style={{ maxHeight: '200px' }}>
-                  {thought}
+                  <BoundedText text={(thought) ?? ''} />
                 </pre>
               </div>
             )}
@@ -123,7 +129,7 @@ export default function DelegateCard({ toolCall, content }: {
               <div>
                 <div className="tw-tool-card__section-label">{t('tradewind.chat.tools.result')} {icon}</div>
                 <pre className="tw-tool-card__pre" style={{ maxHeight: '300px' }}>
-                  {summary}
+                  <BoundedText text={(summary) ?? ''} />
                 </pre>
               </div>
             )}

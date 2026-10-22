@@ -26,15 +26,28 @@ export function registerCycloneSeatRoutes(app: FastifyInstance, options: Cyclone
     if (action === 'compact') {
       const prepared = await options.router.prepareTransport('cyclone', 'seatCompaction',
         { workshopId, seatId }, humanContext(req)) as PreparedCycloneSeatCompaction;
-      reply.hijack();
-      initSSE(reply);
-      const stopHeartbeat = startHeartbeat(reply);
-      pushSSE(reply, { type: 'execution-start', ...prepared.execution });
-      try { await prepared.run(event => pushSSE(reply, event)); }
+      let stopHeartbeat: () => void = () => undefined;
+      let failure: unknown;
+      try {
+        reply.hijack();
+        initSSE(reply);
+        stopHeartbeat = startHeartbeat(reply);
+        pushSSE(reply, { type: 'execution-start', ...prepared.execution });
+        await prepared.run(event => pushSSE(reply, event));
+      }
       catch (error) {
+        failure = error;
         const message = (error as Error).message;
-        pushSSE(reply, { type: 'error', error: message, message });
-      } finally { stopHeartbeat(); endSSE(reply); }
+        try {
+          if (!reply.raw.destroyed && !reply.raw.writableEnded) pushSSE(reply, { type: 'error', error: message, message });
+        } catch (writeError) { req.log.error(writeError); }
+      } finally {
+        try { await prepared.dispose(failure); }
+        finally {
+          try { stopHeartbeat(); }
+          finally { if (!reply.raw.destroyed && !reply.raw.writableEnded) endSSE(reply); }
+        }
+      }
       return;
     }
 
@@ -47,19 +60,28 @@ export function registerCycloneSeatRoutes(app: FastifyInstance, options: Cyclone
         humanContext(req)) as PreparedCycloneSeatChat;
       let stopHB: (() => void) | undefined;
       let sseStarted = false;
+      let failure: unknown;
+      let errorSent = false;
       try {
         reply.hijack();
         initSSE(reply);
         sseStarted = true;
         stopHB = startHeartbeat(reply);
         pushSSE(reply, { type: 'execution-start', ...prepared.execution });
-        await prepared.run(event => pushSSE(reply, event));
+        await prepared.run(event => {
+          if ((event as { type?: string } | null)?.type === 'error') errorSent = true;
+          pushSSE(reply, event);
+        });
       } catch (e) {
-        if (sseStarted) pushSSE(reply, { type: 'error', message: (e as Error).message });
-        else throw e;
+        failure = e;
+        if (sseStarted && !errorSent) pushSSE(reply, { type: 'error', message: (e as Error).message });
+        else if (!sseStarted) throw e;
       } finally {
-        stopHB?.();
-        if (sseStarted) endSSE(reply);
+        try { await prepared.dispose(failure); }
+        finally {
+          stopHB?.();
+          if (sseStarted && !reply.raw.destroyed && !reply.raw.writableEnded) endSSE(reply);
+        }
       }
       return;
     }

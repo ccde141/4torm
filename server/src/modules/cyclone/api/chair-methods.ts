@@ -21,11 +21,11 @@ export function cycloneChairHandlers(chair: CycloneChairService): Record<string,
     deleteChairMessage: handler(parseDelete, input => chair.editMessage(
       input.workshopId, input.roomId, input.index,
     )),
-    resetChairContext: handler(parseReset, input => chair.reset(
-      input.workshopId, input.roomId, input.mode,
+    resetChairContext: handler(parseReset, (input, signal) => chair.reset(
+      input.workshopId, input.roomId, input.mode, signal,
     )),
     compactChairContext: handler(value => identity(recordWith(value, ['workshopId', 'roomId'])),
-      input => chair.reset(input.workshopId, input.roomId, 'summary')),
+      (input, signal) => chair.reset(input.workshopId, input.roomId, 'summary', signal)),
   };
 }
 
@@ -34,8 +34,8 @@ function method(id: string, permission: ModuleMethodManifest['permission']): Mod
     inputSchema: { type: 'object', additionalProperties: false }, output: { mode: 'inline' } };
 }
 
-function handler<T>(parse: (value: unknown) => T, invoke: (value: T) => Promise<unknown>): ModuleMethodHandler {
-  return { parse, invoke: async (_context, input) => invoke(input as T) };
+function handler<T>(parse: (value: unknown) => T, invoke: (value: T, signal?: AbortSignal) => Promise<unknown>): ModuleMethodHandler {
+  return { parse, invoke: async (context, input) => invoke(input as T, context.signal) };
 }
 
 function parseEdit(value: unknown) {

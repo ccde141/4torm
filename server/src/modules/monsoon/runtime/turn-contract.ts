@@ -3,6 +3,7 @@ import type { SandboxLevel } from '../../../services/execution-context.js';
 import type { ToolPreparationProgress } from '../../../engine/shared/tool-progress.js';
 import type { TokenUsage } from '../../../engine/shared/llm-bridge.js';
 import type { FrameworkErrorKind } from '../../../engine/shared/framework-error.js';
+import type { CompactionProgress } from '../../../engine/shared/compaction/index.js';
 import type { MonsoonContextMarker } from '../application/context-port.js';
 
 export interface MonsoonTurnSpec {
@@ -41,7 +42,7 @@ export type MonsoonInputEvent =
   | { type: 'input-closed'; runId: string; retained: MonsoonInputReceipt[] }
   | { type: 'input-skipped'; tool: string; reason: string };
 
-export type MonsoonEvent = MonsoonInputEvent
+export type MonsoonEvent = MonsoonInputEvent | CompactionProgress
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
   | { type: 'notice'; message: string }
@@ -49,12 +50,13 @@ export type MonsoonEvent = MonsoonInputEvent
   | { type: 'context-compacted'; revision: number; marker: MonsoonContextMarker }
   | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | ({ type: 'tool-progress' } & ToolPreparationProgress)
-  | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
+  | { type: 'tool-call'; tool: string; args: Record<string, unknown> }
+  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown;
+      toolImages?: import('../../../engine/shared/types.js').ToolImageRef[] }
   | { type: 'delegate-start'; task: string; delegateId: string }
   | { type: 'delegate-token'; delegateId: string; content: string }
-  | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
-  | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
+  | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, unknown> }
+  | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean; toolImages?: import('../../../engine/shared/types.js').ToolImageRef[] }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
   | { type: 'ask'; question: string; options?: string[] }
   | { type: 'reply-accepted'; waitingRunId: string; answer: string }

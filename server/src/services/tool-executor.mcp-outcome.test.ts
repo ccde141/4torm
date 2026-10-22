@@ -11,10 +11,12 @@ import { executeTool, executeToolOutcome } from './tool-executor.js';
 test('authorized MCP execution retains isError beside the legacy string result', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-mcp-outcome-'));
   const dataDir = path.join(root, 'data');
+  const received: unknown[] = [];
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const message = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (message.method === 'tools/call') received.push(message.params.arguments);
     if (message.id === undefined) { response.writeHead(202).end(); return; }
     const result = message.method === 'initialize'
       ? { protocolVersion: '2024-11-05' }
@@ -40,7 +42,10 @@ test('authorized MCP execution retains isError beside the legacy string result',
     url: `http://127.0.0.1:${address.port}/mcp`, headers: {} }]);
   await initMcpManager(dataDir);
 
-  assert.deepEqual(await executeToolOutcome(dataDir, 'mcp:test:inspect', {}, 'agent'),
+  const args = { count: 2, enabled: false, items: ['one'], viewport: { width: 1280 },
+    nullable: null, text: 'false' };
+  assert.deepEqual(await executeToolOutcome(dataDir, 'mcp:test:inspect', args, 'agent'),
     { result: 'permission denied', ok: false });
-  assert.equal(await executeTool(dataDir, 'mcp:test:inspect', {}, 'agent'), 'permission denied');
+  assert.equal(await executeTool(dataDir, 'mcp:test:inspect', args, 'agent'), 'permission denied');
+  assert.deepEqual(received, [args, args]);
 });

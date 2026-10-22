@@ -22,7 +22,7 @@ interface ResolveOptions {
 }
 
 function authorizationError(
-  code: string, kind: 'not_found' | 'permission', message: string,
+  code: string, kind: 'not_found' | 'permission' | 'conflict', message: string,
 ): never {
   throw frameworkError({
     code, kind, message, source: 'cyclone.organization.authorization', retryable: false,
@@ -109,7 +109,13 @@ export async function resolveAuthorizedTarget(
   if (!seats.some(seat => seat.id === sourceSeatId)) {
     authorizationError('CYCLONE_SOURCE_SEAT_NOT_FOUND', 'not_found', '来源工位不存在');
   }
-  const target = seats.find(seat => seat.title === targetTitle);
+  const matches = seats.filter(seat => seat.title === targetTitle);
+  const exactId = seats.find(seat => seat.id === targetTitle);
+  if (!exactId && matches.length > 1) {
+    authorizationError('CYCLONE_TARGET_SEAT_AMBIGUOUS', 'conflict',
+      `工位名「${targetTitle}」有多个匹配，请使用工位 ID`);
+  }
+  const target = exactId ?? matches[0];
   if (!target) {
     authorizationError(
       'CYCLONE_TARGET_SEAT_NOT_FOUND', 'not_found', `本工作室找不到名为「${targetTitle}」的工位`,

@@ -6,12 +6,12 @@
  *
  * 与 4torm 的差异：
  * - 不走浏览器 fetch；用 Node 18+ 自带的全局 fetch
- * - 不复用 src/llm/client.ts（那是浏览器侧）
+ * - 提供商请求仅从后端发出，前端通过固定模型运行接口进行配置和检测
  */
 
 import fs from 'node:fs/promises';
 import { logModelDiagnostic } from '../../config/developer-mode.js';
-import { createRuntimeFetch } from '../../model-runtime/providers/runtime-fetch.js';
+import { createRuntimeFetch, providerRequestHeaders } from '../../model-runtime/providers/runtime-fetch.js';
 import path from 'node:path';
 import type {
   ContextMessage,
@@ -36,6 +36,7 @@ import {
   extractReasoningEnvelope,
 } from './provider-messages.js';
 import { compileModelMessages } from './model-request/compile.js';
+import { prepareToolImageContext } from './model-request/tool-image-context.js';
 import {
   buildAnthropicRequest,
   parseAnthropicResponse,
@@ -248,7 +249,8 @@ async function modelBudgetContext(dataDir: string, fullModelKey: string) {
     baseUrl: provider.baseUrl,
     model,
     profile: provider.modelProfiles?.[model],
-    providerType: selection.providerType,
+    // A legacy fallback is not an explicit choice: retain profile/host adapter matching.
+    ...(selection.source === 'explicit' ? { providerType: selection.providerType } : {}),
     runtimePolicy: provider.runtimePolicy,
     generationDefaults: provider.generationDefaults,
     customRequestParameters: provider.customRequestParameters,
@@ -258,7 +260,7 @@ async function modelBudgetContext(dataDir: string, fullModelKey: string) {
 
 /** 构造请求公共部分 */
 async function buildRequest(params: LLMCallParams, stream: boolean) {
-  const { dataDir, fullModelKey, messages, options } = params;
+  const { dataDir, fullModelKey, options } = params;
   if (!fullModelKey) throw new Error('Agent.model 为空，无法确定 LLM');
 
   const providers = await loadProviders(dataDir);
@@ -266,6 +268,9 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
   if (!provider) throw new Error(`找不到模型 ${fullModelKey} 的提供商`);
 
   const model = options?.model ?? extractModelId(fullModelKey);
+  const messages = await prepareToolImageContext(params.messages, {
+    dataDir, vision: provider.modelCapabilities?.[model]?.vision?.status, signal: params.signal,
+  });
   const selection = resolveLoggedProviderSelection(provider.id, provider, model);
   const protocol = resolveToolTransportContract(provider, model).protocol;
   if (protocol === 'anthropic-messages') {
@@ -293,11 +298,8 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
   }
 
   const url = provider.baseUrl.replace(/\/+$/, '') + '/chat/completions';
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(provider.customHeaders ?? provider.headers ?? {}),
-  };
-  if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
+  const headers = Object.fromEntries(providerRequestHeaders(provider, 'openai-chat-completions',
+    { 'Content-Type': 'application/json' }));
 
   // 原生模式：先净化工具名，得到 nameMap（sanitized→original）供回填反解。
   // 同时反推 forward（original→sanitized），用于把历史 assistant.tool_calls 的名字
@@ -319,7 +321,7 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
     baseUrl: provider.baseUrl,
     model,
     profile: provider.modelProfiles?.[model],
-    providerType: selection.providerType,
+    ...(selection.source === 'explicit' ? { providerType: selection.providerType } : {}),
     runtimePolicy: provider.runtimePolicy,
     generationDefaults: provider.generationDefaults,
     customRequestParameters: provider.customRequestParameters,

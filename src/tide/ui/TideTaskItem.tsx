@@ -113,11 +113,13 @@ export default function TaskItem({ task, expanded, selected, optimisticRun, prob
         <div style={{ marginTop: '6px', borderTop: '1px solid var(--color-border)', paddingTop: '4px' }}>
           {runs.map(r => (
             <div key={tideRunIdentity(r)} style={{ marginBottom: '3px', color: 'var(--color-text-tertiary)' }}>
-              <span style={{ color: r.status === 'success' ? '#22c55e' : '#ef4444' }}>
-                {r.status === 'success' ? 'OK' : 'ERR'}
+              <span style={{ color: r.status === 'success' ? '#22c55e'
+                : r.status === 'aborted' ? 'var(--color-text-secondary)' : '#ef4444' }}>
+                {r.status === 'success' ? 'OK' : r.status === 'aborted' ? t('tide.task.status.aborted') : 'ERR'}
               </span>
               {' '}{t('tide.task.runMeta', { time: formatRelative(r.timestamp, locale), duration: r.durationMs, turns: r.turns })}
-              {r.error && <span style={{ color: '#ef4444' }}> {r.error.slice(0, 40)}</span>}
+              {r.error && <span style={{ color: r.status === 'aborted'
+                ? 'var(--color-text-secondary)' : '#ef4444' }}> {r.error.slice(0, 40)}</span>}
             </div>
           ))}
         </div>

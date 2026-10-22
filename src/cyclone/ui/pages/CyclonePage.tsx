@@ -1,3 +1,4 @@
+import { backendFetch } from '../../../lib/backend-client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
 import { useLocale } from '../../../i18n/LocaleContext';
@@ -20,7 +21,6 @@ import { useWorkshopOperationStatus } from './useWorkshopOperationStatus';
 import {
   addCycloneSeat,
   createCycloneRoom,
-  createCycloneWorkshop,
   deleteCycloneRoom,
   deleteCycloneSeat,
   deleteCycloneWorkshop,
@@ -28,8 +28,10 @@ import {
   setCycloneChair,
   updateCycloneSeat,
 } from './cyclone-control-client';
+import type { CycloneEntityReceipt } from './cyclone-control-client';
 import '../../../styles/components/cyclone.css';
 import { useCycloneActivityNavigation } from './useCycloneActivityNavigation';
+import { useSupervisorStreamRunners } from './useSupervisorStreamRunners';
 export default function CyclonePage({ active, preselectOperation, onClearPreselect }: {
   active?: boolean; preselectOperation?: string | null;
   onClearPreselect?: () => void;
@@ -48,6 +50,7 @@ export default function CyclonePage({ active, preselectOperation, onClearPresele
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([]);
   const [view, setView] = useState<CycloneView>(null);
   const viewRef = useRef(view); viewRef.current = view;
+  const supervisorRunners = useSupervisorStreamRunners(activeWid, view?.kind === 'supervisor', locale);
   const activeWidRef = useRef(activeWid); activeWidRef.current = activeWid;
   const activeRoomId = view?.kind === 'room' ? view.id : null;
   const visibleSeatId = view?.kind === 'seat' ? view.id : null;
@@ -169,11 +172,7 @@ export default function CyclonePage({ active, preselectOperation, onClearPresele
     )) return;
     await loadWorkshop(activeWid);
   }
-  async function createWorkshop(config: { title: string; chairAgentId?: string }) {
-    const workshop = await runControl(
-      () => createCycloneWorkshop(config), t('cyclone.shell.createWorkshopFailed'),
-    );
-    if (!workshop) return;
+  async function workshopCreated(workshop: CycloneEntityReceipt) {
     await refreshWorkshops(); setActiveWid(workshop.id); setView(null);
   }
   async function openWorkshopWorkspace() {
@@ -203,7 +202,7 @@ export default function CyclonePage({ active, preselectOperation, onClearPresele
   async function openEditSeat(seatId: string) {
     if (!activeWid) return;
     setView({ kind: 'loading-seat', id: seatId });
-    const response = await fetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/status`);
+    const response = await backendFetch(`/api/cyclone/workshop/${activeWid}/seat/${seatId}/status`);
     if (!response.ok) {
       const error = await readCycloneError(response, t('cyclone.shell.loadSeatFailed'));
       setView(current => current?.kind === 'loading-seat' && current.id === seatId ? { ...current, error } : current);
@@ -260,6 +259,7 @@ export default function CyclonePage({ active, preselectOperation, onClearPresele
     <CycloneSidebar workshops={workshops} activeWid={activeWid} seats={seats} rooms={rooms} view={view}
       status={workspaceStatus}
       onCreateWorkshop={() => setView({ kind: 'create-workshop' })}
+      onOpenSupervisor={() => setView({ kind: 'supervisor' })}
       onSelectWorkshop={id => { setActiveWid(id); setWorkspaceTabs([]); setView(null); }}
       onDeleteWorkshop={(id, title) => void deleteWorkshop(id, title)} onOpenWorkspace={() => void openWorkshopWorkspace()}
       onCreateSeat={() => setView({ kind: 'create-seat' })} onOpenSeat={seat => openSeat(seat.id)}
@@ -269,10 +269,11 @@ export default function CyclonePage({ active, preselectOperation, onClearPresele
     <CycloneWorkspacePane active={!!active} agents={agents} activeWid={activeWid}
       workshopLoaded={activeWid !== null && loadedWorkshopId === activeWid} workshops={workshops} seats={seats}
       rooms={rooms} bulletin={bulletin} dispatches={dispatches} view={view} tabs={workspaceTabs}
-      status={workspaceStatus}
+      status={workspaceStatus} statusError={operationError}
       chairAgentId={chairAgentId} chairOpen={chairOpen} seatRunners={seatRunners} roomRunners={roomRunners}
+      supervisorRunners={supervisorRunners}
       externalRoom={externalRoom}
-      dispatchAction={dispatchAction} setView={setView} onCreateWorkshop={createWorkshop}
+      dispatchAction={dispatchAction} setView={setView} onWorkshopCreated={workshopCreated}
       onCreateSeat={createSeat} onRetrySeat={id => void openEditSeat(id)}
       onEditSeat={editSeat} onCreateRoom={createRoom}
       onSelectTab={tab => tab ? openWorkspaceView(tab) : setView(null)} onCloseTab={closeWorkspaceView}

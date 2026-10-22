@@ -1,3 +1,5 @@
+import type { ToolImageRef } from '../engine/tool-media';
+
 /** Agent 的持久化可用状态；实时 busy 由服务端活动表覆盖。 */
 export type AgentStatus = string;
 
@@ -39,6 +41,7 @@ export interface NativeContextMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   images?: ImageAttachment[];
+  toolImages?: ToolImageRef[];
   reasoningContent?: string;
   toolCalls?: Array<{ id: string; name: string; arguments: string }>;
   toolCallId?: string;
@@ -113,8 +116,9 @@ export interface ChatMessage {
 /** 工具调用步骤（StructuredMessage 与流式期间共用） */
 export interface ToolStep {
   tool: string;
-  args: Record<string, string>;
+  args: Record<string, unknown>;
   result?: string;
+  toolImages?: ToolImageRef[];
   status: 'pending' | 'running' | 'done' | 'error';
   /** UI 侧通道元数据，与独立 ToolCall 卡片保持一致。 */
   diff?: ToolCall['diff'];
@@ -129,7 +133,7 @@ export interface ToolStep {
     delegateId: string;
     task: string;
     content: string;
-    steps: Array<{ type: 'tool'; tool?: string; args?: Record<string, string>; result?: string; ok?: boolean }>;
+    steps: Array<{ type: 'tool'; tool?: string; args?: Record<string, unknown>; result?: string; ok?: boolean; toolImages?: ToolImageRef[] }>;
     summary?: string;
     status: 'running' | 'success' | 'error';
   };
@@ -140,6 +144,7 @@ export interface ToolCall {
   toolName: string;
   params: Record<string, unknown>;
   result?: string;
+  toolImages?: ToolImageRef[];
   durationMs?: number;
   status: 'pending' | 'success' | 'error' | 'running';
   /** UI 侧通道元数据：覆盖写入时的旧内容，用于渲染真实 diff（不进 LLM 上下文） */
@@ -159,7 +164,7 @@ export interface ToolCall {
     status: 'running';
   };
   /** delegate 子步骤 */
-  steps?: Array<{ type: 'tool' | 'thought'; tool?: string; args?: Record<string, string>; result?: string; ok?: boolean; text?: string }>;
+  steps?: Array<{ type: 'tool' | 'thought'; tool?: string; args?: Record<string, unknown>; result?: string; ok?: boolean; text?: string; toolImages?: ToolImageRef[] }>;
 }
 
 /** Agent 会话 */

@@ -144,3 +144,43 @@ test('session deletion removes one session and all owned sidecars without touchi
     await assert.rejects(fs.access(path.join(dir, `session-a${suffix}`)));
   }
 });
+
+test('context replacement honours cancellation before primary rename and accepts a committed late abort', async t => {
+  for (const stage of ['temporary', 'committed'] as const) await t.test(stage, async child => {
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-monsoon-cancel-'));
+    child.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+    const repository = new FileMonsoonSessionRepository(dataDir);
+    const created = await repository.create({ ...session(), messages: [{ id: 'original', role: 'user',
+      content: '原始内容', timestamp: '2026-01-01T00:00:01.000Z' }] });
+    const controller = new AbortController();
+    if (stage === 'temporary') {
+      const write = fs.writeFile.bind(fs);
+      child.mock.method(fs, 'writeFile', async (...args: Parameters<typeof fs.writeFile>) => {
+        const result = await write(...args);
+        if (String(args[0]).includes('session-a.json.') && String(args[0]).endsWith('.tmp')) controller.abort();
+        return result;
+      });
+    } else {
+      const renameFile = fs.rename.bind(fs);
+      child.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => {
+        const result = await renameFile(...args);
+        if (String(args[1]).endsWith('session-a.json')) controller.abort();
+        return result;
+      });
+    }
+    const replacement = repository.replace({ ...created, messages: [...created.messages, {
+      id: 'compact', role: 'system', content: '完整摘要', timestamp: '2026-01-01T00:00:02.000Z',
+      type: 'compact-marker', contextExact: true, nativeContext: [{ role: 'system', content: '完整摘要' }],
+    }] }, created.revision, 'content', { clearTokenUsage: true, signal: controller.signal });
+    if (stage === 'temporary') {
+      await assert.rejects(replacement, { name: 'AbortError' });
+      assert.deepEqual(await repository.get('agent-a', 'session-a'), created);
+      assert.equal((await repository.list('agent-a'))[0].revision, created.revision);
+    } else {
+      const saved = await replacement;
+      assert.equal(saved.messages.at(-1)?.content, '完整摘要');
+      assert.equal(controller.signal.aborted, true);
+      assert.deepEqual(await repository.get('agent-a', 'session-a'), JSON.parse(JSON.stringify(saved)));
+    }
+  });
+});

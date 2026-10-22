@@ -1200,12 +1200,16 @@
   align-items: center;
   gap: 6px;
   font-size: var(--text-xs);
-  color: var(--color-text-tertiary);
+  color: var(--color-text-secondary);
   margin-bottom: 6px;
   padding: 4px 8px;
-  background: var(--color-bg);
+  background: var(--glass-bg-soft);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
   font-family: var(--font-mono);
+  text-shadow: var(--text-halo);
 }
 
 .chat__streaming-phase::before {

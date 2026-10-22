@@ -1,4 +1,5 @@
 import { frameworkError, FrameworkError } from '../../../engine/shared/framework-error.js';
+import { randomUUID } from 'node:crypto';
 import { activeHumanGates } from '../../../engine/tradewind/nodes/human-gate.js';
 import { activeNodeRunners } from '../../../engine/tradewind/nodes/agent.js';
 import { activeMeetings } from '../../../engine/tradewind/nodes/meeting.js';
@@ -8,9 +9,13 @@ import {
   startTradewindExecution,
   stopActiveTradewindExecution,
 } from '../../../services/tradewind-execution.js';
-import type { TradewindCommands } from '../application/execution-commands.js';
+import type { RoundCommand, TradewindCommands } from '../application/execution-commands.js';
 import type { TradewindWorkflowStore } from '../application/workflow-store.js';
 import { createTradewindWorkflowStore } from './workflow-store.js';
+import { sameTradewindDataRoot } from '../../../services/tradewind-execution-registry.js';
+import { executionIdentityRequired } from '../../../engine/tradewind/execution/execution-registry.js';
+
+const stoppingExecutions = new WeakSet<object>();
 
 export function createTradewindCommands(
   dataDir: string,
@@ -31,14 +36,19 @@ export function createTradewindCommands(
       }
     },
     stop: async input => {
-      const active = requireExecution(input.executionId);
+      const active = requireExecution(input.executionId, dataDir);
       const executionId = active.getExecutionId();
-      await stopActiveTradewindExecution();
-      return { stopped: true, executionId };
+      if (stoppingExecutions.has(active)) throw controlError('TRADEWIND_STOP_IN_PROGRESS', 'conflict',
+        '该工作流已经收到停止请求，请读取执行状态');
+      stoppingExecutions.add(active);
+      try {
+        await stopActiveTradewindExecution({ executionId, dataDir });
+        return { stopped: true, executionId };
+      } finally { stoppingExecutions.delete(active); }
     },
     submitHumanGate: async input => {
-      requireExecution(input.executionId);
-      const gate = activeHumanGates.get(input.nodeId);
+      requireExecution(input.executionId, dataDir);
+      const gate = activeHumanGates.get(input.nodeId, input.executionId);
       if (!gate) throw frameworkError({ code: 'TRADEWIND_HUMAN_GATE_NOT_WAITING', kind: 'not_found',
         message: '该节点没有等待中的审查', source: 'tradewind.control', retryable: false });
       const content = input.content?.trim() || gate.envelopeContent;
@@ -46,55 +56,63 @@ export function createTradewindCommands(
       return { accepted: true, nodeId: input.nodeId };
     },
     abortNodeRound: async input => {
-      const runner = requireNodeRound(input.nodeId, input.runId);
+      const runner = requireNodeRound(input, dataDir);
       if (!runner.abortRound(input.runId)) throw invalidNodeAction('只有人类发起的节点会话可以单独停止');
       return { aborted: true, ...input };
     },
     pauseNodeRound: async input => {
-      const runner = requireNodeRound(input.nodeId, input.runId);
+      const runner = requireNodeRound(input, dataDir);
       if (!runner.pause(input.runId)) throw invalidNodeAction('节点当前没有可暂停的信封轮');
       return { paused: true, ...input };
     },
     resumeNodeRound: async input => {
-      requireExecution(input.executionId);
-      const runner = activeNodeRunners.get(input.nodeId);
-      if (!runner) throw nodeMissing();
-      if (!runner.resume()) throw invalidNodeAction('节点当前没有已暂停的信封轮');
+      requireExecution(input.executionId, dataDir);
+      const runner = activeNodeRunners.get(input.nodeId, input.executionId);
+      if (!runner || !sameTradewindDataRoot(runner.getDataDir(), dataDir)) throw nodeMissing();
+      if (input.runId && runner.getRuntimeState().pausedRunId !== input.runId) throw roundChanged();
+      if (!runner.resume(input.runId)) throw invalidNodeAction('节点当前没有已暂停的信封轮');
       return { resumed: true, nodeId: input.nodeId };
     },
     abortMeetingRound: async input => {
-      const meeting = activeMeetings.get(input.nodeId);
+      const meeting = [...activeMeetings.values()].find(item => item.session.nodeId === input.nodeId
+        && item.roundIdentity?.runId === input.runId && sameTradewindDataRoot(item.dataDir, dataDir));
       if (!meeting) throw meetingMissing();
       if (!meeting.roundIdentity || meeting.roundIdentity.runId !== input.runId) throw roundChanged();
       if (!meeting.roundAbort || !meeting.session.busy) throw noActiveRound();
       meeting.roundAbort.abort();
       return { aborted: true, ...input };
     },
-    sendNodeMessage: async input => {
-      requireExecution(input.executionId);
-      const runner = activeNodeRunners.get(input.nodeId);
+    sendNodeMessage: async (input, actor) => {
+      requireExecution(input.executionId, dataDir);
+      const runner = activeNodeRunners.get(input.nodeId, input.executionId);
       if (!runner) throw nodeMissing();
       if (runner.isBusy()) throw controlError('TRADEWIND_NODE_BUSY', 'conflict',
         '节点正在处理上一条消息，请稍后再试');
-      runner.push({ source: 'human', content: input.message });
-      return { accepted: true, nodeId: input.nodeId };
+      const messageId = `tradewind-message-${randomUUID()}`;
+      runner.push({ source: 'human', messageId, content: input.message, ...(actor ? { actor } : {}) });
+      return { accepted: true, nodeId: input.nodeId, messageId };
     },
   };
 }
 
-function requireExecution(executionId: string) {
-  const active = getActiveTradewindOrchestrator();
-  if (!isTradewindExecutionRunning() || !active) throw notRunning();
+function requireExecution(executionId: string, dataDir: string) {
+  const active = getActiveTradewindOrchestrator({ executionId, dataDir });
+  if (!isTradewindExecutionRunning({ executionId, dataDir }) || !active) throw notRunning();
   if (active.getExecutionId() !== executionId) {
     throw controlError('TRADEWIND_EXECUTION_CHANGED', 'conflict', '工作流执行已经变化，请刷新状态后重试');
   }
   return active;
 }
 
-function requireNodeRound(nodeId: string, runId: string) {
-  const runner = activeNodeRunners.get(nodeId);
+function requireNodeRound(input: RoundCommand, dataDir: string) {
+  if (input.executionId) requireExecution(input.executionId, dataDir);
+  const matches = [...activeNodeRunners.entries(input.executionId)].filter(([id, item]) => id === input.nodeId
+    && sameTradewindDataRoot(item.getDataDir(), dataDir)
+    && (input.executionId !== undefined || item.getRoundIdentity()?.runId === input.runId));
+  if (matches.length > 1) throw executionIdentityRequired();
+  const runner = matches[0]?.[1];
   if (!runner) throw nodeMissing();
-  if (runner.getRoundIdentity()?.runId !== runId) throw roundChanged();
+  if (runner.getRoundIdentity()?.runId !== input.runId) throw roundChanged();
   return runner;
 }
 

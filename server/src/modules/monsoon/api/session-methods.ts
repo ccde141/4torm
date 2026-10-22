@@ -57,9 +57,12 @@ function parseReplace(value: unknown) {
   if (Object.keys(item).some(key => !['agentId', 'sessionId', 'session',
     'expectedRevision', 'mode'].includes(key))) throw invalid();
   if (!Number.isInteger(item.expectedRevision) ||
-    (item.mode !== 'content' && item.mode !== 'rename')) throw invalid();
+    !['content', 'rename', 'read'].includes(String(item.mode))) throw invalid();
+  const session = record(item.session);
+  if (item.mode === 'read' && (typeof session.lastReadAt !== 'string'
+    || !Number.isFinite(Date.parse(session.lastReadAt)))) throw invalid();
   return { agentId: id(item.agentId), sessionId: id(item.sessionId),
-    session: record(item.session), expectedRevision: item.expectedRevision as number,
+    session, expectedRevision: item.expectedRevision as number,
     mode: item.mode };
 }
 

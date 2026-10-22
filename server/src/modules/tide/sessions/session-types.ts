@@ -1,6 +1,7 @@
 import type { TokenUsage } from '../../../engine/shared/llm-bridge.js';
 import type { TideUsageProgress } from '../domain/token-usage.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
+import type { CompactionProgress } from '../../../engine/shared/compaction/index.js';
 
 export interface TideMessage {
   id: string;
@@ -11,6 +12,7 @@ export interface TideMessage {
   nativeContext?: ContextMessage[];
   contextExact?: boolean;
   contextOmitted?: boolean;
+  compactionId?: string;
 }
 
 export interface TideSession {
@@ -27,6 +29,7 @@ export interface TideSession {
   messageRevision?: number;
   tokenUsage?: TokenUsage;
   usage?: TideUsageProgress;
+  compaction?: CompactionProgress;
 }
 
 export interface ArchiveResult {

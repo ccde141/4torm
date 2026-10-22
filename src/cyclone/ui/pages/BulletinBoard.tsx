@@ -1,14 +1,15 @@
 /**
- * 气旋工作室公告板 —— 工作室主区默认页（选中工作室、未进工位/群聊时展现）
+ * 气旋工作室公告板 —— 以完整条目呈现共享内容，编辑后统一提交增量操作。
  *
  * - 结构化：按条目组织；人在此增/改/删，保存时以增量操作（add/update/remove）提交，
  *   不整表覆盖 → 不会冲掉 agent 期间新增的条目
  * - 全体工位共享：条目注入进每个工位 system prompt（后端 buildBulletinSection）
  * - 全员可写 + 审计时间轴：所有工位/群聊都能改，每次改动进「更改记录」，人可随时撤回
  * - 热切换：不常驻 SSE；每轮工位/群聊结束 → 父层 loadWorkshop 拉一次盘刷新（非编辑态才跟随）
- * - 视觉：复用 config-modal.css 的 config-* 类 + cyclone.css 的 .bulletin-board 磨砂玻璃
+ * - 条目默认完整阅读；局部编辑只更新草稿，不改变底部统一保存的语义
  */
 
+import { backendFetch } from '../../../lib/backend-client';
 import { useState, useEffect, useRef } from 'react';
 import { useLocale } from '../../../i18n/LocaleContext';
 import {
@@ -17,10 +18,10 @@ import {
   revertCycloneBulletin,
 } from './cyclone-control-client';
 import {
-  addBtnStyle, authorStyle, bodyStyle, dirtyStyle, emptyStyle, entrySideStyle,
-  entryStyle, entryTextareaStyle, ghostBtnActiveStyle, ghostBtnStyle, histDescStyle,
-  histMetaStyle, histRowStyle, revertBtnStyle, rootStyle, rowDelStyle,
+  addBtnStyle, bodyStyle, dirtyStyle, emptyStyle, ghostBtnActiveStyle, ghostBtnStyle,
+  histDescStyle, histMetaStyle, histRowStyle, revertBtnStyle, rootStyle,
 } from './bulletin-styles';
+import { BulletinEntryCard } from './BulletinEntryCard';
 import '../../../styles/components/config-modal.css';
 
 export interface BulletinEntry {
@@ -42,7 +43,7 @@ interface BulletinChange {
 }
 
 /** 本地行：已存在条目带 id；新加行 id 为空 */
-interface Row { id: string; text: string; author: string }
+interface Row { key: string; id: string; text: string; author: string; updatedAt?: number }
 
 type BulletinOp =
   | { op: 'add'; text: string }
@@ -50,7 +51,7 @@ type BulletinOp =
   | { op: 'remove'; id: string };
 
 function toRows(entries: BulletinEntry[]): Row[] {
-  return entries.map(e => ({ id: e.id, text: e.text, author: e.author }));
+  return entries.map(e => ({ key: `entry-${e.id}`, id: e.id, text: e.text, author: e.author, updatedAt: e.updatedAt }));
 }
 
 /** 对比基线与当前行，算出增量操作 */
@@ -72,15 +73,13 @@ function diffOps(base: BulletinEntry[], rows: Row[]): BulletinOp[] {
   return ops;
 }
 
-const clip = (s: string, n = 40) => s.length > n ? s.slice(0, n) + '…' : s;
-
 /** 把一条改动描述成一句话 */
 function describeChange(c: BulletinChange, t: ReturnType<typeof useLocale>['t']): string {
   const prefix = c.revertOf != null ? t('cyclone.bulletin.changeReverted') : '';
-  if (c.before == null && c.after != null) return t('cyclone.bulletin.changeAdd', { prefix, text: clip(c.after.text) });
-  if (c.before != null && c.after == null) return t('cyclone.bulletin.changeRemove', { prefix, text: clip(c.before.text) });
+  if (c.before == null && c.after != null) return t('cyclone.bulletin.changeAdd', { prefix, text: c.after.text });
+  if (c.before != null && c.after == null) return t('cyclone.bulletin.changeRemove', { prefix, text: c.before.text });
   if (c.before != null && c.after != null) return t('cyclone.bulletin.changeUpdate', {
-    prefix, before: clip(c.before.text, 24), after: clip(c.after.text, 24),
+    prefix, before: c.before.text, after: c.after.text,
   });
   return prefix || t('cyclone.bulletin.changeNone');
 }
@@ -109,6 +108,7 @@ export default function BulletinBoard({
   const [showHistory, setShowHistory] = useState(false);
   const [changes, setChanges] = useState<BulletinChange[]>([]);
   const [reverting, setReverting] = useState<number | null>(null);
+  const nextDraftKey = useRef(0);
   // 基线 = 上次从盘加载的条目。非编辑态时随外部刷新跟随；编辑态（脏）时冻结不动
   const baseRef = useRef<BulletinEntry[]>(entries);
 
@@ -125,7 +125,7 @@ export default function BulletinBoard({
 
   async function fetchHistory() {
     try {
-      const r = await fetch(`/api/cyclone/workshop/${workshopId}/bulletin-history`);
+      const r = await backendFetch(`/api/cyclone/workshop/${workshopId}/bulletin-history`);
       if (r.ok) setChanges((await r.json()).changes ?? []);
     } catch { /* ignore */ }
   }
@@ -133,7 +133,7 @@ export default function BulletinBoard({
   // 一次性拉盘刷新（不常驻 SSE）：手动按钮 + 回到窗口时触发。编辑态不覆盖本地改动
   async function doRefresh() {
     try {
-      const r = await fetch(`/api/cyclone/workshop/${workshopId}/bulletin`);
+      const r = await backendFetch(`/api/cyclone/workshop/${workshopId}/bulletin`);
       if (r.ok) {
         const b: { entries: BulletinEntry[] } = await r.json();
         if (!dirty) { baseRef.current = b.entries; setRows(toRows(b.entries)); onSaved?.(b.entries); }
@@ -158,7 +158,10 @@ export default function BulletinBoard({
 
   function updateRow(i: number, text: string) { setRows(rs => rs.map((r, j) => j === i ? { ...r, text } : r)); }
   function removeRow(i: number) { setRows(rs => rs.filter((_, j) => j !== i)); }
-  function addRow() { setRows(rs => [...rs, { id: '', text: '', author: '人类' }]); }
+  function addRow() {
+    const key = `draft-${nextDraftKey.current++}`;
+    setRows(rs => [...rs, { key, id: '', text: '', author: '人类' }]);
+  }
 
   /** 应用服务端返回的 { entries, changes } */
   function applyResult(b: { entries: BulletinEntry[]; changes?: BulletinChange[] }) {
@@ -265,21 +268,9 @@ export default function BulletinBoard({
             {rows.length === 0 && (
               <div style={emptyStyle}>{t('cyclone.bulletin.empty')}</div>
             )}
-            {rows.map((row, i) => (
-              <div key={row.id || `new-${i}`} style={entryStyle}>
-                <textarea
-                  className="config-textarea"
-                  style={entryTextareaStyle}
-                  value={row.text}
-                  onChange={e => updateRow(i, e.target.value)}
-                  placeholder={t('cyclone.bulletin.placeholder')}
-                />
-                <div style={entrySideStyle}>
-                  {row.id && <span style={authorStyle} title={t('cyclone.bulletin.lastAuthor', { author: row.author })}>{row.author === '人类' ? t('cyclone.bulletin.authorHuman') : row.author}</span>}
-                  <button onClick={() => removeRow(i)} style={rowDelStyle} title={t('cyclone.bulletin.deleteEntry')}>×</button>
-                </div>
-              </div>
-            ))}
+            {rows.map((row, i) => <BulletinEntryCard key={row.key} text={row.text} author={row.author}
+              updatedAt={row.updatedAt} isNew={!row.id} onChange={value => updateRow(i, value)}
+              onRemove={() => removeRow(i)} />)}
             <button onClick={addRow} style={addBtnStyle}>{t('cyclone.bulletin.addEntry')}</button>
           </div>
 

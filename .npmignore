@@ -17,6 +17,11 @@
 !/LICENSE
 !/README.md
 !/README.zh-CN.md
+!/LINUX.md
+!/REMOTE.md
+!/.dockerignore
+!/Dockerfile
+!/compose.yaml
 !/build/
 !/data/
 !/docs/
@@ -27,6 +32,7 @@
 !/package.json
 !/public/
 !/server/
+!/scripts/
 !/src/
 !/tsconfig.app.json
 !/tsconfig.json
@@ -34,7 +40,16 @@
 !/vite.config.ts
 
 # Local review artifacts and generated docs never belong in an npm archive.
-/scripts/
+/scripts/*
+!/scripts/install-guide-skill.mjs
+!/scripts/install-guide-skill.test.mjs
+!/scripts/linux/
+/scripts/linux/*
+!/scripts/linux/install.sh
+!/scripts/linux/start.sh
+!/scripts/linux/runtime.sh
+!/scripts/linux/backend.sh
+!/scripts/linux/container-entrypoint.mjs
 /design/
 /prototypes/
 /_release/
@@ -132,25 +147,43 @@
 !/docs/public/images/convection/
 /docs/public/images/convection/*
 !/docs/public/images/convection/meeting-room.webp
+!/docs/public/images/convection/meeting-room-current.png
 !/docs/public/images/cyclone/
 /docs/public/images/cyclone/*
 !/docs/public/images/cyclone/collaboration-structure.webp
+!/docs/public/images/cyclone/collaboration-structure-current.png
+!/docs/public/images/cyclone/seat-detail.png
+!/docs/public/images/cyclone/workshop-console.png
+!/docs/public/images/cyclone/workshop-supervisor.png
 !/docs/public/images/extend/
 /docs/public/images/extend/*
 !/docs/public/images/extend/mcp-server-management.webp
 !/docs/public/images/extend/tool-registry.webp
+!/docs/public/images/extend/mcp-server-current.png
+!/docs/public/images/extend/tool-registry-current.png
 !/docs/public/images/guide/
 /docs/public/images/guide/*
 !/docs/public/images/guide/agent-create.webp
 !/docs/public/images/guide/agent-configuration.webp
 !/docs/public/images/guide/agent-console-overview.webp
 !/docs/public/images/guide/agent-detail.webp
+!/docs/public/images/guide/agent-configuration-current.png
+!/docs/public/images/guide/agent-console-current.png
+!/docs/public/images/guide/agent-create-current.png
+!/docs/public/images/guide/agent-detail-current.png
+!/docs/public/images/guide/provider-current.png
 !/docs/public/images/tide/
 /docs/public/images/tide/*
 !/docs/public/images/tide/task-history.webp
+!/docs/public/images/tide/task-conversation.png
+!/docs/public/images/tide/task-overview.png
+!/docs/public/images/tide/task-schedule.png
 !/docs/public/images/tradewind/
 /docs/public/images/tradewind/*
 !/docs/public/images/tradewind/workflow-canvas.webp
+!/docs/public/images/tradewind/run-history.png
+!/docs/public/images/tradewind/workflow-editor.png
+!/docs/public/images/tradewind/workflow-running.png
 
 # Runtime data is default-deny. Only shipped templates and built-in
 # capabilities are restored below; user-created skills and executors stay out.

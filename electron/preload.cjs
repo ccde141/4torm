@@ -6,9 +6,12 @@
  */
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const remoteClient = process.argv.includes('--4torm-remote-client');
 
 contextBridge.exposeInMainWorld('desktop', {
   isElectron: true,
+  remoteClient,
+  backendMode: remoteClient ? 'remote' : 'local',
 
   /**
    * 返回 File 对象对应的绝对磁盘路径（拖入 / 选择的文件）。
@@ -17,13 +20,14 @@ contextBridge.exposeInMainWorld('desktop', {
    * @returns {string} 绝对路径；失败返回空串
    */
   getPathForFile(file) {
+    if (remoteClient) return '';
     try {
       return webUtils.getPathForFile(file);
     } catch {
       return '';
     }
   },
-  executionSurface: {
+  ...(!remoteClient && { executionSurface: {
     show(executionId, bounds, leaseId) {
       return ipcRenderer.invoke('execution-surface:show', { executionId, bounds, leaseId });
     },
@@ -33,5 +37,5 @@ contextBridge.exposeInMainWorld('desktop', {
     setInputEnabled(executionId, enabled) {
       return ipcRenderer.invoke('execution-surface:set-input-enabled', { executionId, enabled });
     },
-  },
+  } }),
 });

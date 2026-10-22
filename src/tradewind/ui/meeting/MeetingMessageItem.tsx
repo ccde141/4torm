@@ -1,11 +1,17 @@
-import { memo, useState } from 'react';
+import BoundedText from '../../../engine/text-display/BoundedText';
+import { memo, useMemo, useState } from 'react';
 import { renderTextWithCode } from '../../../engine/markdown';
-import { diffStat, lineDiff, type DiffLine } from '../../../utils/diff';
+import { computeDiffView, type DiffLine } from '../../../utils/diff';
 import type { MeetingMessage, ToolStep } from './meeting-client';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { CompactedHistory } from '../CompactedHistory';
+import { isCompactedHistory } from '../compaction-events';
+import type { ToolMediaScope } from '../../../engine/tool-media';
+import ToolResultImages from '../../../components/common/ToolResultImages';
 
 interface Props {
   msg: MeetingMessage;
+  mediaScope?: ToolMediaScope;
 }
 
 function getFileEdit(step: ToolStep): { path: string; before: string; after: string } | null {
@@ -50,14 +56,16 @@ function DiffRows({ lines }: { lines: DiffLine[] }) {
   );
 }
 
-const ToolBubble = memo(function ToolBubble({ step }: { step: ToolStep }) {
+const ToolBubble = memo(function ToolBubble({ step, mediaScope }: { step: ToolStep; mediaScope?: ToolMediaScope }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const status = step.status || 'done';
   const icon = status === 'running' ? '...' : status === 'error' ? 'X' : 'OK';
   const edit = getFileEdit(step);
-  const lines = edit ? lineDiff(edit.before, edit.after) : [];
-  const stat = edit ? diffStat(lines) : { add: 0, del: 0 };
+  // Headers also render while collapsed: bound the LCS before allocating it.
+  const view = useMemo(() => edit ? computeDiffView(edit.before, edit.after) : null,
+    [edit?.before, edit?.after]);
+  const stat = view ?? { add: 0, del: 0 };
 
   return (
     <div className={`tw-meeting-tool tw-meeting-tool--${status}`}>
@@ -70,16 +78,19 @@ const ToolBubble = memo(function ToolBubble({ step }: { step: ToolStep }) {
         {stat.del > 0 && <span style={{ color: '#f85149', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>-{stat.del}</span>}
         {status === 'running' && <span className="tw-meeting-tool__spinner" />}
       </button>
+      {mediaScope && !!step.toolImages?.length && <ToolResultImages images={step.toolImages} scope={mediaScope} />}
       {open && (
         <div className="tw-meeting-tool__detail">
           <div className="tw-meeting-tool__section">
             <span className="tw-meeting-tool__label">{edit ? 'Diff' : t('tradewind.meeting.tools.params')}</span>
-            {edit ? <DiffRows lines={lines} /> : <pre>{JSON.stringify(step.args, null, 2)}</pre>}
+            {view ? (view.tooLarge
+              ? <div>{t('tradewind.chat.diff.tooLarge', { deleted: view.del, added: view.add })}</div>
+              : <DiffRows lines={view.lines} />) : <pre><BoundedText text={(JSON.stringify(step.args, null, 2)) ?? ''} /></pre>}
           </div>
           {step.result !== undefined && (
             <div className="tw-meeting-tool__section">
               <span className="tw-meeting-tool__label">{t('tradewind.meeting.tools.result')}</span>
-              <pre>{step.result || t('tradewind.meeting.tools.noOutput')}</pre>
+              <pre><BoundedText text={(step.result || t('tradewind.meeting.tools.noOutput')) ?? ''} /></pre>
             </div>
           )}
         </div>
@@ -88,8 +99,9 @@ const ToolBubble = memo(function ToolBubble({ step }: { step: ToolStep }) {
   );
 });
 
-export const MeetingMessageItem = memo(function MeetingMessageItem({ msg }: Props) {
+export const MeetingMessageItem = memo(function MeetingMessageItem({ msg, mediaScope }: Props) {
   const { t } = useLocale();
+  if (msg.speaker === '系统' && isCompactedHistory(msg.content)) return <CompactedHistory content={msg.content} />;
   if (msg.speaker === '人类') {
     return (
       <div className="tw-meeting-msg tw-meeting-msg--user">
@@ -114,7 +126,7 @@ export const MeetingMessageItem = memo(function MeetingMessageItem({ msg }: Prop
     <div className="tw-meeting-msg">
       <span className="tw-meeting-msg__speaker">{msg.speaker}</span>
       {msg.reasoning && <ThinkBlock content={msg.reasoning} streaming={msg.streaming} />}
-      {tools.map((step, index) => <ToolBubble key={index} step={step} />)}
+      {tools.map((step, index) => <ToolBubble key={index} step={step} mediaScope={mediaScope} />)}
       {content && (
         <span className="tw-meeting-msg__content">
           {renderTextWithCode(content, `mtg-a-${msg.timestamp}`)}
@@ -135,7 +147,7 @@ const ThinkBlock = memo(function ThinkBlock({ content, streaming = false }: { co
         <span className="tw-meeting-think__arrow">{open ? '▼' : '▶'}</span>
         <span className="tw-meeting-think__label">{t('tradewind.meeting.reasoning')}{streaming && '...'}</span>
       </button>
-      {open && <div className="tw-meeting-think__body">{content}{streaming && '...'}</div>}
+      {open && <div className="tw-meeting-think__body"><BoundedText text={content} followTail={streaming} />{streaming && '...'}</div>}
     </div>
   );
 });

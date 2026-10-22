@@ -11,6 +11,8 @@ import {
 import type { CycloneChangeFeed } from './change-feed.js';
 import { archiveCycloneCompaction } from '../../../engine/cyclone/compaction-archive.js';
 import { buildCycloneChairContext, clearCycloneChairContext } from '../../../engine/cyclone/chair-context.js';
+import { withCycloneContextChange } from './context-compaction-transaction.js';
+import { finishCycloneCompaction } from '../../../engine/cyclone/compaction-progress.js';
 
 export class CycloneChairService {
   constructor(
@@ -29,7 +31,7 @@ export class CycloneChairService {
     );
     const room = await this.rooms.require(workshopId, roomId);
     return { chairAgentId: workshop.chairAgentId, messages: room.chairMessages || [],
-      tokenUsage: room.chairTokenUsage, compactionNotice: room.chairCompactionNotice };
+      tokenUsage: room.chairTokenUsage, compactionNotice: room.chairCompactionNotice, compaction: room.chairCompaction };
   }
 
   async editMessage(workshopId: string, roomId: string, index: number, content?: string) {
@@ -51,35 +53,42 @@ export class CycloneChairService {
     });
   }
 
-  async reset(workshopId: string, roomId: string, mode: 'clear' | 'summary') {
+  async reset(workshopId: string, roomId: string, mode: 'clear' | 'summary', signal?: AbortSignal) {
     this.assertIdle(workshopId, roomId);
     return this.withLock(workshopId, roomId, async () => {
       const status = await this.status(workshopId, roomId);
       const room = await this.rooms.require(workshopId, roomId);
-      const archivePath = mode === 'summary' ? await archiveCycloneCompaction(
-        this.dataDir, workshopId, `chair-${roomId}`, { type: 'cyclone-chair-context-compact',
-          roomId, messages: status.messages, chairMessages: status.messages,
-          publicMessages: room.publicMessages, chairActiveContext: room.chairActiveContext,
-          tokenUsage: room.chairTokenUsage },
-      ) : undefined;
-      const chairSummary = mode === 'summary' ? await this.summarizer.summarize({
-        agentId: status.chairAgentId,
-        kind: 'meeting',
-        subject: `群聊「${room.title}」会长私聊`,
-        messages: toCycloneSummaryMessages(buildCycloneChairContext(room,
-          { role: 'system', content: '' }).slice(1)),
-        onNotice: async notice => {
-          room.chairCompactionNotice = notice;
-          await saveRoom(this.dataDir, workshopId, room);
+      return withCycloneContextChange(mode === 'summary' ? 'compact' : 'reset', signal,
+        async progress => {
+          const current = await this.rooms.require(workshopId, roomId);
+          if (current.chairCompaction?.id === progress.id && current.chairCompaction.type === 'compact-done') return;
+          current.chairCompaction = progress; room.chairCompaction = progress;
+          await saveRoom(this.dataDir, workshopId, current);
           this.changes?.publish(workshopId, 'activity', roomId);
-        },
-      }) : undefined;
-      const result = await resetRoomContext(this.dataDir, workshopId, roomId, {
-        scope: 'chair', chairSummary, preparedArchivePath: archivePath,
-      });
-      this.changes?.publish(workshopId, 'activity', roomId);
-      return { ok: true, archivePath: result.archivePath,
-        archivedChairCount: result.archivedChairCount, summary: mode === 'summary' };
+        }, async started => {
+          const archivePath = mode === 'summary' ? await archiveCycloneCompaction(
+            this.dataDir, workshopId, `chair-${roomId}`, { type: 'cyclone-chair-context-compact', roomId,
+              messages: status.messages, chairMessages: status.messages, publicMessages: room.publicMessages,
+              chairActiveContext: room.chairActiveContext, tokenUsage: room.chairTokenUsage }) : undefined;
+          const chairSummary = mode === 'summary' ? await this.summarizer.summarize({
+            agentId: status.chairAgentId, kind: 'meeting', signal, subject: `群聊「${room.title}」会长私聊`,
+            messages: toCycloneSummaryMessages(buildCycloneChairContext(room, { role: 'system', content: '' }).slice(1)),
+            onNotice: async notice => {
+              room.chairCompactionNotice = notice;
+              await saveRoom(this.dataDir, workshopId, room);
+              this.changes?.publish(workshopId, 'activity', roomId);
+            },
+          }) : undefined;
+          if (mode === 'summary' && !chairSummary?.trim()) throw new Error('压缩摘要为空，原会话保留');
+          signal?.throwIfAborted();
+          const result = await resetRoomContext(this.dataDir, workshopId, roomId, {
+            scope: 'chair', chairSummary, preparedArchivePath: archivePath, signal,
+            compaction: finishCycloneCompaction(started),
+          });
+          this.changes?.publish(workshopId, 'activity', roomId);
+          return { ok: true, archivePath: result.archivePath,
+            archivedChairCount: result.archivedChairCount, summary: mode === 'summary' };
+        });
     });
   }
 

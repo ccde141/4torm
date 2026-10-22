@@ -1,7 +1,8 @@
+import { backendFetch } from '../lib/backend-client';
 const BASE = '/api/tools/exec';
 
-export async function executeTool(tool: string, args: Record<string, string>, agentId?: string): Promise<string> {
-  const res = await fetch(BASE, {
+export async function executeTool(tool: string, args: Record<string, unknown>, agentId?: string): Promise<string> {
+  const res = await backendFetch(BASE, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ tool, args, agentId }),

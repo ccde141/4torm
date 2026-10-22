@@ -49,21 +49,30 @@ export class FileMonsoonSessionRepository {
 
   replace(
     value: unknown, expectedRevision: number, mode: SessionWriteMode,
-    options?: { clearTokenUsage?: boolean },
+    options?: { clearTokenUsage?: boolean; signal?: AbortSignal },
   ): Promise<MonsoonSession> {
     const incoming = parseMonsoonSession(value);
     return this.lock(incoming.agentId, async () => {
+      options?.signal?.throwIfAborted();
       const current = await this.read(incoming.agentId, incoming.id);
       if (!current) throw new Error('会话不存在');
       if (current.revision !== expectedRevision) throw new SessionRevisionConflictError(current);
-      const merged = mode === 'rename' ? rename(current, incoming)
-        : content(current, incoming, options?.clearTokenUsage === true);
-      const saved = { ...merged, revision: current.revision + 1,
+      const merged = mode === 'read' ? readMetadata(current, incoming)
+        : mode === 'rename' ? rename(current, incoming)
+          : content(current, incoming, options?.clearTokenUsage === true);
+      // Read observations must not invalidate the revision held by an active model turn.
+      const saved = { ...merged, revision: current.revision + (mode === 'read' ? 0 : 1),
         messageRevision: current.messageRevision + (mode === 'content' ? 1 : 0),
-        updatedAt: new Date().toISOString() };
+        updatedAt: mode === 'read' ? current.updatedAt : new Date().toISOString() };
       saved.unreadCount = sessionUnread(saved);
-      await this.write(saved);
-      await this.upsertIndex(saved);
+      if (options?.clearTokenUsage) {
+        // A context commit has one point of no return. Prepare its recoverable projection first.
+        await this.upsertIndex(saved);
+        await this.write(saved, options.signal);
+      } else {
+        await this.write(saved, options?.signal);
+        await this.upsertIndex(saved);
+      }
       return saved;
     });
   }
@@ -129,11 +138,11 @@ export class FileMonsoonSessionRepository {
     return ordered.map(summary);
   }
 
-  private async write(session: MonsoonSession): Promise<void> {
+  private async write(session: MonsoonSession, signal?: AbortSignal): Promise<void> {
     const dir = agentSessionsDir(this.dataDir, session.agentId);
     await fs.mkdir(dir, { recursive: true });
     await atomicWriteFile(agentSessionFile(this.dataDir, session.agentId, session.id),
-      JSON.stringify(session, null, 2));
+      JSON.stringify(session, null, 2), signal);
   }
 
   private async upsertIndex(session: MonsoonSession): Promise<void> {
@@ -186,7 +195,8 @@ function content(
   current: MonsoonSession, incoming: MonsoonSession, clearTokenUsage: boolean,
 ): MonsoonSession {
   const merged = { ...incoming, title: current.title, titleManual: current.titleManual,
-    titleState: current.titleState, createdAt: current.createdAt };
+    titleState: current.titleState, createdAt: current.createdAt,
+    lastReadAt: latestReadAt(current.lastReadAt, incoming.lastReadAt) };
   if (clearTokenUsage || current.tokenUsage === undefined) delete merged.tokenUsage;
   else merged.tokenUsage = current.tokenUsage;
   return merged;
@@ -195,6 +205,18 @@ function content(
 function rename(current: MonsoonSession, incoming: MonsoonSession): MonsoonSession {
   return { ...current, title: incoming.title, titleManual: incoming.titleManual,
     titleState: incoming.titleState };
+}
+
+function readMetadata(current: MonsoonSession, incoming: MonsoonSession): MonsoonSession {
+  if (!incoming.lastReadAt || !Number.isFinite(Date.parse(incoming.lastReadAt))) {
+    throw new Error('会话已读时间无效');
+  }
+  return { ...current, lastReadAt: latestReadAt(current.lastReadAt, incoming.lastReadAt) };
+}
+
+function latestReadAt(current: string | undefined, incoming: string | undefined): string | undefined {
+  if (!current || !Number.isFinite(Date.parse(current))) return incoming ?? current;
+  return incoming && Date.parse(incoming) > Date.parse(current) ? incoming : current;
 }
 
 function summary(session: MonsoonSession): MonsoonSession {

@@ -11,6 +11,7 @@ import { saveSession, sessionWorkspace, type ConvectionSessionData } from '../in
 import { convectionRoundBoundaries } from './compaction-context.js';
 import type { ConvectionEventSink } from './stream-events.js';
 import { rememberChairContextBoundary, clearConvectionChairContext, convectionChairBoundaries } from './chair-context.js';
+import { recordConvectionCompaction } from '../application/compaction-progress.js';
 
 interface CallerOptions {
   dataDir: string;
@@ -42,22 +43,26 @@ export function createConvectionCompactionCaller(options: CallerOptions): LLMCal
     boundaries: context => kind === 'public' ? convectionRoundBoundaries(context, session.publicMessages)
       : convectionChairBoundaries(context),
     archive: async (before, reason) => {
-      emit?.({ type: 'compact-start' });
       const file = path.join(sessionWorkspace(dataDir, session.id), 'bak',
         `${Date.now()}-${randomUUID()}-${kind}-compact.json`);
       await fs.mkdir(path.dirname(file), { recursive: true });
       await atomicWriteFile(file, JSON.stringify({ reason, publicMessages: session.publicMessages,
         chairMessages: kind === 'chair' ? session.chairMessages : [], modelMessages: before }));
     },
-    commit: plan => commitCompaction(options, plan),
+    commit: (plan, signal) => commitCompaction(options, plan, signal),
     onNotice: async notice => recordNotice(options, notice),
-    onCompacted: plan => emit?.({ type: 'compact-done', archivedCycles: plan.prefix.length, summaryLength: plan.summary.length }),
+    onProgress: event => recordConvectionCompaction(session, kind, event,
+      next => saveSession(dataDir, next), (_sessionId, _scope, progress) => emit?.(progress)),
   });
 }
 
-async function commitCompaction(options: CallerOptions, plan: CompactionCommit): Promise<void> {
+async function commitCompaction(options: CallerOptions, plan: CompactionCommit, signal?: AbortSignal): Promise<void> {
   const { dataDir, session, kind } = options;
   const next: ConvectionSessionData = { ...session };
+  const field = kind === 'chair' ? 'chairCompactionProgress' : 'compactionProgress';
+  const progress = next[field];
+  if (progress?.type === 'compact-start') next[field] = { ...progress, type: 'compact-done',
+    updatedAt: Date.now(), summaryLength: plan.summary.length, archivedMessages: plan.prefix.length };
   if (kind === 'chair') {
     next.chairActiveContext = structuredClone(plan.messages.slice(1));
     rememberChairContextBoundary(next);
@@ -72,7 +77,7 @@ async function commitCompaction(options: CallerOptions, plan: CompactionCommit):
     clearConvectionChairContext(next);
     next.chairTokenUsage = undefined;
   }
-  await saveSession(dataDir, next);
+  await saveSession(dataDir, next, signal);
   Object.assign(session, next);
 }
 

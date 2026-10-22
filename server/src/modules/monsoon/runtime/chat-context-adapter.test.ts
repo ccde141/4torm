@@ -33,7 +33,8 @@ test('季风上下文适配器保留历史元数据、缺图事实并禁用旧 d
       { role: 'assistant', content: '', toolCalls: [
         { id: 'call-a', name: 'read_file', arguments: '{}' },
       ] },
-      { role: 'tool', content: 'done', toolCallId: 'call-a' },
+      { role: 'tool', content: 'done', toolCallId: 'call-a', toolOk: true,
+        toolImages: [{ id: 'f4f82d73-4c42-4b3f-95b5-a8646ab58d9f', name: 'screen.png', mimeType: 'image/png', size: 8 }] },
     ] },
     spec: {
       dataDir: 'C:/data', agentId: 'agent-a', sessionId: 'session-a', model: agent.model,
@@ -47,6 +48,9 @@ test('季风上下文适配器保留历史元数据、缺图事实并禁用旧 d
   assert.match(context.chatMessages[1]?.content ?? '', /附件不存在：lost\.png/);
   assert.equal(context.chatMessages[2]?.toolCalls?.[0]?.id, 'call-a');
   assert.equal(context.chatMessages[3]?.toolCallId, 'call-a');
+  assert.equal(context.chatMessages[3]?.toolOk, true);
+  assert.deepEqual(context.chatMessages[3]?.toolImages,
+    [{ id: 'f4f82d73-4c42-4b3f-95b5-a8646ab58d9f', name: 'screen.png', mimeType: 'image/png', size: 8 }]);
   assert.equal(promptOptions?.allowDelegate, false);
   assert.equal(promptOptions?.mainAgent, true);
   assert.equal((promptOptions?.toolDefs as { name: string }[])

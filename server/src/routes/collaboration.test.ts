@@ -45,7 +45,7 @@ test('collaboration HTTP exposes manifests and invokes the same bounded Tide mod
   assert.deepEqual(modules.find((item: { id: string }) => item.id === 'tide').methods
     .map((method: { id: string }) => method.id), [
       'readTaskList', 'readTaskDetail', 'readTaskRuns', 'readSessions', 'readSession',
-      'listTasks', 'createTask', 'updateTask', 'toggleTask', 'deleteTask', 'deleteSession', 'runTask', 'compactSession',
+      'listTasks', 'createTask', 'updateTask', 'toggleTask', 'deleteTask', 'deleteSession', 'runTask', 'abortTaskRun', 'compactSession',
     ]);
   assert.ok(modules.find((item: { id: string }) => item.id === 'monsoon').observation);
   assert.ok(modules.find((item: { id: string }) => item.id === 'convection').observation);

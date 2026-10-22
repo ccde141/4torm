@@ -1,3 +1,4 @@
+import BoundedText from '../../../engine/text-display/BoundedText';
 import { useState } from 'react';
 import { useLocale } from '../../../i18n/LocaleContext';
 import type { DisplayBlock } from './messageDisplay';
@@ -50,7 +51,7 @@ function ToolDetail({ label, value }: { label: string; value: string }) {
   return (
     <section className="cyclone-system-tool__detail">
       <div>{label}</div>
-      <pre>{value}</pre>
+      <pre><BoundedText text={(value) ?? ''} /></pre>
     </section>
   );
 }

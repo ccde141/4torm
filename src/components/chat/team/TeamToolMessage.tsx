@@ -1,3 +1,4 @@
+import BoundedText from '../../../engine/text-display/BoundedText';
 import type { ChatMessage } from '../../../types';
 import { useLocale } from '../../../i18n/LocaleContext';
 import { formatTimestamp } from '../../../utils/time';
@@ -24,10 +25,10 @@ export function TeamToolMessage({ toolCall, interrupted, actions, timestamp }: {
   return <div className="chat__message chat__message--assistant chat__message--tool">
     <article className="team-tool-card">
       <header><strong>{titles[toolCall.toolName][english ? 1 : 0]}</strong><small>{status}</small></header>
-      {typeof subject === 'string' && <p className="team-tool-subject">{subject}</p>}
-      {toolCall.status === 'error' && <p role="alert">{toolCall.result}</p>}
+      {typeof subject === 'string' && <p className="team-tool-subject"><BoundedText text={subject} /></p>}
+      {toolCall.status === 'error' && <p role="alert"><BoundedText text={toolCall.result ?? ''} /></p>}
       <details><summary>{english ? 'Operation details' : '操作详情'} · {toolCall.toolName}</summary>
-        <pre>{JSON.stringify(params, null, 2)}</pre><pre>{toolCall.result}</pre>
+        <pre><BoundedText text={(JSON.stringify(params, null, 2)) ?? ''} /></pre><pre><BoundedText text={(toolCall.result) ?? ''} /></pre>
       </details>
       {actions}{timestamp && <small>{formatTimestamp(timestamp)}</small>}
     </article>

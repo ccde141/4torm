@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
 import type { ResolvedOutputBudget } from '../../../engine/collaboration/contracts.js';
+import type { WorkflowGraph } from '../../../engine/tradewind/foundation/types/index.js';
 import { agentRegistryFile } from '../../../services/data-paths.js';
 import type { TradewindDesignPort } from '../application/design-port.js';
 import type { TradewindWorkflowStore } from '../application/workflow-store.js';
@@ -32,6 +33,7 @@ export function createTradewindDesignPort(
     listWorkflows: async (workflowId, budget) => bounded(JSON.stringify(
       workflowId ? workflowAgentView(await store.read(workflowId)) : await store.list(), null, 2,
     ), budget),
+    readWorkflow: workflowId => store.read(workflowId),
     updateWorkflow: (workflowId, args, expectedRevision) =>
       updateWorkflow(dataDir, store, writes, workflowId, args, expectedRevision),
   };
@@ -52,10 +54,38 @@ async function updateWorkflow(
   workflowId: string, input: WorkflowSpec, expectedRevision: string,
 ): Promise<string> {
   const original = await store.read(workflowId);
-  const spec = await validatedSpec(dataDir, input);
-  const graph = buildWorkflowGraph(spec, workflowPositions(original.graph.nodes));
+  const spec = await validatedSpec(dataDir, { ...input,
+    ...(input.orchestration === undefined && original.graph.orchestration !== undefined
+      ? { orchestration: original.graph.orchestration } : {}) });
+  const graph = preserveCanvasState(
+    buildWorkflowGraph(spec, workflowPositions(original.graph.nodes)), original.graph,
+  );
   await writes.save({ workflowId, name: spec.name, graph, expectedRevision });
   return `工作流「${spec.name}」（${workflowId}）已更新，共 ${graph.nodes.length} 个节点。`;
+}
+
+/** Agent edits replace the spec, while unchanged canvas objects retain their presentation and ports. */
+function preserveCanvasState(graph: WorkflowGraph, original: WorkflowGraph): WorkflowGraph {
+  const nodes = new Map(original.nodes.map(node => [node.id, node]));
+  const edges = new Map<string, typeof graph.edges>();
+  const key = (edge: WorkflowGraph['edges'][number]) => JSON.stringify([edge.kind, edge.source, edge.target]);
+  for (const edge of original.edges) {
+    const id = key(edge);
+    if (!edges.has(id)) edges.set(id, []);
+    edges.get(id)!.push(edge);
+  }
+  return { ...graph, nodes: graph.nodes.map(node => {
+    const previous = nodes.get(node.id);
+    if (previous?.type !== node.type) return node;
+    const preservedConfig = Object.fromEntries(Object.entries(previous.config)
+      .filter(([key]) => !['agentId', 'role', 'deliveryDelaySec', 'initialEnvelope',
+        'chairAgentId', 'participantNodeIds', 'content', 'archiveName'].includes(key)));
+    return { ...previous, ...node, config: { ...preservedConfig, ...node.config } };
+  }), edges: graph.edges.map(edge => {
+    const previous = edges.get(key(edge))?.shift();
+    if (!previous) return edge;
+    return { ...previous };
+  }) };
 }
 
 async function validatedSpec(

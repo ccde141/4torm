@@ -3,9 +3,31 @@ import type { ChatMessage } from '../../../types';
 import { requirePanelIdentity } from '../stream/panel-identity';
 import type { ExecutionIdentity } from '../hooks/execution-visibility';
 import type { ProviderUsage } from '../token-usage';
+import type { CompactionEvent } from '../compaction-events';
+
+export interface NodeHistoryMessage {
+  role: string;
+  content: string;
+  reasoningContent?: string;
+  messageId?: string;
+  toolSteps?: ChatMessage['toolSteps'];
+}
+
+/** Snapshot and post-compaction events share the same public conversation projection. */
+export function projectNodeHistoryMessages(messages: NodeHistoryMessage[], nextId: () => string,
+  timestamp = new Date().toISOString()): ChatMessage[] {
+  return messages.filter(message => ['user', 'assistant', 'system'].includes(message.role)).map(message => ({
+    id: message.messageId ?? nextId(),
+    role: message.role as 'user' | 'assistant' | 'system',
+    content: message.content,
+    reasoningContent: message.reasoningContent,
+    ...(message.toolSteps ? { toolSteps: message.toolSteps } : {}),
+    timestamp,
+  }));
+}
 
 export interface NodeSnapshot<TEvent extends { type: string }> {
-  messages: Array<{ role: string; content: string; reasoningContent?: string }>;
+  messages: NodeHistoryMessage[];
   roundLog: Array<TEvent & { seq?: number }>;
   busy: boolean;
   roundSource?: 'human' | 'envelope' | 'contact' | null;
@@ -16,6 +38,7 @@ export interface NodeSnapshot<TEvent extends { type: string }> {
   executionId?: string;
   tokenUsage?: { calls: number; latest: ProviderUsage | null };
   compactionNotice?: string;
+  compaction?: CompactionEvent;
 }
 
 type RoundSource = 'human' | 'envelope' | 'contact' | null;

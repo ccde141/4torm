@@ -35,5 +35,6 @@ export async function createRoomDispatchRecord(
     targetSeatId,
     targetSeatTitle: opts.targetSeatTitle,
     task: opts.task,
+    deliveryDeferred: true,
   });
 }

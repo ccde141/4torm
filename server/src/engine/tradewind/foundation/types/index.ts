@@ -18,6 +18,7 @@ export type {
   OutputKind,
   EdgeKind,
   WorkflowMode,
+  WorkflowOrchestration,
   WorkflowNode,
   WorkflowEdge,
   WorkflowGraph,

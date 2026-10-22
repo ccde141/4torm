@@ -1,11 +1,12 @@
 import type { ChatMessage, NativeContextMessage, ToolStep } from '../../types';
 import { normalizeDelegateProgressAtToolBoundary } from './delegate-progress';
+import type { ToolImageRef } from '../tool-media';
 
 type DelegateEvent =
   | { type: 'delegate-start'; delegateId: string; task: string }
   | { type: 'delegate-token'; delegateId: string; content: string }
-  | { type: 'delegate-tool-call'; delegateId: string; tool: string; args?: Record<string, string> }
-  | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok?: boolean }
+  | { type: 'delegate-tool-call'; delegateId: string; tool: string; args?: Record<string, unknown> }
+  | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok?: boolean; toolImages?: ToolImageRef[] }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string };
 
 type AnswerEvent = {
@@ -109,7 +110,8 @@ function updateDelegateStep(step: ToolStep, event: Exclude<DelegateEvent, { type
       const isLastPending = subStep.tool === event.tool
         && subStep.result == null
         && !all.slice(index + 1).some(later => later.tool === event.tool && later.result == null);
-      return isLastPending ? { ...subStep, result: event.result, ok: event.ok } : subStep;
+      return isLastPending ? { ...subStep, result: event.result, ok: event.ok,
+        ...(event.toolImages?.length ? { toolImages: event.toolImages } : {}) } : subStep;
     });
     return { ...step, delegate: { ...delegate, steps: subSteps } };
   }

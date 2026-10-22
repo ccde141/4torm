@@ -6,6 +6,7 @@ import type {
 } from './chat-preparation.js';
 
 interface TurnRuntimePort {
+  trackPreparation<T>(work: () => Promise<T>): Promise<T>;
   get(sessionId: string): MonsoonTurn | undefined;
   getWaitingRunId(sessionId: string, runner: MonsoonTurn): string | undefined;
   claimResume(sessionId: string, runner: MonsoonTurn): boolean;
@@ -45,7 +46,11 @@ export interface MonsoonTurnExecution {
 export class MonsoonTurnService {
   constructor(private readonly ports: MonsoonTurnServicePorts) {}
 
-  async start(input: MonsoonChatInput & { inputRunId: string }): Promise<MonsoonTurnExecution> {
+  start(input: MonsoonChatInput & { inputRunId: string }): Promise<MonsoonTurnExecution> {
+    return this.ports.runtime.trackPreparation(() => this.prepareStart(input));
+  }
+
+  private async prepareStart(input: MonsoonChatInput & { inputRunId: string }): Promise<MonsoonTurnExecution> {
     const prepared = await this.ports.chat.prepare(input);
     const execution = await this.begin(prepared.agentId, input.sessionId, input.inputRunId,
       prepared.runner);
@@ -60,7 +65,14 @@ export class MonsoonTurnService {
     };
   }
 
-  async resume(
+  resume(
+    sessionId: string, runId: string, answer: string, expectedWaitingRunId: string,
+  ): Promise<MonsoonTurnExecution> {
+    return this.ports.runtime.trackPreparation(() =>
+      this.prepareResume(sessionId, runId, answer, expectedWaitingRunId));
+  }
+
+  private async prepareResume(
     sessionId: string, runId: string, answer: string, expectedWaitingRunId: string,
   ): Promise<MonsoonTurnExecution> {
     const runner = this.ports.runtime.get(sessionId);

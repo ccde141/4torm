@@ -15,14 +15,16 @@ test('text tool prompt teaches one strict JSON tool-call envelope', () => {
   }]);
 
   assert.match(prompt, /"type":"tool_call"/);
-  assert.match(prompt, /"name":"read_file"/);
+  assert.match(prompt, /### read_file/);
   assert.match(prompt, /"arguments":\{\}/);
   assert.match(prompt, /filePath: string \[必填\]/);
   assert.doesNotMatch(prompt, /参数 JSON Schema/);
   assert.match(prompt, /普通自然语言/);
   assert.doesNotMatch(prompt, /<action|<answer|<think|<result/);
-  const example = prompt.split('例如调用 read_file：\n')[1]?.split('\n\n规则：')[0];
+  assert.doesNotMatch(prompt, /"name":"read_file","arguments":\{\}/);
+  const example = prompt.match(/```json\n([\s\S]*?)\n```/)?.[1];
   assert.equal(parseTextToolResponse(example ?? '').kind, 'tool-call');
+  assert.match(prompt, /实际参数按所选工具的定义填写/);
 });
 
 test('text tool prompt retains nested schema requirements without long descriptions dominating context', () => {

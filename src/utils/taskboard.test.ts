@@ -37,3 +37,12 @@ test('browser receives the authoritative board when its revision is stale', asyn
     (error: unknown) => error instanceof TaskboardConflictError && error.current?.revision === 5,
   );
 });
+
+test('browser preserves its board by rejecting explicit backend storage failure', async t => {
+  for (const status of [200, 500]) {
+    t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({
+      result: '任务板数据损坏，原文件已保留，请修复后再继续。', ok: false, errorCode: 'TASKBOARD_STORE_CORRUPT',
+    }), { status, headers: { 'Content-Type': 'application/json' } }));
+    await assert.rejects(saveTaskboard('agent-a-session-1', board), /任务板数据损坏/);
+  }
+});

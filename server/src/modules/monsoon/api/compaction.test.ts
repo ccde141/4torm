@@ -11,6 +11,7 @@ import { CollaborationRouter } from '../../../engine/collaboration/router.js';
 import { MonsoonCompactionService } from '../application/compaction-service.js';
 import { monsoonCompactionHandler, monsoonCompactionManifest } from './compaction-port.js';
 import { summarizeMonsoonCompaction } from '../runtime/compaction-summarizer.js';
+import type { CompactionProgress } from '../../../engine/shared/compaction/index.js';
 
 test('compaction route streams progress and commits through the revisioned repository', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-compact-api-'));
@@ -45,9 +46,56 @@ test('compaction route streams progress and commits through the revisioned repos
   assert.equal(response.statusCode, 200);
   assert.match(response.body, /"type":"token","content":"sum"/);
   assert.match(response.body, /"type":"done"/);
+  const events = response.body.split('\n').filter(line => line.startsWith('data:'))
+    .map(line => JSON.parse(line.slice(5).trim()));
+  assert.deepEqual(events.map(event => event.type),
+    ['start', 'compact-start', 'token', 'token', 'compact-done', 'done']);
+  assert.equal(events[1].id, events[4].id);
   const saved = await sessions.get('agent-a', 'session-a');
   assert.equal(saved?.messages[8]?.content, 'summary');
   assert.equal(saved?.revision, 2);
+});
+
+test('manual lifecycle publishes completion after commit and preserves originals after an aborted summary', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-compact-lifecycle-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const sessions = new FileMonsoonSessionRepository(dataDir);
+  const timestamp = new Date().toISOString();
+  const original = await sessions.create({ id: 'session-manual', agentId: 'agent-manual', agentName: 'A',
+    title: 'task', model: 'p:m', systemPrompt: '', createdAt: timestamp, updatedAt: timestamp,
+    messages: [{ id: 'user', role: 'user', content: 'original facts'.repeat(1000), timestamp },
+      { id: 'answer', role: 'assistant', content: 'verified answer'.repeat(1000), timestamp }] });
+  const order: string[] = [];
+  const observed: Array<{ type: string; revision: number; content?: string }> = [];
+  const service = new MonsoonCompactionService(dataDir, sessions, async () => {
+    order.push('summary'); return 'verified facts';
+  }, async () => 16_000);
+  const prepared = await service.prepare({ agentId: original.agentId, sessionId: original.id });
+  await prepared.run({ signal: new AbortController().signal, onChunk: () => {},
+    onProgress: async progress => {
+      order.push(progress.type);
+      const stored = (await sessions.get(original.agentId, original.id))!;
+      observed.push({ type: progress.type, revision: stored.revision, content: stored.messages.at(-1)?.content });
+    } });
+  assert.deepEqual(order, ['compact-start', 'summary', 'compact-done']);
+  assert.deepEqual(observed, [
+    { type: 'compact-start', revision: original.revision, content: original.messages.at(-1)?.content },
+    { type: 'compact-done', revision: original.revision + 1, content: 'verified facts' },
+  ]);
+  const beforeAbort = await sessions.get(original.agentId, original.id);
+  const abort = new AbortController();
+  const interrupted = new MonsoonCompactionService(dataDir, sessions, async ({ onChunk }) => {
+    onChunk('provisional summary'); abort.abort(); return 'ok';
+  }, async () => 16_000);
+  const pending = await interrupted.prepare({ agentId: original.agentId, sessionId: original.id });
+  const progress: CompactionProgress[] = [];
+  await assert.rejects(pending.run({ signal: abort.signal, onChunk: () => {},
+    onProgress: event => { progress.push(event); } }), { name: 'AbortError' });
+  assert.deepEqual(progress.map(event => event.type), ['compact-start', 'compact-failed']);
+  assert.equal(progress[1].aborted, true);
+  assert.deepEqual(await sessions.get(original.agentId, original.id), beforeAbort);
+  const retry = await interrupted.prepare({ agentId: original.agentId, sessionId: original.id });
+  retry.dispose?.();
 });
 
 async function captureStreamingSummaryProvider(dataDir: string, content = '海桥 Q72；索引未完成。', finishReason = 'stop') {

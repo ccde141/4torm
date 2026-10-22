@@ -20,15 +20,19 @@ import {
 test('manual meeting compact and chair reset retain scoped identities through the central router', async () => {
   const originalFetch = globalThis.fetch;
   const calls: Array<Record<string, unknown>> = [];
+  const signals: Array<AbortSignal | null | undefined> = [];
   globalThis.fetch = async (input, init) => {
     assert.equal(String(input), '/api/collaboration/invoke');
     calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    signals.push(init?.signal);
     return Response.json({ ok: true });
   };
   try {
-    await compactConvectionContext('conv-a');
-    await compactConvectionChairContext('conv-a');
-    await resetConvectionChairContext('conv-a');
+    const controller = new AbortController();
+    await compactConvectionContext('conv-a', controller.signal);
+    await compactConvectionChairContext('conv-a', controller.signal);
+    await resetConvectionChairContext('conv-a', controller.signal);
+    assert.deepEqual(signals, [controller.signal, controller.signal, controller.signal]);
     assert.deepEqual(calls.map(call => [call.method, call.input]), [
       ['compactContext', { sessionId: 'conv-a' }],
       ['compactChairContext', { sessionId: 'conv-a' }],

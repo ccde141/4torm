@@ -1,15 +1,22 @@
 import type { KeyboardEventHandler, RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { renderTextWithCode } from '../../../engine/markdown';
+import BoundedText from '../../../engine/text-display/BoundedText';
 import type { MeetingChairMessage, MeetingMessage, MeetingStatus } from './meeting-client';
 import { MeetingMessageItem } from './MeetingMessageItem';
 import { useLocale } from '../../../i18n/LocaleContext';
 import type { ProviderUsage } from '../token-usage';
 import { CompactionNotice } from '../../../components/common/CompactionNotice';
+import { CompactionStatus } from '../../../components/common/CompactionStatus';
+import type { CompactionActivity } from '../../../components/common/compaction-activity';
+import { CompactedHistory } from '../CompactedHistory';
+import { isCompactedHistory } from '../compaction-events';
+import type { ToolMediaScope } from '../../../engine/tool-media';
 
 export type MeetingView = 'public' | 'chair';
 
 interface MeetingPanelViewProps {
+  mediaScope?: ToolMediaScope;
   nodeLabel: string;
   visible: boolean;
   activeView: MeetingView;
@@ -24,8 +31,10 @@ interface MeetingPanelViewProps {
   setChairInput: (value: string) => void;
   busy: boolean;
   chairBusy: boolean;
+  chairHistoryRequest?: boolean;
   error: string | null;
   compactionNotice?: string | null;
+  compactions?: Partial<Record<MeetingView, CompactionActivity>>;
   isOpening: boolean;
   isEnded: boolean;
   publicStateLabel: string;
@@ -43,6 +52,7 @@ interface MeetingPanelViewProps {
   onSendPublic: () => void;
   onSendChair: () => void;
   onAbortRound: () => void;
+  onAbortChair?: () => void;
   onPublicKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;
   onChairKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;
 }
@@ -124,9 +134,10 @@ export default function MeetingPanelView(props: MeetingPanelViewProps) {
                 </div>
               )}
               <div className="tw-meeting-panel__messages" ref={publicContainerRef}>
-                {publicMsgs.map((message, index) => <MeetingMessageItem key={index} msg={message} />)}
+                {publicMsgs.map((message, index) => <MeetingMessageItem key={index} msg={message} mediaScope={props.mediaScope} />)}
                 <div ref={publicEndRef} />
               </div>
+              <CompactionStatus activity={props.compactions?.public} />
               <div className={`tw-meeting-panel__status${busy ? ' tw-meeting-panel__status--active' : ''}`}><span className="tw-meeting-panel__status-pulse" />{publicStateLabel}</div>
               <div className="tw-meeting-panel__input-area"><div className="tw-meeting-panel__composer">
                 <textarea className="tw-meeting-panel__input" value={publicInput} onChange={(event) => setPublicInput(event.target.value)} onKeyDown={onPublicKeyDown} placeholder={isEnded ? t('tradewind.meeting.endedPlaceholder') : isOpening ? t('tradewind.meeting.openingPlaceholder') : t('tradewind.meeting.publicPlaceholder')} disabled={busy || isOpening || isEnded} rows={1} />
@@ -140,18 +151,22 @@ export default function MeetingPanelView(props: MeetingPanelViewProps) {
             <section className="tw-meeting-panel__conversation tw-meeting-panel__conversation--chair" hidden={activeView !== 'chair'} aria-hidden={activeView !== 'chair'}>
               <div className="tw-meeting-panel__conversation-head"><div><span className="tw-meeting-panel__section-title">{t('tradewind.meeting.chairTitle')}</span><small>{t('tradewind.meeting.chairSubtitle')}</small></div></div>
               <div className="tw-meeting-panel__messages" ref={chairContainerRef}>
-                {chairMsgs.filter(message => message.role !== 'system').map((message, index) => (
+                {chairMsgs.filter(message => message.role !== 'system' || isCompactedHistory(message.content)).map((message, index) => message.role === 'system' && isCompactedHistory(message.content)
+                  ? <CompactedHistory key={index} content={message.content} /> : (
                   <div key={index} className={`tw-meeting-msg tw-meeting-msg--${message.role}`}>
-                    {message.reasoningContent && <details className="tw-meeting-think" open={!message.content}><summary className="tw-meeting-think__trigger">{t('tradewind.meeting.reasoning')}</summary><div className="tw-meeting-think__body">{message.reasoningContent}</div></details>}
+                    {message.reasoningContent && <details className="tw-meeting-think" open={!message.content}><summary className="tw-meeting-think__trigger">{t('tradewind.meeting.reasoning')}</summary><div className="tw-meeting-think__body"><BoundedText text={message.reasoningContent} followTail={chairBusy} /></div></details>}
                     <span className="tw-meeting-msg__content">{renderTextWithCode(message.content, `chair-${index}`)}</span>
                   </div>
                 ))}
                 <div ref={chairEndRef} />
               </div>
+              <CompactionStatus activity={props.compactions?.chair} />
               <div className={`tw-meeting-panel__status${chairBusy ? ' tw-meeting-panel__status--active' : ''}`}><span className="tw-meeting-panel__status-pulse" />{chairStateLabel}</div>
               <div className="tw-meeting-panel__input-area"><div className="tw-meeting-panel__composer">
                 <textarea className="tw-meeting-panel__input" value={chairInput} onChange={(event) => setChairInput(event.target.value)} onKeyDown={onChairKeyDown} placeholder={isOpening ? t('tradewind.meeting.openingPlaceholder') : t('tradewind.meeting.chairPlaceholder')} rows={1} disabled={isOpening || chairBusy} />
-                <button className="tw-meeting-panel__send" onClick={onSendChair} disabled={isOpening || chairBusy || !chairInput.trim()}>{t('tradewind.meeting.send')}</button>
+                {props.chairHistoryRequest
+                  ? <button className="tw-meeting-panel__stop" onClick={props.onAbortChair} aria-label={t('tradewind.meeting.stopRound')}>■</button>
+                  : <button className="tw-meeting-panel__send" onClick={onSendChair} disabled={isOpening || chairBusy || !chairInput.trim()}>{t('tradewind.meeting.send')}</button>}
               </div></div>
             </section>
           </div>

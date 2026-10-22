@@ -98,5 +98,8 @@ function streamTurn(
     replyAcceptance: execution.replyAcceptance,
     open: () => initSSE(raw, req.raw.httpVersionMajor, req.headers.origin),
     execute: execution.execute,
+  }).catch(error => {
+    raw.destroy();
+    console.error('[monsoon] 轮次生命周期失败:', error);
   });
 }

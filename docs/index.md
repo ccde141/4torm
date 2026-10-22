@@ -21,22 +21,22 @@ hero:
 
 features:
   - icon: 🌬️
-    title: 季风 · 对话
+    title: 季风 · 智能体对话
     details: 与单个 Agent 持续对话，调用工具、组织工作队，或跨功能区安排协作并跟进执行
     link: /modes/chat
     linkText: 进入引导
   - icon: 🌀
-    title: 对流 · 会议室
+    title: 对流 · 多方会议室
     details: 让多个 Agent 围绕同一议题依次发言，由会议助理在侧栏提供私聊建议
     link: /modes/convection
     linkText: 进入引导
   - icon: 🏢
-    title: 气旋 · 工作室
+    title: 气旋 · 团队协作室
     details: 用可视化协作结构组织固定工位，既能单独交流，也能按需组成群聊
     link: /modes/cyclone
     linkText: 进入引导
   - icon: 🔀
-    title: 信风 · 工作流
+    title: 信风 · 工作流编排
     details: 在可视化画布上编排节点，让任务和结果按照连线逐步流转
     link: /modes/tradewind
     linkText: 进入引导

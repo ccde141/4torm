@@ -57,6 +57,8 @@ Agents may also create complete directories under `data/skills/`, containing at 
 
 New skills appear in agent settings but are not added to existing agents automatically; future agents select currently installed skills by default.
 
+External guide-only packages can be installed with `npm run skill:install -- --source <skill-directory-or-SKILL.md> --data-dir <data-directory>`. The installer generates metadata while retaining the guide and supported relative file references. It refuses to overwrite an existing skill, does not execute scripts or install dependencies, and grants no external tools. Skills using MCP still require a connected service and explicit agent tool selection. See the [visual desktop example](./mcp#visual-desktop-example).
+
 Removal requires confirmation. If an agent still references the skill, deletion is rejected with the relevant agents listed. Remove those assignments first.
 
 ## Skill Tools
@@ -95,11 +97,11 @@ Definitions are resolved in this order:
 3. data/skills/*/tools.json
 ```
 
-Framework and global custom tools therefore cannot be overridden by a skill. When a definition comes from a skill, its executor lookup is:
+Framework and global custom tools therefore cannot be overridden by a skill. Executor locations depend on the definition's source:
 
 ```text
-1. data/skills/{skillId}/executors/{fileName}.js
-2. data/tools/executors/{fileName}.js
+Skill tool: data/skills/{skillId}/executors/{fileName}.js
+Global tool: data/tools/executors/{fileName}.js
 ```
 
 ### Differences from Global Tools
@@ -110,7 +112,7 @@ Framework and global custom tools therefore cannot be overridden by a skill. Whe
 | Independent | Yes | No, belongs to a skill |
 | UI | Tools page | Skills page with tool badge |
 | Definition merge | Direct registration | Indirect through skill |
-| Executor priority | Global | Skill-local first |
+| Executor location | Global | Skill-local |
 
 ## Assign Skills to Agents
 
@@ -182,6 +184,6 @@ You are a Git operations specialist. Use git_status and git_diff to inspect the 
 3. Summarize the changes
 ```
 
-After assignment, the agent receives its selected global tools plus `git_status` and `git_diff`, deduplicated automatically. At execution time, a tool definition originating from this skill uses the skill-local executor first and the global executor directory as a fallback.
+After assignment, the agent receives its selected global tools plus `git_status` and `git_diff`, deduplicated automatically. A tool originating from this skill uses its own executor. Missing skill executors fail explicitly instead of falling back to a global script with the same name.
 
 See [Tools](./tools) for every tool-definition field.

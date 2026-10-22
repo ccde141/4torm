@@ -1,12 +1,14 @@
 import type { ChildProcess } from 'node:child_process';
 import spawn from 'cross-spawn';
+import { StringDecoder } from 'node:string_decoder';
 import { McpBaseClient } from './mcp-base-client.js';
 import type { JsonRpcRequest, JsonRpcResponse, McpStdioConfig } from './mcp-types.js';
+import { createMcpRequestScope } from './mcp-request.js';
+import { readMcpRpcResponse } from './mcp-rpc.js';
 
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
-  timer: ReturnType<typeof setTimeout>;
 }
 
 export class McpStdioClient extends McpBaseClient {
@@ -14,11 +16,14 @@ export class McpStdioClient extends McpBaseClient {
   private nextId = 1;
   private pending = new Map<number, PendingRequest>();
   private buffer = '';
+  private decoder = new StringDecoder('utf8');
 
   constructor(private readonly config: McpStdioConfig) { super(); }
   get name(): string { return this.config.name; }
 
   protected async openTransport(): Promise<void> {
+    this.buffer = '';
+    this.decoder = new StringDecoder('utf8');
     const env = { ...process.env, ...this.config.env };
     const proc = spawn(this.config.command, this.config.args, {
       stdio: ['pipe', 'pipe', 'pipe'], env, cwd: this.config.cwd,
@@ -27,8 +32,8 @@ export class McpStdioClient extends McpBaseClient {
     this.proc = proc;
     proc.stdout!.on('data', chunk => this.onData(Buffer.from(chunk)));
     proc.stderr!.on('data', chunk => this.emit('log', `[${this.name}] ${String(chunk).trim()}`));
-    proc.on('exit', code => this.onExit(code));
-    proc.on('error', error => this.onProcessError(error));
+    proc.on('exit', code => { if (this.proc === proc) this.onExit(code); });
+    proc.on('error', error => { if (this.proc === proc) this.onProcessError(error); });
     await new Promise(resolve => setTimeout(resolve, 100));
   }
 
@@ -40,17 +45,30 @@ export class McpStdioClient extends McpBaseClient {
     this.rejectAll(new Error('MCP client disconnected'));
   }
 
-  protected request(method: string, params: Record<string, unknown>): Promise<unknown> {
+  protected request(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     const id = this.nextId++;
     const message: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
+    const scope = createMcpRequestScope(signal);
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const cleanup = () => {
+        scope.signal.removeEventListener('abort', abort);
+        scope.dispose();
+      };
+      const abort = () => {
         this.pending.delete(id);
-        reject(new Error(`MCP request timeout: ${method} (id=${id})`));
-      }, 30_000);
-      this.pending.set(id, { resolve, reject, timer });
+        cleanup();
+        reject(scope.signal.reason);
+        try { this.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: id } }); }
+        catch { /* The disconnected transport cannot receive cancellation. */ }
+      };
+      if (scope.signal.aborted) { cleanup(); reject(scope.signal.reason); return; }
+      scope.signal.addEventListener('abort', abort, { once: true });
+      this.pending.set(id, {
+        resolve: value => { cleanup(); resolve(value); },
+        reject: error => { cleanup(); reject(error); },
+      });
       try { this.send(message); }
-      catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error as Error); }
+      catch (error) { this.pending.delete(id); cleanup(); reject(error as Error); }
     });
   }
 
@@ -64,7 +82,7 @@ export class McpStdioClient extends McpBaseClient {
   }
 
   private onData(chunk: Buffer): void {
-    this.buffer += chunk.toString();
+    this.buffer += this.decoder.write(chunk);
     let newline = this.buffer.indexOf('\n');
     while (newline >= 0) {
       const line = this.buffer.slice(0, newline).replace(/\r$/, '').trim();
@@ -83,10 +101,12 @@ export class McpStdioClient extends McpBaseClient {
     if (message.id === undefined) return;
     const pending = this.pending.get(message.id);
     if (!pending) return;
-    clearTimeout(pending.timer);
     this.pending.delete(message.id);
-    if (message.error) pending.reject(new Error(`MCP error [${message.error.code}]: ${message.error.message}`));
-    else pending.resolve(message.result);
+    try {
+      const rpc = readMcpRpcResponse(message, message.id);
+      if (rpc.error) pending.reject(new Error(`MCP error [${rpc.error.code}]: ${rpc.error.message}`));
+      else pending.resolve(rpc.result);
+    } catch (error) { pending.reject(error as Error); }
   }
 
   private onExit(code: number | null): void {
@@ -102,7 +122,6 @@ export class McpStdioClient extends McpBaseClient {
 
   private rejectAll(error: Error): void {
     for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
       pending.reject(error);
     }
     this.pending.clear();

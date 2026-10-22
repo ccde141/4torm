@@ -45,6 +45,7 @@ test('closing /api/tools/exec aborts the running executor', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-tool-route-abort-'));
   const dataDir = path.join(root, 'data');
   const marker = path.join(root, 'aborted.txt');
+  const ready = path.join(root, 'ready.txt');
   await installAbortProbe(dataDir);
 
   const app = Fastify();
@@ -65,8 +66,10 @@ test('closing /api/tools/exec aborts the running executor', async (t) => {
     headers: { 'content-type': 'application/json' },
   });
   req.on('error', () => {});
-  req.end(JSON.stringify({ tool: 'abort_probe', args: { marker } }));
-  setTimeout(() => req.destroy(), 30);
+  req.end(JSON.stringify({ tool: 'abort_probe', args: { marker, ready } }));
+  // 只在执行器已经登记 abort 监听后断开，不能把尚未开始的请求当作运行中取消。
+  try { await waitForFile(ready, 'executor did not become ready for cancellation'); }
+  finally { req.destroy(); }
 
   await waitForFile(marker);
   assert.equal(await fs.readFile(marker, 'utf8'), 'aborted');
@@ -217,11 +220,12 @@ async function installAbortProbe(dataDir: string): Promise<void> {
   }]));
   await fs.writeFile(path.join(executorDir, 'abort_probe.js'), `
     import fs from 'node:fs/promises';
-    export default (_args, ctx) => new Promise((resolve) => {
+    export default (_args, ctx) => new Promise((resolve, reject) => {
       ctx.signal.addEventListener('abort', async () => {
         await fs.writeFile(_args.marker, 'aborted');
         resolve('aborted');
       }, { once: true });
+      fs.writeFile(_args.ready, 'ready').catch(reject);
     });
   `);
 }
@@ -236,13 +240,15 @@ async function waitForObservation(ownerId: string, command: string) {
   throw new Error('observed command did not start');
 }
 
-async function waitForFile(filePath: string): Promise<void> {
+async function waitForFile(
+  filePath: string, failure = 'executor did not observe the disconnected request',
+): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
     try { await fs.access(filePath); return; } catch {}
     await new Promise(resolve => setTimeout(resolve, 20));
   }
-  throw new Error('executor did not observe the disconnected request');
+  throw new Error(failure);
 }
 
 async function installExecutionModeTool(dataDir: string, name: string, executionMode: 'sync' | 'detachable'): Promise<void> {

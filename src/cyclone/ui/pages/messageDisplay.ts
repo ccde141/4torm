@@ -1,3 +1,8 @@
+import { isCompactionHistory } from '../../../components/common/compaction-history';
+import { projectContactResult, type ContactResultDisplay } from './contact-result';
+import { isCancelledToolResult } from './tool-result-status';
+import type { ToolImageRef } from '../../../engine/tool-media';
+
 /**
  * 气旋消息展示适配 —— 把后端 ContextMessage 存储格式转成季风式展示消息
  *
@@ -10,20 +15,21 @@
  * 故重载时这两类卡片只能从 toolCalls 重建为 {任务/目标 + 结果} 折叠态（无 steps）。
  */
 
-export type DelegateStep = { type: 'tool'; tool: string; args?: Record<string, unknown>; result?: string; ok?: boolean };
+export type DelegateStep = { type: 'tool'; tool: string; args?: Record<string, unknown>; result?: string; ok?: boolean; toolImages?: ToolImageRef[] };
 
 export type DisplayBlock =
-  | { kind: 'tool'; tool: string; args: Record<string, unknown>; result?: string; status: 'running' | 'success' | 'error' }
+  | { kind: 'tool'; tool: string; args: Record<string, unknown>; result?: string; toolImages?: ToolImageRef[]; status: 'running' | 'success' | 'error' }
   | { kind: 'delegate'; id: string; task: string; summary?: string; content?: string; steps: DelegateStep[]; status: 'running' | 'success' | 'error' }
-  | { kind: 'contact'; id: string; target: string; message: string; reply?: string; status: 'running' | 'success' | 'error' }
+  | ({ kind: 'contact'; id: string; target: string; message: string } & ContactResultDisplay)
   | { kind: 'ask'; question: string; options?: string[]; answered: boolean; reply?: string };
 
 export interface DisplayMessage {
   id: string;
   sourceIndex?: number;
   role: 'user' | 'assistant' | 'system';
-  kind?: 'dispatch-receipt';
+  kind?: 'dispatch-receipt' | 'supervisor-information';
   dispatchId?: string;
+  sourceTitle?: string;
   /** 文本气泡内容（已剥工具调用标签） */
   content: string;
   /** 已落库的原生思考流，仅用于折叠展示。 */
@@ -37,9 +43,14 @@ interface StoredMsg {
   content: string;
   toolCalls?: Array<{ id: string; name: string; arguments: string }>;
   toolCallId?: string;
+  toolOk?: boolean;
+  toolImages?: ToolImageRef[];
   kind?: 'dispatch-receipt';
   dispatchId?: string;
   reasoning?: string;
+  supervisorInboxId?: string;
+  supervisorSourceTitle?: string;
+  supervisorInternal?: boolean;
 }
 
 function parseArgs(raw: string): Record<string, unknown> {
@@ -62,15 +73,43 @@ function parseDelegateResult(result: string | undefined): { summary: string; sta
   return { summary: result, status: 'success' };
 }
 
-/** contact 结果是否成功（与 seat-runner 判定一致） */
-function contactOk(result: string | undefined): 'running' | 'success' | 'error' {
-  if (result === undefined) return 'running';
-  if (isCancelledToolResult(result)) return 'error';
-  return (result.startsWith('联络失败') || result.startsWith('联络被系统拒绝') || result.includes('正忙')) ? 'error' : 'success';
-}
-
 function displayText(content: string): string {
   return (content || '').trim();
+}
+
+function textEnvelope(content: string): Record<string, unknown> | undefined {
+  const source = /^```(?:tool_call|json)[ \t]*\r?\n([\s\S]*?)\r?\n```$/i.exec(content.trim())?.[1] ?? content;
+  try {
+    const value = JSON.parse(source);
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : undefined;
+  } catch { return undefined; }
+}
+
+/** Normalize contact and framework image results from text ReAct, leaving stored indices intact. */
+function textContactMessages(stored: StoredMsg[]): StoredMsg[] {
+  const messages = stored.slice();
+  const ids = new Set(stored.flatMap(message => message.toolCalls?.map(call => call.id) ?? []));
+  for (const [index, message] of stored.entries()) {
+    if (message.role !== 'assistant' || message.toolCalls?.length) continue;
+    const call = textEnvelope(message.content);
+    const next = stored[index + 1];
+    const result = next?.role === 'user' ? textEnvelope(next.content) : undefined;
+    const imageResult = !!next?.toolImages?.length && result?.type === 'tool_result'
+      && result.name === call?.name && typeof result.content === 'string' && typeof result.ok === 'boolean';
+    if (call?.type !== 'tool_call' || typeof call.name !== 'string'
+      || (call.name !== 'contact' && call.name !== 'contact_read' && !imageResult)
+      || !call.arguments || typeof call.arguments !== 'object' || Array.isArray(call.arguments)) continue;
+    let id = `text-contact:${index}`;
+    while (ids.has(id)) id += ':';
+    ids.add(id);
+    messages[index] = { ...message, content: '', toolCalls: [{ id, name: call.name,
+      arguments: JSON.stringify(call.arguments) }] };
+    if (result?.type === 'tool_result' && result.name === call.name
+      && typeof result.content === 'string' && typeof result.ok === 'boolean') {
+      messages[index + 1] = { ...next, role: 'tool', content: result.content, toolCallId: id, toolOk: result.ok };
+    }
+  }
+  return messages;
 }
 
 /**
@@ -79,16 +118,33 @@ function displayText(content: string): string {
  * - assistant 的 toolCalls → 卡片块（delegate/contact/普通工具分流），结果从匹配 toolCallId 的 tool 消息取
  * - 普通文本作为气泡
  */
-export function contextToDisplay(stored: StoredMsg[], askFallback = '需要你的确认'): DisplayMessage[] {
+export function contextToDisplay(stored: StoredMsg[], askFallback = '需要你的确认', options: { supervisor?: boolean } = {}): DisplayMessage[] {
+  stored = textContactMessages(stored);
   // 先建 toolCallId → result 索引
   const resultMap = new Map<string, string>();
+  const resultOk = new Map<string, boolean>();
+  const resultImages = new Map<string, ToolImageRef[]>();
+  const contactResults = new Map<string, string>();
   for (const m of stored) {
-    if (m.role === 'tool' && m.toolCallId) resultMap.set(m.toolCallId, m.content);
+    if (m.role !== 'tool' || !m.toolCallId) continue;
+    resultMap.set(m.toolCallId, m.content);
+    if (m.toolOk !== undefined) resultOk.set(m.toolCallId, m.toolOk);
+    if (m.toolImages?.length) resultImages.set(m.toolCallId, m.toolImages);
+    const contact = projectContactResult(m.content, m.toolOk);
+    if (contact.communicationId) contactResults.set(contact.communicationId, m.content);
   }
 
   const out: DisplayMessage[] = [];
   let seq = 0;
   for (const [sourceIndex, m] of stored.entries()) {
+    if (options.supervisor && m.supervisorInternal === true) continue;
+    if (options.supervisor && m.supervisorInboxId) {
+      const header = /^\[协作信息：([^；\n]+)[^\n]*\]\r?\n/.exec(m.content);
+      out.push({ id: `d${seq++}`, sourceIndex, role: 'system', kind: 'supervisor-information',
+        sourceTitle: m.supervisorSourceTitle || header?.[1],
+        content: header ? m.content.slice(header[0].length) : m.content });
+      continue;
+    }
     if (m.role === 'tool') continue;
     if (m.role === 'system') {
       const text = displayText(m.content);
@@ -99,7 +155,7 @@ export function contextToDisplay(stored: StoredMsg[], askFallback = '需要你�
         });
         continue;
       }
-      if (text.includes('重置前') || text.includes('摘要')) {
+      if (isCompactionHistory(text)) {
         out.push({ id: `d${seq++}`, sourceIndex, role: 'system', content: text });
       }
       continue;
@@ -113,7 +169,10 @@ export function contextToDisplay(stored: StoredMsg[], askFallback = '需要你�
           return { kind: 'delegate', id: tc.id, task: String(args.task ?? ''), summary, steps: [], status };
         }
         if (tc.name === 'contact') {
-          return { kind: 'contact', id: tc.id, target: String(args.target ?? ''), message: String(args.message ?? ''), reply: result, status: contactOk(result) };
+          const initial = projectContactResult(result, resultOk.get(tc.id));
+          const latest = initial.communicationId ? contactResults.get(initial.communicationId) : undefined;
+          return { kind: 'contact', id: tc.id, target: String(args.target ?? ''), message: String(args.message ?? ''),
+            ...projectContactResult(latest ?? result, latest ? undefined : resultOk.get(tc.id)) };
         }
         if (tc.name === 'ask') {
           let options: string[] | undefined;
@@ -124,7 +183,7 @@ export function contextToDisplay(stored: StoredMsg[], askFallback = '需要你�
           // result 即用户答案（resume 落库的 role:'tool' 配对）；undefined 表示仍挂起
           return { kind: 'ask', question: String(args.question ?? askFallback), options, answered: result !== undefined, reply: result };
         }
-        return { kind: 'tool', tool: tc.name, args, result, status: statusOf(result) };
+        return { kind: 'tool', tool: tc.name, args, result, toolImages: resultImages.get(tc.id), status: statusOf(result) };
       });
       const text = displayText(m.content);
       // 跳过纯工具调用且无文本的空壳（卡片已单列），但保留有文本或有卡片的
@@ -139,4 +198,3 @@ export function contextToDisplay(stored: StoredMsg[], askFallback = '需要你�
   }
   return out;
 }
-import { isCancelledToolResult } from './tool-result-status';

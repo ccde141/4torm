@@ -1,12 +1,16 @@
 import type { ModuleMethodHandler, ModuleMethodManifest } from '../../../engine/collaboration/contracts.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
-import type { TradewindReadPort } from '../application/read-port.js';
+import type { TradewindReadPort, TradewindReadIdentity } from '../application/read-port.js';
 
 const names = ['readNodeStatuses', 'readNodeStatus', 'readNodeSnapshot', 'readMeetingStatus'];
 
 export function tradewindReadManifests(): ModuleMethodManifest[] {
   return [...names.map((id): ModuleMethodManifest => ({ id, kind: 'query', permission: 'observe',
-    audiences: ['human', 'internal'], inputSchema: { type: 'object', additionalProperties: false },
+    audiences: ['human', 'internal'], inputSchema: { type: 'object', additionalProperties: false,
+      ...(id === 'readNodeStatuses' ? {} : { required: ['nodeId'] }), properties: {
+        executionId: { type: 'string', minLength: 1 }, workflowId: { type: 'string', minLength: 1 },
+        ...(id === 'readNodeStatuses' ? {} : { nodeId: { type: 'string', minLength: 1 } }),
+      } },
     output: { mode: 'inline' },
   })), { id: 'readAgentNodeConversation', kind: 'query', permission: 'observe',
     audiences: ['agent', 'internal'],
@@ -39,10 +43,10 @@ export function tradewindReadManifests(): ModuleMethodManifest[] {
 
 export function tradewindReadHandlers(port: TradewindReadPort): Record<string, ModuleMethodHandler> {
   return {
-    readNodeStatuses: { parse: empty, invoke: async () => port.nodeStatuses() },
-    readNodeStatus: node(nodeId => port.nodeStatus(nodeId)),
-    readNodeSnapshot: node(nodeId => port.nodeSnapshot(nodeId)),
-    readMeetingStatus: node(nodeId => port.meetingStatus(nodeId)),
+    readNodeStatuses: { parse: parseIdentity, invoke: async (_context, input) => port.nodeStatuses(input as TradewindReadIdentity) },
+    readNodeStatus: node((nodeId, identity) => port.nodeStatus(nodeId, identity)),
+    readNodeSnapshot: node((nodeId, identity) => port.nodeSnapshot(nodeId, identity)),
+    readMeetingStatus: node((nodeId, identity) => port.meetingStatus(nodeId, identity)),
     readAgentNodeConversation: {
       parse: parseConversation,
       invoke: (_context, input) => port.agentNodeConversation(input as ReturnType<typeof parseConversation>),
@@ -87,22 +91,25 @@ function identifier(value: unknown): string {
   return value;
 }
 
-function node(invoke: (nodeId: string) => Promise<unknown> | unknown): ModuleMethodHandler {
+function node(invoke: (nodeId: string, identity: TradewindReadIdentity) => Promise<unknown> | unknown): ModuleMethodHandler {
   return { parse: parseNode,
-    invoke: async (_context, input) => invoke((input as { nodeId: string }).nodeId) };
+    invoke: async (_context, input) => {
+      const { nodeId, ...identity } = input as ReturnType<typeof parseNode>;
+      return invoke(nodeId, identity);
+    } };
 }
 
-function empty(value: unknown): Record<string, never> {
+function parseIdentity(value: unknown): TradewindReadIdentity {
   const item = record(value);
-  if (Object.keys(item).length) throw invalid();
-  return {};
+  if (Object.keys(item).some(key => key !== 'executionId' && key !== 'workflowId')) throw invalid();
+  return { ...(item.executionId === undefined ? {} : { executionId: identifier(item.executionId) }),
+    ...(item.workflowId === undefined ? {} : { workflowId: identifier(item.workflowId) }) };
 }
 
-function parseNode(value: unknown): { nodeId: string } {
+function parseNode(value: unknown): { nodeId: string } & TradewindReadIdentity {
   const item = record(value);
-  if (Object.keys(item).some(key => key !== 'nodeId') || typeof item.nodeId !== 'string' ||
-    !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(item.nodeId)) throw invalid();
-  return { nodeId: item.nodeId };
+  const { nodeId, ...identity } = item;
+  return { nodeId: identifier(nodeId), ...parseIdentity(identity) };
 }
 
 function record(value: unknown): Record<string, unknown> {

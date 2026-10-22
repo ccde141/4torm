@@ -1,3 +1,4 @@
+import BoundedText from '../../engine/text-display/BoundedText';
 import { useState, type ReactNode } from 'react';
 import { renderTextWithCode } from '../../engine/markdown';
 import BoundedMessageText from './BoundedMessageText';
@@ -49,12 +50,12 @@ export default function StructuredMessage({ tools, agent, answer, msgId, timesta
               <div className="stmsg-tool-detail">
                 <div className="stmsg-tool-section">
                   <span className="stmsg-tool-label">{translate('chat.tool.params')}</span>
-                  <pre>{JSON.stringify(tool.args, null, 2)}</pre>
+                  <pre><BoundedText text={(JSON.stringify(tool.args, null, 2)) ?? ''} /></pre>
                 </div>
                 {tool.result && (
                   <div className="stmsg-tool-section">
                     <span className="stmsg-tool-label">{translate('chat.tool.result')}</span>
-                    <pre>{tool.result}</pre>
+                    <pre><BoundedText text={(tool.result) ?? ''} /></pre>
                   </div>
                 )}
               </div>

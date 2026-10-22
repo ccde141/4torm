@@ -1,10 +1,9 @@
-import fs from 'node:fs/promises';
-import { normalizeSandboxLevel } from '../../../services/execution-context.js';
-import { agentRegistryFile } from '../../../services/data-paths.js';
+import { loadAgent } from '../../../engine/shared/agent-loader.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
-import { parseTideInterval } from '../domain/schedule.js';
+import { parseTideSchedule } from '../domain/schedule.js';
 import type { TideTask } from '../domain/task.js';
 import { readSeasonSession } from '../sessions/session-store.js';
+import type { SeasonSessionPort } from '../sessions/season-session-port.js';
 import type { TideTaskService, CreateTideTaskInput } from './task-service.js';
 
 const MIN_INTERVAL_MS = 60_000;
@@ -30,7 +29,8 @@ interface AgentInfo { name: string; sandboxLevel: string; canWriteFiles: boolean
 type AutomationResult = { result: string; pending: PendingAutomation };
 
 export class TideAgentAutomationService {
-  constructor(private readonly dataDir: string, private readonly tasks: TideTaskService) {}
+  constructor(private readonly dataDir: string, private readonly tasks: TideTaskService,
+    private readonly seasonSessions?: SeasonSessionPort) {}
 
   async create(actorId: string, raw: Record<string, unknown>): Promise<AutomationResult> {
     const args = extract(raw);
@@ -39,13 +39,13 @@ export class TideAgentAutomationService {
     const name = requiredText(args.name, 'name');
     const schedule = requiredText(args.schedule, 'schedule');
     const prompt = requiredText(args.prompt, 'prompt');
-    if (parseTideInterval(schedule) < MIN_INTERVAL_MS) fail('间隔不能小于 60 秒（every 1m 起）');
+    validateSchedule(schedule);
     const pushMode = pushModeOf(args.pushMode);
     if (pushMode === 'designated' && boolean(args.selfLoop, false)) {
       fail('指定季风会话不能与自循环同时使用');
     }
     const targetSessionId = optionalText(args.targetSessionId, 'targetSessionId');
-    await assertTargetSession(this.dataDir, agentId, pushMode, targetSessionId);
+    await assertTargetSession(this.seasonSessions, agentId, pushMode, targetSessionId);
     const input: CreateTideTaskInput = {
       name, schedule, prompt, agentId, pushMode,
       ...(targetSessionId ? { targetSessionId } : {}),
@@ -63,12 +63,14 @@ export class TideAgentAutomationService {
     const taskId = requiredText(args.taskId, 'taskId');
     const current = (await this.tasks.detail(taskId)).task;
     const patch: Partial<TideTask> = {};
+    if (args.agentId !== undefined) {
+      patch.agentId = requiredText(args.agentId, 'agentId');
+      await requireAgent(this.dataDir, patch.agentId);
+    }
     for (const field of ['name', 'schedule', 'prompt'] as const) {
       if (args[field] !== undefined) patch[field] = requiredText(args[field], field);
     }
-    if (patch.schedule && parseTideInterval(patch.schedule) < MIN_INTERVAL_MS) {
-      fail('间隔不能小于 60 秒（every 1m 起）');
-    }
+    if (patch.schedule) validateSchedule(patch.schedule);
     if (args.repeatCount !== undefined) patch.repeatCount = integer(args.repeatCount, 'repeatCount', -1);
     if (args.windowN !== undefined) patch.windowN = integer(args.windowN, 'windowN', 1);
     if (args.selfLoop !== undefined) patch.selfLoop = boolean(args.selfLoop, false);
@@ -78,10 +80,21 @@ export class TideAgentAutomationService {
     if (args.targetSessionId !== undefined) {
       patch.targetSessionId = requiredText(args.targetSessionId, 'targetSessionId');
     }
-    await assertTargetSession(this.dataDir, current.agentId,
-      patch.pushMode ?? current.pushMode, patch.targetSessionId ?? current.targetSessionId);
+    if (!patch.agentId || patch.agentId === current.agentId) {
+      await assertTargetSession(this.seasonSessions, current.agentId,
+        patch.pushMode ?? current.pushMode, patch.targetSessionId ?? current.targetSessionId);
+    }
     const task = await this.tasks.update(taskId, patch);
     return output('updated', task, await requireAgent(this.dataDir, task.agentId));
+  }
+}
+
+function validateSchedule(schedule: string): void {
+  let plan: ReturnType<typeof parseTideSchedule>;
+  try { plan = parseTideSchedule(schedule); }
+  catch { fail('schedule 必须是有效间隔（如 every 5m）或每天时分（如 daily 08:00）'); }
+  if (plan.kind === 'interval' && plan.intervalMs < MIN_INTERVAL_MS) {
+    fail('间隔不能小于 60 秒（every 1m 起）；每天定时使用 daily HH:mm');
   }
 }
 
@@ -127,28 +140,25 @@ function pushModeOf(value: unknown): 'accumulate' | 'designated' {
 }
 
 async function assertTargetSession(
-  dataDir: string, agentId: string, mode: 'accumulate' | 'designated', sessionId?: string,
+  port: SeasonSessionPort | undefined, agentId: string, mode: 'accumulate' | 'designated', sessionId?: string,
 ): Promise<void> {
   if (sessionId && !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(sessionId)) {
     fail('targetSessionId 无效');
   }
   if (mode === 'designated' && (!sessionId
-    || !(await readSeasonSession(dataDir, agentId, sessionId)))) {
+    || !(await readSeasonSession(port, agentId, sessionId)))) {
     fail('指定的季风会话不存在或不属于目标 Agent');
   }
 }
 
 async function requireAgent(dataDir: string, agentId: string): Promise<AgentInfo> {
-  const raw = await fs.readFile(agentRegistryFile(dataDir), 'utf8');
-  const registry = JSON.parse(raw) as Record<string, {
-    name?: string; config?: { sandboxLevel?: string; tools?: string[] };
-  }>;
-  const agent = registry[agentId];
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(agentId)) fail('agentId 无效');
+  const agent = await loadAgent(dataDir, agentId);
   if (!agent) fail(`Agent 不存在：${agentId}`);
   return {
     name: agent.name || agentId,
-    sandboxLevel: normalizeSandboxLevel(agent.config?.sandboxLevel),
-    canWriteFiles: (agent.config?.tools ?? []).some(tool => WRITE_TOOLS.includes(tool)),
+    sandboxLevel: agent.sandboxLevel,
+    canWriteFiles: agent.tools.some(tool => WRITE_TOOLS.includes(tool)),
   };
 }
 

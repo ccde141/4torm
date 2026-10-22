@@ -1,7 +1,10 @@
+import type { ToolImageRef } from '../../../engine/tool-media';
+
 interface StoredToolCall {
   tool: string;
-  args: Record<string, string>;
+  args: Record<string, unknown>;
   result?: string;
+  toolImages?: ToolImageRef[];
 }
 
 interface StoredConvectionMessage {

@@ -11,6 +11,7 @@ import {
   subscribeDispatchChanges,
   updateDispatch,
 } from './dispatch-store.js';
+import { activateDispatch, claimDispatch, withdrawExpiredDispatch } from './dispatch-admission.js';
 
 test('派发创建和终态提交后通知，重复创建与活动进度不通知', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-dispatch-notify-'));
@@ -106,4 +107,50 @@ test('相同投递身份不能悄悄改写任务内容', async (t) => {
   );
   const [saved] = await listWorkshopDispatches(dataDir, 'work-a');
   assert.equal(saved.task, '实现接口');
+});
+
+test('接入与期限撤回竞争同一落盘槽，撤回后旧快照不能复活', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dispatch-admission-race-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const input = { workshopId: 'work-a', sourceKind: 'seat' as const, sourceRoomId: '',
+    sourceSeatId: 'seat-a', sourceSeatTitle: '调度', sourceRoundSeq: 0,
+    dispatchOrder: 0, targetSeatId: 'seat-b', targetSeatTitle: '核验', task: '核验' };
+  const accepted = await createDispatch(dataDir, { ...input, sourceTurnId: 'accepted' });
+  const deadline = Date.parse(accepted.admissionDeadlineAt!);
+  const [claim, afterExpiry] = await Promise.all([
+    claimDispatch(dataDir, 'work-a', accepted.id, deadline - 1),
+    withdrawExpiredDispatch(dataDir, 'work-a', accepted.id, deadline + 1),
+  ]);
+  assert.equal(claim.claimed, true);
+  assert.equal(afterExpiry?.status, 'running');
+  assert.equal(afterExpiry?.delivered, true);
+  const expired = await createDispatch(dataDir, { ...input, sourceTurnId: 'expired' });
+  const expiredDeadline = Date.parse(expired.admissionDeadlineAt!);
+  const [withdrawn, lateClaim] = await Promise.all([
+    withdrawExpiredDispatch(dataDir, 'work-a', expired.id, expiredDeadline),
+    claimDispatch(dataDir, 'work-a', expired.id, expiredDeadline - 1),
+  ]);
+  assert.equal(withdrawn?.errorCode, 'CYCLONE_TARGET_BUSY');
+  assert.equal(withdrawn?.delivered, false);
+  assert.equal(withdrawn?.decisionState, 'not_applicable');
+  assert.equal(lateClaim.claimed, false);
+  const revived = await updateDispatch(dataDir, 'work-a', expired.id, { status: 'running', delivered: true });
+  assert.equal(revived?.status, 'failed');
+  assert.equal(revived?.delivered, false);
+});
+
+test('群聊未放行时不计入接入期限，放行后从允许投递时刻计30秒', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dispatch-deferred-admission-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const item = await createDispatch(dataDir, { workshopId: 'work-a', sourceRoomId: 'room-a',
+    sourceSeatId: 'seat-a', sourceSeatTitle: '调度', sourceTurnId: 'turn-a', sourceRoundSeq: 1,
+    dispatchOrder: 0, targetSeatId: 'seat-b', targetSeatTitle: '核验', task: '核验', deliveryDeferred: true });
+  const later = Date.parse(item.createdAt) + 120_000;
+  assert.equal(item.admissionDeadlineAt, undefined);
+  assert.equal((await withdrawExpiredDispatch(dataDir, 'work-a', item.id, later))?.status, 'queued');
+  assert.equal((await claimDispatch(dataDir, 'work-a', item.id, later)).claimed, false);
+  const ready = await activateDispatch(dataDir, 'work-a', item.id, later);
+  assert.equal(Date.parse(ready!.admissionDeadlineAt!) - later, 30_000);
+  const repeated = await activateDispatch(dataDir, 'work-a', item.id, later + 20_000);
+  assert.equal(repeated?.admissionDeadlineAt, ready?.admissionDeadlineAt, '重复kick不得延长期限');
 });

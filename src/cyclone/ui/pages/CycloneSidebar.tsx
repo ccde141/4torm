@@ -2,6 +2,7 @@ import { useLocale } from '../../../i18n/LocaleContext';
 import type { CycloneView, RoomSummary, SeatSummary, WorkshopSummary } from './cyclone-page-model';
 import type { WorkspaceEntityStatus, WorkspaceStatusProjection } from './cyclone-workspace-status';
 import { PresenceItems } from '../../../components/common/PresenceItems';
+import { useConsoleText } from '../console/console-text';
 
 interface Props {
   workshops: WorkshopSummary[];
@@ -15,6 +16,7 @@ interface Props {
   onDeleteWorkshop(id: string, title: string): void;
   onOpenWorkspace(): void;
   onCreateSeat(): void;
+  onOpenSupervisor(): void;
   onOpenSeat(seat: SeatSummary): void;
   onEditSeat(id: string): void;
   onDeleteSeat(id: string, title: string): void;
@@ -25,6 +27,7 @@ interface Props {
 
 export function CycloneSidebar(props: Props) {
   const { t } = useLocale();
+  const text = useConsoleText();
   return <aside style={leftPanelStyle}>
     <SectionHead label={t('cyclone.shell.workshops')} addLabel={t('cyclone.shell.createWorkshop')} onAdd={props.onCreateWorkshop} />
     <PresenceItems items={props.workshops} getKey={workshop => workshop.id}
@@ -39,6 +42,10 @@ export function CycloneSidebar(props: Props) {
       <span className="cyclone__workspace-btn-icon">↗</span><span>{t('cyclone.shell.workspace')}</span>
     </button>}
     {props.activeWid && <>
+      <button type="button" onClick={props.onOpenSupervisor} style={{ ...itemRow(props.view?.kind === 'supervisor'),
+        marginTop: 'var(--space-3)', width: '100%', cursor: 'pointer' }}>
+        <span aria-hidden="true">◇</span><Ellipsis>{text('工作室主管', 'Workshop supervisor')}</Ellipsis>
+      </button>
       <SectionHead label={t('cyclone.shell.seats')} addLabel={t('cyclone.shell.addSeat')} onAdd={props.onCreateSeat} />
       <PresenceItems key={`seats:${props.activeWid}`} items={props.seats}
         getKey={seat => seat.id} scope="seats" render={seat =>
@@ -102,5 +109,5 @@ const sectionLabelStyle: React.CSSProperties = { fontSize: 'var(--text-xs)', fon
 const itemMainStyle: React.CSSProperties = { minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', padding: 0, border: 'none', background: 'transparent', color: 'inherit', font: 'inherit', textAlign: 'left', cursor: 'pointer' };
 const deleteButtonStyle: React.CSSProperties = { width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: 'var(--color-text-tertiary)', border: 'none', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-md)', cursor: 'pointer', lineHeight: 1, flexShrink: 0, padding: 0 };
 function itemRow(active: boolean): React.CSSProperties {
-  return { padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', color: active ? 'var(--color-accent)' : 'var(--color-text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', border: `1px solid ${active ? 'var(--color-accent)' : 'transparent'}`, background: active ? 'var(--color-accent-subtle)' : undefined, fontWeight: active ? 600 : undefined, transition: 'background var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo)', display: 'flex', alignItems: 'center', gap: 4 };
+  return { padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-sm)', color: active ? 'var(--color-accent)' : 'var(--color-text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', border: `1px solid ${active ? 'var(--color-accent)' : 'transparent'}`, background: active ? 'var(--color-accent-subtle)' : 'transparent', fontWeight: active ? 600 : undefined, transition: 'background var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo)', display: 'flex', alignItems: 'center', gap: 4 };
 }

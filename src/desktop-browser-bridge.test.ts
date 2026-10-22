@@ -9,6 +9,9 @@ const { createDesktopBrowserBridge, createDesktopBrowserBridgeServer } = require
   createDesktopBrowserBridge(deps: { token: string; registry: unknown }): { handle(input: unknown): Promise<unknown> };
   createDesktopBrowserBridgeServer(deps: { bridge: { handle(input: unknown): Promise<unknown> }; endpoint: string }): { listen(): Promise<void>; close(): Promise<void> };
 };
+const { createDesktopBrowserEndpoint } = require('../electron/desktop-browser-endpoint.cjs') as {
+  createDesktopBrowserEndpoint(): { endpoint: string; secure(): void; cleanup(): void };
+};
 
 test('Electron hides its directly managed server process window without a shell', () => {
   const main = fs.readFileSync('electron/main.cjs', 'utf8');
@@ -59,9 +62,10 @@ test('desktop browser bridge preserves event arrays instead of encoding them as 
 });
 
 test('desktop browser bridge server rejects malformed JSON and closes cleanly', async () => {
-  const endpoint = `\\\\.\\pipe\\4torm-bridge-test-${process.pid}-${Date.now()}`;
+  const address = createDesktopBrowserEndpoint();
+  const { endpoint } = address;
   const server = createDesktopBrowserBridgeServer({
-    endpoint,
+    ...address,
     bridge: { handle: async () => ({ id: 'request-a', ok: true, result: { frame: '' } }) },
   });
   await server.listen();

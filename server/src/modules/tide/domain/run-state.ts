@@ -1,4 +1,6 @@
 import { parseTideUsageProgress, type TideUsageProgress } from './token-usage.js';
+import type { CompactionProgress } from '../../../engine/shared/compaction/index.js';
+import { parseTideCompactionProgress } from './compaction-progress.js';
 
 export const TIDE_RUN_STATUSES = [
   'queued', 'running', 'completed', 'failed', 'aborted', 'crashed',
@@ -22,6 +24,9 @@ export interface TideRunState {
   agentId?: string;
   usage?: TideUsageProgress;
   compactionNotice?: string;
+  compaction?: CompactionProgress;
+  compactionSessionId?: string;
+  compactionSourceRevision?: number;
 }
 
 export function parseTideRunState(value: unknown): TideRunState {
@@ -45,6 +50,14 @@ export function parseTideRunState(value: unknown): TideRunState {
   copyOptionalText(state, value, 'errorMessage');
   copyOptionalText(state, value, 'agentId');
   copyOptionalText(state, value, 'compactionNotice');
+  copyOptionalText(state, value, 'compactionSessionId');
+  if (value.compaction !== undefined) state.compaction = parseTideCompactionProgress(value.compaction);
+  if (value.compactionSourceRevision !== undefined) {
+    if (!Number.isSafeInteger(value.compactionSourceRevision) || Number(value.compactionSourceRevision) < 0) {
+      throw new Error('invalid compactionSourceRevision');
+    }
+    state.compactionSourceRevision = Number(value.compactionSourceRevision);
+  }
   if (value.usage !== undefined) state.usage = parseTideUsageProgress(value.usage);
   return state;
 }
@@ -56,7 +69,7 @@ function copyOptionalTimestamp(
 }
 
 function copyOptionalText(
-  target: TideRunState, source: Record<string, unknown>, key: 'errorCode' | 'errorMessage' | 'agentId' | 'compactionNotice',
+  target: TideRunState, source: Record<string, unknown>, key: 'errorCode' | 'errorMessage' | 'agentId' | 'compactionNotice' | 'compactionSessionId',
 ): void {
   if (source[key] !== undefined) target[key] = text(source[key], key);
 }

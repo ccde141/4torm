@@ -39,11 +39,11 @@ export function cycloneRoomHandlers(rooms: CycloneRoomService): Record<string, M
     deleteRoomMessage: handler(parseDelete, input => rooms.editMessage(
       input.workshopId, input.roomId, input.index, undefined, input.expectedMessage,
     )),
-    resetRoomContext: handler(parseReset, input => rooms.reset(
-      input.workshopId, input.roomId, input.options,
+    resetRoomContext: handler(parseReset, (input, signal) => rooms.reset(
+      input.workshopId, input.roomId, input.options, signal,
     )),
-    compactRoomContext: handler(parseCompact, input => rooms.reset(
-      input.workshopId, input.roomId, { mode: 'summary', scope: input.scope },
+    compactRoomContext: handler(parseCompact, (input, signal) => rooms.reset(
+      input.workshopId, input.roomId, { mode: 'summary', scope: input.scope }, signal,
     )),
     deleteRoom: handler(parseIdentityValue, input => rooms.remove(input.workshopId, input.roomId)),
   };
@@ -54,8 +54,8 @@ function method(id: string, permission: ModuleMethodManifest['permission']): Mod
     inputSchema: { type: 'object', additionalProperties: false }, output: { mode: 'inline' } };
 }
 
-function handler<T>(parse: (value: unknown) => T, invoke: (value: T) => Promise<unknown>): ModuleMethodHandler {
-  return { parse, invoke: async (_context, input) => invoke(input as T) };
+function handler<T>(parse: (value: unknown) => T, invoke: (value: T, signal?: AbortSignal) => Promise<unknown>): ModuleMethodHandler {
+  return { parse, invoke: async (context, input) => invoke(input as T, context.signal) };
 }
 
 function parseCreate(value: unknown): CreateRoomInput {

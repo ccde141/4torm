@@ -1,3 +1,4 @@
+import { backendFetch } from '../lib/backend-client';
 import type { Agent, ChatMessage } from '../types';
 import { getAgents } from './agent';
 import { nameSessionOnce, requestSessionTitle, withSessionWrite } from './session-naming';
@@ -61,7 +62,7 @@ export async function createSession(agent: Agent, model?: string): Promise<ChatS
 }
 
 export async function getSessionsByAgent(agentId: string): Promise<ChatSession[]> {
-  const response = await fetch(`${BASE}/${encodeURIComponent(agentId)}`);
+  const response = await backendFetch(`${BASE}/${encodeURIComponent(agentId)}`);
   const result = await responseJson<ChatSession[]>(response, '读取会话列表失败');
   for (const session of result) remember(session);
   return result;
@@ -76,12 +77,18 @@ export async function getSession(id: string, knownAgentId?: string): Promise<Cha
 /** Read a fresh hydrated snapshot without changing the cached session. */
 export async function getSessionSnapshot(id: string, knownAgentId?: string): Promise<ChatSession | null> {
   const agentId = knownAgentId ?? sessions.get(id)?.agentId ?? agentIdFromSessionId(id);
-  const response = await fetch(sessionUrl(agentId, id));
-  if (response.status === 404) return null;
-  const wire = await responseJson<ChatSession & { pendingRuns?: PendingMonsoonRun[] }>(
-    response, '读取会话失败');
+  const wire = await readSessionWire(agentId, id);
+  if (!wire) return null;
   const { pendingRuns = [], ...stored } = wire;
   return hydratePendingRuns(stored, pendingRuns);
+}
+
+async function readSessionWire(agentId: string, id: string): Promise<
+  (ChatSession & { pendingRuns?: PendingMonsoonRun[] }) | null
+> {
+  const response = await backendFetch(sessionUrl(agentId, id));
+  if (response.status === 404) return null;
+  return responseJson(response, '读取会话失败');
 }
 
 export function getCachedMessages(sessionId: string): ChatMessage[] | undefined {
@@ -89,9 +96,16 @@ export function getCachedMessages(sessionId: string): ChatMessage[] | undefined 
 }
 
 export async function markSessionRead(sessionId: string): Promise<void> {
-  const session = await getSession(sessionId);
-  if (!session) return;
-  await saveSession({ ...session, lastReadAt: new Date().toISOString() });
+  const agentId = sessions.get(sessionId)?.agentId ?? agentIdFromSessionId(sessionId);
+  await withSessionWrite(agentId, async () => {
+    const wire = await readSessionWire(agentId, sessionId);
+    if (!wire) return;
+    const { pendingRuns = [], ...stored } = wire;
+    // Reading is metadata: pending-run projections must never become another persisted copy.
+    const saved = await replace({ ...stored, messages: [], lastReadAt: new Date().toISOString() },
+      stored.revision ?? 0, 'read');
+    remember(hydratePendingRuns(saved, pendingRuns));
+  });
 }
 
 export async function saveSession(
@@ -111,7 +125,7 @@ export async function saveSession(
 export async function deleteSession(id: string, knownAgentId?: string): Promise<void> {
   const agentId = knownAgentId ?? sessions.get(id)?.agentId ?? agentIdFromSessionId(id);
   await withSessionWrite(agentId, async () => {
-    const response = await fetch(sessionUrl(agentId, id), { method: 'DELETE' });
+    const response = await backendFetch(sessionUrl(agentId, id), { method: 'DELETE' });
     await responseJson(response, '删除会话失败');
     sessions.delete(id); messages.delete(id);
   });
@@ -146,7 +160,7 @@ export async function getAllSessions(): Promise<ChatSession[]> {
 }
 
 async function create(session: ChatSession): Promise<ChatSession> {
-  const response = await fetch(BASE, {
+  const response = await backendFetch(BASE, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...session, revision: 0 }),
   });
@@ -158,9 +172,9 @@ async function create(session: ChatSession): Promise<ChatSession> {
 async function replace(
   session: ChatSession,
   expectedRevision: number,
-  mode: 'content' | 'rename',
+  mode: 'content' | 'rename' | 'read',
 ): Promise<ChatSession> {
-  const response = await fetch(sessionUrl(session.agentId, session.id), {
+  const response = await backendFetch(sessionUrl(session.agentId, session.id), {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ expectedRevision, mode, session: { ...session, revision: expectedRevision } }),
   });

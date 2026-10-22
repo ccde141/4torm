@@ -1,3 +1,5 @@
+import type { ToolImageRef } from './types.js';
+
 export type McpTransport = 'stdio' | 'streamable-http' | 'sse';
 
 interface McpConfigBase {
@@ -39,16 +41,25 @@ export interface McpClient {
   readonly tools: McpToolDef[];
   connect(): Promise<void>;
   refreshTools(): Promise<McpToolDef[]>;
-  callTool(toolName: string, args: Record<string, unknown>): Promise<string>;
-  callToolOutcome(toolName: string, args: Record<string, unknown>): Promise<McpToolOutcome>;
+  callTool(toolName: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
+  callToolOutcome(toolName: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpToolOutcome>;
   disconnect(): void;
   on(event: 'log', listener: (message: string) => void): this;
   on(event: 'disconnected', listener: (info: { code: number | null; intentional: boolean }) => void): this;
 }
 
+export interface McpInvocationOptions {
+  agentId?: string;
+  signal?: AbortSignal;
+}
+
 export interface McpToolOutcome {
   result: string;
   ok: boolean;
+  toolImages?: ToolImageRef[];
+  structuredContent?: Record<string, unknown>;
+  /** Transport-local bytes; removed before returning a manager result. */
+  inlineImages?: Array<{ mimeType: string; data: string }>;
 }
 
 export interface JsonRpcRequest {

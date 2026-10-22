@@ -15,12 +15,17 @@ const PHASE_KEY: Record<ExecutionPhase, MessageKey> = {
 };
 
 interface ToolbarProps {
+  runDisabled?: boolean;
+  disabledReason?: string;
+  orchestration?: 'strict' | 'handoff';
   workflowId: string;
   workflowName: string;
   activeWorkflowId?: string | null;
   running: boolean;
   phase: ExecutionPhase;
   saveTime: number | null;
+  saving?: boolean;
+  openingWorkspace?: boolean;
   onRun: (mode: WorkflowMode) => void;
   onOpenProfiles: () => void;
   onStop: () => void;
@@ -31,7 +36,7 @@ interface ToolbarProps {
 }
 
 export function Toolbar({
-  workflowId, workflowName, activeWorkflowId, running, phase, saveTime, onRun, onOpenProfiles, onStop, onSave, onOpenWorkspace, onSetWorkflowName, onLoadList,
+  workflowId, workflowName, activeWorkflowId, running, phase, saveTime, saving, openingWorkspace, onRun, onOpenProfiles, onStop, onSave, onOpenWorkspace, onSetWorkflowName, onLoadList, runDisabled, disabledReason, orchestration,
 }: ToolbarProps) {
   const { t, locale } = useLocale();
   const [editing, setEditing] = useState(false);
@@ -78,20 +83,22 @@ export function Toolbar({
         ) : (
           <div className="tw-toolbar__name-group" onDoubleClick={startEdit}>
             <span className="tw-toolbar__title">{workflowName || t('tradewind.untitled')}</span>
-            <span className="tw-toolbar__id">{workflowId}</span>
+            <span className="tw-toolbar__id">{orchestration && `${locale === 'zh-CN' ? (orchestration === 'strict' ? '严格依赖' : '条件交接') : (orchestration === 'strict' ? 'Strict dependency' : 'Conditional handoff')} · `}{workflowId}</span>
           </div>
         )}
-        <button className="tw-toolbar__btn tw-toolbar__btn--ghost" onClick={onLoadList}>
+        <button className="tw-toolbar__btn tw-toolbar__btn--ghost" onClick={onLoadList}
+          aria-label={locale === 'zh-CN' ? '显示或收起工作流列表' : 'Toggle workflow list'}>
           ☰
         </button>
       </div>
       <div className="tw-toolbar__actions">
-        <button className="tw-toolbar__btn tw-toolbar__btn--save" onClick={onSave}>
-          {t('tradewind.toolbar.save')}
+        <button className="tw-toolbar__btn tw-toolbar__btn--save" onClick={onSave} aria-busy={saving}>
+          {t(saving ? 'tradewind.toolbar.saving' : 'tradewind.toolbar.save')}
         </button>
-        <button className="tw-toolbar__workspace-btn" onClick={onOpenWorkspace} title={t('tradewind.toolbar.workspaceTitle')}>
+        <button className="tw-toolbar__workspace-btn" onClick={onOpenWorkspace} disabled={openingWorkspace}
+          aria-busy={openingWorkspace} title={t('tradewind.toolbar.workspaceTitle')}>
           <span className="tw-toolbar__workspace-btn-icon" aria-hidden="true">↗</span>
-          <span>{t('tradewind.toolbar.openWorkspace')}</span>
+          <span>{t(openingWorkspace ? 'tradewind.toolbar.openingWorkspace' : 'tradewind.toolbar.openWorkspace')}</span>
         </button>
         {showSaved && saveTime && (
           <span className="tw-toolbar__saved-hint">{t('tradewind.toolbar.savedAt', { time: formatTime(saveTime) })}</span>
@@ -111,7 +118,8 @@ export function Toolbar({
             <button
               className="tw-toolbar__btn tw-toolbar__btn--run"
               onClick={() => onRun('manual')}
-              title={t('tradewind.toolbar.manualTitle')}
+              disabled={runDisabled}
+              title={disabledReason ?? t('tradewind.toolbar.manualTitle')}
             >
               <span className="tw-toolbar__btn-icon">▶</span>
               {t('tradewind.toolbar.manualRun')}
@@ -119,7 +127,8 @@ export function Toolbar({
             <button
               className="tw-toolbar__btn tw-toolbar__btn--run tw-toolbar__btn--auto"
               onClick={onOpenProfiles}
-              title={t('tradewind.toolbar.autoTitle')}
+              disabled={runDisabled}
+              title={disabledReason ?? t('tradewind.toolbar.autoTitle')}
             >
               <span className="tw-toolbar__btn-icon">⚡</span>
               {t('tradewind.toolbar.autoRun')}

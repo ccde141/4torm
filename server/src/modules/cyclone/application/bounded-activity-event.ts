@@ -1,5 +1,6 @@
 /** Limit transient event copies; the persisted conversation remains the full source of truth. */
 export const MAX_ACTIVITY_EVENT_CHARS = 8_192;
+import { readToolImageRefs } from '../../../engine/shared/tool-media-store.js';
 
 interface Budget { remaining: number; truncated: boolean }
 
@@ -7,17 +8,19 @@ export function boundedActivityEvent(event: Record<string, unknown>): {
   event: Record<string, unknown>; truncated: boolean;
 } {
   if (JSON.stringify(event).length <= MAX_ACTIVITY_EVENT_CHARS) return { event, truncated: false };
+  const { toolImages, ...content } = event;
+  const images = toolImages === undefined ? {} : { toolImages: readToolImageRefs(toolImages) };
   const budget: Budget = { remaining: 6_000, truncated: true };
-  const clipped = clipValue(event, budget, 0) as Record<string, unknown>;
+  const clipped = { ...clipValue(content, budget, 0) as Record<string, unknown>, ...images };
   if (JSON.stringify(clipped).length <= MAX_ACTIVITY_EVENT_CHARS) {
     return { event: clipped, truncated: true };
   }
   const minimal: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(event).slice(0, 32)) {
+  for (const [key, value] of Object.entries(content).slice(0, 32)) {
     if (key.length > 128) continue;
     minimal[key] = key === 'type' && typeof value === 'string' ? value.slice(0, 128) : emptyValue(value);
   }
-  return { event: minimal, truncated: true };
+  return { event: { ...minimal, ...images }, truncated: true };
 }
 
 function clipValue(value: unknown, budget: Budget, depth: number): unknown {

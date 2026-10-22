@@ -47,7 +47,7 @@ test('execution observations open in a responsive overlay while the taskboard st
   assert.match(overlay, /closingId/);
   assert.match(overlay, /suspendNativeSurface=\{closingId === selected\.id\}/);
   assert.match(drawer, /setClosingObservation\(id\)[\s\S]*await confirm/);
-  assert.match(read('src/components/chat/NativeObservationView.tsx'), /!suspended && window\.desktop/);
+  assert.match(read('src/components/chat/NativeObservationView.tsx'), /!suspended && desktopSurface/);
   assert.match(overlay, /background: 'rgba\(220, 38, 38, 0\.16\)'/);
   assert.match(overlay, /role="dialog"/);
   assert.match(overlay, /reservedRight/);

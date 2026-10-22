@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { LLMCaller } from '../shared/react/native-loop.js';
 import type { SeatData } from './types.js';
+import type { ContextMessage } from '../shared/types.js';
 import { trackSeatModelUsage } from './seat-token-usage.js';
+import { withSeatContinuity } from './seat-continuity.js';
 
 function seat(): SeatData {
   return {
@@ -42,4 +44,21 @@ test('模型请求失败也清除旧计量并保留错误', async () => {
     messages, async () => { assert.equal(target.tokenUsage, undefined); });
   await assert.rejects(tracked.call(messages), error => error === failure);
   assert.equal(target.messages.length, 1);
+});
+
+test('成功模型请求后持久化失败保留原 IO 错误且不消费接续提醒', async () => {
+  const target = seat();
+  target.compactState = { disabled: false, archiveSeq: 1, lastCompactAt: '2026-10-01T00:00:00.000Z' };
+  const messages: ContextMessage[] = [{ role: 'system', content: '规则' }, { role: 'user', content: '继续' }];
+  const failure = new Error('owner write failed');
+  let fail = true;
+  const tracked = trackSeatModelUsage(withSeatContinuity({ call: async request => {
+    assert.match(request[0].content, /本工位私聊上下文于/);
+    return { content: '回复', finishReason: 'stop' };
+  } }, target, 'solo'), target, messages, async () => { if (fail) throw failure; });
+  await assert.rejects(tracked.call(messages), error => error === failure);
+  assert.equal(target.historySeen, undefined);
+  fail = false;
+  await tracked.call(messages);
+  assert.equal(target.historySeen?.compactedAt, target.compactState.lastCompactAt);
 });

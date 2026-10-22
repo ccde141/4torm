@@ -19,6 +19,17 @@ const featureKeys: Record<CollaborationFeature, MessageKey> = {
 export const statusKey = (status: keyof typeof statusKeys): MessageKey => statusKeys[status];
 export const featureKey = (feature: CollaborationFeature): MessageKey => featureKeys[feature];
 
+export function activityStatusKey(activity: AgentActivityView): MessageKey {
+  return statusKey(activity.kind === 'running' && activity.item?.status === 'queued'
+    ? 'queued' : activity.kind);
+}
+
+export function activityStatusLabel(activity: AgentActivityView, t: (key: MessageKey) => string): string {
+  const label = t(activityStatusKey(activity));
+  return activity.kind === 'running' && !activity.item && activity.feature
+    ? `${label} · ${t(featureKey(activity.feature))}` : label;
+}
+
 export function activitySummaryKey(activity: AgentActivityView): MessageKey | undefined {
   if (activity.item) return undefined;
   const summaries = {

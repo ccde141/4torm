@@ -6,13 +6,14 @@ import type { RoomData, SeatData } from '../../../engine/cyclone/types.js';
 import { agentRegistryFile } from '../../../services/data-paths.js';
 import type { WorkshopSummary } from '../domain/workshop.js';
 
-export type CycloneThreadTarget = 'seat' | 'room' | 'chair';
+export type CycloneThreadTarget = 'seat' | 'room' | 'chair' | 'supervisor';
 
 interface Sources {
   workshops: { list(): Promise<WorkshopSummary[]> };
   seats: { require(workshopId: string, seatId: string): Promise<SeatData> };
   rooms: { require(workshopId: string, roomId: string): Promise<RoomData> };
   chair: { status(workshopId: string, roomId: string): Promise<{ messages: ContextMessage[] }> };
+  supervisor?: { status(workshopId: string): Promise<{ messages: Array<ContextMessage & { supervisorInternal?: true }> }> };
 }
 
 interface ThreadInput {
@@ -86,6 +87,11 @@ export class CycloneAgentReadService {
   }
 
   private async messages(input: Omit<ThreadInput, 'cursor' | 'limit'>): Promise<ThreadMessage[]> {
+    if (input.target === 'supervisor') {
+      if (input.targetId !== 'supervisor' || !this.sources.supervisor) throw invalid('主管会话目标应为 supervisor');
+      const value = await this.sources.supervisor.status(input.workshopId);
+      return value.messages.filter(message => message.role !== 'system' && !message.supervisorInternal);
+    }
     if (input.target === 'seat') {
       return (await this.sources.seats.require(input.workshopId, input.targetId)).messages;
     }

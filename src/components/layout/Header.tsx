@@ -1,3 +1,4 @@
+import { backendFetch, backendUrl } from '../../lib/backend-client';
 import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { loadSkinConfig } from '../../store/skin';
 import { getAgents } from '../../store/agent';
@@ -58,7 +59,7 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
     // 单个数据源失败不应拖垮整次搜索，故各 fetch 独立 try/catch（getJson 返回 null 时跳过）
     const getJson = async (url: string): Promise<any> => {
       try {
-        const res = await fetch(url);
+        const res = await backendFetch(url);
         if (!res.ok) return null;
         return await res.json();
       } catch { return null; }
@@ -197,7 +198,7 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
         </div>
         <a
           className="header__btn"
-          href={locale === 'en-US' ? '/docs/en/' : '/docs/'}
+          href={backendUrl(locale === 'en-US' ? '/docs/en/' : '/docs/')}
           target="_blank"
           rel="noopener noreferrer"
           title={t('header.docs')}

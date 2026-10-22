@@ -38,6 +38,20 @@ test('信风精确查询从归档恢复已切换离场的运行终态', async t 
   });
 });
 
+test('historical handoff failures retain the committed error identity after leaving memory', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tradewind-failure-identity-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const workflowId = 'wf-failure'; const runId = 'exec-failure';
+  const directory = tradewindRunDir(dataDir, workflowId, runId);
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, 'meta.json'), JSON.stringify({ workflowId, executionId: runId,
+    status: 'error', errorCode: 'TRADEWIND_HANDOFF_NOT_SEALED', errorMessage: '节点没有完成有效的单目标封口' }));
+  const snapshot = await createTradewindRuntimeSource(dataDir).inspect?.({ operationId: workflowId, runId });
+  assert.equal(snapshot?.status, 'failed');
+  assert.equal(snapshot?.errorCode, 'TRADEWIND_HANDOFF_NOT_SEALED');
+  assert.equal(snapshot?.errorMessage, '节点没有完成有效的单目标封口');
+});
+
 function waitingGraph(): WorkflowGraph {
   const nodes = ['entry', 'human-gate', 'output'].map((type, index) => ({
     id: type, type, label: type, position: { x: index * 100, y: 0 }, config: {},

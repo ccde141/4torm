@@ -38,7 +38,7 @@ const MANAGE_ITEMS: LocalizedNavItem[] = [
 // SVG icon components (no external deps)
 const ICONS: Record<string, React.FC<{ className?: string }>> = {
   dashboard: ({ className }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="7" height="7" rx="1" />
       <rect x="14" y="3" width="7" height="7" rx="1" />
       <rect x="3" y="14" width="7" height="7" rx="1" />
@@ -46,27 +46,27 @@ const ICONS: Record<string, React.FC<{ className?: string }>> = {
     </svg>
   ),
   agents: ({ className }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="8" r="4" />
       <path d="M4 20c0-4 4-7 8-7s8 3 8 7" />
       <circle cx="18" cy="6" r="2.5" />
     </svg>
   ),
   chat: ({ className }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
     </svg>
   ),
   // 对流：上下两条 U 形回路 + 路径末端 V 形箭头 = 对话在多方间持续循环交换
   convection: ({ className }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M6 6v7a5 5 0 0 0 5 5h0.5 l-3 -3 m3 3 l-3 3" />
       <path d="M18 18v-7a5 5 0 0 0-5-5h-0.5 l3 -3 m-3 3 l3 3" />
     </svg>
   ),
   // 信风：三道平行流动弧线，呼应"风带 + 信件传递"的隐喻
   tradewind: ({ className }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 8 Q 9 5, 14 8 T 21 8" />
       <path d="M3 13 Q 10 10, 16 13 T 21 13" />
       <path d="M3 18 Q 8 15, 13 18 T 19 18" />
@@ -74,7 +74,7 @@ const ICONS: Record<string, React.FC<{ className?: string }>> = {
   ),
   // 气旋：双交错椭圆轨道 — 群聊/私聊双轨围绕工作室核心旋转
   cyclone: ({ className }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <ellipse cx="12" cy="12" rx="9" ry="4" transform="rotate(-15 12 12)" />
       <ellipse cx="12" cy="12" rx="9" ry="4" transform="rotate(55 12 12)" />
       <circle cx="12" cy="12" r="2.5" />
@@ -84,31 +84,31 @@ const ICONS: Record<string, React.FC<{ className?: string }>> = {
   ),
   // 潮汐：波浪线 + 时钟指针，呼应"定时 + 海潮涨落"
   tide: ({ className }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M2 18 Q 5 14, 8 18 T 14 18 T 20 18" />
       <circle cx="17" cy="9" r="5" />
       <path d="M17 7v2l1.5 1" />
     </svg>
   ),
   skills: ({ className }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
     </svg>
   ),
   tools: ({ className }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
     </svg>
   ),
   settings: ({ className }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   ),
   mcp: ({ className }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
       <circle cx="12" cy="12" r="4" />
     </svg>
@@ -155,8 +155,8 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
         </button>
       </div>
 
-      {/* Keep content mounted so expanding reveals stable layout instead of remounting it. */}
-      <div className="sidebar__body" inert={collapsed} aria-hidden={collapsed}>
+      {/* One navigation stays mounted and interactive in both the full sidebar and icon rail. */}
+      <div className="sidebar__body">
       <nav id="app-sidebar-navigation" className="sidebar__nav">
         <div className="sidebar__nav-group">
           <div className="sidebar__nav-label">{t('nav.workspace')}</div>
@@ -165,12 +165,15 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
             return (
               <button
                 key={item.id}
+                type="button"
                 className={`sidebar__nav-item${activePage === item.id ? ' sidebar__nav-item--active' : ''}`}
                 onClick={() => onNavigate(item.id)}
+                title={t(item.label)}
+                aria-label={t(item.label)}
                 aria-current={activePage === item.id ? 'page' : undefined}
               >
                 <Icon className="sidebar__nav-icon" />
-                <span>{t(item.label)}</span>
+                <span className="sidebar__nav-text">{t(item.label)}</span>
                 {item.badge !== undefined && (
                   <span className="sidebar__nav-badge">{item.badge}</span>
                 )}
@@ -186,12 +189,15 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
             return (
               <button
                 key={item.id}
+                type="button"
                 className={`sidebar__nav-item${activePage === item.id ? ' sidebar__nav-item--active' : ''}`}
                 onClick={() => onNavigate(item.id)}
+                title={t(item.label)}
+                aria-label={t(item.label)}
                 aria-current={activePage === item.id ? 'page' : undefined}
               >
                 <Icon className="sidebar__nav-icon" />
-                <span>{t(item.label)}</span>
+                <span className="sidebar__nav-text">{t(item.label)}</span>
               </button>
             );
           })}
@@ -204,11 +210,15 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
             return (
               <button
                 key={item.id}
+                type="button"
                 className={`sidebar__nav-item${activePage === item.id ? ' sidebar__nav-item--active' : ''}`}
                 onClick={() => onNavigate(item.id)}
+                title={t(item.label)}
+                aria-label={t(item.label)}
+                aria-current={activePage === item.id ? 'page' : undefined}
               >
                 <Icon className="sidebar__nav-icon" />
-                <span>{t(item.label)}</span>
+                <span className="sidebar__nav-text">{t(item.label)}</span>
               </button>
             );
           })}
@@ -220,19 +230,19 @@ const Sidebar = memo(function Sidebar({ activePage, collapsed, onNavigate, onTog
         <LanguageSwitch />
         <div className="sidebar__links-label">{t('nav.links')}</div>
         <div className="sidebar__links">
-          <a className="sidebar__link" href="https://github.com/ccde141/4torm/issues" target="_blank" rel="noopener noreferrer" title={t('nav.bugReport')}>
+          <a className="sidebar__link" href="https://github.com/ccde141/4torm/issues" target="_blank" rel="noopener noreferrer" title={t('nav.bugReport')} aria-label={t('nav.bugReport')}>
             <svg className="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
             </svg>
             <span>[{t('nav.bugReport')}]</span>
           </a>
-          <a className="sidebar__link" href="https://github.com/ccde141/4torm" target="_blank" rel="noopener noreferrer" title={t('nav.repository')}>
+          <a className="sidebar__link" href="https://github.com/ccde141/4torm" target="_blank" rel="noopener noreferrer" title={t('nav.repository')} aria-label={t('nav.repository')}>
             <svg className="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
             </svg>
             <span>[{t('nav.repository')}]</span>
           </a>
-          <a className="sidebar__link" href="https://space.bilibili.com/406091025" target="_blank" rel="noopener noreferrer" title={t('nav.blog')}>
+          <a className="sidebar__link" href="https://space.bilibili.com/406091025" target="_blank" rel="noopener noreferrer" title={t('nav.blog')} aria-label={t('nav.blog')}>
             <svg className="sidebar__link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
             </svg>

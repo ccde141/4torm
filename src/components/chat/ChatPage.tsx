@@ -80,7 +80,7 @@ export default function ChatPage({ active = true, preselectSession, onClearPrese
 
   return <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
     <MonsoonSidebar agents={catalog.agents} offlineIds={catalog.offlineIds}
-      selectedAgent={selectedAgent} sessions={sessions.sessions}
+      selectedAgent={selectedAgent} sessions={sessions.sessions} displayUsage={sessions.displayUsage}
       activeSessionId={sessions.activeSessionId} selectAgent={sessions.selectAgent}
       selectSession={sessions.selectSession} newSession={sessions.newSession}
       deleteSession={session => { void deleteSession(session); }} />
@@ -88,6 +88,7 @@ export default function ChatPage({ active = true, preselectSession, onClearPrese
       <MonsoonConversation agent={selectedAgent} messages={messages} streaming={streaming}
         askFeedback={actions.askFeedback.feedback} onAskCheck={() => { void actions.checkAsk(); }}
         compacting={actions.compacting} input={input} setInput={setInput}
+        compaction={sessions.activeSessionId ? runners.compactions[sessions.activeSessionId] : undefined}
         models={catalog.models} selectedModel={catalog.selectedModel}
         setSelectedModel={catalog.setSelectedModel} sessions={sessions} editor={editor}
         human={human} scroll={scroll} taskboard={taskboard} images={images}

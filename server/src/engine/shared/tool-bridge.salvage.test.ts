@@ -48,7 +48,7 @@ function ok(name: string, cond: boolean) {
 // 6. Windows 路径反斜杠在字符串内 → 配平扫描不被干扰（\A 坑）
 {
   const r = salvageToolArgs('{"path":"I:\\\\A_Test\\\\providers.json"}');
-  ok('windows-path', r.ok && r.args.path.includes('A_Test'));
+  ok('windows-path', r.ok && typeof r.args.path === 'string' && r.args.path.includes('A_Test'));
 }
 
 // 7. 后缀垃圾一个点 → 救回
@@ -69,10 +69,12 @@ function ok(name: string, cond: boolean) {
   ok('garbage-reject', !r.ok);
 }
 
-// 10. 嵌套对象值被 stringify 成字符串（保持 Record<string,string> 约定）
+// 10. 结构化参数保持 JSON 原值，包括看起来像布尔值的字符串。
 {
-  const r = salvageToolArgs('{"opts":{"n":1}}');
-  ok('nested-stringify', r.ok && r.args.opts === '{"n":1}');
+  const expected = { opts: { n: 1 }, items: ['one'], enabled: false, count: 2, nullable: null, text: 'false' };
+  const r = salvageToolArgs(JSON.stringify(expected));
+  ok('structured-values', r.ok && !r.repaired);
+  if (r.ok) assert.deepEqual(r.args, expected);
 }
 
 // 11. 前缀超长（>96 字符）→ 拒绝（防把正文当参数）
@@ -80,6 +82,14 @@ function ok(name: string, cond: boolean) {
   const longLead = 'x'.repeat(200);
   const r = salvageToolArgs(`${longLead} {"a":"1"}`);
   ok('long-leading-reject', !r.ok);
+}
+
+{
+  const expected = { text: 'keep,}this,] too "quoted,}"', nested: ['a,]b', { value: ',}' }], count: 1 };
+  const raw = JSON.stringify(expected).replace(/,"count":1}$/, ',"count":1,}');
+  const result = salvageToolArgs(raw);
+  assert.equal(result.ok, true);
+  if (result.ok) assert.deepEqual(result.args, expected);
 }
 
 console.log(`\n✅ salvageToolArgs: ${pass} 个断言全部通过`);

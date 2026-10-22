@@ -3,6 +3,7 @@
  */
 
 import { buildTextureBackground, gridBackgroundUrl, getTextureDefaults, type TextureLayer } from '../utils/skin-textures';
+import { backendUrl } from '../lib/backend-client';
 import { hexToRgb, darkenColor, toRgba, onAccentColor, readJson, uploadBinary, deleteFile, fileUrl } from './skin-helpers';
 import { persistSkinConfig } from './skin-persistence';
 import { DEFAULT_SKIN, DEFAULT_TEXTURE, normalizeSkinConfig } from './skin-config';
@@ -113,7 +114,7 @@ function applyTextureVars(config: SkinConfig, root: HTMLElement): void {
   const imgList: string[] = [], repeatList: string[] = [], sizeList: string[] = [];
   if (hasGrid) { imgList.push(gridBackgroundUrl()); repeatList.push('repeat'); sizeList.push('auto'); }
   if (hasCustom) {
-    imgList.push(buildTextureBackground('custom', texture.customImage));
+    imgList.push(buildTextureBackground('custom', backendUrl(texture.customImage!)));
     repeatList.push(imageRepeat); sizeList.push(imageSize);
   }
 

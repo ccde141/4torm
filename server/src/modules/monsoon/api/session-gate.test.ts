@@ -31,6 +31,9 @@ test('季风会话读写均先经过中心方法路由', async t => {
     ['GET', '/sessions/agent-a/session-a', undefined, 'readSession'],
     ['PUT', '/sessions/agent-a/session-a', { session: {}, expectedRevision: 1, mode: 'rename' },
       'replaceSession'],
+    ['PUT', '/sessions/agent-a/session-a', {
+      session: { lastReadAt: '2026-01-01T00:00:00.000Z' }, expectedRevision: 1, mode: 'read',
+    }, 'replaceSession'],
     ['DELETE', '/sessions/agent-a/session-a', undefined, 'deleteSession'],
   ] as const;
   for (const [method, url, payload, expected] of cases) {

@@ -1,3 +1,4 @@
+import { backendFetch } from '../../lib/backend-client';
 interface StoppingRunner {
   userStopped: boolean;
 }
@@ -12,7 +13,7 @@ export async function requestConversationStop(
   sessionId: string,
   runId: string,
   runner: StoppingRunner,
-  request: typeof fetch = fetch,
+  request: typeof fetch = backendFetch,
 ): Promise<void> {
   runner.userStopped = true;
   try {

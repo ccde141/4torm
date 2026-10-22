@@ -8,6 +8,18 @@ const placeholder: ChatMessage = {
   timestamp: '2026-09-30T00:00:00.000Z', agentId: 'agent-a',
 };
 
+test('MCP screenshots survive stream completion, reload and conversation history reconstruction', async () => {
+  const { buildConversationHistory } = await import('./conversation-history');
+  const images = [{ id: 'image-a', name: 'screen.png', mimeType: 'image/png', size: 10 }];
+  const projection = new MonsoonMessageProjection([placeholder], 'run-a', 'agent-a', () => 'next');
+  projection.apply({ type: 'tool-call', tool: 'mcp:desktop:observe', args: { crop: [0, 0, 50, 50] } });
+  projection.apply({ type: 'tool-result', tool: 'mcp:desktop:observe', result: '{"observation_id":"a"}', ok: true, toolImages: images });
+  projection.apply({ type: 'answer', content: 'Seen' });
+  const reloaded: ChatMessage[] = JSON.parse(JSON.stringify(projection.messages));
+  assert.deepEqual(reloaded[0].toolSteps?.[0].toolImages, images);
+  assert.deepEqual(buildConversationHistory(reloaded).find(message => message.role === 'tool')?.toolImages, images);
+});
+
 test('one projection handles output, tools and the final answer in order', () => {
   const projection = new MonsoonMessageProjection([placeholder], 'run-a', 'agent-a', () => 'ask-a');
   assert.equal(projection.apply({ type: 'reasoning', content: '想' }).flush, 'throttled');

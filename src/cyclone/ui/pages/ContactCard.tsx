@@ -1,5 +1,7 @@
+import BoundedText from '../../../engine/text-display/BoundedText';
 import { useState } from 'react';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { contactStateLabel, type ContactResultDisplay } from './contact-result';
 
 /**
  * ContactCard — 气旋工位间联络卡片
@@ -8,23 +10,21 @@ import { useLocale } from '../../../i18n/LocaleContext';
  * 区别于 delegate（状态色竖条）/ ask（紫竖条）：contact 用蓝竖条 #3b82f6，
  * 语义是"对其他工位发起联络"，折叠看标题，展开看发出消息 + 对方回复全文。
  */
-export interface ContactCardData {
+export interface ContactCardData extends ContactResultDisplay {
   target: string;
   message: string;
-  reply?: string;
-  status: 'running' | 'success' | 'error';
 }
 
 const BLUE = '#3b82f6';
 
 export default function ContactCard({ data }: { data: ContactCardData }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [expanded, setExpanded] = useState(false);
   const { target, message, reply, status } = data;
 
   const icon = status === 'success' ? '\u2713' : status === 'error' ? '\u2717' : '\u25cc';
-  const subtitle = status === 'running' ? t('cyclone.contact.running')
-    : status === 'error' ? t('cyclone.contact.failed') : t('cyclone.contact.replied');
+  const subtitle = contactStateLabel(data, locale) || (status === 'running' ? t('cyclone.contact.running')
+    : status === 'error' ? t('cyclone.contact.failed') : t('cyclone.contact.replied'));
 
   return (
     <div className="chat__message chat__message--assistant" style={{ paddingLeft: '24px' }}>
@@ -73,14 +73,17 @@ export default function ContactCard({ data }: { data: ContactCardData }) {
           <div style={{ padding: '0 var(--space-4) var(--space-3)', borderTop: '1px solid var(--border-color)' }}>
             <div style={{ marginTop: 'var(--space-2)' }}>
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>{t('cyclone.contact.sent')}</div>
-              <pre style={preStyle}>{message}</pre>
+              <pre style={preStyle}><BoundedText text={(message) ?? ''} /></pre>
             </div>
             {reply && (
               <div style={{ marginTop: 'var(--space-2)' }}>
                 <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>{t('cyclone.contact.reply', { target, icon })}</div>
-                <pre style={preStyle}>{reply}</pre>
+                <pre style={preStyle}><BoundedText text={(reply) ?? ''} /></pre>
               </div>
             )}
+            {data.replyTruncated && <p role="status" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>
+              {locale === 'en-US' ? 'Long reply: showing the first part.' : '回复较长，当前显示前段。'}
+            </p>}
           </div>
         )}
       </div>

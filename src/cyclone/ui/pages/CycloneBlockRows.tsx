@@ -7,22 +7,24 @@ import CycloneSystemToolCard from './CycloneSystemToolCard';
 import { isCycloneSystemTool } from './cyclone-system-tool';
 import type { DisplayBlock } from './messageDisplay';
 import type { CycloneDispatch } from './dispatch-timeline';
+import type { ToolMediaScope } from '../../../engine/tool-media';
 
-function BlockRow({ block, dispatches, onAskReply }: {
+function BlockRow({ block, dispatches, onAskReply, mediaScope }: {
   block: DisplayBlock;
   dispatches: CycloneDispatch[];
   onAskReply?: (answer: string) => void;
+  mediaScope?: ToolMediaScope;
 }) {
   if (block.kind === 'tool') {
     if (isCycloneSystemTool(block.tool)) {
       return <CycloneSystemToolCard block={block} dispatches={dispatches} />;
     }
-    return <ToolCallMessage toolCall={{
-      toolName: block.tool, params: block.args, result: block.result, status: block.status,
+    return <ToolCallMessage mediaScope={mediaScope} toolCall={{
+      toolName: block.tool, params: block.args, result: block.result, toolImages: block.toolImages, status: block.status,
     }} />;
   }
   if (block.kind === 'delegate') {
-    return <DelegateCard toolCall={{
+    return <DelegateCard mediaScope={mediaScope} toolCall={{
       toolName: 'delegate', params: { task: block.task }, result: block.summary,
       status: block.status, steps: block.steps as any,
     }} content={block.content} />;
@@ -31,16 +33,15 @@ function BlockRow({ block, dispatches, onAskReply }: {
     return <AskCard question={block.question} options={block.options} answered={block.answered}
       reply={block.reply} onReply={onAskReply || (() => {})} />;
   }
-  return <ContactCard data={{
-    target: block.target, message: block.message, reply: block.reply, status: block.status,
-  }} />;
+  return <ContactCard data={block} />;
 }
 
-export function BlockRows({ blocks, prefix, dispatches, onAskReply }: {
+export function BlockRows({ blocks, prefix, dispatches, onAskReply, mediaScope }: {
   blocks: DisplayBlock[];
   prefix: string;
   dispatches: CycloneDispatch[];
   onAskReply?: (answer: string) => void;
+  mediaScope?: ToolMediaScope;
 }) {
   const items = blocks.map(block => ({
     block,
@@ -51,7 +52,7 @@ export function BlockRows({ blocks, prefix, dispatches, onAskReply }: {
   return (
     <CycloneToolActivityList items={items} renderItem={(item, index) => (
       <BlockRow key={`${prefix}-${index}`} block={item.block} dispatches={dispatches}
-        onAskReply={onAskReply} />
+        onAskReply={onAskReply} mediaScope={mediaScope} />
     )} />
   );
 }

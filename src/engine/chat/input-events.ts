@@ -1,3 +1,4 @@
+import { backendFetch } from '../../lib/backend-client';
 import type { ChatMessage, NativeContextMessage } from '../../types';
 
 type Receipt = Omit<NonNullable<ChatMessage['humanInputs']>[number], 'state'>;
@@ -51,7 +52,7 @@ export function editInputAnswer(message: ChatMessage, content: string): ChatMess
 
 /** Read-only recovery. An interrupted run is never restarted by loading its history. */
 export async function recoverInputMessages(messages: ChatMessage[], agentId: string, sessionId: string,
-  request: typeof fetch = fetch): Promise<ChatMessage[]> {
+  request: typeof fetch = backendFetch): Promise<ChatMessage[]> {
   let result = messages;
   for (const message of messages) {
     if (!message.inputRunId || message.inputClosed) continue;

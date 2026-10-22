@@ -10,6 +10,12 @@ import { useTideEntities } from './use-tide-entities';
 import TidePageSidebar from './TidePageSidebar';
 import TidePageMain from './TidePageMain';
 import type { TideSelection } from './tide-selection';
+import './tide-task-form.css';
+import './tide-schedule-fields.css';
+import './tide-task-detail.css';
+import './tide-run-history.css';
+import './tide-session-view.css';
+import './tide-session-list.css';
 
 export default function TidePage({ active = true, preselectTask, onClearPreselect }: {
   active?: boolean; preselectTask?: string | null; onClearPreselect?: () => void;
@@ -194,8 +200,8 @@ export default function TidePage({ active = true, preselectTask, onClearPreselec
       await live.current.refreshSessions();
     } catch (cause) { alert(cause instanceof Error ? cause.message : String(cause)); }
   };
-  const handleViewSession = (sessionId: string) => {
-    const agentId = live.current.selectedAgent?.id;
+  const handleViewSession = (sessionId: string, ownerAgentId?: string) => {
+    const agentId = ownerAgentId ?? live.current.selectedAgent?.id;
     if (!agentId) return;
     navigationGuard.current.manualSelection(preselectTask);
     setNavigationError('');

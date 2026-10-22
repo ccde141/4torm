@@ -1,107 +1,140 @@
-import { useEffect, useRef, useState } from 'react';
-import { compactTideSession, type TideSession } from '../../api/tide';
+import BoundedText from '../../engine/text-display/BoundedText';
+import type { TideSession } from '../../api/tide';
 import StructuredMessage from '../../components/chat/StructuredMessage';
 import { useLocale } from '../../i18n/LocaleContext';
-import { actionBtnStyle } from './tide-styles';
-import { formatTideContextTokens } from './tide-token-label';
+import { formatTideContextTokens, useTideUsage } from './tide-token-label';
 import { CompactionNotice } from '../../components/common/CompactionNotice';
+import { CompactionStatus } from '../../components/common/CompactionStatus';
+import { CompactionHistory } from '../../components/common/CompactionHistory';
+import { isCompactionHistory } from '../../components/common/compaction-history';
 import { visibleTideMessages } from './tide-session-projection';
+import { useTideCompaction } from './use-tide-compaction';
+import TideIcon from './TideIcon';
+import { formatTimestamp } from '../../utils/time';
+import ToolResultImages from '../../components/common/ToolResultImages';
+import type { ToolImageRef, ToolMediaScope } from '../../engine/tool-media';
 
 interface TideSessionViewProps {
   session: TideSession;
+  running?: boolean;
   onClose: () => void;
   onCompacted?: () => Promise<unknown>;
 }
 
-export default function TideSessionView({ session, onClose, onCompacted }: TideSessionViewProps) {
+export default function TideSessionView({ session, running = false, onClose, onCompacted }: TideSessionViewProps) {
   const { locale, t } = useLocale();
-  const [compacting, setCompacting] = useState(false);
-  const [notice, setNotice] = useState('');
-  const [error, setError] = useState('');
-  const identity = `${session.agentId}:${session.id}`;
-  const currentIdentity = useRef(identity);
-  currentIdentity.current = identity;
-  useEffect(() => { setNotice(''); setError(''); setCompacting(false); }, [identity]);
+  const { compact, cancel, compacting, notice, activity } = useTideCompaction(session, onCompacted,
+    locale === 'en-US');
   const messages = visibleTideMessages(session);
-  const compact = async () => {
-    setCompacting(true); setError(''); setNotice('');
-    try {
-      const result = await compactTideSession(session.agentId, session.id);
-      if (currentIdentity.current !== identity) return;
-      setNotice(result.notices.join('\n'));
-      await onCompacted?.();
-    } catch (cause) { if (currentIdentity.current === identity) setError((cause as Error).message); }
-    finally { if (currentIdentity.current === identity) setCompacting(false); }
-  };
+  const tokenUsage = useTideUsage(`${session.agentId}:${session.id}`, session.tokenUsage,
+    running || compacting || activity?.phase === 'running');
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
-        <h2 style={{ fontSize: 'var(--text-lg)', margin: 0 }}>{session.title}</h2>
-        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-          <button onClick={() => void compact()} disabled={compacting || messages.length === 0} style={actionBtnStyle}>
-            {compacting ? (locale === 'en-US' ? 'Compacting…' : '正在压缩…')
-              : (locale === 'en-US' ? 'Compact session' : '压缩会话')}
-          </button>
-          <button onClick={onClose} style={actionBtnStyle}>{t('tide.session.close')}</button>
+    <section className="tide-session" aria-label={t('tide.session.title')}>
+      <header className="tide-session__header">
+        <div className="tide-session__heading">
+          <div className="tide-session__symbol"><TideIcon name="message" /></div>
+          <div className="tide-session__heading-text">
+            <span className="tide-session__eyebrow">{t('tide.session.title')}</span>
+            <h2>{session.title}</h2>
+          </div>
+          {running && <span className="tide-session__running"><i />{t('tide.task.status.executing')}</span>}
         </div>
-      </div>
-      <div style={{ fontSize: '10px', color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-6)', textAlign: 'center', textShadow: 'var(--text-halo)' }}>
-        {t('tide.session.messageCount', { count: messages.length, model: session.model })}
-        <span title={locale === 'en-US'
-          ? 'Provider-reported input tokens for the latest model request'
-          : '最近一次模型请求的输入 token 数，由提供商回报'}>
-          {' · '}{formatTideContextTokens(session.tokenUsage, locale)}{session.tokenUsage ? ' tokens' : ''}
-        </span>
-      </div>
-      <div className="chat__messages">
-        {notice && <CompactionNotice message={notice} />}
-        {error && <p role="alert" className="agent-detail__error">{error}</p>}
+        <div className="tide-session__actions">
+          <button className="tide-session__button" onClick={() => void compact()}
+            disabled={compacting || activity?.phase === 'running' || messages.length === 0}>
+            <TideIcon name="repeat" />
+            {t(compacting ? 'tide.session.compacting' : 'tide.session.compact')}
+          </button>
+          {compacting && <button className="tide-session__button tide-session__button--danger" onClick={cancel}>
+            <TideIcon name="stop" />{t('tide.session.stopCompaction')}
+          </button>}
+          <button className="tide-session__button" onClick={onClose}>
+            <TideIcon name="arrow-left" />{t('tide.session.close')}
+          </button>
+        </div>
+        <div className="tide-session__meta">
+          {session.agentName && <span className="tide-session__agent">{session.agentName}</span>}
+          <span>{t('tide.session.messageCount', { count: messages.length, model: session.model })}</span>
+          <span className="tide-session__usage" title={t('tide.session.usageHint')}>
+            {formatTideContextTokens(tokenUsage, locale)}{tokenUsage ? ' tokens' : ''}
+          </span>
+        </div>
+      </header>
+      <CompactionStatus activity={activity} />
+      {(notice || session.compactionNotice) && <CompactionNotice message={notice || session.compactionNotice!} />}
+      <div className="tide-session__messages chat__messages">
+        {messages.length === 0 && <div className="tide-session__empty"><TideIcon name="message" />{t('tide.session.empty')}</div>}
         {messages.map(message => {
+          if (message.role === 'system' && (message.type === 'compact-marker' || isCompactionHistory(message.content))) {
+            return <CompactionHistory key={message.id} content={message.content} />;
+          }
+          if (message.role === 'system') return <div key={message.id} className="chat__message chat__message--system">
+            <div className="chat__avatar">S</div>
+            <div className="chat__bubble"><BoundedText text={message.content} /></div>
+          </div>;
           if (message.role === 'tool-call') return <ToolCallBubble key={message.id} content={message.content} timestamp={message.timestamp} />;
-          if (message.role === 'tool-result') return <ToolResultBubble key={message.id} content={message.content} timestamp={message.timestamp} />;
+          if (message.role === 'tool-result') return <ToolResultBubble key={message.id} content={message.content} timestamp={message.timestamp}
+            toolImages={message.toolImages} mediaScope={{ feature: 'tide', agentId: session.agentId, sessionId: session.id }} />;
           if (message.role === 'assistant') {
             return <StructuredMessage key={message.id} tools={[]} answer={message.content} msgId={message.id} timestamp={message.timestamp} />;
           }
           return (
             <div key={message.id} className="chat__message chat__message--user">
               <div className="chat__avatar" aria-label={t('tide.session.pushAvatarLabel')}>
-                {t('tide.session.pushAvatar')}
+                <TideIcon name="arrow" />
               </div>
               <div className="chat__bubble">
-                <div style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>{message.content}</div>
-                {message.timestamp && <div className="chat__timestamp" title={message.timestamp}>{message.timestamp.slice(0, 19).replace('T', ' ')}</div>}
+                <div className="tide-session__push-content"><BoundedText text={message.content} /></div>
+                {message.timestamp && <div className="chat__timestamp" title={formatTimestamp(message.timestamp, true)}>{formatTimestamp(message.timestamp)}</div>}
               </div>
             </div>
           );
         })}
       </div>
-    </div>
+    </section>
   );
 }
 
 function ToolCallBubble({ content, timestamp }: { content: string; timestamp?: string }) {
-  let parsed: { tool: string; args: Record<string, string> } = { tool: '?', args: {} };
-  try { parsed = JSON.parse(content); } catch {}
+  const { t } = useLocale();
+  let parsed: { tool: string; args: unknown } = { tool: '?', args: content };
+  try {
+    const value: unknown = JSON.parse(content);
+    if (value && typeof value === 'object' && 'tool' in value && typeof value.tool === 'string') {
+      parsed = { tool: value.tool, args: 'args' in value ? value.args : {} };
+    }
+  } catch { /* Keep legacy tool text available when it has no structured fields. */ }
   return (
-    <div style={{ margin: '8px 0 8px 36px', padding: '8px 12px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '6px', fontSize: 'var(--text-xs)' }}>
-      <div style={{ color: '#3b82f6', fontWeight: 'var(--font-medium)', marginBottom: '4px' }}>→ {parsed.tool}</div>
-      {Object.keys(parsed.args).length > 0 && <pre style={{ margin: 0, fontSize: '10px', color: 'var(--color-text-tertiary)', whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono, monospace)' }}>{JSON.stringify(parsed.args, null, 2)}</pre>}
-      {timestamp && <div style={{ fontSize: '9px', color: 'var(--color-text-tertiary)', marginTop: '4px' }}>{timestamp.slice(11, 19)}</div>}
-    </div>
+    <details className="tide-session__tool tide-session__tool--call">
+      <summary><TideIcon name="tool" /><strong>{parsed.tool}</strong><span>{t('chat.tool.params')}</span>
+        {timestamp && <time dateTime={timestamp} title={formatTimestamp(timestamp, true)}>{formatTimestamp(timestamp)}</time>}
+      </summary>
+      <pre><BoundedText text={typeof parsed.args === 'string' ? parsed.args : JSON.stringify(parsed.args, null, 2) ?? ''} /></pre>
+    </details>
   );
 }
 
-function ToolResultBubble({ content, timestamp }: { content: string; timestamp?: string }) {
-  let parsed: { tool: string; result: string; ok: boolean } = { tool: '?', result: '', ok: true };
-  try { parsed = JSON.parse(content); } catch {}
-  const color = parsed.ok ? '#22c55e' : '#ef4444';
+function ToolResultBubble({ content, timestamp, toolImages, mediaScope }: { content: string; timestamp?: string;
+  toolImages?: ToolImageRef[]; mediaScope: ToolMediaScope }) {
+  const { t } = useLocale();
+  let parsed = { tool: '?', result: content, ok: true };
+  try {
+    const value: unknown = JSON.parse(content);
+    if (value && typeof value === 'object' && 'tool' in value && typeof value.tool === 'string') {
+      const result = 'result' in value ? value.result : '';
+      parsed = { tool: value.tool, result: typeof result === 'string' ? result : JSON.stringify(result) ?? '',
+        ok: !('ok' in value) || value.ok !== false };
+    }
+  } catch { /* Keep legacy tool text available when it has no structured fields. */ }
   return (
-    <div style={{ margin: '4px 0 12px 36px', padding: '8px 12px', background: parsed.ok ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${parsed.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`, borderRadius: '6px', fontSize: 'var(--text-xs)' }}>
-      <div style={{ color, fontWeight: 'var(--font-medium)', marginBottom: '4px' }}>{parsed.ok ? '←' : '✗'} {parsed.tool}</div>
-      <pre style={{ margin: 0, color: 'var(--color-text-secondary)', whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono, monospace)', fontSize: '11px', maxHeight: '200px', overflow: 'auto' }}>
-        {parsed.result.slice(0, 1500)}{parsed.result.length > 1500 ? '\n…' : ''}
+    <details className={`tide-session__tool tide-session__tool--${parsed.ok ? 'done' : 'error'}`}>
+      <summary><TideIcon name={parsed.ok ? 'check' : 'close'} /><strong>{parsed.tool}</strong><span>{t('chat.tool.result')}</span>
+        {timestamp && <time dateTime={timestamp} title={formatTimestamp(timestamp, true)}>{formatTimestamp(timestamp)}</time>}
+      </summary>
+      <pre>
+        <BoundedText text={parsed.result} />
       </pre>
-      {timestamp && <div style={{ fontSize: '9px', color: 'var(--color-text-tertiary)', marginTop: '4px' }}>{timestamp.slice(11, 19)}</div>}
-    </div>
+      {!!toolImages?.length && <ToolResultImages images={toolImages} scope={mediaScope} />}
+    </details>
   );
 }

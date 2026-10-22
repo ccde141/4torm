@@ -2,6 +2,9 @@ import { createDispatch, listWorkshopDispatches, updateDispatch, type CycloneDis
 import { resolveAuthorizedTarget } from './organization/organization-authorization.js';
 import { saveSeat } from './seat-store.js';
 import type { SeatData, SeatContextMessage } from './types.js';
+import { loadWorkshop } from './workshop-store.js';
+import { loadSeat } from './seat-store.js';
+import { frameworkError } from '../shared/framework-error.js';
 
 interface CreateSeatDispatchOpts {
   workshopId: string;
@@ -44,8 +47,28 @@ function receiptMessage(item: CycloneDispatch): SeatContextMessage {
     role: 'system',
     kind: 'dispatch-receipt',
     dispatchId: item.id,
-    content: `异步工位「${item.targetSeatTitle}」已完成任务「${item.task}」：\n\n${outcome}`,
+    content: `异步工位「${item.targetSeatTitle}」${item.status === 'failed' ? '未完成' : '已完成'}任务「${item.task}」：\n\n${outcome}`,
   };
+}
+
+export async function createSupervisorDispatchRecord(dataDir: string, opts: {
+  workshopId: string; targetSeatTitle: string; task: string; sourceTurnId: string; dispatchOrder?: number;
+}): Promise<CycloneDispatch> {
+  const workshop = await loadWorkshop(dataDir, opts.workshopId);
+  if (!workshop) throw new Error('工作室不存在');
+  const seats = await Promise.all(workshop.seatIds.map(id => loadSeat(dataDir, opts.workshopId, id)));
+  const matches = seats.filter(seat => seat?.title === opts.targetSeatTitle);
+  const identified = seats.find(seat => seat?.id === opts.targetSeatTitle);
+  if (!identified && matches.length > 1) throw frameworkError({ code: 'CYCLONE_SEAT_TARGET_AMBIGUOUS',
+    kind: 'validation', message: '目标工位名称存在歧义，请使用工位 ID',
+    source: 'cyclone.dispatch', retryable: false });
+  const target = identified ?? matches[0];
+  if (!target) throw frameworkError({ code: 'CYCLONE_SEAT_NOT_FOUND', kind: 'not_found',
+    message: '目标工位不存在或不属于当前工作室', source: 'cyclone.dispatch', retryable: false });
+  return createDispatch(dataDir, { workshopId: opts.workshopId, sourceKind: 'supervisor',
+    sourceRoomId: '', sourceSeatId: 'supervisor', sourceSeatTitle: '工作室主管',
+    sourceTurnId: opts.sourceTurnId, sourceRoundSeq: 0, dispatchOrder: opts.dispatchOrder ?? 0,
+    targetSeatId: target.id, targetSeatTitle: target.title, task: opts.task, receiptState: 'pending' });
 }
 
 export async function deliverSeatDispatchReceipts(

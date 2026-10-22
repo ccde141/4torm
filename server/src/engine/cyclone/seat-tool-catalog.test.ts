@@ -24,6 +24,14 @@ test('工位文本协议列出运行时真实可调用的派发与后台工具',
     wsRelPath: 'data/cyclone/workshop-a/workspace',
   });
   for (const name of names) assert.match(prompt, new RegExp(`### ${name}\\b`));
+  assert.match(prompt, /收尾前再用 seat_dispatch_read 核对一次有关派发/);
+  assert.match(prompt, /给人类的回复末尾/);
+  assert.match(prompt, /避免连续轮询或空等/);
+  assert.match(prompt, /不必每轮通读履历和记忆/);
+  const activity = catalog.find(tool => tool.name === 'seat_activity_read');
+  assert.deepEqual(activity?.parameters?.properties?.filter?.enum, ['all', 'work', 'changes']);
+  assert.equal(activity?.parameters?.properties?.limit?.maximum, 12);
+  assert.equal(activity?.parameters?.properties?.cursor?.type, 'string');
 });
 
 test('没有派发目标时不向工位建议不存在的派发工具', () => {
@@ -47,4 +55,16 @@ test('被联络工位的文本协议列出实际可用的协作工具', () => {
     assert.match(prompt, new RegExp(`### ${name}\\b`));
   }
   assert.doesNotMatch(prompt, /### ask\b|### task_board\b/);
+});
+
+test('局部策略移除对应协作工具但保留池中其他能力和场景工具', () => {
+  const policy = { contact: false, dispatch: false, bulletin: false };
+  const real = [{ name: 'read_file', description: '文件' }, { name: 'framework', description: '框架' }];
+  const targets = [{ title: '同事', duty: '协作' }];
+  for (const catalog of [buildSeatToolCatalog(real, targets, targets, policy),
+    buildContactToolCatalog(real, targets, policy)]) {
+    const names = catalog.map(tool => tool.name);
+    for (const name of ['contact', 'dispatch', 'bulletin']) assert.equal(names.includes(name), false);
+    for (const name of ['read_file', 'framework', 'delegate']) assert.equal(names.includes(name), true);
+  }
 });

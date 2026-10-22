@@ -54,6 +54,6 @@ export async function abortMeetingRound(
 
 export async function sendNodeMessage(
   executionId: string, nodeId: string, message: string, fallback = '发送节点消息失败',
-): Promise<void> {
-  await invokeFeature('tradewind', 'sendNodeMessage', { executionId, nodeId, message }, fallback);
+): Promise<{ accepted: true; nodeId: string; messageId?: string }> {
+  return invokeFeature('tradewind', 'sendNodeMessage', { executionId, nodeId, message }, fallback);
 }

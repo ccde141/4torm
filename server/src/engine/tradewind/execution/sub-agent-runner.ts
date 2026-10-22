@@ -51,8 +51,8 @@ export interface SubAgentResult {
 export type SubAgentEvent =
   | { type: 'token'; data: { t: string } }
   | { type: 'reasoning'; data: { t: string } }
-  | { type: 'tool_call'; data: { tool: string; args: Record<string, string> } }
-  | { type: 'tool_result'; data: { tool: string; result: string; ok: boolean } }
+  | { type: 'tool_call'; data: { tool: string; args: Record<string, unknown> } }
+  | { type: 'tool_result'; data: { tool: string; result: string; ok: boolean; toolImages?: import('../../shared/types.js').ToolImageRef[] } }
   | { type: 'continuation'; data: { reason: string; attempt: number } }
   | { type: 'remind'; data: { msg: string } }
   | { type: 'done'; data: SubAgentResult }

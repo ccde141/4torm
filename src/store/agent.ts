@@ -1,3 +1,4 @@
+import { backendFetch } from '../lib/backend-client';
 import { getAllModels, getProviderForModel } from '../llm';
 import type { Agent, AgentConfig } from '../types';
 import { notifyAgentsChanged } from './agent-events';
@@ -9,7 +10,7 @@ const ACTIVITY_SURFACES = new Set(['conversation', 'convection', 'cyclone', 'tra
 
 async function readAgentActivities(): Promise<AgentActivities | null> {
   try {
-    const response = await fetch('/api/collaboration/presence');
+    const response = await backendFetch('/api/collaboration/presence');
     if (!response.ok) return null;
     const value: unknown = await response.json();
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -109,7 +110,7 @@ export async function deleteAgent(id: string): Promise<void> {
 }
 
 async function request<T = unknown>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await backendFetch(url, init);
   const body = await response.json().catch(() => ({})) as { error?: string };
   if (!response.ok) throw new Error(body.error || `Agent 请求失败（HTTP ${response.status}）`);
   return body as T;

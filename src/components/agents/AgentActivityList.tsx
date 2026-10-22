@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useLocale } from '../../i18n/LocaleContext';
 import type { AgentActivityView } from './dashboard-activity';
 import { activityPreview } from './agent-activity-view';
-import { activitySummaryKey, featureKey, statusKey } from './agent-card-view';
+import { activityStatusLabel, activitySummaryKey, featureKey, statusKey } from './agent-card-view';
 
 interface Props {
   activity: AgentActivityView;
@@ -18,7 +18,7 @@ export default function AgentActivityList({ activity, selectedKey, onSelect }: P
   return <div className="agent-detail__main">
     <div className="agent-detail__now">
       <label>{t('dashboard.detail.currentState')}</label>
-      <strong>{t(statusKey(activity.kind))}</strong>
+      <strong>{activityStatusLabel(activity, t)}</strong>
       <span>{summaryKey ? t(summaryKey) : activity.summary}</span>
     </div>
     <h3>{t('dashboard.card.activity')}</h3>

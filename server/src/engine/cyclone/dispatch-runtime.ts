@@ -1,10 +1,14 @@
-import { chatSeat, type SeatEvent } from './seat-runner.js';
+import { chatSeatWithinExecution, type SeatEvent } from './seat-runner.js';
+import { loadSeat, tryAcquireSeatLock } from './seat-store.js';
 import { loadRoom } from './room-store.js';
 import {
   type CycloneDispatch,
   type DispatchActivity,
   updateDispatch,
+  loadDispatch,
+  mutateDispatch,
 } from './dispatch-store.js';
+import { activateDispatch, claimDispatch, withdrawExpiredDispatch } from './dispatch-admission.js';
 import { reduceDispatchActivity } from './dispatch-progress.js';
 import { beginExternalSeatActivity } from './seat-activity.js';
 import type { ReActTermination } from '../shared/react/outcome.js';
@@ -17,15 +21,22 @@ interface SeatExecutionResult {
   executionIds?: string[];
 }
 
-interface DispatchChildExecution {
+export interface DispatchChildExecution {
   executionId: string;
   status: 'completed' | 'failed' | 'cancelled';
   error?: string;
+}
+type DispatchResult = 'completed' | 'awaiting_human' | 'queued' | 'failed';
+
+function storedResult(item: CycloneDispatch | null): DispatchResult {
+  return !item ? 'failed' : item.status === 'running' ? 'queued' : item.status;
 }
 
 export interface DispatchExecutionDeps {
   executeSeat: (item: CycloneDispatch) => Promise<SeatExecutionResult>;
   getCompletedRoundSeq: (item: CycloneDispatch) => Promise<number>;
+  acquireTarget?: (item: CycloneDispatch) => (() => void) | null;
+  targetPending?: (item: CycloneDispatch) => Promise<boolean>;
   waitExecutions?: (
     item: CycloneDispatch,
     executionIds: string[],
@@ -61,10 +72,11 @@ async function defaultExecuteSeat(dataDir: string, item: CycloneDispatch): Promi
     activity = next;
     writes = writes.then(() => updateDispatch(dataDir, item.workshopId, item.id, { activity: next }));
   };
-  const origin = item.sourceKind === 'seat' ? '工位' : '群聊工位';
+  const origin = item.sourceKind === 'supervisor' ? '工作室主管'
+    : item.sourceKind === 'seat' ? '工位' : '群聊工位';
   let result;
   try {
-    result = await chatSeat(
+    result = await chatSeatWithinExecution(
       dataDir,
       item.workshopId,
       item.targetSeatId,
@@ -81,7 +93,7 @@ async function defaultExecuteSeat(dataDir: string, item: CycloneDispatch): Promi
   };
 }
 
-async function waitForDispatchExecutions(
+export async function waitForDispatchExecutions(
   item: CycloneDispatch,
   executionIds: string[],
 ): Promise<DispatchChildExecution[]> {
@@ -96,6 +108,31 @@ async function waitForDispatchExecutions(
       error: snapshot.error,
     };
   }));
+}
+
+export async function retainDispatchExecutions(dataDir: string, item: CycloneDispatch, ids: string[]): Promise<string[]> {
+  const updated = await mutateDispatch(dataDir, item.workshopId, item.id, current => {
+    return { ...current, executionIds: [...new Set([...(current.executionIds ?? []), ...ids])] };
+  });
+  return updated?.executionIds ?? [];
+}
+
+export async function settleDispatchExecutions(
+  dataDir: string, item: CycloneDispatch, executionIds: string[],
+  wait: NonNullable<DispatchExecutionDeps['waitExecutions']> = waitForDispatchExecutions,
+): Promise<boolean> {
+  if (!executionIds.length) return true;
+  const executions = await wait(item, executionIds);
+  const failed = executions.find(execution => execution.status !== 'completed');
+  if (!failed) return true;
+  const cancelled = failed.status === 'cancelled';
+  await updateDispatch(dataDir, item.workshopId, item.id, {
+    status: 'failed', activity: undefined, response: undefined,
+    error: failed.error ?? (cancelled ? '后台执行已取消' : '后台执行失败'),
+    errorCode: cancelled ? 'BACKGROUND_EXECUTION_CANCELLED' : 'BACKGROUND_EXECUTION_FAILED',
+    errorKind: cancelled ? 'cancelled' : 'tool', completedAt: new Date().toISOString(),
+  });
+  return false;
 }
 
 async function persistFailedTermination(
@@ -123,13 +160,35 @@ export async function executeDispatchRecord(
   item: CycloneDispatch,
   deps?: DispatchExecutionDeps,
 ): Promise<'completed' | 'awaiting_human' | 'queued' | 'failed'> {
-  const resolved = deps ?? {
+  const resolved = {
     executeSeat: (current: CycloneDispatch) => defaultExecuteSeat(dataDir, current),
     getCompletedRoundSeq: (current: CycloneDispatch) => defaultCompletedRoundSeq(dataDir, current),
+    acquireTarget: (current: CycloneDispatch) => tryAcquireSeatLock(current.workshopId, current.targetSeatId),
+    targetPending: async (current: CycloneDispatch) => {
+      const seat = await loadSeat(dataDir, current.workshopId, current.targetSeatId);
+      if (!seat) throw new Error('目标工位不存在或已删除');
+      return Boolean(seat.pending);
+    },
+    ...deps,
   };
-  await updateDispatch(dataDir, item.workshopId, item.id, { status: 'running', error: undefined });
+  // Re-read persisted state before touching the target: old snapshots have no execution rights.
+  const latest = await loadDispatch(dataDir, item.workshopId, item.id);
+  if (!latest || latest.status !== 'queued') return storedResult(latest);
+  if (latest.deliveryDeferred) return 'queued';
+  await activateDispatch(dataDir, item.workshopId, item.id);
+  const eligible = await withdrawExpiredDispatch(dataDir, item.workshopId, item.id);
+  if (!eligible || eligible.status !== 'queued') return storedResult(eligible);
+  const release = resolved.acquireTarget(eligible);
+  if (!release) return 'queued';
+  let admitted = false;
   try {
+    if (await resolved.targetPending(eligible)) return 'queued';
+    const claim = await claimDispatch(dataDir, item.workshopId, item.id);
+    if (!claim.claimed || !claim.item) return storedResult(claim.item);
+    admitted = true;
+    item = claim.item;
     const result = await resolved.executeSeat(item);
+    const executionIds = await retainDispatchExecutions(dataDir, item, result.executionIds ?? []);
     if (result.termination.status === 'waiting') {
       await updateDispatch(dataDir, item.workshopId, item.id, { status: 'awaiting_human', activity: undefined });
       return 'awaiting_human';
@@ -138,24 +197,8 @@ export async function executeDispatchRecord(
       await persistFailedTermination(dataDir, item, result.termination);
       return 'failed';
     }
-    const executionIds = [...new Set(result.executionIds ?? [])];
-    if (executionIds.length > 0) {
-      await updateDispatch(dataDir, item.workshopId, item.id, { executionIds });
-      const executions = await (resolved.waitExecutions ?? waitForDispatchExecutions)(item, executionIds);
-      const failed = executions.find(execution => execution.status !== 'completed');
-      if (failed) {
-        const cancelled = failed.status === 'cancelled';
-        await updateDispatch(dataDir, item.workshopId, item.id, {
-          status: 'failed', activity: undefined, response: undefined,
-          error: failed.error ?? (cancelled ? '后台执行已取消' : '后台执行失败'),
-          errorCode: cancelled ? 'BACKGROUND_EXECUTION_CANCELLED' : 'BACKGROUND_EXECUTION_FAILED',
-          errorKind: cancelled ? 'cancelled' : 'tool',
-          completedAt: new Date().toISOString(),
-        });
-        return 'failed';
-      }
-    }
-    const deadline = item.sourceKind === 'seat'
+    if (!await settleDispatchExecutions(dataDir, item, executionIds, resolved.waitExecutions)) return 'failed';
+    const deadline = (item.sourceKind ?? 'room') !== 'room'
       ? undefined
       : Math.max(item.sourceRoundSeq, await resolved.getCompletedRoundSeq(item)) + 3;
     await updateDispatch(dataDir, item.workshopId, item.id, {
@@ -167,18 +210,16 @@ export async function executeDispatchRecord(
     });
     return 'completed';
   } catch (error) {
-    if (isQueueableSeatState(error)) {
-      await updateDispatch(dataDir, item.workshopId, item.id, {
-        status: 'queued', error: undefined, activity: undefined,
-      });
+    if (!admitted && isQueueableSeatState(error)) {
       return 'queued';
     }
     await updateDispatch(dataDir, item.workshopId, item.id, {
       status: 'failed',
+      delivered: admitted,
       activity: undefined,
       error: (error as Error).message,
       completedAt: new Date().toISOString(),
     });
     return 'failed';
-  }
+  } finally { release(); }
 }

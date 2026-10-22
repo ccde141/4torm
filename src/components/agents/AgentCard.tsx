@@ -2,7 +2,7 @@ import type { Agent } from '../../types';
 import type { AgentActivityView } from './dashboard-activity';
 import AgentAvatar from './AgentAvatar';
 import { activityPreview } from './agent-activity-view';
-import { activitySummaryKey, cardDetails, featureKey, statusKey,
+import { activityStatusLabel, activitySummaryKey, cardDetails, featureKey, statusKey,
   workspaceDisplayLabel } from './agent-card-view';
 import { useLocale } from '../../i18n/LocaleContext';
 import '../../styles/components/agent-card.css';
@@ -38,8 +38,7 @@ export default function AgentCard({
         </span>
         <span className="agent-card__status">
           <i className="agent-card__status-dot" aria-hidden="true" />
-          {deleting ? t('agent.deleting') : locale === 'zh-CN' ? activity.label
-            : t(statusKey(activity.item?.status ?? activity.kind))}
+          {deleting ? t('agent.deleting') : activityStatusLabel(activity, t)}
         </span>
       </span>
       <span className="agent-card__activity">

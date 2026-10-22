@@ -1,3 +1,4 @@
+import { backendFetch } from '../lib/backend-client';
 import { readJson } from '../api/storage';
 
 /** 任务状态：待办 / 进行中 / 完成 / 受阻 */
@@ -18,6 +19,7 @@ export interface TaskBoard {
 }
 
 interface TaskboardMutationResponse {
+  ok?: boolean;
   result?: string;
   meta?: { taskboard: TaskBoard | null };
 }
@@ -85,7 +87,7 @@ async function mutateTaskboard(
   board: TaskBoard | null,
   expectedRevision: number,
 ): Promise<TaskBoard | null> {
-  const response = await fetch('/api/taskboard/mutate', {
+  const response = await backendFetch('/api/taskboard/mutate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -100,7 +102,7 @@ async function mutateTaskboard(
   if (response.status === 409) {
     throw new TaskboardConflictError(payload.result || '任务板版本冲突', payload.meta?.taskboard ?? null);
   }
-  if (!response.ok) throw new Error(payload.result || `任务板保存失败: ${response.status}`);
+  if (!response.ok || payload.ok === false) throw new Error(payload.result || `任务板保存失败: ${response.status}`);
   return payload.meta?.taskboard ?? null;
 }
 

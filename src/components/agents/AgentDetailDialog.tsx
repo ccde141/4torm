@@ -12,7 +12,7 @@ import MemoryPanel from './MemoryPanel';
 import { AGENT_CONFIG_TABS, AGENT_CONFIG_TAB_LABELS, isAgentConfigTab,
   type AgentConfigTab } from './AgentConfigTabs';
 import { useLocale } from '../../i18n/LocaleContext';
-import { statusKey } from './agent-card-view';
+import { activityStatusLabel } from './agent-card-view';
 import '../../styles/components/agent-detail.css';
 
 interface Rect { left: number; top: number; width: number; height: number }
@@ -48,7 +48,7 @@ function focusWithin(dialog: HTMLElement, event: KeyboardEvent) {
 }
 
 export default function AgentDetailDialog(props: Props) {
-  const { t, locale } = useLocale();
+  const { t } = useLocale();
   const { agent, activity, origin, onClose, onSaveConfig, onDelete, onNavigate } = props;
   const [rect, setRect] = useState(origin);
   const [open, setOpen] = useState(false);
@@ -134,10 +134,9 @@ export default function AgentDetailDialog(props: Props) {
       <div className="agent-detail__content" inert={closing}>
         <header className="agent-detail__head">
           <AgentAvatar agent={agent} className="agent-detail__avatar" fallback={agent.name[0]} />
-          <div className="agent-detail__identity"><small>AGENT / {agent.id}</small><h2>{agent.name}</h2><p>{agent.role}</p></div>
+          <div className="agent-detail__identity"><small>{t('dashboard.agent')} / {agent.id}</small><h2>{agent.name}</h2><p>{agent.role}</p></div>
           <span className={`agent-detail__status agent-detail__status--${activity.kind}`}>
-            <i aria-hidden="true" /> {locale === 'zh-CN' ? activity.label
-              : t(statusKey(activity.kind))}</span>
+            <i aria-hidden="true" /> {activityStatusLabel(activity, t)}</span>
           <button type="button" aria-label={t('dashboard.detail.close')}
             className="agent-detail__close" onClick={close}>×</button>
         </header>

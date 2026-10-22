@@ -4,8 +4,88 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import Fastify from 'fastify';
 import { callLLM, resolveModelPromptBudget } from './llm-bridge.js';
 import { FrameworkError } from './framework-error.js';
+import { buildProbeBody } from '../../model-runtime/providers/capability-probe.js';
+import type { StoredProvider } from '../../model-runtime/config/provider-store.js';
+import { modelRuntimeRoutes } from '../../routes/model-runtime.js';
+
+test('configured model lists, probes and inference share authentication precedence without duplicate casing', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-provider-auth-consistency-'));
+  const app = Fastify(); app.decorate('dataDir', dataDir); app.decorate('projectRoot', dataDir);
+  await app.register(modelRuntimeRoutes, { prefix: '/api/model-runtime' });
+  t.after(async () => { await app.close(); await fs.rm(dataDir, { recursive: true, force: true }); });
+  let expectedProtocol = 'openai-chat-completions';
+  let requests = 0;
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    requests++;
+    const headers = new Headers(init?.headers);
+    if (expectedProtocol === 'openai-chat-completions') {
+      assert.equal(headers.get('authorization'), 'Bearer preferred-key');
+      assert.equal([...headers.keys()].filter(key => key === 'authorization').length, 1);
+    } else {
+      assert.equal(headers.get('x-api-key'), 'custom-anthropic-key');
+      assert.equal(headers.get('anthropic-version'), '2024-01-01');
+      assert.equal(headers.get('authorization'), null);
+    }
+    return Response.json(init?.method === 'GET' ? { data: [{ id: 'model' }] } : {
+      choices: [{ message: { content: 'fixture' }, finish_reason: 'stop' }],
+      content: [{ type: 'text', text: 'fixture' }], stop_reason: 'end_turn',
+    });
+  });
+  for (const protocol of ['openai-chat-completions', 'anthropic-messages']) {
+    expectedProtocol = protocol;
+    const provider = { id: 'p', baseUrl: 'https://provider.test/v1', models: ['model'],
+      providerType: protocol === 'anthropic-messages' ? 'anthropic' : 'openai-compatible', transport: protocol,
+      apiKey: 'preferred-key', customHeaders: protocol === 'anthropic-messages'
+        ? { 'X-Api-Key': 'custom-anthropic-key', 'Anthropic-Version': '2024-01-01' }
+        : { authorization: 'first-custom-token', Authorization: 'second-custom-token' } };
+    await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [provider] }));
+    const listed = await app.inject({ method: 'POST', url: '/api/model-runtime/models', payload: { providerId: 'p' } });
+    assert.equal(listed.statusCode, 200);
+    const probe = await app.inject({ method: 'POST', url: '/api/model-runtime/probes',
+      payload: { providerId: 'p', model: 'model', capability: 'tools' } });
+    assert.equal(probe.statusCode, 200);
+    const result = await callLLM({ dataDir, fullModelKey: 'p:model', messages: [{ role: 'user', content: 'fixture' }] });
+    assert.equal(result.content, 'fixture');
+  }
+  assert.equal(requests, 6, 'one list, one probe and one inference per protocol, without replay');
+});
+
+test('inference and capability probes honor the same legacy profiles and explicit provider precedence', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-provider-adapter-consistency-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const cases: Array<{ provider: StoredProvider; model: string; field: string }> = [
+    { provider: { id: 'p', baseUrl: 'https://proxy.test/v1', modelProfiles: { 'vendor-model': 'kimi' } },
+      model: 'vendor-model', field: 'max_completion_tokens' },
+    { provider: { id: 'p', baseUrl: 'https://api.moonshot.cn/v1' },
+      model: 'kimi-k3', field: 'max_completion_tokens' },
+    { provider: { id: 'p', baseUrl: 'https://api.moonshot.cn/v1', providerType: 'openai-compatible',
+      transport: 'openai-chat-completions', modelProfiles: { 'kimi-k3': 'kimi' } },
+      model: 'kimi-k3', field: 'max_tokens' },
+    { provider: { id: 'p', baseUrl: 'https://proxy.test/v1', modelProfiles: { qwen: 'llama-cpp' } },
+      model: 'qwen', field: 'max_tokens' },
+    { provider: { id: 'p', baseUrl: 'https://proxy.test/v1', providerType: 'kimi',
+      transport: 'openai-chat-completions', modelProfiles: { 'vendor-model': 'llama-cpp' } },
+      model: 'vendor-model', field: 'max_completion_tokens' },
+  ];
+  let expected: string;
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body[expected], 64);
+    assert.equal(body[expected === 'max_tokens' ? 'max_completion_tokens' : 'max_tokens'], undefined);
+    return Response.json({ choices: [{ message: { content: 'fixture' }, finish_reason: 'stop' }] });
+  });
+  for (const scenario of cases) {
+    expected = scenario.field;
+    await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [scenario.provider] }));
+    assert.equal(buildProbeBody(scenario.provider, scenario.model, 'tools')[expected], 64);
+    const result = await callLLM({ dataDir, fullModelKey: `p:${scenario.model}`,
+      messages: [{ role: 'user', content: 'fixture' }], options: { maxTokens: 64 } });
+    assert.equal(result.content, 'fixture');
+  }
+});
 
 test('an explicit framework budget survives Anthropic custom output defaults', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-output-budget-'));

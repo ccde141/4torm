@@ -5,11 +5,13 @@ import type { LLMCaller, ReActStreamEvent, ToolCallOutcome } from '../../../engi
 import type { ReActTermination } from '../../../engine/shared/react/outcome.js';
 import { callToolOutcome } from './tool-bridge.js';
 import { executeConvectionMemoryTool } from './convection-memory.js';
+import { legacyToolArguments } from '../../../engine/shared/tool-arguments.js';
 
 export interface ToolCallRecord {
   tool: string;
-  args: Record<string, string>;
+  args: Record<string, unknown>;
   result: string;
+  toolImages?: import('../../../engine/shared/types.js').ToolImageRef[];
 }
 
 export interface AgentReActResult {
@@ -25,9 +27,10 @@ export interface ConvectionReActEvent {
   label: string;
   chunk?: string;
   tool?: string;
-  args?: Record<string, string>;
+  args?: Record<string, unknown>;
   result?: string;
   ok?: boolean;
+  toolImages?: import('../../../engine/shared/types.js').ToolImageRef[];
   phase?: 'llm-waiting' | 'tool-exec';
   elapsed?: number;
   message?: string;
@@ -64,7 +67,7 @@ export interface ConvectionTextDependencies {
     signal?: AbortSignal,
     onReasoning?: (chunk: string) => void,
   ): Promise<ModelResult>;
-  callAgentTool(name: string, args: Record<string, string>): Promise<string | ToolCallOutcome>;
+  callAgentTool(name: string, args: Record<string, unknown>): Promise<string | ToolCallOutcome>;
 }
 
 function mapEvent(label: string, event: ReActStreamEvent): ConvectionReActEvent | null {
@@ -86,9 +89,10 @@ function defaultDependencies(params: RunReActParams): ConvectionTextDependencies
       onReasoning,
     }),
     callAgentTool: async (name, args) => {
-      const memoryResult = await executeConvectionMemoryTool(params.dataDir, params.agentId, name, args);
+      const memoryResult = await executeConvectionMemoryTool(params.dataDir, params.agentId, name, legacyToolArguments(args));
       if (memoryResult !== null) return memoryResult;
       return callToolOutcome({
+        mediaAccess: { dataDir: params.dataDir, feature: 'convection', target: { sessionId: params.sessionId } },
         tool: name,
         args,
         agentId: params.agentId,

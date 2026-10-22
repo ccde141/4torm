@@ -9,6 +9,12 @@ test('seat progress forwards heartbeat with elapsed time', () => {
   );
 });
 
+test('seat failure is forwarded while the room consumes its terminal result after persistence', () => {
+  const error = { type: 'error' as const, message: 'provider unavailable' };
+  assert.deepEqual(toSeatProgressEvent(error), error);
+  assert.equal(toRoomProgressEvent('研究工位', error), null);
+});
+
 test('room progress keeps speaker ownership on heartbeat', () => {
   assert.deepEqual(
     toRoomProgressEvent('研究工位', { type: 'heartbeat', phase: 'llm-waiting', elapsed: 12_000 }),

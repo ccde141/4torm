@@ -2,7 +2,7 @@ export interface ParsedContent {
   think: string;
   answer: string;
   note: string;
-  actions: Array<{ tool: string; args: Record<string, string> }>;
+  actions: Array<{ tool: string; args: Record<string, unknown> }>;
   raw: string;
 }
 

@@ -11,10 +11,12 @@ function fact(operationId: string, phase: string, status: CollaborationProbeItem
 test('中心探针把未打开的工位、群聊和会长运行映射到对应工作室实体', () => {
   const facts = selectWorkshopOperations([
     fact('seat:workshop-a:seat-1', 'seat-chat', 'running'),
+    fact('seat:workshop-a:seat-2', 'seat-contact', 'running'),
     fact('room:workshop-a:room-1', 'room-speak', 'failed'),
     fact('room:workshop-a:room-2', 'chair-chat', 'crashed'),
   ], 'workshop-a');
   assert.equal(facts.seats.get('seat-1')?.status, 'running');
+  assert.equal(facts.seats.get('seat-2')?.status, 'running');
   assert.equal(facts.rooms.get('room-1')?.status, 'failed');
   assert.equal(facts.rooms.get('room-2')?.status, 'crashed');
 });

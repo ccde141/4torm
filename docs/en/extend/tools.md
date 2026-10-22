@@ -29,7 +29,7 @@ Feature-owned capabilities such as `ask`, taskboards, the Monsoon session team, 
 
 ## Create and Manage Tools
 
-![Global tool registry](/images/extend/tool-registry.webp)
+![Global tool registry](/images/extend/tool-registry-current.png)
 
 Use **Register Tool** to provide a stable unique name, purpose, JSON Schema arguments, dangerous marker, execution lifecycle, and either a command template or custom JavaScript executor.
 

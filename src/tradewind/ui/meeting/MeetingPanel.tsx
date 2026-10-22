@@ -21,7 +21,9 @@ import { useLocale } from '../../../i18n/LocaleContext';
 import { abortMeetingRound } from '../execution-client';
 import { belongsToExecution } from '../hooks/execution-visibility';
 import { acceptsPanelEvent } from '../stream/panel-identity';
-import { latestProviderUsage, type ProviderUsage } from '../token-usage';
+import { latestProviderUsage, updateProviderUsage, type ProviderUsageDisplay, type ProviderUsageDisplayEvent } from '../token-usage';
+import { compactionActivity, reduceCompactionActivity, type CompactionActivity } from '../../../components/common/compaction-activity';
+import { historyCommand, pendingCompaction } from '../compaction-events';
 
 interface MeetingPanelProps {
   nodeId: string;
@@ -51,11 +53,26 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
   const [publicMsgs, setPublicMsgs] = useState<MeetingMessage[]>([]);
   const [chairMsgs, setChairMsgs] = useState<MeetingChairMessage[]>([]);
   const [status, setStatus] = useState<MeetingStatus | null>(null);
-  const [latestUsage, setLatestUsage] = useState<ProviderUsage | null | undefined>();
+  const [error, setError] = useState<string | null>(null);
+  const [usageDisplay, setUsageDisplay] = useState<ProviderUsageDisplay>();
+  const usageScope = JSON.stringify([workflowId, executionId, nodeId]);
+  const usageScopeRef = useRef(usageScope);
+  usageScopeRef.current = usageScope;
+  const latestUsage = usageDisplay?.scope === usageScope ? usageDisplay.usage : undefined;
+  const updateUsage = useCallback((event: ProviderUsageDisplayEvent) => {
+    if (usageScope !== usageScopeRef.current) return;
+    setUsageDisplay(current => updateProviderUsage(current, usageScope, event));
+  }, [usageScope]);
+  const restoreUsage = useCallback((value: Pick<MeetingStatus, 'busy' | 'tokenUsage'>) => {
+    if (value.busy) updateUsage({ type: 'start', operation: 'public' });
+    updateUsage({ type: 'usage', usage: latestProviderUsage(value.tokenUsage) });
+    if (!value.busy) updateUsage({ type: 'done', operation: 'public' });
+  }, [updateUsage]);
   const usageVersionRef = useRef(0);
-  const identityRef = useRef({ workflowId, executionId });
-  identityRef.current = { workflowId, executionId };
-  const acceptsStatus = useCallback((value: MeetingStatus) => belongsToExecution(value, identityRef.current), []);
+  const identityRef = useRef({ workflowId, executionId, nodeId });
+  identityRef.current = { workflowId, executionId, nodeId };
+  const acceptsStatus = useCallback((value: MeetingStatus) => belongsToExecution(value, identityRef.current)
+    && value.nodeId === identityRef.current.nodeId, []);
   const reportStatusError = useCallback((cause: unknown) => {
     setError(cause instanceof Error ? cause.message : String(cause));
   }, []);
@@ -63,9 +80,15 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
   const [chairInput, setChairInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [chairBusy, setChairBusy] = useState(false);
+  const [chairHistoryRequest, setChairHistoryRequest] = useState(false);
   const [endingRequested, setEndingRequested] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [compactionNotice, setCompactionNotice] = useState<string | null>(null);
+  const [compactions, setCompactions] = useState<Partial<Record<MeetingView, CompactionActivity>>>({});
+  const compactionVersionRef = useRef(0);
+  const requestsRef = useRef<Partial<Record<MeetingView, AbortController>>>({});
+  const panelKey = `${workflowId}:${executionId}:${nodeId}`;
+  const panelKeyRef = useRef(panelKey);
+  panelKeyRef.current = panelKey;
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
   const [waitingLabel, setWaitingLabel] = useState('');
   const [waitingElapsed, setWaitingElapsed] = useState(0);
@@ -93,6 +116,37 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
     if (streamFrameRef.current !== null) cancelAnimationFrame(streamFrameRef.current);
   }, []);
 
+  const updateCompaction = useCallback((target: MeetingView, event: unknown) => {
+    compactionVersionRef.current++;
+    setCompactions(current => ({ ...current,
+      [target]: reduceCompactionActivity(current[target], event) }));
+  }, []);
+
+  const restoreCompactions = useCallback((facts: MeetingStatus['compactions'], version: number) => {
+    if (version !== compactionVersionRef.current) return;
+    setCompactions({ public: compactionActivity(facts?.public), chair: compactionActivity(facts?.chair) });
+  }, []);
+
+  const reconcileCancelledCompaction = useCallback(async (target: MeetingView, requestKey: string) => {
+    const version = compactionVersionRef.current;
+    try {
+      const latest = await getStatus(nodeId, { workflowId, executionId });
+      if (requestKey !== panelKeyRef.current || !acceptsStatus(latest) || version !== compactionVersionRef.current) return;
+      compactionVersionRef.current++;
+      setCompactions(current => ({ ...current, [target]: compactionActivity(latest.compactions?.[target]) }));
+      if (latest.compactions?.[target]?.type !== 'compact-start') updateUsage({ type: 'done', operation: target });
+      if (target === 'public') {
+        setBusy(latest.busy);
+        if (latest.publicMessages) setPublicMsgs(latest.publicMessages);
+      } else if (latest.chairMessages) setChairMsgs(latest.chairMessages);
+    } catch {
+      if (requestKey !== panelKeyRef.current) return;
+      setCompactions(current => current[target]?.phase === 'running' ? { ...current,
+        [target]: { ...current[target]!, phase: 'failed', updatedAt: Date.now(),
+          message: t('compaction.status.unconfirmed') } } : current);
+    }
+  }, [nodeId, workflowId, executionId, acceptsStatus, t, updateUsage]);
+
   // 等待计时器
   useEffect(() => {
     if (!waitingSince) { setWaitingElapsed(0); return; }
@@ -116,24 +170,30 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
   useEffect(() => {
     let cancelled = false;
     const usageVersion = usageVersionRef.current;
-    setLatestUsage(undefined);
+    const compactionVersion = compactionVersionRef.current;
+    setUsageDisplay(undefined);
     setCompactionNotice(null);
+    setCompactions({});
+    requestsRef.current = {};
+    setChairHistoryRequest(false);
     getStatus(nodeId, { workflowId, executionId })
       .then((s) => {
         if (cancelled || !acceptsStatus(s)) return;
         setError(null);
         roundIdRef.current = s.runId ?? null;
         setStatus(s);
+        setBusy(s.busy);
         setCompactionNotice(s.compactionNotice ?? null);
+        restoreCompactions(s.compactions, compactionVersion);
         if (usageVersion === usageVersionRef.current) {
-          setLatestUsage(latestProviderUsage(s.tokenUsage));
+          restoreUsage(s);
         }
         if (s.publicMessages) setPublicMsgs(s.publicMessages);
         if (s.chairMessages) setChairMsgs(s.chairMessages);
       })
       .catch(reportStatusError);
     return () => { cancelled = true; };
-  }, [nodeId, workflowId, executionId, acceptsStatus, reportStatusError]);
+  }, [nodeId, workflowId, executionId, acceptsStatus, reportStatusError, restoreCompactions, restoreUsage]);
 
   // 事件处理中枢：所有会议室事件通过此函数路由
   const handleEvent = useCallback((ev: MeetingBroadcastEvent) => {
@@ -155,8 +215,9 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
           chairMessages: ev.chairMessages as MeetingStatus['chairMessages'],
           tokenUsage: ev.tokenUsage,
         });
-        setLatestUsage(latestProviderUsage(ev.tokenUsage));
+        restoreUsage({ busy: ev.messages.some(message => message.streaming), tokenUsage: ev.tokenUsage });
         setCompactionNotice(ev.compactionNotice ?? null);
+        restoreCompactions(ev.compactions, compactionVersionRef.current);
         setPublicMsgs(ev.messages as MeetingMessage[]);
         setChairMsgs((ev.chairMessages as MeetingStatus['chairMessages']) || []);
         // 恢复公共流快照：前端连接前可能已经发出 agent-start。
@@ -172,6 +233,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
         break;
       }
       case 'round-start':
+        updateUsage({ type: 'start', operation: 'public' });
         roundIdRef.current = ev.runId;
         setBusy(true);
         break;
@@ -185,7 +247,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
                 if (!acceptsStatus(s)) return;
                 setStatus(s);
                 if (usageVersion === usageVersionRef.current) {
-                  setLatestUsage(latestProviderUsage(s.tokenUsage));
+                  restoreUsage(s);
                 }
               }).catch(reportStatusError);
             return prev;
@@ -194,6 +256,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
         });
         // opening → discussion：清理 opening 期间残留的 busy 状态
         if (ev.phase === 'discussion') {
+          updateUsage({ type: 'done', operation: 'public' });
           setBusy(false);
           setWaitingSince(null);
           setWaitingLabel('');
@@ -208,7 +271,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
             .then(s => {
               if (!acceptsStatus(s)) return;
               if (usageVersion === usageVersionRef.current) {
-                setLatestUsage(latestProviderUsage(s.tokenUsage));
+                restoreUsage(s);
               }
               if (s.publicMessages) setPublicMsgs(s.publicMessages);
               if (s.chairMessages) setChairMsgs(s.chairMessages);
@@ -237,6 +300,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
       case 'summary-done':
       case 'compact-start':
       case 'compact-done':
+      case 'compact-failed':
       case 'compact-warn':
       case 'compaction-notice':
       case 'compaction-notice-clear':
@@ -248,7 +312,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
         handleStreamEvent(ev);
         break;
     }
-  }, [nodeId, workflowId, executionId, acceptsStatus, reportStatusError]);
+  }, [nodeId, workflowId, executionId, acceptsStatus, reportStatusError, restoreCompactions, restoreUsage, updateUsage]);
   handleEventRef.current = handleEvent;
 
   const updateLastPublic = useCallback((mutate: (last: MeetingMessage) => MeetingMessage) => {
@@ -308,9 +372,10 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
     switch (ev.type) {
       case 'usage':
         usageVersionRef.current++;
-        setLatestUsage(ev.usage);
+        updateUsage({ type: 'usage', usage: ev.usage });
         break;
       case 'agent-start':
+        updateUsage({ type: 'start', operation: 'public' });
         stream.currentLabel = ev.label;
         stream.streamContent = '';
         stream.reasoningContent = '';
@@ -355,6 +420,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
             return {
               ...t,
               result: ev.result,
+              toolImages: ev.toolImages,
               status: 'done',
               ...(typeof ev.meta?.before === 'string' ? { diff: { before: ev.meta.before } } : {}),
             };
@@ -434,6 +500,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
         break;
       case 'round-done':
         flushStreamFrame();
+        updateUsage({ type: 'done', operation: 'public' });
         // 后端权威快照——直接替换（不保留前端 streaming 残留，避免重复）
         setPublicMsgs((ev as any).messages as MeetingMessage[]);
         setBusy(false);
@@ -444,6 +511,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
         publicStreamRef.current.pendingTools = [];
         break;
       case 'chair-token': {
+        updateUsage({ type: 'start', operation: 'chair' });
         const chairStream = chairStreamRef.current;
         chairStream.streamContent = appendChairStreamChunk(
           { content: chairStream.streamContent, reasoning: chairStream.reasoningContent },
@@ -455,6 +523,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
         break;
       }
       case 'chair-reasoning': {
+        updateUsage({ type: 'start', operation: 'chair' });
         const chairStream = chairStreamRef.current;
         chairStream.reasoningContent = appendChairStreamChunk(
           { content: chairStream.streamContent, reasoning: chairStream.reasoningContent },
@@ -466,6 +535,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
         break;
       }
       case 'chair-done': {
+        updateUsage({ type: 'done', operation: 'chair' });
         const chairContent = ev.content || chairStreamRef.current.streamContent;
         const chairReasoning = ev.reasoningContent || chairStreamRef.current.reasoningContent;
         flushStreamFrame();
@@ -477,11 +547,13 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
       }
       case 'summary-chunk':
         summaryStreamRef.current += ev.chunk;
+        updateUsage({ type: 'start', operation: 'public' });
         summaryFrameDirtyRef.current = true;
         scheduleStreamFrame();
         break;
       case 'summary-done':
         flushStreamFrame();
+        updateUsage({ type: 'done', operation: 'public' });
         setBusy(false);
         setWaitingSince(null);
         // 定稿会议助理总结
@@ -500,32 +572,56 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
         break;
       case 'compact-start':
       case 'compact-done':
+      case 'compact-failed':
+        updateCompaction(ev.target ?? 'public', ev);
+        if (ev.type === 'compact-start') updateUsage({ type: 'start', operation: ev.target ?? 'public' });
+        else if (ev.reason === 'manual' && ev.target === 'chair') updateUsage({ type: 'done', operation: 'chair' });
+        if (ev.type === 'compact-failed' && ev.reason === 'manual' && ev.target === 'chair') setChairBusy(false);
+        break;
       case 'compact-warn':
-        // 压缩事件暂时只透传 UI（后续可加压缩进度条）
+        setCompactionNotice(ev.message);
         break;
       case 'compaction-notice':
         setCompactionNotice(ev.message);
         break;
       case 'compaction-notice-clear':
         setCompactionNotice(null);
+        updateCompaction('public', { type: 'input-accepted' });
+        updateCompaction('chair', { type: 'input-accepted' });
         break;
       case 'history-updated':
-        setPublicMsgs(ev.messages);
-        setChairMsgs(ev.chairMessages);
+        // Replace only this history; the other channel may still be streaming.
+        if (streamFrameRef.current !== null) cancelAnimationFrame(streamFrameRef.current);
+        streamFrameRef.current = null;
+        if (ev.target !== 'chair') {
+          publicFrameDirtyRef.current = false;
+          summaryFrameDirtyRef.current = false;
+          setPublicMsgs(ev.messages);
+        }
+        if (ev.target !== 'public') {
+          chairFrameDirtyRef.current = false;
+          setChairMsgs(ev.chairMessages);
+        }
+        if (publicFrameDirtyRef.current || chairFrameDirtyRef.current || summaryFrameDirtyRef.current) scheduleStreamFrame();
         break;
       case 'heartbeat':
         setWaitingLabel(ev.label);
         break;
       case 'error':
         setError(ev.message);
-        setBusy(false);
-        setWaitingSince(null);
+        updateUsage({ type: 'done', operation: ev.target ?? 'public' });
+        updateCompaction(ev.target ?? 'public', ev);
+        if (ev.target === 'chair') setChairBusy(false);
+        else {
+          setBusy(false);
+          setWaitingSince(null);
+        }
         break;
       case 'done':
       case 'minutes-done':
         break;
     }
-  }, [executionId, flushStreamFrame, nodeId, scheduleStreamFrame, updateLastPublic]);
+  }, [executionId, flushStreamFrame, nodeId, scheduleStreamFrame, updateLastPublic, updateCompaction, updateUsage]);
 
   const phase = status?.phase ?? 'opening';
 
@@ -586,6 +682,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
     if (pub) pub.scrollTop = pub.scrollHeight;
     if (chair) chair.scrollTop = chair.scrollHeight;
     const usageVersion = usageVersionRef.current;
+    const compactionVersion = compactionVersionRef.current;
     // 自愈：面板持久挂载，事件若因 race 丢失会一直缺失。切回面板时用服务端权威态
     // 全量同步 publicMessages/chairMessages/phase/busy，纠正任何累积偏差。
     getStatus(nodeId, { workflowId, executionId })
@@ -594,8 +691,9 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
         setError(null);
         roundIdRef.current = s.runId ?? null;
         setStatus(s);
+        restoreCompactions(s.compactions, compactionVersion);
         if (usageVersion === usageVersionRef.current) {
-          setLatestUsage(latestProviderUsage(s.tokenUsage));
+          restoreUsage(s);
         }
         if (s.publicMessages) setPublicMsgs(s.publicMessages);
         if (s.chairMessages) setChairMsgs(s.chairMessages);
@@ -606,62 +704,101 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
         }
       })
       .catch(reportStatusError);
-  }, [visible, nodeId, workflowId, executionId, acceptsStatus, reportStatusError]);
+  }, [visible, nodeId, workflowId, executionId, acceptsStatus, reportStatusError, restoreCompactions, restoreUsage]);
 
   // 公共发言（fire-and-forget，事件通过 /events 流返回）
   const handleSpeak = useCallback(async () => {
     const text = publicInput.trim();
-    if (!text || busy) return;
-    setPublicInput('');
+    if (!text || busy || requestsRef.current.public || compactions.public?.phase === 'running') return;
+    const command = historyCommand(text);
+    const pending = command ? pendingCompaction(command) : undefined;
+    const controller = command ? new AbortController() : undefined;
+    if (controller) requestsRef.current.public = controller;
+    if (pending) updateCompaction('public', pending);
+    else setPublicInput('');
+    updateUsage({ type: 'start', operation: 'public' });
     setError(null);
     setWaitingSince(Date.now());
     setWaitingLabel('');
     setBusy(true);
 
-    setPublicMsgs(prev => [...prev, { speaker: '人类', content: text, timestamp: Date.now() }]);
+    if (!command) setPublicMsgs(prev => [...prev, { speaker: '人类', content: text, timestamp: Date.now() }]);
 
     let result: { ok: boolean; error?: string };
     try {
-      result = await sendSpeak(executionId, nodeId, text);
+      result = await sendSpeak(executionId, nodeId, text, controller?.signal);
     } catch (e) {
       result = { ok: false, error: (e as Error).message };
     }
+    if (panelKey !== panelKeyRef.current) return;
+    if (controller?.signal.aborted && !result.ok) {
+      await reconcileCancelledCompaction('public', panelKey);
+    } else if (pending) setCompactions(current => current.public?.id === pending.id
+      ? { ...current, public: reduceCompactionActivity(current.public, { ...pending,
+        type: result.ok ? 'compact-done' : 'compact-failed', updatedAt: Date.now(),
+        message: result.error }) } : current);
+    if (panelKey !== panelKeyRef.current) return;
+    if (controller && requestsRef.current.public === controller) delete requestsRef.current.public;
+    if (result.ok && command) setPublicInput(current => current.trim() === text ? '' : current);
     if (!result.ok) {
-      setError(result.error || t('tradewind.meeting.sendPublicFailed'));
+      if (!controller?.signal.aborted) setError(result.error || t('tradewind.meeting.sendPublicFailed'));
+      updateUsage({ type: 'done', operation: 'public' });
       setBusy(false);
       setWaitingSince(null);
     }
     // 成功时不设 busy=false——等 round-done 事件
-  }, [executionId, publicInput, busy, nodeId, t]);
+  }, [executionId, publicInput, busy, nodeId, t, compactions.public?.phase, updateCompaction, panelKey, reconcileCancelledCompaction, updateUsage]);
 
   // 会议助理私聊（fire-and-forget，事件通过 /events 流返回）
   const handleChair = useCallback(async () => {
     const text = chairInput.trim();
-    if (!text || chairBusy) return;
-    setChairInput('');
+    if (!text || chairBusy || requestsRef.current.chair || compactions.chair?.phase === 'running') return;
+    const command = text === '/compact';
+    const pending = command ? pendingCompaction('compact') : undefined;
+    const controller = command ? new AbortController() : undefined;
+    if (controller) requestsRef.current.chair = controller;
+    setChairHistoryRequest(command);
+    if (pending) updateCompaction('chair', pending);
+    else setChairInput('');
+    updateUsage({ type: 'start', operation: 'chair' });
     setError(null);
     setChairBusy(true);
     chairStreamRef.current.streamContent = '';
     chairStreamRef.current.reasoningContent = '';
 
-    setChairMsgs(prev => [...prev, { role: 'user', content: text }]);
-    setChairMsgs(prev => [...prev, { role: 'assistant', content: '' }]);
+    if (!command) {
+      setChairMsgs(prev => [...prev, { role: 'user', content: text }]);
+      setChairMsgs(prev => [...prev, { role: 'assistant', content: '' }]);
+    }
 
     let result: { ok: boolean; error?: string };
     try {
-      result = await sendChair(executionId, nodeId, text);
+      result = await sendChair(executionId, nodeId, text, controller?.signal);
     } catch (cause) {
       result = { ok: false, error: (cause as Error).message };
     }
+    if (panelKey !== panelKeyRef.current) return;
+    if (controller?.signal.aborted && !result.ok) {
+      await reconcileCancelledCompaction('chair', panelKey);
+    } else if (pending) setCompactions(current => current.chair?.id === pending.id
+      ? { ...current, chair: reduceCompactionActivity(current.chair, { ...pending,
+        type: result.ok ? 'compact-done' : 'compact-failed', updatedAt: Date.now(),
+        message: result.error }) } : current);
+    if (panelKey !== panelKeyRef.current) return;
+    if (controller && requestsRef.current.chair === controller) delete requestsRef.current.chair;
+    setChairHistoryRequest(false);
+    if (result.ok && command) setChairInput(current => current.trim() === text ? '' : current);
+    updateUsage({ type: 'done', operation: 'chair' });
     setChairBusy(false);
     if (!result.ok) {
-      setError(result.error || t('tradewind.meeting.sendChairFailed'));
-      setChairMsgs(prev => prev.filter(m => m.role !== 'assistant' || m.content));
+      if (!controller?.signal.aborted) setError(result.error || t('tradewind.meeting.sendChairFailed'));
+      if (!command) setChairMsgs(prev => prev.filter(m => m.role !== 'assistant' || m.content));
     }
-  }, [chairBusy, chairInput, executionId, nodeId, t]);
+  }, [chairBusy, chairInput, executionId, nodeId, t, compactions.chair?.phase, updateCompaction, panelKey, reconcileCancelledCompaction, updateUsage]);
 
   // 结束会议（不关面板，切为 ended 状态）
   const handleEnd = useCallback(async () => {
+    updateUsage({ type: 'start', operation: 'public' });
     setBusy(true);
     setEndingRequested(true);
     setError(null);
@@ -672,9 +809,10 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
       setError((e as Error).message);
     } finally {
       setBusy(false);
+      updateUsage({ type: 'done', operation: 'public' });
       setEndingRequested(false);
     }
-  }, [executionId, nodeId]);
+  }, [executionId, nodeId, updateUsage]);
 
   const publicKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); }
@@ -684,11 +822,17 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
   };
 
   const handleAbortRound = useCallback(async () => {
+    if (requestsRef.current.public) {
+      requestsRef.current.public.abort();
+      return;
+    }
     if (!roundIdRef.current) return;
     try {
       await abortMeetingRound(nodeId, roundIdRef.current);
     } catch (cause) { setError((cause as Error).message); }
   }, [executionId, nodeId]);
+
+  const handleAbortChair = useCallback(() => { requestsRef.current.chair?.abort(); }, []);
 
   const isOpening = phase === 'opening';
   const isEnded = phase === 'ended';
@@ -707,6 +851,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
 
   return (
     <MeetingPanelView
+      mediaScope={{ feature: 'tradewind', workflowId, executionId, nodeId, kind: 'meeting' }}
       nodeLabel={nodeLabel}
       visible={visible}
       activeView={activeView}
@@ -719,10 +864,12 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
       chairInput={chairInput}
       setPublicInput={setPublicInput}
       setChairInput={setChairInput}
-      busy={busy}
-      chairBusy={chairBusy}
+      busy={busy || compactions.public?.phase === 'running'}
+      chairBusy={chairBusy || compactions.chair?.phase === 'running'}
+      chairHistoryRequest={chairHistoryRequest}
       error={error}
       compactionNotice={compactionNotice}
+      compactions={compactions}
       isOpening={isOpening}
       isEnded={isEnded}
       publicStateLabel={publicStateLabel}
@@ -740,6 +887,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
       onSendPublic={handleSpeak}
       onSendChair={handleChair}
       onAbortRound={handleAbortRound}
+      onAbortChair={handleAbortChair}
       onPublicKeyDown={publicKeyDown}
       onChairKeyDown={chairKeyDown}
     />

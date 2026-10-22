@@ -29,14 +29,16 @@ export interface TradewindCommands {
   }>;
   abortNodeRound(input: RoundCommand): Promise<RoundReceipt<'aborted'>>;
   pauseNodeRound(input: RoundCommand): Promise<RoundReceipt<'paused'>>;
-  resumeNodeRound(input: ExecutionCommand & { nodeId: string }): Promise<{ resumed: true; nodeId: string }>;
+  resumeNodeRound(input: ExecutionCommand & { nodeId: string; runId?: string }): Promise<{ resumed: true; nodeId: string }>;
   abortMeetingRound(input: RoundCommand): Promise<RoundReceipt<'aborted'>>;
-  sendNodeMessage(input: ExecutionCommand & { nodeId: string; message: string }): Promise<{
+  sendNodeMessage(input: ExecutionCommand & { nodeId: string; message: string },
+    actor?: { type: 'human' | 'agent' | 'system'; id?: string }): Promise<{
     accepted: true;
     nodeId: string;
+    messageId?: string;
   }>;
 }
 
-export interface RoundCommand { nodeId: string; runId: string }
+export interface RoundCommand { executionId?: string; nodeId: string; runId: string }
 export interface ExecutionCommand { executionId: string }
 type RoundReceipt<K extends 'aborted' | 'paused'> = { nodeId: string; runId: string } & Record<K, true>;

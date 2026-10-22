@@ -1,4 +1,5 @@
 import type { ContextMessage } from '../../../engine/shared/types.js';
+import { readToolImageRefs } from '../../../engine/shared/tool-media-store.js';
 import { resolveConversationImages, type ConversationImageRef } from '../infrastructure/attachments.js';
 import type { MonsoonMessage } from '../domain/session.js';
 
@@ -12,8 +13,9 @@ export function persistMonsoonContext(
   messages: readonly ContextMessage[] | readonly StoredMonsoonContextMessage[],
 ): StoredMonsoonContextMessage[] {
   return messages.map(message => {
-    const { images, ...rest } = structuredClone(message);
-    return { ...rest, ...(images ? { images: images.map(imageReference) } : {}) };
+    const { images, toolImages, ...rest } = structuredClone(message);
+    return { ...rest, ...(images ? { images: images.map(imageReference) } : {}),
+      ...(toolImages !== undefined ? { toolImages: readToolImageRefs(toolImages) } : {}) };
   });
 }
 

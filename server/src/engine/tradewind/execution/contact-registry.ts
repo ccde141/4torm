@@ -1,97 +1,60 @@
-/**
- * Contact Registry —— 跨节点横向联络的全局注册表 + 死锁防护
- *
- * 职责：
- * 1. 维护 label → nodeId 的查找索引（启动时由 orchestrator 注入）
- * 2. 维护有向等待图（nodeId → 正在等待的 targetNodeId）
- * 3. 发起 contact 前检测环（DFS），拒绝会造成死锁的调用
- * 4. contact 完成后清除等待关系
- *
- * 设计约束：
- * - 全局单例（一个进程同时只有一个工作流在跑）
- * - 等待图是稀疏的（同一时刻一个节点最多等一个目标）
- * - 环检测 O(n)，n = agent 节点数，通常 < 20
- */
-
+/** Labels and wait edges belong to one execution; another workflow cannot replace them. */
 import type { NodeRunner } from './node-runner';
+import { executionIdentityRequired } from './execution-registry';
 
-// ── 全局状态 ──────────────────────────────────────────────────────
+interface RunnerLookup { get(nodeId: string, executionId?: string): NodeRunner | undefined }
+interface ContactScope {
+  labels: Map<string, string>;
+  waits: Map<string, string>;
+  runners: RunnerLookup | null;
+}
+const scopes = new Map<string, ContactScope>();
+const legacyScope = '__legacy__';
 
-/** label → nodeId */
-const labelIndex = new Map<string, string>();
-
-/** nodeId → NodeRunner（引用 agent.ts 的 activeNodeRunners） */
-let runnerLookup: Map<string, NodeRunner> | null = null;
-
-/** 有向等待图：sourceNodeId → targetNodeId（source 正在等 target 回复） */
-const waitGraph = new Map<string, string>();
-
-// ── 初始化 / 清理 ────────────────────────────────────────────────
-
-/** 工作流启动时注入 label→nodeId 映射 + runner 查找表引用 */
 export function initContactRegistry(
-  nodeLabelMap: Record<string, string>,
-  runners: Map<string, NodeRunner>,
+  nodeLabelMap: Record<string, string>, runners: RunnerLookup, executionId = legacyScope,
 ): void {
-  labelIndex.clear();
-  waitGraph.clear();
-  for (const [nodeId, label] of Object.entries(nodeLabelMap)) {
-    labelIndex.set(label, nodeId);
-  }
-  runnerLookup = runners;
+  scopes.set(executionId, { labels: new Map(Object.entries(nodeLabelMap).map(([id, label]) => [label, id])),
+    waits: new Map(), runners });
 }
 
-/** 工作流停止时清理 */
-export function clearContactRegistry(): void {
-  labelIndex.clear();
-  waitGraph.clear();
-  runnerLookup = null;
+export function clearContactRegistry(executionId?: string): void {
+  if (executionId === undefined) scopes.clear();
+  else scopes.delete(executionId);
 }
 
-// ── 查找 ─────────────────────────────────────────────────────────
+function scopeFor(executionId?: string): ContactScope | undefined {
+  if (executionId !== undefined) return scopes.get(executionId);
+  if (scopes.size > 1) throw executionIdentityRequired();
+  return scopes.values().next().value;
+}
 
-/** 通过 label 查找目标节点的 NodeRunner，找不到返回 null */
-export function findRunnerByLabel(label: string): { nodeId: string; runner: NodeRunner } | null {
-  const nodeId = labelIndex.get(label);
+export function findRunnerByLabel(label: string, executionId?: string): { nodeId: string; runner: NodeRunner } | null {
+  const scope = scopeFor(executionId);
+  const nodeId = scope?.labels.get(label);
   if (!nodeId) return null;
-  const runner = runnerLookup?.get(nodeId) ?? null;
-  if (!runner) return null;
-  return { nodeId, runner };
+  const runner = scope?.runners?.get(nodeId, executionId);
+  return runner ? { nodeId, runner } : null;
 }
 
-// ── 等待图管理 + 环检测 ──────────────────────────────────────────
-
-/**
- * 尝试注册一条等待关系：source 即将等待 target 回复。
- * 如果注册后会形成环（死锁），返回 false 并不注册。
- * 成功注册返回 true。
- */
-export function tryRegisterWait(sourceNodeId: string, targetNodeId: string): boolean {
-  // 检测：从 target 出发沿 waitGraph 走，能否走回 source
-  if (wouldFormCycle(sourceNodeId, targetNodeId)) {
-    return false;
+export function tryRegisterWait(sourceNodeId: string, targetNodeId: string, executionId?: string): boolean {
+  let scope = scopeFor(executionId);
+  if (!scope) {
+    scope = { labels: new Map(), waits: new Map(), runners: null };
+    scopes.set(executionId ?? legacyScope, scope);
   }
-  waitGraph.set(sourceNodeId, targetNodeId);
-  return true;
-}
-
-/** contact 完成后清除等待关系 */
-export function clearWait(sourceNodeId: string): void {
-  waitGraph.delete(sourceNodeId);
-}
-
-/**
- * 环检测：如果在 waitGraph 中加入 source→target 后会形成环，返回 true。
- * 算法：从 target 开始，沿现有 waitGraph 边做 DFS，看能否到达 source。
- */
-function wouldFormCycle(sourceNodeId: string, targetNodeId: string): boolean {
   let current: string | undefined = targetNodeId;
   const visited = new Set<string>();
   while (current) {
-    if (current === sourceNodeId) return true;
-    if (visited.has(current)) return false; // 已经成环但不含 source
+    if (current === sourceNodeId) return false;
+    if (visited.has(current)) break;
     visited.add(current);
-    current = waitGraph.get(current);
+    current = scope.waits.get(current);
   }
-  return false;
+  scope.waits.set(sourceNodeId, targetNodeId);
+  return true;
+}
+
+export function clearWait(sourceNodeId: string, executionId?: string): void {
+  scopeFor(executionId)?.waits.delete(sourceNodeId);
 }

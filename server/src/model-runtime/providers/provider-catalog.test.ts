@@ -308,6 +308,16 @@ test('configuration schema carries validation ranges and localized guidance', ()
   });
 });
 
+test('DeepSeek catalog distinguishes its conservative default from the API output maximum', () => {
+  const provider = getProviderCatalog().providers.find(item => item.id === 'deepseek')!;
+  const field = provider.configuration!.sections.flatMap(section => section.fields)
+    .find(item => item.path === 'generationDefaults.maxOutputTokens')!;
+  assert.equal(provider.configuration!.defaults.generationDefaults.maxOutputTokens, 8192);
+  assert.equal(field.kind, 'integer');
+  assert.equal('min' in field && field.min, 1);
+  assert.equal('max' in field && field.max, 393_216);
+});
+
 test('presets only persist provider identities that passed qualification', () => {
   const catalog = getProviderCatalog();
   const selectable = new Set(catalog.providers.filter(provider => provider.selectable).map(provider => provider.id));

@@ -26,6 +26,8 @@ function harness(
     isSuspended: () => false,
   } as MonsoonTurn;
   const runtime: MonsoonStreamRuntime = {
+    isStopping: () => false,
+    trackExecution: work => Promise.resolve().then(work),
     markRunning: () => { actions.push('running'); },
     complete: () => { actions.push('complete'); },
     fail: () => { actions.push('fail'); },
@@ -167,10 +169,13 @@ test('reply acceptance is never sent when running state or journal write fails',
 });
 
 test('disconnect aborts an active turn and failure clears its lease', async () => {
+  const entered = deferred();
   let reject!: (error: Error) => void;
-  const { response, actions, run } = harness(() => new Promise((_resolve, fail) => { reject = fail; }));
+  const { response, actions, run } = harness(() => new Promise((_resolve, fail) => {
+    reject = fail; entered.resolve();
+  }));
   const pending = run();
-  await Promise.resolve();
+  await entered.promise;
   response.emit('close');
   reject(new Error('model stopped'));
   await pending;
@@ -191,6 +196,8 @@ test('response initialization failure releases the turn without starting executi
   await runMonsoonTurnStream({
     response, runner: { abort() {} } as MonsoonTurn,
     runtime: {
+      isStopping: () => false,
+      trackExecution: work => Promise.resolve().then(work),
       markRunning: () => { actions.push('running'); },
       complete: () => { actions.push('complete'); },
       fail: () => { actions.push('fail'); },
@@ -200,5 +207,32 @@ test('response initialization failure releases the turn without starting executi
     open: () => { throw new Error('headers failed'); },
   });
   assert.deepEqual(actions, ['fail']);
+  assert.equal(response.destroyed, true);
+});
+
+test('shutdown between preparation and running-state commit never starts the model', async () => {
+  const entered = deferred();
+  const release = deferred();
+  let stopping = false;
+  let executed = 0;
+  let terminal = '';
+  const { runtime, run } = harness(async () => { executed++; });
+  runtime.isStopping = () => stopping;
+  runtime.markRunning = async () => { entered.resolve(); await release.promise; };
+  runtime.complete = (_session, _runner, _runId, status) => { terminal = status; };
+  const pending = run();
+  await entered.promise;
+  stopping = true;
+  release.resolve();
+  await pending;
+  assert.equal(executed, 0);
+  assert.equal(terminal, 'aborted');
+});
+
+test('terminal persistence failure rejects the lifecycle promise rather than declaring it drained', async t => {
+  t.mock.method(console, 'error', () => {});
+  const { response, runtime, run } = harness(async () => { throw new Error('model stopped'); });
+  runtime.fail = async () => { throw new Error('terminal disk failure'); };
+  await assert.rejects(run(), /terminal disk failure/);
   assert.equal(response.destroyed, true);
 });

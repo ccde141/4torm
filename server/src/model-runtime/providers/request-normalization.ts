@@ -7,7 +7,7 @@ import type {
 } from '../contracts/provider-adapter.js';
 import { normalizeLlamaCppConfig } from '../config/llama-cpp-config.js';
 import { normalizeOllamaConfig } from '../config/ollama-config.js';
-import { normalizeDeepSeekConfig } from '../config/deepseek-config.js';
+import { normalizeDeepSeekRuntimeConfig } from '../config/deepseek-config.js';
 import { normalizeVllmConfig } from '../config/vllm-config.js';
 import { normalizeKimiConfig } from '../config/kimi-config.js';
 import { normalizeZhipuConfig } from '../config/zhipu-config.js';
@@ -34,8 +34,8 @@ export function resolveMaxOutputTokens(
   identity: ProviderModelIdentity,
   requested?: number,
 ): number {
-  if (requested !== undefined) return requested;
   const adapter = resolveProviderAdapter(identity);
+  if (requested !== undefined) return adapter.constrainOutputTokens?.(requested) ?? requested;
   if (adapter.id === 'llama-cpp') {
     return llamaConfig(identity).generationDefaults.maxOutputTokens;
   }
@@ -104,7 +104,7 @@ function ollamaConfig(identity: ProviderModelIdentity) {
 }
 
 function deepSeekConfig(identity: ProviderModelIdentity) {
-  return normalizeDeepSeekConfig({ generationDefaults: identity.generationDefaults });
+  return normalizeDeepSeekRuntimeConfig({ generationDefaults: identity.generationDefaults });
 }
 
 function vllmConfig(identity: ProviderModelIdentity) {
@@ -154,5 +154,12 @@ export function normalizeChatRequestBody(
     delete body.max_tokens;
   }
   adapter.normalizeRequest?.(body, identity);
-  return mergeCustomRequestParameters(body, identity.customRequestParameters);
+  const merged = mergeCustomRequestParameters(body, identity.customRequestParameters);
+  const tokenField = capabilities.maxTokensField;
+  if (adapter.constrainOutputTokens && tokenField !== 'omit' && merged[tokenField] !== undefined) {
+    const tokens = merged[tokenField];
+    if (typeof tokens !== 'number') throw new Error('模型 max_tokens 必须是正整数');
+    merged[tokenField] = adapter.constrainOutputTokens(tokens);
+  }
+  return merged;
 }

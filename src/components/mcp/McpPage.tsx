@@ -1,3 +1,4 @@
+import { backendFetch } from '../../lib/backend-client';
 import { useCallback, useEffect, useState } from 'react';
 import { McpImportPanel } from './McpImportPanel';
 import { McpServerForm } from './McpServerForm';
@@ -8,7 +9,7 @@ import './McpForm.css';
 import { useLocale } from '../../i18n/LocaleContext';
 
 async function requestJson<T>(url: string, options: RequestInit | undefined, fallback: (status: number) => string): Promise<T> {
-  const response = await fetch(url, options);
+  const response = await backendFetch(url, options);
   const data = await response.json().catch(() => ({})) as T & { error?: string };
   if (!response.ok) throw new Error(data.error || fallback(response.status));
   return data;

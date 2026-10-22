@@ -1,3 +1,4 @@
+import { backendFetch } from '../../../lib/backend-client';
 import { errorFromResponse } from '../../../api/error-contract.js';
 import { invokeFeature } from '../../../api/collaboration.js';
 import type { EditableOrganization, WorkshopOrganization, WorkshopOrganizationState } from './organization-types.js';
@@ -9,7 +10,7 @@ function endpoint(workshopId: string): string {
 export async function loadOrganization(
   workshopId: string, signal?: AbortSignal,
 ): Promise<WorkshopOrganizationState> {
-  const response = await fetch(endpoint(workshopId), { signal });
+  const response = await backendFetch(endpoint(workshopId), { signal });
   if (!response.ok) throw await errorFromResponse(response, '加载工作室组织图失败');
   return response.json();
 }

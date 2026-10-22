@@ -12,6 +12,7 @@
  */
 
 import type { ToolDef } from '../../shared/tool-defs-loader';
+import type { HandoffRoute } from '../foundation/handoff-target.js';
 
 export interface BuildVirtualToolDefsParams {
   /** 是否注入 delegate（sub-agent 委托）。沙箱级别在 prompt 段落里说明，schema 不带。 */
@@ -68,7 +69,7 @@ export function buildVirtualToolDefs(params: BuildVirtualToolDefsParams): ToolDe
  * 仅在自动模式注入；手动模式由人类触发信封传递。
  * execEnvelopeTool 处理条目操作；native 循环用 complete_task 结束本轮。
  */
-export function buildEnvelopeToolDefs(): ToolDef[] {
+export function buildEnvelopeToolDefs(routes?: readonly HandoffRoute[]): ToolDef[] {
   return [
     {
       name: 'envelope_add',
@@ -104,7 +105,11 @@ export function buildEnvelopeToolDefs(): ToolDef[] {
         type: 'object',
         properties: {
           note: { type: 'string', description: '给下游的自由备注（可选）：交接说明、注意事项、口头补充等' },
+          ...(routes ? { targetNodeId: { type: 'string', enum: [...new Set(routes.map(route => route.targetNodeId))],
+            description: '从当前节点的预设连线中选择唯一交接对象。必须选择一个，不能复制或分裂信封。' },
+          edgeId: { type: 'string', enum: routes.map(route => route.edgeId), description: '也可用唯一连线 ID 指定路线，与 targetNodeId 二选一。' } } : {}),
         },
+        ...(routes ? { anyOf: [{ required: ['targetNodeId'] }, { required: ['edgeId'] }] } : {}),
       },
     },
   ];

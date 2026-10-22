@@ -142,7 +142,7 @@ test('Anthropic request respects explicit headers without losing protocol defaul
   });
 
   assert.equal(request.url, 'https://proxy.example/v1/messages');
-  assert.equal(request.headers.Authorization, 'Bearer proxy');
+  assert.equal(new Headers(request.headers).get('authorization'), 'Bearer proxy');
   assert.equal(request.headers['anthropic-version'], '2024-01-01');
   assert.equal(request.body.stream, true);
 });

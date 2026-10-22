@@ -1,3 +1,4 @@
+import { backendFetch } from '../../../lib/backend-client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocale } from '../../../i18n/LocaleContext';
 import { createLatestRequestGuard } from '../../../lib/latest-request';
@@ -21,7 +22,7 @@ export function useCycloneCatalog(active?: boolean) {
   const refreshWorkshops = useCallback(async () => {
     const request = listGuard.current.begin();
     try {
-      const response = await fetch('/api/cyclone/list');
+      const response = await backendFetch('/api/cyclone/list');
       if (response.ok) {
         const items: WorkshopSummary[] = await response.json();
         if (request.isCurrent()) { setWorkshops(items); setWorkshopsLoaded(true); }

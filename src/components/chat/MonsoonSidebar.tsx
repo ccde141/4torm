@@ -4,6 +4,7 @@ import type { Agent } from '../../types';
 import type { ChatSession } from '../../store/chat';
 import { useLocale } from '../../i18n/LocaleContext';
 import { PresenceItems } from '../common/PresenceItems';
+import { sessionUsageKey, type SessionUsageDisplay } from './session-list-state';
 
 const statusColors = Object.fromEntries(SYSTEM_STATUSES.map(status => [status.id, status.color]));
 
@@ -12,6 +13,7 @@ export interface MonsoonSidebarProps {
   offlineIds: Set<string>;
   selectedAgent: Agent | null;
   sessions: ChatSession[];
+  displayUsage?: SessionUsageDisplay;
   activeSessionId: string | null;
   selectAgent(agent: Agent): void;
   selectSession(sessionId: string): void;
@@ -47,7 +49,8 @@ export function MonsoonSidebar(props: MonsoonSidebarProps) {
         <PresenceItems key={props.selectedAgent.id} items={props.sessions}
           getKey={session => session.id} scope="sessions" render={session => {
           const unread = props.activeSessionId === session.id ? 0 : session.unreadCount ?? 0;
-          const tokens = formatTokenUsage(session.tokenUsage, locale);
+          const tokens = formatTokenUsage(props.displayUsage
+            ? props.displayUsage[sessionUsageKey(session)] : session.tokenUsage, locale);
           return <div style={{ position: 'relative' }}>
             <div className={`session-item${props.activeSessionId === session.id ? ' session-item--active' : ''}`}
               role="button" tabIndex={0} aria-current={props.activeSessionId === session.id ? 'true' : undefined}

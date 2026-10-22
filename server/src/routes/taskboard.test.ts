@@ -66,3 +66,22 @@ test('taskboard route refuses non-taskboard storage paths', async t => {
   });
   assert.equal(response.statusCode, 400);
 });
+
+test('taskboard route reports corrupt storage as failure without altering it', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-taskboard-route-corrupt-'));
+  const app = Fastify();
+  app.decorate('dataDir', dataDir);
+  app.decorate('projectRoot', path.dirname(dataDir));
+  await app.register(taskboardRoutes, { prefix: '/api/taskboard' });
+  t.after(async () => { await app.close(); await fs.rm(dataDir, { recursive: true, force: true }); });
+  const target = 'agents/agent-a/sessions/session-a.taskboard.json';
+  const file = path.join(dataDir, target);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, '{broken');
+  const response = await app.inject({ method: 'POST', url: '/api/taskboard/mutate',
+    payload: { path: target, action: 'set', expectedRevision: 0, tasks: [{ title: 'must not write' }] } });
+  assert.equal(response.statusCode, 500);
+  assert.equal(response.json().ok, false);
+  assert.equal(response.json().errorCode, 'TASKBOARD_STORE_CORRUPT');
+  assert.equal(await fs.readFile(file, 'utf8'), '{broken');
+});

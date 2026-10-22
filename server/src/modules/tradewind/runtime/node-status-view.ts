@@ -6,13 +6,15 @@ import {
   getActiveTradewindLoop, getActiveTradewindOrchestrator,
   isTradewindExecutionRunning,
 } from '../../../services/tradewind-execution.js';
+import type { TradewindExecutionIdentity } from '../../../services/tradewind-execution.js';
 
-export function nodeStatuses() {
-  const orchestrator = getActiveTradewindOrchestrator();
-  const loop = getActiveTradewindLoop();
-  if (!isTradewindExecutionRunning()) return {
+export function nodeStatuses(identity?: TradewindExecutionIdentity) {
+  const orchestrator = getActiveTradewindOrchestrator(identity);
+  const loop = getActiveTradewindLoop(identity);
+  if (!isTradewindExecutionRunning(identity)) return {
     running: false, nodes: {}, outcome: orchestrator?.getOutcome() ?? null,
     executionId: orchestrator?.getExecutionId(), workflowId: orchestrator?.getWorkflowId(),
+    handoff: orchestrator?.getHandoffState(),
   };
   const lap = loop?.getLapIndex();
   if (!orchestrator) return { running: true, nodes: {}, ...(lap !== undefined ? { lap } : {}) };
@@ -39,5 +41,6 @@ export function nodeStatuses() {
     nodes[nodeId] ??= { busy: false, envelopePending: true };
   }
   return { running: true, nodes, executionId, workflowId: orchestrator.getWorkflowId(),
+    handoff: orchestrator.getHandoffState(),
     ...(lap !== undefined ? { lap } : {}) };
 }

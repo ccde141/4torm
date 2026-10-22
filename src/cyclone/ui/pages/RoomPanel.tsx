@@ -1,3 +1,7 @@
+import { CompactionStatus } from '../../../components/common/CompactionStatus';
+import { compactionActivity } from '../../../components/common/compaction-activity';
+import { visibleCycloneCompaction } from './cyclone-compaction-activity';
+import { useCycloneContextOperation } from './useCycloneContextOperation';
 /**
  * 气旋群聊面板 —— 对齐对流中栏布局
  *
@@ -29,8 +33,9 @@ import { useSmartChatScroll } from './useSmartChatScroll';
 import { useLocale } from '../../../i18n/LocaleContext';
 import type { ExternalRoomView } from './useRoomExternalActivity';
 import { abortCycloneExecution } from './cyclone-execution-client';
-import { formatCycloneUsage, visibleCycloneUsage } from './cyclone-token-usage';
+import { formatCycloneUsage, useCycloneUsage } from './cyclone-token-usage';
 import { CompactionNotice } from '../../../components/common/CompactionNotice';
+import { ContactActivityScope } from './ContactActivityScope';
 import { visibleCompactionFeedback } from '../../../components/common/compaction-feedback';
 import {
   deleteCycloneRoomMessage,
@@ -55,7 +60,6 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
   const [input, setInputRaw] = useState(() => runners.getDraft(roomId));
   const [editingMessage, setEditingMessage] = useState<ExpectedRoomMessage | null>(null);
   const [editMessageContent, setEditMessageContent] = useState('');
-  const [contextBusy, setContextBusy] = useState(false);
   /** 订阅 tick：runner 每次 notify 自增，触发本组件重渲染读取最新 roundFeed 缓冲 */
   const [, forceTick] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -77,12 +81,21 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
   const externalFact = externalRoom.fact?.operationId === `room:${workshopId}:${roomId}`
     ? externalRoom.fact : null;
   const streaming = !!runner?.streaming || (!!externalActivity?.running && !externalRoom.error);
-  const { room, history, error: loadError, reload } = useRoomStatus({
+  const { room, history, error: loadError, reload, loadedScope } = useRoomStatus({
     workshopId, roomId, active, streaming, onChanged,
   });
-  const token = formatCycloneUsage(visibleCycloneUsage(
-    runner ? runner.tokenUsage : externalActivity?.tokenUsage, room?.publicLatestTokenUsage,
-  ), locale);
+  const contextOperation = useCycloneContextOperation(`${workshopId}:${roomId}`, reload);
+  const storedCompaction = compactionActivity(room?.compaction);
+  const contextBusy = contextOperation.busy || (!streaming && storedCompaction?.phase === 'running');
+  const compaction = contextOperation.busy ? contextOperation.activity
+    : visibleCycloneCompaction(runner ? runner.compaction : externalActivity?.compaction,
+      storedCompaction, contextOperation.activity);
+  const liveUsage = runner ?? externalActivity;
+  const tokenUsage = useCycloneUsage(`${workshopId}:${roomId}`,
+    liveUsage?.lastKnownTokenUsage ?? liveUsage?.tokenUsage,
+    loadedScope === `${workshopId}:${roomId}` ? room?.publicLatestTokenUsage : undefined,
+    streaming || contextBusy);
+  const token = formatCycloneUsage(tokenUsage, locale);
   const editingMessageIndex = editingMessage && room
     ? findRoomMessageIndex(room.publicMessages, editingMessage) : null;
   const editingMessageChanged = editingMessage !== null && editingMessageIndex === -1;
@@ -191,20 +204,24 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
   }
 
   async function resetRoomContext(mode: 'clear' | 'summary', scope: 'public' | 'both' = 'public') {
-    if (streaming || contextBusy) return;
+    if (streaming) return;
     const label = t(scope === 'both' ? 'cyclone.roomPanel.scopeBoth' : 'cyclone.roomPanel.scopePublic');
     const action = t(mode === 'summary' ? 'cyclone.roomPanel.resetSummary' : 'cyclone.roomPanel.resetClear');
-    if (!(await confirm({
+    if (mode === 'clear' && !(await confirm({
       title: t('cyclone.roomPanel.resetTitle', { action, scope: label }),
       message: t('cyclone.roomPanel.resetMessage'),
-      confirmText: t(mode === 'summary' ? 'cyclone.roomPanel.confirmSummary' : 'cyclone.roomPanel.confirmClear'), danger: true,
+      confirmText: t('cyclone.roomPanel.confirmClear'), danger: true,
     }))) return;
-    setContextBusy(true);
-    try { await runAction(
-      () => mode === 'summary' ? compactCycloneRoomContext(workshopId, roomId, scope)
-        : resetRoomContextThroughCenter(workshopId, roomId, mode, scope),
-      t('cyclone.roomPanel.resetFailed'),
-    ); } finally { setContextBusy(false); }
+    const result = await contextOperation.run(mode === 'summary' ? 'compact' : 'reset', signal => mode === 'summary'
+      ? compactCycloneRoomContext(workshopId, roomId, scope, signal)
+      : resetRoomContextThroughCenter(workshopId, roomId, mode, scope, signal));
+    if (result === 'completed') {
+      const next = runners.dequeue(roomId);
+      if (next != null) void dispatchText(next);
+    } else if (result === 'stopped') {
+      const items = runners.takeAllQueued(roomId);
+      if (items.length) setInput([...items, runners.getDraft(roomId)].filter(item => item.trim()).join('\n'));
+    }
   }
 
   /** 实际派发一轮：slash 指令优先，否则发起群聊轮。出队续发与即时发送共用。 */
@@ -220,6 +237,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
 
   function speak() {
     if (contextBusy) return;
+    contextOperation.clear();
     const text = input.trim();
     if (!text) return;
     if (streaming) {                       // 运行期：入队，不打断当前轮
@@ -231,6 +249,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
   }
 
   function stop() {
+    if (contextOperation.busy) { contextOperation.cancel(); return; }
     if (runner?.streaming) { runners.abortRoom(roomId); return; }
     if (externalActivity?.running) {
       void abortCycloneExecution(externalActivity.operationId, externalActivity.runId)
@@ -252,6 +271,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
     return <div style={{ opacity: .5, margin: 'auto' }}>{t('cyclone.roomPanel.loading')}</div>;
   }
   return (
+    <ContactActivityScope workshopId={workshopId} targetId={roomId} active={active}>
     <div className="cyclone-room" style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, position: 'relative' }}>
       {/* Header */}
       <div className="conv__header">
@@ -288,6 +308,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
             runner ? runner.compactionNotice : externalActivity?.compactionNotice, room.compactionNotice,
           )} />
           <RoomTimeline history={history} roundFeed={roundFeed} dispatches={roomDispatches}
+            mediaScope={{ feature: 'cyclone', workshopId, kind: 'room', targetId: roomId }}
             highlightedId={highlightedDispatchId} editingMessageIndex={editingMessageIndex}
             editMessageContent={editMessageContent} onEditContent={setEditMessageContent}
             onStartEdit={startEditMessage} onSaveEdit={saveEditMessage} onCancelEdit={cancelEditMessage}
@@ -307,10 +328,12 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
         </button>
       )}
 
-      <RoomComposer inputRef={inputRef} input={input} streaming={streaming}
-        disabled={contextBusy} phase={contextBusy ? t('chat.page.compacting') : externalRoom.error || roundFeed?.[roundFeed.length - 1]?.phase} queue={queue}
+      <CompactionStatus activity={compaction} />
+      <RoomComposer inputRef={inputRef} input={input} streaming={streaming || contextOperation.busy}
+        disabled={contextBusy} phase={compaction?.phase === 'running' ? undefined : externalRoom.error || roundFeed?.[roundFeed.length - 1]?.phase} queue={queue}
         onInput={setInput} onSend={speak} onStop={stop}
         onRemoveQueued={index => runners.removeQueued(roomId, index)} />
     </div>
+    </ContactActivityScope>
   );
 }

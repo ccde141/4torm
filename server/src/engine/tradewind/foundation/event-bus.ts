@@ -2,13 +2,14 @@
  * 事件总线 —— emit 事件 + append 写 events.jsonl + SSE 推送
  *
  * 同一实例的写入串行执行；写入成功后才向 SSE 订阅者推送。
- * 写入失败时记录警告、跳过推送，emit 仍正常返回；断开的订阅者会移除。
+ * 旧严格流保留尽力记录；条件交接 required 模式向调用方真实抛错，失败后禁止后续事实越过它。
  */
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
 import type { EventLog } from './types';
+import { frameworkError, FrameworkError } from '../../shared/framework-error.js';
 
 /** SSE 订阅者句柄 */
 interface SSESubscriber {
@@ -25,24 +26,33 @@ export class EventBus {
   private readonly eventsFile: string;
   private readonly subscribers = new Set<SSESubscriber>();
   private writeQueue: Promise<void> = Promise.resolve();
+  private writeFailure: unknown;
 
-  constructor(eventsFile: string) {
+  constructor(eventsFile: string, private readonly required = false) {
     this.eventsFile = eventsFile;
   }
 
   /**
-   * 串行写入事件文件；成功后推送，失败时只记录警告。
+   * 串行写入事件文件；成功后推送。required 模式 await emit 可观察到持久化失败。
    */
   emit(log: EventLog): Promise<void> {
     const line = JSON.stringify(log) + '\n';
-    this.writeQueue = this.writeQueue.then(async () => {
+    const committed = this.writeQueue.then(async () => {
+      if (this.required && this.writeFailure) throw this.writeFailure;
       await fs.mkdir(path.dirname(this.eventsFile), { recursive: true });
       await fs.appendFile(this.eventsFile, line, 'utf-8');
       this.broadcast(line);
-    }).catch(err => {
+    }).catch(error => {
+      if (!this.required || error instanceof FrameworkError) throw error;
+      throw frameworkError({ code: 'TRADEWIND_EVENT_WRITE_FAILED', kind: 'io',
+        message: '信风执行事实未能保存，已停止继续交接；不会自动重新执行',
+        source: 'tradewind.events', retryable: false }, { cause: error });
+    });
+    this.writeQueue = committed.catch(err => {
+      this.writeFailure = err;
       console.warn('[tradewind:event-bus] 事件落盘失败：', (err as Error).message);
     });
-    return this.writeQueue;
+    return this.required ? committed : this.writeQueue;
   }
 
   /** 注册 SSE 订阅者，返回 unsubscribe */
@@ -75,9 +85,10 @@ export class EventBus {
     }
   }
 
-  /** 等待已入队的写入结束；写入失败只记录警告。 */
+  /** 等待写入结束；required 模式保留并抛出首次失败。 */
   async flush(): Promise<void> {
     await this.writeQueue;
+    if (this.required && this.writeFailure) throw this.writeFailure;
   }
 
   /** 关闭所有 SSE 连接 */

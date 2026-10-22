@@ -15,6 +15,11 @@ import { tradewindReadHandlers, tradewindReadManifests } from './read-methods.js
 import type { TradewindEventPort } from '../application/event-port.js';
 import { tradewindEventHandlers, tradewindEventManifests } from './event-port.js';
 import { tradewindMeetingHandlers, tradewindMeetingManifests } from './meeting-methods.js';
+import type { TradewindHistoryPort } from '../application/history-port.js';
+import { tradewindHistoryHandlers, tradewindHistoryManifests } from './history-methods.js';
+import type { TradewindValidationPort } from '../application/validation-port.js';
+import { tradewindValidationHandlers, tradewindValidationManifests } from './validation-methods.js';
+import { tradewindProfileHandlers, tradewindProfileManifests } from './profile-methods.js';
 
 export function createTradewindModule(dependencies: {
   source: TradewindRuntimeSource;
@@ -25,10 +30,13 @@ export function createTradewindModule(dependencies: {
   records?: FeatureRecordHandler;
   reads?: TradewindReadPort;
   events?: TradewindEventPort;
+  history?: TradewindHistoryPort;
+  validation?: TradewindValidationPort;
 }): FeatureModule {
   const catalog = new TradewindExecutionCatalog(dependencies.source);
   const designMethods = dependencies.design ? tradewindDesignManifests() : [];
-  const workflowMethods = dependencies.workflowAdmin ? tradewindWorkflowManifests() : [];
+  const workflowMethods = dependencies.workflowAdmin
+    ? [...tradewindWorkflowManifests(), ...tradewindProfileManifests()] : [];
   const meetingMethods = dependencies.meetingCommands ? tradewindMeetingManifests() : [];
   return {
     manifest: {
@@ -36,7 +44,9 @@ export function createTradewindModule(dependencies: {
       agentCapability: TRADEWIND_AGENT_CAPABILITY,
       operation: { inspect: true, wait: Boolean(dependencies.source.subscribe),
         ...(dependencies.records ? { records: true as const } : {}) },
-      methods: [...(dependencies.reads ? tradewindReadManifests() : []),
+      methods: [...(dependencies.history ? tradewindHistoryManifests() : []),
+        ...(dependencies.validation ? tradewindValidationManifests() : []),
+        ...(dependencies.reads ? tradewindReadManifests() : []),
         ...tradewindControlManifests(), ...designMethods, ...workflowMethods, ...meetingMethods],
       ...(dependencies.events ? { transports: tradewindEventManifests() } : {}),
       observation: {
@@ -48,10 +58,13 @@ export function createTradewindModule(dependencies: {
       },
     },
     handlers: {
+      ...(dependencies.history ? tradewindHistoryHandlers(dependencies.history) : {}),
+      ...(dependencies.validation ? tradewindValidationHandlers(dependencies.validation) : {}),
       ...(dependencies.reads ? tradewindReadHandlers(dependencies.reads) : {}),
       ...tradewindControlHandlers(dependencies.commands),
       ...(dependencies.design ? tradewindDesignHandlers(dependencies.design) : {}),
-      ...(dependencies.workflowAdmin ? tradewindWorkflowHandlers(dependencies.workflowAdmin) : {}),
+      ...(dependencies.workflowAdmin ? { ...tradewindWorkflowHandlers(dependencies.workflowAdmin),
+        ...tradewindProfileHandlers(dependencies.workflowAdmin) } : {}),
       ...(dependencies.meetingCommands ? tradewindMeetingHandlers(dependencies.meetingCommands) : {}),
     },
     ...(dependencies.events ? { transports: tradewindEventHandlers(dependencies.events) } : {}),

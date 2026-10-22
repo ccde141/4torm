@@ -1,3 +1,4 @@
+import { SUB_AGENT_MAX_ROUNDS } from '../shared/sub-agent-budget.js';
 /**
  * 气旋工位虚拟工具 schema —— 原生工具调用模式专用
  *
@@ -47,7 +48,14 @@ export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDe
     contactTargets = [],
   } = opts;
   const dispatchTargets = opts.dispatchTargets ?? contactTargets;
-  const defs: ToolDef[] = [];
+  const defs: ToolDef[] = [{
+    name: 'contact_read',
+    description: '查询本岗位发出或收到的联络票据及回复。联络已接入但仍在处理时，按需凭contactId查询，不要重发相同请求；较长回复按nextOffset续读。身份和工作室由框架绑定。',
+    parameters: { type: 'object', additionalProperties: false, required: ['contactId'], properties: {
+      contactId: { type: 'string', minLength: 1, description: 'contact返回的查询ID' },
+      offset: { type: 'integer', minimum: 0, description: '回复正文续读位置，默认0' },
+    } },
+  }];
   if (allowTaskBoard) defs.push({
       name: 'task_board',
       description: '维护本工位的任务板（用户可见的结构化进度清单）。多步骤任务先写出拆解，每当开始或完成一项就整块覆盖更新，让用户实时看到进度。单步问答不必建板。',
@@ -93,7 +101,7 @@ export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDe
   if (allowDelegate) {
     defs.push({
       name: 'delegate',
-      description: `将本工位职责内、无需长期岗位上下文的临时并行子任务委托给独立 SubAgent，完成后返回摘要。${allowDispatch ? '跨工位职责或需要持续岗位上下文时，优先 dispatch 给固定工位。' : '跨工位职责先联络相应工位。'}单个 SubAgent 工具调用上限约25轮，任务过大需拆分。`,
+      description: `将本工位职责内、无需长期岗位上下文的临时并行子任务委托给独立 SubAgent，完成后返回摘要。${allowDispatch ? '跨工位职责或需要持续岗位上下文时，优先 dispatch 给固定工位。' : '跨工位职责先联络相应工位。'}单个 SubAgent 工具调用上限为${SUB_AGENT_MAX_ROUNDS}轮，任务过大需拆分。`,
       parameters: {
         type: 'object',
         properties: {
@@ -111,7 +119,7 @@ export function buildSeatVirtualToolDefs(opts: SeatVirtualToolOpts = {}): ToolDe
     const roster = contactTargets.map(t => `  - ${t.title}：${t.duty}`).join('\n');
     defs.push({
       name: 'contact',
-      description: `联络本工作室里的另一个工位。对方会在自己的会话里完整处理你的消息并返回回复。\n可选目标（工位：职责）：\n${roster}\n按职责挑对人，不要向正在联络你的工位反向联络（死锁）。`,
+      description: `联络本工作室里的另一个工位。最多等待30秒接入；未接入则返回busy、delivered:false，本次已撤回，不会稍后投递。已接入但30秒内未回复时返回running、delivered:true和contactId，对方继续执行，你可先做其他工作，再按需用contact_read查询；不要重发已送达请求。\n可选目标（工位：职责）：\n${roster}\n按职责挑对人，不要向正在联络你的工位反向联络（死锁）。`,
       parameters: {
         type: 'object',
         properties: {

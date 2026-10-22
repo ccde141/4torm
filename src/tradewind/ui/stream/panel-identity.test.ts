@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { acceptsPanelEvent, requirePanelIdentity } from './panel-identity';
+import { acceptsPanelEvent, requirePanelIdentity, panelReadUrl } from './panel-identity';
 import { readNodeSnapshot, readNodeStatus } from '../chat/agent-chat-runtime';
 import { getStatus } from '../meeting/meeting-client';
 
 const current = { workflowId: 'W1', executionId: 'E1' };
+
+test('panel reads select the exact execution before requesting a shared node ID', () => {
+  const url = new URL(panelReadUrl('/api/tradewind/chat/shared/snapshot', current), 'http://localhost');
+  assert.equal(url.searchParams.get('workflowId'), 'W1');
+  assert.equal(url.searchParams.get('executionId'), 'E1');
+});
 
 test('node events with reused IDs cannot enter another workflow panel', () => {
   assert.equal(acceptsPanelEvent({ scope: 'agent', type: 'token', workflowId: 'W2', executionId: 'E2' }, 'agent', current), false);

@@ -44,7 +44,7 @@ test('气旋只在工位私聊驱动中开放后台控制并使用工位所有�
   const catalog = buildSeatToolCatalog([], [], []);
   assert.deepEqual(catalog.slice(-3).map(tool => tool.name),
     ['inspect_execution', 'wait_execution', 'terminate_execution']);
-  assert.match(seat, /buildSeatToolCatalog\(toolDefs, contactTargets, dispatchTargets\)/);
+  assert.match(seat, /buildSeatToolCatalog\(toolDefs, contactTargets, dispatchTargets, seatCollaborationPolicy\(seat\)\)/);
   assert.match(seat, /ownerId: `\$\{workshopId\}:\$\{seatId\}`/);
   assert.doesNotMatch(room, /buildBackgroundExecutionToolDefs/);
   assert.doesNotMatch(contact, /buildBackgroundExecutionToolDefs/);

@@ -1,7 +1,7 @@
 import { listWorkshopDispatches } from './dispatch-store.js';
 import { removeSeatFromOrganization } from './organization/organization-store.js';
 import { loadRoom, RoomSettingsConflictError, saveRoom, tryAcquireRoomLock } from './room-store.js';
-import { deleteSeat, loadSeat } from './seat-store.js';
+import { deleteSeat, loadSeat, tryAcquireSeatLock } from './seat-store.js';
 import type { RoomData, RoomMessage } from './types.js';
 import { loadWorkshop } from './workshop-store.js';
 
@@ -84,6 +84,13 @@ export async function deleteSeatFromWorkshop(
   workshopId: string,
   seatId: string,
 ): Promise<void> {
+  const releaseSeat = tryAcquireSeatLock(workshopId, seatId);
+  if (!releaseSeat) throw new RoomSettingsConflictError('该工位正在处理中，请稍后删除');
+  try { await deleteIdleSeatFromWorkshop(dataDir, workshopId, seatId); }
+  finally { releaseSeat(); }
+}
+
+async function deleteIdleSeatFromWorkshop(dataDir: string, workshopId: string, seatId: string): Promise<void> {
   const [seat, rooms] = await Promise.all([
     loadSeat(dataDir, workshopId, seatId),
     loadAffectedRooms(dataDir, workshopId, seatId),

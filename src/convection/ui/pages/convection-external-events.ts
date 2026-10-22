@@ -1,5 +1,16 @@
 import type { ConvectionToolStep, ConvectionTurnMessage } from './ConvectionTurnCard';
 import type { ConvectionUsage } from './convection-token-usage';
+import { compactionActivity, type CompactionActivity } from '../../../components/common/compaction-activity';
+import type { ToolImageRef } from '../../../engine/tool-media';
+
+/** A broken request is not evidence of rollback; keep its checking message until a saved terminal arrives. */
+export function restoreConvectionCompaction(current: CompactionActivity | undefined,
+  stored: unknown): CompactionActivity | undefined {
+  const next = compactionActivity(stored);
+  if (current?.id === next?.id && current?.phase !== 'running' && next?.phase === 'running') return current;
+  return next?.phase === 'running' && current?.phase === 'running' && current.message
+    ? { ...next, message: current.message } : next;
+}
 
 export interface ExternalChairMessage {
   role: string;
@@ -14,15 +25,18 @@ export type ExternalRoundEvent =
   | { type: 'agent-start' | 'token' | 'reasoning' | 'agent-done' | 'agent-failed'
       | 'heartbeat' | 'tool-call' | 'tool-result'; agentId: string; label: string;
       chunk?: string; content?: string; rawContent?: string; message?: string;
-      tool?: string; args?: Record<string, string>; result?: string;
-      toolCalls?: Array<{ tool: string; args: Record<string, string>; result?: string }>;
+      tool?: string; args?: Record<string, unknown>; result?: string;
+      toolImages?: ToolImageRef[];
+      toolCalls?: Array<{ tool: string; args: Record<string, unknown>; result?: string; toolImages?: ToolImageRef[] }>;
       phase?: 'llm-waiting' | 'tool-exec'; elapsed?: number }
   | { type: 'chair-token' | 'chair-reasoning' | 'chair-done'; chunk?: string; content?: string }
   | { type: 'notice'; message: string }
   | { type: 'compaction-notice'; message: string }
   | { type: 'input-accepted' }
   | { type: 'usage'; usage: ConvectionUsage | null }
-  | { type: 'compact-start' | 'compact-done' | 'error'; message?: string };
+  | { type: 'compact-start' | 'compact-done' | 'compact-failed'; id?: string;
+      operation?: 'compact' | 'reset'; startedAt?: number; updatedAt?: number; aborted?: boolean; message?: string }
+  | { type: 'error'; message?: string };
 
 function lastSpeaker(messages: ConvectionTurnMessage[], event: ExternalRoundEvent): number {
   if (!('agentId' in event)) return -1;
@@ -68,7 +82,7 @@ export function applyExternalPublicEvent(
     { toolCalls: [...(item.toolCalls ?? []), { tool: event.tool ?? '',
       args: event.args ?? {}, status: 'running' }] });
   if (event.type === 'tool-result') return updateMessage(current, index,
-    { toolCalls: finishTool(item.toolCalls ?? [], event.tool ?? '', event.result ?? '') });
+    { toolCalls: finishTool(item.toolCalls ?? [], event.tool ?? '', event.result ?? '', event.toolImages) });
   if (event.type === 'agent-failed') return updateMessage(current, index,
     { content: event.message ?? '', streaming: false, waitingInfo: undefined });
   return updateMessage(current, index, { content: event.content ?? '',
@@ -76,9 +90,9 @@ export function applyExternalPublicEvent(
     toolCalls: event.toolCalls?.map(tool => ({ ...tool, status: 'done' as const })) });
 }
 
-function finishTool(tools: ConvectionToolStep[], name: string, result: string): ConvectionToolStep[] {
+function finishTool(tools: ConvectionToolStep[], name: string, result: string, toolImages?: ToolImageRef[]): ConvectionToolStep[] {
   return tools.map(tool => tool.tool === name && tool.status === 'running'
-    ? { ...tool, result, status: 'done' } : tool);
+    ? { ...tool, result, toolImages, status: 'done' } : tool);
 }
 
 export function applyExternalChairEvent(

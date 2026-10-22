@@ -1,3 +1,4 @@
+import { backendFetch } from '../../../lib/backend-client';
 import { useEffect, useState } from 'react';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
 import { inviteSeatToRoom, type JoinBehavior } from './room-invite';
@@ -123,7 +124,7 @@ export default function RoomSettingsPanel({
     try {
       const result = await inviteSeatToRoom({
         join: () => joinCycloneRoom(workshopId, roomId, seatId),
-        fetcher: fetch, introUrl: `${roomUrl}/intro`, seatId, behavior, messages: {
+        fetcher: backendFetch, introUrl: `${roomUrl}/intro`, seatId, behavior, messages: {
         joinFailed: t('cyclone.roomInvite.joinFailed'),
         introFailed: t('cyclone.roomInvite.introFailed'),
         missingStream: t('cyclone.roomInvite.missingStream'),

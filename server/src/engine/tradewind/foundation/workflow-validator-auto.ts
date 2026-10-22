@@ -20,7 +20,7 @@ const checkNoMeetingInAuto: ValidationRule = (ctx) =>
     .filter(n => n.type === 'meeting')
     .map(n => ({
       code: 'auto-no-meeting',
-      message: `自动模式不支持会议室节点「${n.label || n.id}」——会议需要人类在场。请改用手动模式，或移除该节点。`,
+      message: `无人值守运行不支持会议节点「${n.label || n.id}」。请改用交互运行，或移除该节点。`,
       nodeId: n.id,
     }));
 
@@ -30,7 +30,7 @@ const checkNoHumanGateInAuto: ValidationRule = (ctx) =>
     .filter(n => n.type === 'human-gate')
     .map(n => ({
       code: 'auto-no-human-gate',
-      message: `自动模式不支持暂停点节点「${n.label || n.id}」——全自动流程无人恢复。请改用手动模式，或移除该节点。`,
+      message: `暂停点「${n.label || n.id}」会等待人类提交，不能用于无人值守运行。请改用交互运行，或移除该节点。`,
       nodeId: n.id,
     }));
 
@@ -62,7 +62,7 @@ export async function checkAgentsNativeCapable(
     if (!decision.native) {
       errors.push({
         code: 'auto-agent-not-native',
-        message: `自动模式要求 Agent 节点「${node.label || node.id}」的模型具备原生工具调用能力，当前判定为文本模式。请到模型提供区探测或切换到支持原生工具调用的模型。`,
+        message: `严格依赖工作流的无人值守运行要求 Agent 节点「${node.label || node.id}」使用支持原生工具调用的模型，当前判定为文本工具模式。请在模型设置中探测原生工具能力或切换模型，也可改用交互运行。`,
         nodeId: node.id,
       });
     }

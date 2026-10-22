@@ -4,6 +4,7 @@ import type {
   AutoProfile, WorkflowEdge, WorkflowGraph, WorkflowNode,
 } from '../../../engine/tradewind/foundation/types/index.js';
 import type { SaveWorkflowCommand, TradewindWorkflowAdmin } from '../application/workflow-admin.js';
+import { parseWorkflowProfile } from '../domain/workflow-profile.js';
 
 export function tradewindWorkflowManifests(): ModuleMethodManifest[] {
   return [query('loadWorkflow'), query('listWorkflowSummaries'), query('loadWorkflowProfiles'),
@@ -61,31 +62,8 @@ function parseProfileIdentity(value: unknown): { workflowId: string; profileId: 
 }
 
 function profile(value: unknown): AutoProfile {
-  const record = exact(value, [
-    'id', 'name', 'cadence', 'overlap', 'lapBound', 'carryOver', 'loopNote', 'summaryPrompt',
-  ]);
-  const cadence = exact(record.cadence, ['kind', 'gapSec', 'by']);
-  const parsedCadence = parseCadence(cadence);
-  if (record.overlap !== 'skip' && record.overlap !== 'queue') throw invalidInput();
-  if (record.carryOver !== 'accumulate' && record.carryOver !== 'reset'
-    && record.carryOver !== 'summary') throw invalidInput();
-  const lapBound = record.lapBound === null ? null : positiveInteger(record.lapBound);
-  return {
-    id: identifier(record.id), name: text(record.name, 200), cadence: parsedCadence,
-    overlap: record.overlap, lapBound, carryOver: record.carryOver,
-    ...optionalText(record, 'loopNote'), ...optionalText(record, 'summaryPrompt'),
-  };
-}
-
-function parseCadence(cadence: Record<string, unknown>): AutoProfile['cadence'] {
-  if (cadence.kind === 'relative') {
-    if (cadence.by !== undefined) throw invalidInput();
-    return { kind: 'relative', gapSec: nonNegative(cadence.gapSec) };
-  }
-  if (cadence.kind === 'absolute' && cadence.by === 'tide' && cadence.gapSec === undefined) {
-    return { kind: 'absolute', by: 'tide' };
-  }
-  throw invalidInput();
+  try { return parseWorkflowProfile(value); }
+  catch { throw invalidInput(); }
 }
 
 function method(id: string, permission: 'design' | 'administer'): ModuleMethodManifest {
@@ -110,7 +88,7 @@ function parseEmpty(value: unknown): Record<string, never> {
 function parseSave(value: unknown): SaveWorkflowCommand {
   const record = exact(value, ['workflowId', 'name', 'graph', 'expectedRevision']);
   return { workflowId: identifier(record.workflowId), name: text(record.name, 200),
-    graph: graph(record.graph), expectedRevision: record.expectedRevision === null
+    graph: parseWorkflowGraph(record.graph), expectedRevision: record.expectedRevision === null
       ? null : revision(record.expectedRevision) };
 }
 
@@ -124,10 +102,13 @@ function revision(value: unknown): string {
   return value;
 }
 
-function graph(value: unknown): WorkflowGraph {
-  if (!isRecord(value) || Object.keys(value).some(key => key !== 'nodes' && key !== 'edges')
+export function parseWorkflowGraph(value: unknown): WorkflowGraph {
+  if (!isRecord(value) || Object.keys(value).some(key => !['nodes', 'edges', 'orchestration'].includes(key))
     || !Array.isArray(value.nodes) || !Array.isArray(value.edges)) throw invalidInput();
-  return { nodes: value.nodes.map(node), edges: value.edges.map(edge) };
+  if (value.orchestration !== undefined && value.orchestration !== 'strict'
+    && value.orchestration !== 'handoff') throw invalidInput();
+  return { nodes: value.nodes.map(node), edges: value.edges.map(edge),
+    ...(value.orchestration === undefined ? {} : { orchestration: value.orchestration }) };
 }
 
 function node(value: unknown): WorkflowNode {
@@ -178,24 +159,8 @@ function integer(value: unknown): number {
   return result;
 }
 
-function nonNegative(value: unknown): number {
-  const result = finite(value);
-  if (result < 0) throw invalidInput();
-  return result;
-}
-
-function positiveInteger(value: unknown): number {
-  const result = integer(value);
-  if (result < 1) throw invalidInput();
-  return result;
-}
-
 function optionalNumber(record: Record<string, unknown>, key: 'width' | 'height') {
   return record[key] === undefined ? {} : { [key]: finite(record[key]) };
-}
-
-function optionalText(record: Record<string, unknown>, key: 'loopNote' | 'summaryPrompt') {
-  return record[key] === undefined ? {} : { [key]: text(record[key], 4_000) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

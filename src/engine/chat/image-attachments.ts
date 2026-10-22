@@ -1,3 +1,4 @@
+import { backendFetch, backendUrl } from '../../lib/backend-client';
 import type { ImageAttachment } from '../../types';
 
 export const MAX_MESSAGE_IMAGES = 4;
@@ -50,7 +51,7 @@ export async function uploadImageDraft(
   sessionId: string,
   draft: ImageDraft,
 ): Promise<ImageAttachment> {
-  const response = await fetch('/api/conversation/attachments', {
+  const response = await backendFetch('/api/conversation/attachments', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -69,18 +70,18 @@ export async function deleteConversationAttachment(
   agentId: string,
   sessionId: string,
   attachmentId: string,
-  request: typeof fetch = fetch,
+  request: typeof fetch = backendFetch,
 ): Promise<void> {
   const response = await request(attachmentUrl(agentId, sessionId, attachmentId), { method: 'DELETE' });
   if (!response.ok) throw new Error(`附件清理失败（HTTP ${response.status}）`);
 }
 
 export function attachmentUrl(agentId: string, sessionId: string, attachmentId: string): string {
-  return `/api/conversation/attachments/${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}/${encodeURIComponent(attachmentId)}`;
+  return backendUrl(`/api/conversation/attachments/${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}/${encodeURIComponent(attachmentId)}`);
 }
 
 export async function deleteConversationImages(agentId: string, sessionId: string): Promise<void> {
-  const response = await fetch(
+  const response = await backendFetch(
     `/api/conversation/attachments/${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}`,
     { method: 'DELETE' },
   );

@@ -1,3 +1,4 @@
+import { backendFetch } from '../../lib/backend-client';
 import { useEffect, useState } from 'react';
 import { type TaskboardObservation } from './taskboard-observations';
 
@@ -16,7 +17,7 @@ export function useTaskboardObservations(
     let failureRetries = 3;
     const load = async () => {
       const query = new URLSearchParams({ scope, ownerId });
-      const response = await fetch(`/api/tools/observations?${query}`);
+      const response = await backendFetch(`/api/tools/observations?${query}`);
       if (!response.ok) throw new Error(`observation polling failed: ${response.status}`);
       if (disposed) return false;
       const data = await response.json() as { items?: TaskboardObservation[] };

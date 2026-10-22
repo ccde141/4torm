@@ -19,6 +19,11 @@ import type { WorkshopDispatches } from './useWorkshopDispatches';
 import type { CycloneView, RoomSummary, SeatSummary, WorkshopSummary } from './cyclone-page-model';
 import type { WorkspaceStatusProjection } from './cyclone-workspace-status';
 import type { ExternalRoomView } from './useRoomExternalActivity';
+import { WorkshopConsole } from '../console/WorkshopConsole';
+import { ConsoleIcon } from '../console/ConsoleIcon';
+import { useConsoleText } from '../console/console-text';
+import { SupervisorPanel } from './SupervisorPanel';
+import type { CycloneEntityReceipt } from './cyclone-control-client';
 
 interface Props {
   active: boolean;
@@ -33,14 +38,16 @@ interface Props {
   view: CycloneView;
   tabs: WorkspaceTab[];
   status: WorkspaceStatusProjection;
+  statusError?: string;
   chairAgentId: string | null;
   chairOpen: boolean;
   seatRunners: SeatStreamRunners;
+  supervisorRunners: SeatStreamRunners;
   roomRunners: RoomStreamRunners;
   externalRoom: ExternalRoomView;
   dispatchAction: WorkshopDispatches['act'];
   setView: Dispatch<SetStateAction<CycloneView>>;
-  onCreateWorkshop(config: { title: string; chairAgentId?: string }): Promise<void>;
+  onWorkshopCreated(workshop: CycloneEntityReceipt): Promise<void>;
   onCreateSeat(draft: SeatDraft): Promise<void>;
   onRetrySeat(id: string): void;
   onEditSeat(id: string, draft: SeatDraft): Promise<void>;
@@ -58,11 +65,13 @@ interface Props {
 
 export function CycloneWorkspacePane(props: Props) {
   const { t } = useLocale();
+  const text = useConsoleText();
   const activeTabKey = props.view?.kind === 'seat' || props.view?.kind === 'room' ? tabKey(props.view) : null;
-  const organizationVisible = props.view === null || props.view.kind === 'bulletin';
+  const organizationVisible = props.view?.kind === 'graph' || props.view?.kind === 'bulletin';
   const organizationPanel = props.view?.kind === 'bulletin' ? 'bulletin' : 'graph';
   const managementView = props.view !== null && props.view.kind !== 'seat'
-    && props.view.kind !== 'room' && props.view.kind !== 'bulletin';
+    && props.view.kind !== 'room' && props.view.kind !== 'bulletin' && props.view.kind !== 'graph'
+    && props.view.kind !== 'supervisor';
   const loadingSeat = props.view?.kind === 'loading-seat' ? props.view : null;
   const editingSeat = props.view?.kind === 'edit-seat' ? props.view : null;
   const activeRoomId = props.view?.kind === 'room' ? props.view.id : null;
@@ -74,14 +83,16 @@ export function CycloneWorkspacePane(props: Props) {
     <main style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
       {props.activeWid && <nav className="cyclone-org-workspace__tabs" aria-label={t('cyclone.org.title')}>
         <button type="button" className={props.view === null ? 'active' : ''}
-          onClick={() => props.onSelectTab(null)}>{t('cyclone.org.graph')}</button>
+          onClick={() => props.onSelectTab(null)}><ConsoleIcon name="overview" />{text('工作台', 'Console')}</button>
+        <button type="button" className={props.view?.kind === 'graph' ? 'active' : ''}
+          onClick={() => props.setView({ kind: 'graph' })}><ConsoleIcon name="structure" />{t('cyclone.org.graph')}</button>
         <button type="button" className={props.view?.kind === 'bulletin' ? 'active' : ''}
-          onClick={() => props.setView({ kind: 'bulletin' })}>{t('cyclone.org.bulletin')}</button>
+          onClick={() => props.setView({ kind: 'bulletin' })}><ConsoleIcon name="bulletin" />{t('cyclone.org.bulletin')}</button>
       </nav>}
       {props.activeWid && props.tabs.length > 0 && <WorkshopTabs tabs={props.tabs} activeKey={activeTabKey}
         statusFor={statusForTab} onSelect={props.onSelectTab} onClose={props.onCloseTab} />}
       {props.view?.kind === 'create-workshop' && <CreateWorkshopPanel agents={props.agents}
-        onCreate={props.onCreateWorkshop} onCancel={() => props.setView(null)} />}
+        onCreated={props.onWorkshopCreated} onCancel={() => props.setView(null)} />}
       {props.view?.kind === 'create-seat' && props.activeWid && <SeatPanel key="create-seat" mode="create"
         agents={props.agents} onSubmit={props.onCreateSeat} onCancel={() => props.setView(null)} />}
       {loadingSeat && <SeatEditorLoading key={`loading-seat-${loadingSeat.id}`}
@@ -95,6 +106,18 @@ export function CycloneWorkspacePane(props: Props) {
         onCreate={props.onCreateRoom} onCancel={() => props.setView(null)} />}
       {!props.activeWid && props.view === null && <div style={emptyStyle}>{t('cyclone.shell.empty')}</div>}
       {props.activeWid && <div style={{ display: managementView ? 'none' : 'flex', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+        <div style={mountedStyle(props.view?.kind === 'supervisor')}>
+          <SupervisorPanel key={props.activeWid} workshopId={props.activeWid} agents={props.agents}
+            runners={props.supervisorRunners} active={props.active && props.view?.kind === 'supervisor'} onChanged={props.onWorkshopReload} />
+        </div>
+        <div style={{ display: props.view === null ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
+          <WorkshopConsole key={props.activeWid} workshopId={props.activeWid} active={props.active && props.view === null}
+            agents={props.agents} status={props.status} statusError={props.statusError} onCreateSeat={() => props.setView({ kind: 'create-seat' })}
+            onOpenSeat={props.onOpenSeat} onOpenRoom={id => {
+              const room = props.rooms.find(item => item.id === id);
+              if (room) props.onSelectTab({ kind: 'room', id, title: room.title });
+            }} onChanged={props.onWorkshopReload} />
+        </div>
         <div style={{ display: organizationVisible ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
           <OrganizationWorkspace workshopId={props.activeWid} summaryReady={props.workshopLoaded} agents={props.agents}
             title={props.workshops.find(workshop => workshop.id === props.activeWid)?.title} seats={props.seats}

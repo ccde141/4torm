@@ -4,11 +4,16 @@
  * 布局：左侧会话列表 | 中间公共群聊（顶部 Agent 配置栏）| 右侧会议助理私聊
  */
 
+import { backendFetch } from '../../../lib/backend-client';
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { getAgents } from '../../../store/agent';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
 import { CompactionNotice } from '../../../components/common/CompactionNotice';
+import { CompactionHistory } from '../../../components/common/CompactionHistory';
+import { isCompactionHistory } from '../../../components/common/compaction-history';
 import { compactionFeedbackEvent, compactionFeedbackMessage } from '../../../components/common/compaction-feedback';
+import { CompactionStatus } from '../../../components/common/CompactionStatus';
+import { compactionActivity, reduceCompactionActivity, type CompactionActivity } from '../../../components/common/compaction-activity';
 import { renderTextWithCode } from '../../../engine/markdown';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
@@ -30,7 +35,7 @@ import {
 import { createLatestRequestGuard } from '../../../lib/latest-request';
 import { fetchConvectionRead } from './convection-load-retry';
 import { abortConvectionRound, readConvectionRound, readConvectionRoundStatus } from './convection-runtime';
-import { reconcileConvectionRound } from './convection-round-recovery';
+import { reconcileConvectionCompaction, reconcileConvectionRound } from './convection-round-recovery';
 import {
   createConvectionSession,
   deleteConvectionMessage,
@@ -52,7 +57,9 @@ import type { Agent } from '../../../types';
 import AgentAvatar from '../../../components/agents/AgentAvatar';
 import { useLocale } from '../../../i18n/LocaleContext';
 import { useConvectionConferenceFeed, type ConvectionRoomSummary } from './useConvectionConferenceFeed';
-import { applyConvectionUsage, formatConvectionUsage } from './convection-token-usage';
+import { applyConvectionUsage, beginConvectionUsage, formatConvectionUsage,
+  mergeConvectionSessions, restoreConvectionUsage } from './convection-token-usage';
+import { restoreConvectionCompaction } from './convection-external-events';
 
 type ConvMsg = ConvectionTurnMessage;
 type ToolStep = ConvectionToolStep;
@@ -84,10 +91,19 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
   const [cMsgs, setCMsgs] = useState<CMsg[]>([]);
   const [publicNotice, setPublicNotice] = useState('');
   const [chairNotice, setChairNotice] = useState('');
+  const [publicCompaction, setPublicCompaction] = useState<CompactionActivity>();
+  const [chairCompaction, setChairCompaction] = useState<CompactionActivity>();
+  const manualCompaction = useRef<'public' | 'chair' | null>(null);
+  const [contextVerification, setContextVerification] = useState<{
+    sessionId: string; round: 'public' | 'chair'; started: CompactionActivity;
+  } | null>(null);
+  const publicStreamRevision = useRef(0);
+  const chairStreamRevision = useRef(0);
   const [input, setInput] = useState('');
   const [cInput, setCInput] = useState('');
   const [activeRound, setActiveRound] = useState<ConvectionRound>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const visibleRunId = useRef(activeRunId); visibleRunId.current = activeRunId;
   const busy = activeRound === 'public';
   const cBusy = activeRound === 'chair';
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
@@ -145,19 +161,23 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
   useEffect(() => { if (!active) return; refreshAgents(); const t = setInterval(refreshAgents, 5000); return () => clearInterval(t); }, [refreshAgents, active]);
 
   const refreshSessions = useCallback(async () => {
-    try { const r = await fetchConvectionRead('/api/convection/list'); if (r.ok) setSessions(await r.json()); else console.error(await readErrorMessage(r, translate('convection.page.loadListFailed'))); } catch (e) { console.error('[convection] load list failed', e); }
+    try { const r = await fetchConvectionRead('/api/convection/list'); if (r.ok) {
+      const rooms = await r.json() as SessionSummary[];
+      setSessions(current => mergeConvectionSessions(current, rooms));
+    } else console.error(await readErrorMessage(r, translate('convection.page.loadListFailed'))); } catch (e) { console.error('[convection] load list failed', e); }
   }, [translate]);
   useEffect(() => { if (active) void refreshSessions(); }, [active, refreshSessions]);
   const feedDisconnected = useConvectionConferenceFeed({
     active, sessionId: activeId, publicRequest: abortRef, chairRequest: cAbortRef,
     setSessions, setActiveRound, setActiveRunId, setMessages: setMsgs,
     setChairMessages: setCMsgs,
-    setPublicNotice, setChairNotice,
+    setPublicNotice, setChairNotice, setPublicCompaction, setChairCompaction,
     onMissingSession: id => {
       if (activeId !== id) return;
       localStorage.removeItem(ACTIVE_SESSION_KEY);
       setActiveId(null); setMsgs([]); setCMsgs([]);
       setPublicNotice(''); setChairNotice('');
+      setPublicCompaction(undefined); setChairCompaction(undefined);
       setActiveRound(null); setActiveRunId(null);
     },
   });
@@ -173,9 +193,12 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
     if (shouldBlockConvectionSessionSwitch(activeId, id, hasLocalRound)) return;
     if (!shouldLoadConvectionSession(id, activeId, loadingSessionRef.current)) return;
     const request = sessionRequestGuard.current.begin();
+    publicStreamRevision.current += 1; chairStreamRevision.current += 1;
     loadingSessionRef.current = id;
     setActiveId(id);
+    setContextVerification(null);
     setPublicNotice(''); setChairNotice('');
+    setPublicCompaction(undefined); setChairCompaction(undefined);
     setActiveRound(null);
     setActiveRunId(null);
     localStorage.setItem(ACTIVE_SESSION_KEY, id);
@@ -196,11 +219,17 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
       const d = await r.json();
       const runtime = await readConvectionRound(id);
       if (!request.isCurrent()) return;
+      const pending = runtime?.round ?? (compactionActivity(d.compactionProgress)?.phase === 'running'
+        ? 'public' : compactionActivity(d.chairCompactionProgress)?.phase === 'running' ? 'chair' : null);
+      setSessions(current => restoreConvectionUsage(current, id, d, pending));
       setMsgs((d.publicMessages || []).map(restoreConvectionMessage));
       setCMsgs(d.chairMessages || []);
       setPublicNotice(compactionFeedbackMessage(d.compactionNotice));
       setChairNotice(compactionFeedbackMessage(d.chairCompactionNotice));
-      setActiveRound(runtime?.round ?? null);
+      setPublicCompaction(compactionActivity(d.compactionProgress));
+      setChairCompaction(compactionActivity(d.chairCompactionProgress));
+      setActiveRound(runtime?.round ?? (compactionActivity(d.compactionProgress)?.phase === 'running'
+        ? 'public' : compactionActivity(d.chairCompactionProgress)?.phase === 'running' ? 'chair' : null));
       setActiveRunId(runtime?.runId ?? null);
     } catch (e) { if (request.isCurrent()) { console.error('[convection] load session failed', e); alert(`${translate('convection.page.loadSessionFailed')}: ${(e as Error).message}`); } }
     finally { if (loadingSessionRef.current === id) loadingSessionRef.current = null; }
@@ -209,6 +238,8 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
   // 中心状态可纠正断流或缺少终止帧造成的本地忙碌残留。
   useEffect(() => {
     if (!active || !activeId || !activeRound) return;
+    if (manualCompaction.current || (!activeRunId && (publicCompaction?.phase === 'running'
+      || chairCompaction?.phase === 'running'))) return;
     if ((abortRef.current || cAbortRef.current) && !activeRunId) return;
     let cancelled = false;
     const sync = async () => {
@@ -216,7 +247,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         const result = await reconcileConvectionRound({
           readRound: () => readConvectionRoundStatus(activeId),
           loadMessages: async () => {
-            const r = await fetch(`/api/convection/session/${activeId}/status`);
+            const r = await backendFetch(`/api/convection/session/${activeId}/status`);
             if (!r.ok) throw new Error(await readErrorMessage(r, translate('convection.page.reloadFailed')));
             return r.json();
           },
@@ -233,6 +264,9 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
             setCMsgs(data.chairMessages || []);
             setPublicNotice(compactionFeedbackMessage(data.compactionNotice));
             setChairNotice(compactionFeedbackMessage(data.chairCompactionNotice));
+            setPublicCompaction(compactionActivity(data.compactionProgress));
+            setChairCompaction(compactionActivity(data.chairCompactionProgress));
+            setSessions(current => restoreConvectionUsage(current, activeId, data));
             setActiveRound(null);
             setActiveRunId(null);
             refreshSessions();
@@ -249,13 +283,18 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
     };
     const timer = setInterval(sync, 2000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [active, activeId, activeRound, activeRunId, refreshSessions, translate]);
+  }, [active, activeId, activeRound, activeRunId, publicCompaction?.phase, chairCompaction?.phase, refreshSessions, translate]);
 
   const requestRoundAbort = useCallback(async (
     controller: AbortController | null,
     returnQueuedMessages: boolean,
   ) => {
     if (!activeId) return;
+    if (manualCompaction.current && controller) {
+      if (returnQueuedMessages) stoppedRef.current = true;
+      controller.abort();
+      return;
+    }
     try {
       await abortConvectionRound(activeId, activeRunId ?? undefined);
       if (returnQueuedMessages) stoppedRef.current = true;
@@ -407,18 +446,58 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
     }
   }, [cMsgs]);
 
-  const reloadCommittedContext = useCallback(async (sessionId: string) => {
+  const reloadCommittedContext = useCallback(async (sessionId: string,
+    ongoing?: { round: 'public' | 'chair'; revision: number },
+    verification?: { signal: AbortSignal; isCurrent(): boolean }) => {
     try {
-      const response = await fetchConvectionRead(`/api/convection/session/${sessionId}/status`);
+      const path = `/api/convection/session/${sessionId}/status`;
+      const response = verification ? await backendFetch(path, { signal: verification.signal })
+        : await fetchConvectionRead(path);
       if (!response.ok) throw new Error(await readErrorMessage(response, translate('convection.page.reloadFailed')));
       const data = await response.json();
       if (selectedSessionId.current !== sessionId) return;
-      setMsgs((data.publicMessages ?? []).map(restoreConvectionMessage));
-      setCMsgs(data.chairMessages ?? []);
+      if (verification && !verification.isCurrent()) return;
+      if (ongoing && (ongoing.round === 'public' ? publicStreamRevision : chairStreamRevision).current !== ongoing.revision) return;
+      setMsgs(current => [...(data.publicMessages ?? []).map(restoreConvectionMessage),
+        ...(ongoing ? current.filter(message => message.streaming) : [])]);
+      setCMsgs(current => [...(data.chairMessages ?? []),
+        ...(ongoing ? current.filter(message => message.streaming) : [])]);
       setPublicNotice(compactionFeedbackMessage(data.compactionNotice));
       setChairNotice(compactionFeedbackMessage(data.chairCompactionNotice));
-    } catch (error) { console.error('[convection] committed context sync failed', error); }
+      setPublicCompaction(current => restoreConvectionCompaction(current, data.compactionProgress));
+      setChairCompaction(current => restoreConvectionCompaction(current, data.chairCompactionProgress));
+      const pending = ongoing?.round ?? (compactionActivity(data.compactionProgress)?.phase === 'running'
+        ? 'public' : compactionActivity(data.chairCompactionProgress)?.phase === 'running' ? 'chair' : null);
+      setSessions(current => restoreConvectionUsage(current, sessionId, data, pending));
+      return data;
+    } catch (error) { if (!verification) console.error('[convection] committed context sync failed', error); }
   }, [translate]);
+
+  useEffect(() => {
+    if (!contextVerification || !active || activeRunId || activeId !== contextVerification.sessionId) return;
+    const check = contextVerification;
+    const controller = new AbortController();
+    const current = () => !controller.signal.aborted && selectedSessionId.current === check.sessionId
+      && !visibleRunId.current && !abortRef.current && !cAbortRef.current;
+    const setter = check.round === 'public' ? setPublicCompaction : setChairCompaction;
+    void reconcileConvectionCompaction({ scope: check.round, signal: controller.signal,
+      readContext: () => reloadCommittedContext(check.sessionId, undefined, {
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]), isCurrent: current,
+      }),
+    }).then(result => {
+      if (!current()) return;
+      const progress = result.status === 'unconfirmed' ? undefined : compactionActivity(
+        check.round === 'public' ? result.context.compactionProgress : result.context.chairCompactionProgress);
+      if (result.status !== 'running') {
+        if (!progress) setter({ ...check.started, id: `pending-check-${Date.now()}`, phase: 'failed',
+          updatedAt: Date.now(), message: translate('compaction.status.unconfirmed') });
+        if (check.round === 'public' && progress?.phase !== 'completed') stoppedRef.current = true;
+        setActiveRound(null); setActiveRunId(null);
+      }
+      setContextVerification(value => value === check ? null : value);
+    }).catch(error => { if (current()) console.error('[convection] context verification failed', error); });
+    return () => controller.abort();
+  }, [active, activeId, activeRunId, contextVerification, reloadCommittedContext, translate]);
 
   const handleSpeak = useCallback(async (textArg?: string) => {
     const fromQueue = typeof textArg === 'string';   // 出队续发：文本显式传入，不读输入框
@@ -430,30 +509,52 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
     }
     if (cBusy) return;
     if (!fromQueue) setInput('');
+    setSessions(current => beginConvectionUsage(current, activeId, 'public'));
 
     // 指令拦截
     if (msg === '/reset' || msg === '/compact' || msg === '/reset summary') {
       const mode = msg === '/reset' ? 'clean' : 'summary';
       setActiveRound('public');
       setActiveRunId(null);
+      const ctrl = new AbortController();
+      abortRef.current = ctrl; manualCompaction.current = 'public';
+      const startedAt = Date.now();
+      let acknowledged = false;
+      const started: CompactionActivity = { id: `pending-${startedAt}`, phase: 'running', operation: mode === 'clean' ? 'reset' : 'compact', startedAt, updatedAt: startedAt };
+      setContextVerification(null); setPublicCompaction(started);
       try {
-        const resetData = mode === 'summary' ? await compactConvectionContext(activeId)
-          : await resetConvectionContext(activeId, mode);
-        if (mode === 'summary' && resetData?.summaryFailed) {
-          alert(translate('convection.page.summaryFailed'));
-        }
+        await (mode === 'summary' ? compactConvectionContext(activeId, ctrl.signal)
+          : resetConvectionContext(activeId, mode, ctrl.signal));
+        acknowledged = true;
+        setPublicCompaction(current => current ? { ...current, phase: 'completed', updatedAt: Date.now(), message: undefined } : current);
         refreshSessions();
       } catch (e) {
-        console.error('[convection] context operation failed', e);
         const errorKey = mode === 'summary' ? 'convection.page.compactFailed' : 'convection.page.resetFailed';
-        alert(`${translate(errorKey)}: ${(e as Error).message}`);
+        setPublicCompaction(current => ({ ...(current ?? started),
+          phase: 'running', updatedAt: Date.now(), message: translate(ctrl.signal.aborted
+            ? 'compaction.status.checkingStop' : 'compaction.status.checkingConnection') }));
+        if (!ctrl.signal.aborted) console.error(`[convection] ${translate(errorKey)}`, e);
       } finally {
-        await reloadCommittedContext(activeId);
-        if (selectedSessionId.current === activeId) { setActiveRound(null); setActiveRunId(null); }
+        abortRef.current = null; manualCompaction.current = null;
+        const saved = await reloadCommittedContext(activeId, undefined, {
+          signal: AbortSignal.timeout(5_000), isCurrent: () => selectedSessionId.current === activeId,
+        });
+        if (acknowledged && !saved) setSessions(current => restoreConvectionUsage(current, activeId, {}));
+        if (selectedSessionId.current === activeId && (acknowledged || (saved
+          && compactionActivity(saved.compactionProgress)?.phase !== 'running'))) {
+          const progress = compactionActivity(saved?.compactionProgress);
+          if (!acknowledged && progress?.phase !== 'completed') {
+            stoppedRef.current = true;
+            if (!progress) setPublicCompaction({ ...started, phase: 'failed', updatedAt: Date.now(),
+              message: translate('compaction.status.unconfirmed') });
+          }
+          setActiveRound(null); setActiveRunId(null);
+        } else if (selectedSessionId.current === activeId) setContextVerification({ sessionId: activeId, round: 'public', started });
       }
       return;
     }
 
+    setContextVerification(null);
     setActiveRound('public');
     setActiveRunId(null);
     const ctrl = new AbortController();
@@ -462,6 +563,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
     setMsgs(prev => [...prev, { speaker: '人类', content: msg, timestamp: now }]);
     console.log(`[${now}] 人类发言 → 对流: ${msg.slice(0, 80)}`);
     let preserveServerRound = false;
+    let completed = false;
     let executionError: string | null = null;
     try {
       let currentLabel = '';
@@ -485,8 +587,11 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
       };
       const cancelFlush = () => { if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; } };
       await streamConvectionSSE(streamUrl(`/api/convection/session/${activeId}/speak`), { message: msg }, (ev: any) => {
+        const revision = ++publicStreamRevision.current;
         const feedback = compactionFeedbackEvent(ev);
         if (feedback !== undefined) setPublicNotice(feedback ?? '');
+        setPublicCompaction(current => reduceCompactionActivity(current, ev));
+        if (ev.type === 'compact-done') void reloadCommittedContext(activeId, { round: 'public', revision });
         if (ev.type === 'round-start') {
           setActiveRound(normalizeConvectionRound(ev.round));
           setActiveRunId(typeof ev.runId === 'string' ? ev.runId : null);
@@ -512,12 +617,12 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
           const tools = pendingTools;
           setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === currentLabel ? { ...m, toolCalls: tools } : m));
         } else if (ev.type === 'tool-result') {
-          pendingTools = pendingTools.map(t => t.tool === ev.tool && t.status === 'running' ? { ...t, result: ev.result, status: 'done' } : t);
+          pendingTools = pendingTools.map(t => t.tool === ev.tool && t.status === 'running' ? { ...t, result: ev.result, toolImages: ev.toolImages, status: 'done' } : t);
           const tools = pendingTools;
           setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === currentLabel ? { ...m, toolCalls: tools } : m));
         } else if (ev.type === 'agent-done') {
           cancelFlush();   // 终答权威，撤掉可能在排队的后沿刷新（否则覆盖 final content）
-          const finalTools: ToolStep[] = (ev.toolCalls || []).map((tc: any) => ({ tool: tc.tool, args: tc.args, result: tc.result, status: 'done' as const }));
+          const finalTools: ToolStep[] = (ev.toolCalls || []).map((tc: any) => ({ tool: tc.tool, args: tc.args, result: tc.result, toolImages: tc.toolImages, status: 'done' as const }));
           setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === ev.label ? { ...m, content: ev.content, rawContent: streamContent || ev.rawContent || ev.content, reasoning: reasoningContent || ev.reasoning, toolCalls: finalTools, streaming: false } : m));
           currentLabel = '';
           streamContent = '';
@@ -533,12 +638,6 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
           streamContent = '';
           reasoningContent = '';
           pendingTools = [];
-        } else if (ev.type === 'compact-start') {
-          setMsgs(p => [...p, { speaker: '系统', content: translate('convection.page.archiving'), streaming: true, toolCalls: [], timestamp: new Date().toISOString() }]);
-        } else if (ev.type === 'compact-done') {
-          setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === '系统' && m.streaming
-            ? { ...m, content: translate('convection.page.archived', { cycles: (ev as any).archivedCycles, size: Math.round(((ev as any).summaryLength || 0) / 1000) }), streaming: false }
-            : m));
         } else if (ev.type === 'notice') {
           // 系统提示（如强制 native 但探测不支持的警告）
           setMsgs(p => [...p, { speaker: '系统', content: ev.message, toolCalls: [], timestamp: new Date().toISOString() }]);
@@ -548,6 +647,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         executionFailed: translate('convection.sse.executionFailed'),
         interrupted: translate('convection.sse.interrupted'),
       });
+      completed = true;
     } catch (e: any) {
       if (e instanceof ConvectionHttpError && e.status === 409) {
         preserveServerRound = true;
@@ -555,6 +655,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         setActiveRound(null);
         setActiveRunId(null);
         const runtime = await readConvectionRound(activeId);
+        setSessions(current => restoreConvectionUsage(current, activeId, {}, runtime?.round));
         setActiveRound(runtime?.round ?? null);
         setActiveRunId(runtime?.runId ?? null);
         return;
@@ -566,9 +667,11 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         executionError = translate('convection.page.connectionInterrupted', { detail: e.message || translate('convection.page.unknownError') });
       }
     } finally {
+      publicStreamRevision.current += 1;
       abortRef.current = null;
       if (!preserveServerRound) {
-        await reloadCommittedContext(activeId);
+        const saved = await reloadCommittedContext(activeId);
+        if (completed && !saved) setSessions(current => restoreConvectionUsage(current, activeId, {}));
         if (selectedSessionId.current === activeId) {
           if (executionError) setMsgs(current => [...current, { speaker: '系统', content: executionError!,
             timestamp: new Date().toISOString() }]);
@@ -605,14 +708,39 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
 
   const handleChair = useCallback(async () => {
     if (!cInput.trim() || activeRound !== null || !activeId) return;
+    setSessions(current => beginConvectionUsage(current, activeId, 'chair'));
+    setContextVerification(null);
     const msg = cInput.trim(); setCInput(''); setActiveRound('chair'); setActiveRunId(null);
     if (msg === '/compact' || msg === '/reset' || msg === '/reset summary') {
+      const ctrl = new AbortController();
+      cAbortRef.current = ctrl; manualCompaction.current = 'chair';
+      const startedAt = Date.now();
+      let acknowledged = false;
+      const started: CompactionActivity = { id: `pending-${startedAt}`, phase: 'running', operation: msg === '/reset' ? 'reset' : 'compact', startedAt, updatedAt: startedAt };
+      setContextVerification(null); setChairCompaction(started);
       try {
-        if (msg === '/reset') await resetConvectionChairContext(activeId);
-        else await compactConvectionChairContext(activeId);
-      } catch (error) { alert((error as Error).message); }
-      finally { await reloadCommittedContext(activeId);
-        if (selectedSessionId.current === activeId) setActiveRound(null); }
+        if (msg === '/reset') await resetConvectionChairContext(activeId, ctrl.signal);
+        else await compactConvectionChairContext(activeId, ctrl.signal);
+        acknowledged = true;
+        setChairCompaction(current => current ? { ...current, phase: 'completed', updatedAt: Date.now(), message: undefined } : current);
+      } catch (error) { setChairCompaction(current => ({ ...(current ?? started),
+        phase: 'running', updatedAt: Date.now(), message: translate(ctrl.signal.aborted
+          ? 'compaction.status.checkingStop' : 'compaction.status.checkingConnection') }));
+        if (!ctrl.signal.aborted) console.error('[convection] chair context request interrupted', error); }
+      finally { cAbortRef.current = null; manualCompaction.current = null;
+        const saved = await reloadCommittedContext(activeId, undefined, {
+          signal: AbortSignal.timeout(5_000), isCurrent: () => selectedSessionId.current === activeId,
+        });
+        if (acknowledged && !saved) setSessions(current => restoreConvectionUsage(current, activeId, {}));
+        if (selectedSessionId.current === activeId && (acknowledged || (saved
+          && compactionActivity(saved.chairCompactionProgress)?.phase !== 'running'))) {
+          if (!acknowledged && !compactionActivity(saved?.chairCompactionProgress)) {
+            setChairCompaction({ ...started, phase: 'failed', updatedAt: Date.now(),
+              message: translate('compaction.status.unconfirmed') });
+          }
+          setActiveRound(null);
+        }
+        else if (selectedSessionId.current === activeId) setContextVerification({ sessionId: activeId, round: 'chair', started }); }
       return;
     }
     const ctrl = new AbortController();
@@ -621,14 +749,18 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
     setCMsgs(prev => [...prev, { role: 'user', content: msg, timestamp: now }]);
     const assistantTimestamp = new Date().toISOString();
     let preserveServerRound = false;
+    let completed = false;
     let executionError: string | null = null;
     try {
       let acc = '';
       let cReasoning = '';
       setCMsgs(prev => [...prev, { role: 'assistant', content: '', streaming: true, timestamp: assistantTimestamp }]);
       await streamConvectionSSE(streamUrl(`/api/convection/session/${activeId}/chair`), { message: msg }, (ev: any) => {
+        const revision = ++chairStreamRevision.current;
         const feedback = compactionFeedbackEvent(ev);
         if (feedback !== undefined) setChairNotice(feedback ?? '');
+        setChairCompaction(current => reduceCompactionActivity(current, ev));
+        if (ev.type === 'compact-done') void reloadCommittedContext(activeId, { round: 'chair', revision });
         if (ev.type === 'round-start') {
           setActiveRound(normalizeConvectionRound(ev.round));
           setActiveRunId(typeof ev.runId === 'string' ? ev.runId : null);
@@ -653,6 +785,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         executionFailed: translate('convection.sse.executionFailed'),
         interrupted: translate('convection.sse.interrupted'),
       });
+      completed = true;
     } catch (e: any) {
       if (e instanceof ConvectionHttpError && e.status === 409) {
         preserveServerRound = true;
@@ -660,6 +793,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         setActiveRound(null);
         setActiveRunId(null);
         const runtime = await readConvectionRound(activeId);
+        setSessions(current => restoreConvectionUsage(current, activeId, {}, runtime?.round));
         setActiveRound(runtime?.round ?? null);
         setActiveRunId(runtime?.runId ?? null);
         return;
@@ -675,9 +809,11 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
       if (e.name !== 'AbortError') executionError = translate('convection.page.requestFailed', {
         detail: e.message || translate('convection.page.unknownError') });
     } finally {
+      chairStreamRevision.current += 1;
       cAbortRef.current = null;
       if (!preserveServerRound) {
-        await reloadCommittedContext(activeId);
+        const saved = await reloadCommittedContext(activeId);
+        if (completed && !saved) setSessions(current => restoreConvectionUsage(current, activeId, {}));
         if (selectedSessionId.current === activeId) {
           if (executionError) setCMsgs(current => [...current, { role: 'assistant', content: executionError!,
             timestamp: new Date().toISOString() }]);
@@ -805,15 +941,20 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
                   );
                 }
                 // 对流拥有自己的回合实现；与气旋只统一视觉契约，不建立跨功能依赖。
-                return <ConvectionTurnCard key={i} message={m} agent={resolveConvectionAgent(agents, m.speaker, m.agentId)} messageId={`conv-${i}`}
+                return <ConvectionTurnCard key={i} message={publicCompaction?.phase === 'running'
+                  ? { ...m, waitingInfo: undefined } : m} agent={resolveConvectionAgent(agents, m.speaker, m.agentId)} messageId={`conv-${i}`}
+                  mediaScope={activeId ? { feature: 'convection', sessionId: activeId } : undefined}
                   onEdit={() => handleStartEdit(i, m.content)} onDelete={() => handleDeleteMsg(i)} />;
               })}
             </div>
             {/* Input */}
             <div className="chat__input-area">
+              <CompactionStatus activity={publicCompaction} />
               <QueuedChips items={queue} onRemove={i => { if (activeId) removeQueuedMsg(activeId, i); }} />
               <div className="chat__input-wrapper">
-                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder={publicComposerMode === 'blocked' ? translate('convection.page.privateRunning') : busy ? translate('convection.page.publicStreaming') : translate('convection.page.publicPlaceholder')} rows={1} />
+                <textarea ref={inputRef} className="chat__input" value={input} onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSpeak(); } }} placeholder={publicCompaction?.phase === 'running'
+                  ? translate(publicCompaction.operation === 'reset' ? 'compaction.status.resetting' : 'compaction.status.running')
+                  : publicComposerMode === 'blocked' ? translate('convection.page.privateRunning') : busy ? translate('convection.page.publicStreaming') : translate('convection.page.publicPlaceholder')} rows={1} />
                 {publicComposerMode === 'blocked' ? (
                   <button className="chat__send-btn" disabled title={translate('convection.page.privateRunning')}>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
@@ -825,7 +966,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
                     </button>
                     <button className="chat__stop-btn" onClick={() => {
                       void requestRoundAbort(abortRef.current, true);
-                    }} title={translate('convection.page.stop')}>
+                    }} disabled={!abortRef.current && !activeRunId} title={translate('convection.page.stop')}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
                     </button>
                   </>
@@ -862,32 +1003,36 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         </div>
         <div ref={cRef} className="conv__chair-messages">
           <CompactionNotice message={chairNotice} />
-          {cMsgs.map((m, i) => (
+          {cMsgs.map((m, i) => m.role === 'system' && isCompactionHistory(m.content)
+            ? <CompactionHistory key={i} content={m.content} /> : (
             <div key={i} className={`conv__chair-msg conv__chair-msg--${m.role === 'user' ? 'user' : 'assistant'}`}>
               <div className={`conv__chair-bubble conv__chair-bubble--${m.role === 'user' ? 'user' : 'assistant'}`}>
                 {convectionReasoningProps(m.reasoning, !!m.streaming) && (
                   <ReasoningBlock {...convectionReasoningProps(m.reasoning, !!m.streaming)!} />
                 )}
-                {m.waitingInfo && (m as any).streaming && (
+                {m.waitingInfo && m.streaming && chairCompaction?.phase !== 'running' && (
                   <div className="conv__waiting-hint">
                     {translate('convection.turn.waitingModel')}
                     <span className="conv__waiting-elapsed">{Math.round(m.waitingInfo.elapsed / 1000)}s</span>
                     <span className="thinking-card__tool-spinner" />
                   </div>
                 )}
-                {renderTextWithCode(m.content, `chair-${i}`)}{(m as any).streaming && !m.waitingInfo ? '▍' : ''}
+                {renderTextWithCode(m.content, `chair-${i}`)}{m.streaming && !m.waitingInfo && chairCompaction?.phase !== 'running' ? '▍' : ''}
                 {m.timestamp && <div className="chat__timestamp" title={formatTimestamp(m.timestamp, true)}>{formatTimestamp(m.timestamp)}</div>}
               </div>
             </div>
           ))}
         </div>
         <div className="chat__input-area">
+          <CompactionStatus activity={chairCompaction} />
           <div className="chat__input-wrapper">
-            <textarea ref={cInputRef} className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={!activeId ? '' : chairComposerMode === 'blocked' ? translate('convection.page.publicRunning') : translate('convection.page.chairPlaceholder')} disabled={!activeId} rows={1} />
+            <textarea ref={cInputRef} className="chat__input" value={cInput} onChange={e => { setCInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px'; }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChair(); } }} placeholder={!activeId ? '' : chairCompaction?.phase === 'running'
+              ? translate(chairCompaction.operation === 'reset' ? 'compaction.status.resetting' : 'compaction.status.running')
+              : chairComposerMode === 'blocked' ? translate('convection.page.publicRunning') : translate('convection.page.chairPlaceholder')} disabled={!activeId} rows={1} />
             {cBusy ? (
               <button className="chat__stop-btn" onClick={() => {
                 void requestRoundAbort(cAbortRef.current, false);
-              }} title={translate('convection.page.stop')}>
+              }} disabled={!cAbortRef.current && !activeRunId} title={translate('convection.page.stop')}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
               </button>
             ) : chairComposerMode === 'blocked' ? (

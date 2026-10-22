@@ -23,8 +23,3 @@ export const agentBtn: CSSProperties = {
 export const emptyCenter: CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%',
 };
-
-export const sessItem: CSSProperties = {
-  padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--border-radius-sm)',
-  cursor: 'pointer', marginBottom: '2px',
-};

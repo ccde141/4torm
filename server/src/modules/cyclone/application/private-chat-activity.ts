@@ -1,12 +1,12 @@
 import type { CycloneExecutionSnapshot } from '../domain/operation-snapshot.js';
 import { boundedActivityEvent } from './bounded-activity-event.js';
 
-export type PrivateChatKind = 'seat' | 'chair';
+export type PrivateChatKind = 'seat' | 'chair' | 'supervisor';
 
 export interface PrivateChatActivitySnapshot {
   operationId: string;
   runId: string;
-  phase: 'seat-chat' | 'chair-chat';
+  phase: 'seat-chat' | 'chair-chat' | 'supervisor-chat' | 'supervisor-resume';
   message: string;
   running: boolean;
   latestSeq: number;
@@ -87,6 +87,8 @@ export class CyclonePrivateChatActivity {
 }
 
 function privateKind(execution: CycloneExecutionSnapshot): PrivateChatKind {
+  if (execution.targetKind === 'supervisor'
+    && (execution.phase === 'supervisor-chat' || execution.phase === 'supervisor-resume')) return 'supervisor';
   if (execution.phase === 'seat-chat' && execution.targetKind === 'seat') return 'seat';
   if (execution.phase === 'chair-chat' && execution.targetKind === 'room') return 'chair';
   throw new Error('Private chat activity requires a seat-chat or chair-chat execution');

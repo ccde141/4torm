@@ -1,13 +1,5 @@
-/**
- * Orchestrator —— 信风工作流编排核心
- *
- * 生命周期：constructor → start() → [执行中] → stop()
- *
- * 职责：
- * - 持有运行身份、状态、归档及 EventBus/TokenStream 生命周期
- * - start() 委托 bootstrap 准备执行资源，接管归档后再激活节点
- * - 节点完成回调中判断是否为 Output → 触发 workflow-end
- * - stop() 中止所有 buffer、flush EventBus、关闭 SSE
+/** 信风运行生命周期：接管准备资源后激活，统一提交终态并释放本次执行。
+ * strict 由既有入口汇合完成；handoff 由逐封队列确认所有 root 交付后完成。
  */
 
 import path from 'node:path';
@@ -25,6 +17,7 @@ import type { AgentActivityHandle } from '../../shared/agent-activity.js';
 import { clearContactRegistry } from '../execution/contact-registry';
 import { FrameworkError } from '../../shared/framework-error.js';
 import { prepareWorkflowExecution } from './workflow-bootstrap';
+import type { HandoffRuntime } from './handoff-runtime.js';
 
 export interface OrchestratorOptions {
   graph: WorkflowGraph;
@@ -72,6 +65,10 @@ export class Orchestrator {
   private readonly trigger?: OrchestratorOptions['trigger'];
 
   private archive!: ArchiveManager;
+  private handoff?: HandoffRuntime;
+  private nodesSettled?: () => Promise<void>;
+  private preparation?: ReturnType<typeof prepareWorkflowExecution>;
+  private preparing = false;
   private abortController = new AbortController();
   private running = false;
   private outcome: LapOutcome | null = null;
@@ -80,7 +77,6 @@ export class Orchestrator {
   private failure: FrameworkError | null = null;
   private completionNodeId: string | null = null;
   private agentActivities = new Map<string, AgentActivityHandle>();
-
   /** 本圈结束信号：Output → 'done'；出错 → 'error'；外部 stop 未出 output → 'stopped'。供 LoopController 等待。 */
   private settledResolve!: (outcome: LapOutcome) => void;
   private readonly settled = new Promise<LapOutcome>((resolve) => {
@@ -104,7 +100,7 @@ export class Orchestrator {
     );
 
     const eventsFile = path.join(this.runDir, 'events.jsonl');
-    this.eventBus = new EventBus(eventsFile);
+    this.eventBus = new EventBus(eventsFile, this.graph.orchestration === 'handoff');
     this.tokenStream = new TokenStreamBus();
 
     for (const node of this.graph.nodes) {
@@ -118,8 +114,10 @@ export class Orchestrator {
   getTokenStream(): TokenStreamBus { return this.tokenStream; }
   getRunDir(): string { return this.runDir; }
   isRunning(): boolean { return this.running || (this.stopPromise !== null && !this.settlementComplete); }
+  isPreparing(): boolean { return this.preparing && !this.archive?.hasStarted(); }
   getOutcome(): LapOutcome | null { return this.settlementComplete ? this.outcome : null; }
   getFailure(): FrameworkError | null { return this.failure; }
+  getHandoffState() { return this.handoff?.snapshot(); }
 
   /** 本圈结束信号。LoopController 用它等待续圈时机；'done' 才续圈，'error'/'stopped' 终止循环。 */
   whenSettled(): Promise<LapOutcome> { return this.settled; }
@@ -136,7 +134,8 @@ export class Orchestrator {
   }
 
   private async startExecution(): Promise<void> {
-    const prepared = await prepareWorkflowExecution({
+    this.preparing = true;
+    this.preparation = prepareWorkflowExecution({
       executionId: this.executionId, workflowId: this.workflowId,
       runDir: this.runDir, dataDir: this.dataDir, graph: this.graph,
       mode: this.mode, initialInput: this.initialInput,
@@ -148,12 +147,24 @@ export class Orchestrator {
       onError: (nodeId, error) => this.handleNodeError(nodeId, error),
       onArchive: archive => { this.archive = archive; },
     });
+    let prepared: Awaited<ReturnType<typeof prepareWorkflowExecution>>;
+    try { prepared = await this.preparation; }
+    finally { this.preparing = false; }
+    if (this.abortController.signal.aborted) {
+      const error = new Error('工作流启动已停止'); error.name = 'AbortError'; throw error;
+    }
     // 必须先接管归档再激活节点：极速 Output 也使用同一个终态提交入口。
     this.archive = prepared.archive;
+    this.handoff = prepared.handoff;
+    this.nodesSettled = prepared.settle;
     prepared.activate();
   }
 
   private async failStart(error: unknown): Promise<void> {
+    if (this.abortController.signal.aborted && this.outcome === 'stopped' && this.stopPromise) {
+      await this.stopPromise;
+      return;
+    }
     this.running = false;
     this.outcome = 'error';
     this.failure = this.executionFailure(error);
@@ -171,37 +182,49 @@ export class Orchestrator {
   private async performStop(): Promise<void> {
     this.running = false;
     if (!this.outcome) this.outcome = 'stopped';
+    if (this.preparing) {
+      this.abortController.abort();
+      await this.preparation?.catch(() => undefined);
+    }
 
     // 终态提交失败仍必须释放资源；settled 报告失败，显式 stop 调用保留 IO 异常。
     let archiveError: unknown;
     try {
+      if (this.handoff) await this.eventBus.flush();
       await this.archive?.writeEnd(this.outcome);
-      if (this.outcome === 'done') this.emitCompletion();
+      if (this.outcome === 'done') await this.emitCompletion();
     }
     catch (error) {
       archiveError = error;
       this.failure = this.executionFailure(error);
       this.outcome = 'error';
+      if (this.handoff) await this.archive?.recordFailure(this.failure).catch(() => undefined);
       this.eventBus.emit({ timestamp: new Date().toISOString(), nodeId: '',
         eventTypeId: 'node-error', payload: {
           message: this.failure.message, code: this.failure.data.code,
         } });
     }
     try { await this.releaseExecutionResources(); }
+    catch (error) {
+      archiveError ??= error;
+      this.failure = this.executionFailure(error);
+      this.outcome = 'error';
+      if (this.handoff) await this.archive?.recordFailure(this.failure).catch(() => undefined);
+    }
     finally { this.settlementComplete = true; this.settledResolve(this.outcome); }
     if (archiveError) throw archiveError;
   }
 
   private async releaseExecutionResources(): Promise<void> {
     // 0. 清理 Contact Registry
-    clearContactRegistry();
+    clearContactRegistry(this.executionId);
 
     // 0.1 清理控制台活动状态。
     for (const activity of this.agentActivities.values()) activity.end();
     this.agentActivities.clear();
 
     // 0.5 主动 flush 所有活跃 NodeRunner 的 messages（防止 abort 后来不及 persist）
-    for (const [, runner] of activeNodeRunners) {
+    for (const [, runner] of activeNodeRunners.entries(this.executionId)) {
       try { await runner.flush(); } catch { /* 忽略 */ }
     }
 
@@ -210,17 +233,16 @@ export class Orchestrator {
     for (const buffer of this.inputBuffers.values()) {
       buffer.abort();
     }
+    if (this.handoff) await this.nodesSettled?.();
 
     // 2. 等 EventBus 落盘完成
-    await this.eventBus.flush();
-
-    // 3. 关闭 SSE 连接
-    this.eventBus.closeAll();
-    this.tokenStream.closeAll();
-
-    // 4. 清理节点上下文存储
-    clearNodeContextStore(this.executionId);
-    clearNodeStatusStore(this.executionId);
+    try { await this.eventBus.flush(); }
+    finally {
+      this.eventBus.closeAll();
+      this.tokenStream.closeAll();
+      clearNodeContextStore(this.executionId);
+      clearNodeStatusStore(this.executionId);
+    }
   }
 
   private executionFailure(error: unknown): FrameworkError {
@@ -235,8 +257,8 @@ export class Orchestrator {
     void this.stop().catch(error => console.error('[orchestrator] 收尾失败：', error));
   }
 
-  private emitCompletion(): void {
-    this.eventBus.emit({ timestamp: new Date().toISOString(),
+  private emitCompletion(): Promise<void> {
+    return this.eventBus.emit({ timestamp: new Date().toISOString(),
       nodeId: this.completionNodeId ?? '',
       eventTypeId: this.loopContext ? BUILTIN_EVENT_IDS.LAP_DONE : BUILTIN_EVENT_IDS.WORKFLOW_END });
   }
@@ -253,9 +275,7 @@ export class Orchestrator {
     if (node.type === 'output') {
       this.outcome = 'done';
       this.completionNodeId = nodeId;
-      // 单圈完成：归档 + 收尾（释放锁、清 runner）。
-      // 循环 vs 单次的区别由 settled 信号交给上层判断——本圈无论如何都 stop（每圈全新 Orchestrator）。
-      // 非循环（单次运行）时上层无人 await settled，等价于原 WORKFLOW_END + stop 行为。
+      // 每圈独立收尾；LoopController 只在 settled='done' 后继续下一圈。
       this.stopInBackground();
     }
   }
@@ -265,6 +285,7 @@ export class Orchestrator {
     // settled 已由 stop() resolve('stopped')，不再覆写 meta / 重复 resolve。
     if (!this.running) return;
     this.outcome = 'error';
+    this.failure = this.executionFailure(error);
 
     console.error(`[orchestrator] Node ${nodeId} failed:`, error.message);
     this.eventBus.emit({

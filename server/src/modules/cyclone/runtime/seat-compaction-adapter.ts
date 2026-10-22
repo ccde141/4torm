@@ -17,8 +17,10 @@ import type { CycloneExecutionPort } from '../domain/operation-snapshot.js';
 import type { CycloneChangeFeed } from '../application/change-feed.js';
 import { archiveCycloneCompaction } from '../../../engine/cyclone/compaction-archive.js';
 import { saveSeat } from '../../../engine/cyclone/seat-store.js';
-import type { CompactionNotice } from '../../../engine/shared/compaction/index.js';
+import type { CompactionNotice, CompactionProgress } from '../../../engine/shared/compaction/index.js';
+import { startCycloneCompaction, finishCycloneCompaction } from '../../../engine/cyclone/compaction-progress.js';
 import { loadAgent } from '../../../engine/shared/agent-loader.js';
+import { trackCyclonePreparation, trackCyclonePreparationStart } from '../application/execution-preparation.js';
 
 type ReadyPlan = Extract<SeatCompactionPlan, { ok: true }>;
 
@@ -29,7 +31,8 @@ export interface CycloneSeatCompactionRuntime {
     signal: AbortSignal; onChunk(chunk: string): void;
     onNotice?(notice: CompactionNotice): void | Promise<void> }): Promise<string>;
   apply(dataDir: string, workshopId: string, seat: SeatData, plan: ReadyPlan,
-    summary: string, archivePath?: string): Promise<{ archivedCount: number }>;
+    summary: string, archivePath?: string, signal?: AbortSignal,
+    progress?: CompactionProgress): Promise<{ archivedCount: number }>;
   archive?(dataDir: string, workshopId: string, seat: SeatData, plan: ReadyPlan): Promise<string>;
 }
 
@@ -55,7 +58,7 @@ export function createCycloneSeatCompactionPort(
   runtime: CycloneSeatCompactionRuntime = defaultRuntime,
   changes?: CycloneChangeFeed,
 ): CycloneSeatCompactionPort {
-  return { prepare: async input => {
+  return { prepare: input => trackCyclonePreparationStart(commands, async () => {
     const execution = await commands.begin({ workshopId: input.workshopId,
       targetKind: 'seat', targetId: input.seatId, phase: 'seat-compact' });
     changes?.publish(input.workshopId, 'activity', input.seatId);
@@ -67,9 +70,27 @@ export function createCycloneSeatCompactionPort(
       const plan = runtime.plan(seat.messages || [], seat.tokenUsage?.promptTokens);
       if (!plan.ok) throw planError(plan);
       const model = await runtime.resolveModel(dataDir, seat.agentId);
-      return { execution, run: onEvent => runCompaction(
-        dataDir, input, seat, plan, model, execution, commands, executions, runtime, onEvent, changes,
-      ) };
+      let task: Promise<void> | undefined;
+      let disposal: Promise<void> | undefined;
+      return trackCyclonePreparation(commands, { execution,
+        run: onEvent => {
+          if (disposal) return Promise.reject(compactError('CYCLONE_COMPACTION_PREPARATION_CLOSED',
+            'conflict', '压缩准备已结束，不能再次执行'));
+          task ??= runCompaction(dataDir, input, seat, plan, model, execution,
+            commands, executions, runtime, onEvent, changes);
+          return task;
+        },
+        dispose: cause => {
+          // Normal execution owns finish; transport cleanup must never submit its terminal twice.
+          disposal ??= task ? task.then(() => undefined, () => undefined) : (async () => {
+            await commands.finish({ operationId: execution.operationId, runId: execution.runId,
+              status: cause === undefined ? 'aborted' : 'failed', agentIds: [],
+              ...(cause === undefined ? {} : { error: errorMessage(cause) }) });
+            changes?.publish(input.workshopId, 'activity', input.seatId);
+          })();
+          return disposal;
+        },
+      });
     } catch (error) {
       await commands.finish({ operationId: execution.operationId, runId: execution.runId,
         status: 'failed', error: errorMessage(error),
@@ -77,7 +98,7 @@ export function createCycloneSeatCompactionPort(
       changes?.publish(input.workshopId, 'activity', input.seatId);
       throw error;
     }
-  } };
+  }) };
 }
 
 async function runCompaction(
@@ -94,23 +115,44 @@ async function runCompaction(
   changes?: CycloneChangeFeed,
 ): Promise<void> {
   const signal = executions.signal(execution.operationId, execution.runId);
-  onEvent?.({ type: 'start', compressedCount: plan.archivedMessages.length, keptTurnCount: plan.keptTurnCount });
+  const started = startCycloneCompaction();
   let failure: unknown;
+  let committed = false;
+  const notify = (event: unknown) => {
+    try { onEvent?.(event); } catch (error) { console.warn('[cyclone] compaction observer failed', error); }
+  };
   try {
+    signal.throwIfAborted();
+    seat.compaction = started;
+    await saveSeat(dataDir, input.workshopId, seat);
+    changes?.publish(input.workshopId, 'activity', input.seatId);
+    notify(started);
+    notify({ type: 'start', compressedCount: plan.archivedMessages.length, keptTurnCount: plan.keptTurnCount });
     const archivePath = await runtime.archive?.(dataDir, input.workshopId, seat, plan);
     const summary = await runtime.summarize({ dataDir, model, agentId: seat.agentId,
       subject: `工位「${seat.title}」私聊`, summaryInput: plan.summaryInput, signal,
-      onChunk: content => onEvent?.({ type: 'token', content }),
+      onChunk: content => notify({ type: 'token', content }),
       onNotice: async notice => {
         seat.compactionNotice = notice;
         await saveSeat(dataDir, input.workshopId, seat);
-        onEvent?.(notice);
+        notify(notice);
       } });
-    const result = await runtime.apply(dataDir, input.workshopId, seat, plan, summary, archivePath);
+    signal.throwIfAborted();
+    const done = finishCycloneCompaction(started);
+    const result = await runtime.apply(dataDir, input.workshopId, seat, plan, summary, archivePath, signal, done);
+    committed = true;
     changes?.publish(input.workshopId, 'activity', input.seatId);
-    onEvent?.({ type: 'done', archivedCount: result.archivedCount, keptTurnCount: plan.keptTurnCount });
-  } catch (error) { failure = error; }
-  const status = signal.aborted ? 'aborted' : failure ? 'failed' : 'completed';
+    notify(done);
+    notify({ type: 'done', archivedCount: result.archivedCount, keptTurnCount: plan.keptTurnCount });
+  } catch (error) {
+    failure = error;
+    const failed = finishCycloneCompaction(started, error, signal.aborted);
+    seat.compaction = failed;
+    await saveSeat(dataDir, input.workshopId, seat)
+      .catch(cause => console.warn('[cyclone] compaction failure feedback could not be saved', cause));
+    notify(failed);
+  }
+  const status = committed ? 'completed' : signal.aborted ? 'aborted' : 'failed';
   await commands.finish({ operationId: execution.operationId, runId: execution.runId, status,
     agentIds: [seat.agentId],
     ...(failure ? { error: errorMessage(failure) } : {}) });

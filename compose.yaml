@@ -1,0 +1,37 @@
+services:
+  backend:
+    build:
+      context: .
+      args:
+        INSTALL_BROWSER: ${FOURTORM_INSTALL_BROWSER:-0}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${FOURTORM_BIND_ADDRESS:-127.0.0.1}:${FOURTORM_PORT:-3001}:3001"
+    environment:
+      FOURTORM_HOST: 0.0.0.0
+      FOURTORM_PUBLIC_ORIGIN: ${FOURTORM_PUBLIC_ORIGIN:?Set the HTTPS origin used by clients}
+      FOURTORM_ACCESS_TOKEN_FILE: /run/secrets/4torm_access_token
+      FOURTORM_TLS_CERT_FILE: /run/secrets/4torm_tls_cert
+      FOURTORM_TLS_KEY_FILE: /run/secrets/4torm_tls_key
+      FOURTORM_TLS_SERVERNAME: ${FOURTORM_TLS_SERVERNAME:?Set the certificate hostname}
+    volumes:
+      - 4torm-data:/app/data
+    secrets:
+      - 4torm_access_token
+      - 4torm_tls_cert
+      - 4torm_tls_key
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    stop_grace_period: 45s
+
+volumes:
+  4torm-data:
+
+secrets:
+  4torm_access_token:
+    file: ${FOURTORM_CONFIG_DIR:?Set an external configuration directory}/access-token
+  4torm_tls_cert:
+    file: ${FOURTORM_CONFIG_DIR:?Set an external configuration directory}/cert.pem
+  4torm_tls_key:
+    file: ${FOURTORM_CONFIG_DIR:?Set an external configuration directory}/key.pem

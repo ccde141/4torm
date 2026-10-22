@@ -20,6 +20,10 @@ export async function collaborationRoutes(
   app: FastifyInstance,
   options: CollaborationRouteOptions,
 ): Promise<void> {
+  const pendingInvocations = new Set<AbortController>();
+  app.addHook('preClose', async () => {
+    for (const controller of pendingInvocations) controller.abort(new Error('服务正在关闭'));
+  });
   registerCollaborationRecordRoutes(app, options.router);
   app.get('/probe-fields', async () => probeCatalog('human'));
   app.get('/presence', async request => options.router.agentPresence(humanContext(request)));
@@ -29,8 +33,20 @@ export async function collaborationRoutes(
 
   app.post('/invoke', async (request, reply) => {
     const call = parseCall(request.body);
-    const result = await options.router.invoke(call, humanContext(request));
-    return reply.send(result);
+    const controller = new AbortController();
+    const abort = () => controller.abort(new Error('客户端已中止请求'));
+    const close = () => { if (!reply.raw.writableEnded) abort(); };
+    pendingInvocations.add(controller);
+    request.raw.once('aborted', abort);
+    reply.raw.once('close', close);
+    try {
+      const result = await options.router.invoke(call, { ...humanContext(request), signal: controller.signal });
+      return reply.send(result);
+    } finally {
+      pendingInvocations.delete(controller);
+      request.raw.removeListener('aborted', abort);
+      reply.raw.removeListener('close', close);
+    }
   });
 
   app.post('/observe', async (request, reply) => {

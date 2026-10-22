@@ -31,3 +31,25 @@ test('typed local execution marks unknown and removed tools as failed while stri
   assert.equal(removed.ok, false);
   assert.match(removed.result, /未知工具/);
 });
+
+test('direct local execution keeps the existing executor text contract for structured arguments', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-local-args-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await fs.mkdir(path.join(dataDir, 'tools', 'executors'), { recursive: true });
+  await fs.mkdir(path.join(dataDir, 'agents'), { recursive: true });
+  await fs.writeFile(path.join(dataDir, 'tools', 'registry.json'), JSON.stringify([
+    { name: 'inspect_args', description: 'Fixture', executorType: 'custom' },
+  ]));
+  await fs.writeFile(path.join(dataDir, 'tools', 'executors', 'inspect_args.js'),
+    'export default args => JSON.stringify(args);');
+  await fs.writeFile(path.join(dataDir, 'agents', 'registry.json'), JSON.stringify({
+    agent: { id: 'agent', config: { tools: ['inspect_args'], toolMode: 'selected', skills: [] } },
+  }));
+
+  const outcome = await executeToolOutcome(dataDir, 'inspect_args', {
+    enabled: false, count: 2, items: ['one'], viewport: { width: 1280 }, nullable: null, text: 'false',
+  }, 'agent');
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(JSON.parse(outcome.result), { enabled: 'false', count: '2', items: '["one"]',
+    viewport: '{"width":1280}', nullable: 'null', text: 'false' });
+});

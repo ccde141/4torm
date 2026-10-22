@@ -18,6 +18,9 @@ import { MonsoonTurnService } from '../application/turn-service.js';
 import { MonsoonAttachmentService } from '../application/attachment-service.js';
 import { MonsoonCompactionService } from '../application/compaction-service.js';
 import { summarizeMonsoonCompaction } from '../runtime/compaction-summarizer.js';
+import { createMonsoonExternalSessionPort } from '../runtime/external-session-adapter.js';
+import type { MonsoonExternalSessionPort } from '../application/external-session-port.js';
+import { withMonsoonToolImages } from './tool-images.js';
 
 export interface MonsoonFeatureOptions { dataDir: string }
 
@@ -31,6 +34,7 @@ export interface MonsoonFeature {
   input: MonsoonInputService;
   title: MonsoonTitleGenerator;
   turns: MonsoonTurnService;
+  externalSessions: MonsoonExternalSessionPort;
 }
 
 export function createMonsoonFeature(options: MonsoonFeatureOptions): MonsoonFeature {
@@ -48,11 +52,12 @@ export function createMonsoonFeature(options: MonsoonFeatureOptions): MonsoonFea
   const turns = new MonsoonTurnService({ chat, runtime, sessions, journal });
   const title = createMonsoonTitleGenerator(options.dataDir);
   return {
-    module: createMonsoonModule(runtime, teams, runs, sessions, turns, { sessions, journal },
+    module: withMonsoonToolImages(createMonsoonModule(runtime, teams, runs, sessions, turns, { sessions, journal },
       new MonsoonAttachmentService(options.dataDir, sessions), input, title,
-      new MonsoonCompactionService(options.dataDir, sessions, summarizeMonsoonCompaction)),
+      new MonsoonCompactionService(options.dataDir, sessions, summarizeMonsoonCompaction)), options.dataDir, sessions),
     runtime, sessions, journal, teams, input, chat,
     title,
     turns,
+    externalSessions: createMonsoonExternalSessionPort(options.dataDir),
   };
 }

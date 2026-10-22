@@ -10,6 +10,7 @@ export interface CycloneSummaryInput {
   subject: string;
   messages: CycloneSummaryMessage[];
   kind?: 'conversation' | 'meeting';
+  signal?: AbortSignal;
   onNotice?: (notice: CompactionNotice) => void | Promise<void>;
 }
 

@@ -1,3 +1,4 @@
+import { shutdownCyclonePreparations } from '../application/execution-preparation.js';
 import type { FeatureModule } from '../../../engine/collaboration/contracts.js';
 import { tryAcquireRoomLock } from '../../../engine/cyclone/room-store.js';
 import { tryAcquireSeatLock } from '../../../engine/cyclone/seat-store.js';
@@ -39,6 +40,21 @@ import { createCycloneSeatChatPort } from '../runtime/seat-chat-adapter.js';
 import type { CycloneSeatCompactionPort } from '../application/seat-compaction.js';
 import { createCycloneSeatCompactionPort } from '../runtime/seat-compaction-adapter.js';
 import { CycloneChangeFeed } from '../application/change-feed.js';
+import { CycloneConsoleService } from '../application/console-service.js';
+import { CycloneSeatMemoryService } from '../application/seat-memory-service.js';
+import { subscribeSeatMemoryChanges } from '../../../engine/cyclone/seat-memory.js';
+import { readSeatEvents, subscribeSeatEvents } from '../../../engine/cyclone/seat-event-journal.js';
+import { CycloneAgentObservationService } from '../application/agent-observation-service.js';
+import { CycloneSeatFactService } from '../application/seat-fact-service.js';
+import { registerSeatFactReader } from '../../../engine/cyclone/seat-fact-tools.js';
+import { tryAcquireSupervisorLock } from '../../../engine/cyclone/supervisor-store.js';
+import { registerSupervisorTools } from '../../../engine/cyclone/supervisor-tools.js';
+import { subscribeContactCommunications } from '../../../engine/cyclone/contact-communication.js';
+import { CycloneSupervisorService } from '../application/supervisor-service.js';
+import { createSupervisorToolAdapter } from '../runtime/supervisor-tool-adapter.js';
+import type { CollaborationRouter } from '../../../engine/collaboration/router.js';
+import { CycloneAgentSupervisorService } from '../application/agent-supervisor-service.js';
+import { withCycloneToolImages } from './tool-images.js';
 
 export interface CycloneFeatureOptions {
   dataDir: string;
@@ -47,6 +63,7 @@ export interface CycloneFeatureOptions {
 export interface CycloneFeature {
   changes: CycloneChangeFeed;
   dispose(): void;
+  shutdown(): Promise<void>;
   module: FeatureModule;
   executions: CycloneExecutionPort;
   workshops: CycloneWorkshopService;
@@ -61,19 +78,36 @@ export interface CycloneFeature {
   chairChats: CycloneChairChatPort;
   seatChats: CycloneSeatChatPort;
   seatCompactions: CycloneSeatCompactionPort;
+  console: CycloneConsoleService;
+  seatMemory: CycloneSeatMemoryService;
+  supervisor: CycloneSupervisorService;
+  connectSupervisorRouter(router: CollaborationRouter): void;
+  supervisorToolNames(): string[];
 }
 
 export function createCycloneFeature(options: CycloneFeatureOptions): CycloneFeature {
   const changes = new CycloneChangeFeed();
   const stopDispatchChanges = subscribeDispatchChanges(options.dataDir, item => {
     changes.publish(item.workshopId, 'dispatch', item.id);
+    void supervisor.receiveDispatch(item).catch(error => globalThis.console.error('[cyclone] 主管派发回执保存失败', error));
+  });
+  const stopContactChanges = subscribeContactCommunications(options.dataDir, item => {
+    changes.publish(item.workshopId, 'activity', item.targetId);
+    void supervisor.receiveContact(item).catch(error => globalThis.console.error('[cyclone] 主管联络回执保存失败', error));
   });
   const stopBulletinChanges = subscribeBulletinChanges(options.dataDir, workshopId => {
     changes.publish(workshopId, 'bulletin', workshopId);
   });
+  const stopMemoryChanges = subscribeSeatMemoryChanges(options.dataDir, (workshopId, seatId) => {
+    changes.publish(workshopId, 'activity', seatId);
+  });
+  const stopSeatEvents = subscribeSeatEvents(options.dataDir, event => {
+    changes.publish(event.workshopId, 'activity', event.seatId);
+  });
   const executions = new CycloneExecutionRegistry({
     seat: tryAcquireSeatLock,
     room: tryAcquireRoomLock,
+    supervisor: workshopId => tryAcquireSupervisorLock(options.dataDir, workshopId),
   });
   const summarizer = options.summarizer ?? new LlmCycloneContextSummarizer(options.dataDir);
   const workshops = new CycloneWorkshopService(options.dataDir, changes);
@@ -82,7 +116,6 @@ export function createCycloneFeature(options: CycloneFeatureOptions): CycloneFea
   const chair = new CycloneChairService(
     options.dataDir, executions, workshops, rooms, summarizer, changes,
   );
-  const collaborations = new CycloneCollaborationService(options.dataDir, workshops, rooms);
   const dispatches = new CycloneDispatchService(options.dataDir, workshops, rooms, changes);
   const agentManagement = new CycloneAgentManagementService(
     options.dataDir, workshops, rooms, changes,
@@ -90,11 +123,22 @@ export function createCycloneFeature(options: CycloneFeatureOptions): CycloneFea
   const agentBulletin = new CycloneAgentBulletinService(options.dataDir, workshops);
   const agentDispatch = new CycloneAgentDispatchService(dispatches);
   const runs = new CycloneRunRepository(options.dataDir);
+  const seatMemory = new CycloneSeatMemoryService(options.dataDir);
+  const console = new CycloneConsoleService(options.dataDir, workshops, runs,
+    workshopId => readSeatEvents(options.dataDir, workshopId), workshopId => supervisor.summary(workshopId));
+  const agentObservation = new CycloneAgentObservationService(console, seatMemory);
+  const seatFacts = new CycloneSeatFactService(console, dispatches, seats);
+  const stopSeatFacts = registerSeatFactReader(options.dataDir,
+    (scope, tool, args) => seatFacts.read(scope, tool, args));
   const commands = createCycloneCommands(executions, runs);
   const roomRounds = createCycloneRoomRoundPort(options.dataDir, rooms, commands, executions,
     undefined, changes);
   const roomActivity = new CycloneRoomActivity();
   const privateActivity = new CyclonePrivateChatActivity();
+  const supervisor = new CycloneSupervisorService(options.dataDir, commands, executions,
+    summarizer, changes, privateActivity);
+  const collaborations = new CycloneCollaborationService(options.dataDir, workshops, rooms, supervisor);
+  const agentSupervisor = new CycloneAgentSupervisorService(options.dataDir, supervisor);
   const roomIntroductions = createCycloneRoomIntroductionPort(
     options.dataDir, rooms, commands, executions, undefined, changes,
   );
@@ -107,17 +151,23 @@ export function createCycloneFeature(options: CycloneFeatureOptions): CycloneFea
   const seatChats = createCycloneSeatChatPort(
     options.dataDir, seats, commands, executions, undefined, changes,
   );
-  const agentRead = new CycloneAgentReadService(options.dataDir, { workshops, seats, rooms, chair });
+  const agentRead = new CycloneAgentReadService(options.dataDir, { workshops, seats, rooms, chair, supervisor });
   const agentExecution = new CycloneAgentExecutionService(
     seatChats, chairChats, seats, undefined, privateActivity,
   );
   const seatCompactions = createCycloneSeatCompactionPort(
     options.dataDir, seats, commands, executions, undefined, changes,
   );
-  return {
+  let stopSupervisorTools = () => {};
+  const feature: CycloneFeature = {
     changes,
-    dispose: () => { stopDispatchChanges(); stopBulletinChanges(); },
-    module: createCycloneModule({
+    dispose: () => {
+      stopDispatchChanges(); stopContactChanges(); stopBulletinChanges(); stopMemoryChanges(); stopSeatEvents(); stopSeatFacts(); stopSupervisorTools();
+      console.dispose();
+    },
+    module: withCycloneToolImages(createCycloneModule({
+      dataDir: options.dataDir,
+      supervisor,
       source: createCycloneRuntimeSource(options.dataDir, executions, runs),
       commands,
       workshops,
@@ -136,6 +186,10 @@ export function createCycloneFeature(options: CycloneFeatureOptions): CycloneFea
       agentManagement,
       agentBulletin,
       agentDispatch,
+      console,
+      seatMemory,
+      agentObservation,
+      agentSupervisor,
       operations: {
         subscribe: (identity, listener) => runs.subscribe(
           identity.operationId, identity.runId, listener,
@@ -177,7 +231,11 @@ export function createCycloneFeature(options: CycloneFeatureOptions): CycloneFea
           return fact ? { fact, detailAvailable: false } : null;
         },
       },
-    }),
+    }), options.dataDir, { workshops, seats, rooms, chair, supervisor }),
+    shutdown: async () => {
+      await supervisor.shutdown();
+      await shutdownCyclonePreparations(commands);
+    },
     executions,
     workshops,
     seats,
@@ -191,5 +249,14 @@ export function createCycloneFeature(options: CycloneFeatureOptions): CycloneFea
     chairChats,
     seatChats,
     seatCompactions,
+    console,
+    seatMemory,
+    supervisor,
+    connectSupervisorRouter: router => supervisorAdapter.connect(router),
+    supervisorToolNames: () => supervisorAdapter.port.definitions.map(tool => tool.name),
   };
+  const supervisorAdapter = createSupervisorToolAdapter(options.dataDir, feature.module,
+    (workshopId, seatId, message) => supervisor.report(workshopId, seatId, message));
+  stopSupervisorTools = registerSupervisorTools(options.dataDir, supervisorAdapter.port);
+  return feature;
 }

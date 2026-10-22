@@ -2,12 +2,12 @@ import type { CollaborationProbeItem } from '../../../api/collaboration';
 import type { Locale } from '../../../i18n/locale';
 import { applySeatEvent, emptyLive, type Live } from './seat-stream-events';
 
-export type PrivateChatKind = 'seat' | 'chair';
+export type PrivateChatKind = 'seat' | 'chair' | 'supervisor';
 
 export interface ExternalPrivateActivityResponse {
   operationId: string;
   runId: string;
-  phase: 'seat-chat' | 'chair-chat';
+  phase: 'seat-chat' | 'chair-chat' | 'supervisor-chat' | 'supervisor-resume';
   message: string;
   running: boolean;
   latestSeq: number;
@@ -29,8 +29,12 @@ export interface ExternalPrivateActivity {
 export function privateChatFact(
   fact: CollaborationProbeItem | null, kind: PrivateChatKind,
 ): CollaborationProbeItem | null {
-  const phase = kind === 'seat' ? 'seat-chat' : 'chair-chat';
-  return fact?.phase === phase ? fact : null;
+  return fact && privateChatPhaseMatches(fact.phase, kind) ? fact : null;
+}
+
+export function privateChatPhaseMatches(phase: unknown, kind: PrivateChatKind): boolean {
+  if (kind === 'supervisor') return phase === 'supervisor-chat' || phase === 'supervisor-resume';
+  return phase === (kind === 'seat' ? 'seat-chat' : 'chair-chat');
 }
 
 export function applyExternalPrivateActivity(

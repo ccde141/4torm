@@ -1,9 +1,9 @@
 /**
  * 循环档案面板 —— 管理 AutoProfile + 兼作选档运行入口
  *
- * 由 Toolbar「自动运行」按钮触发显示（用户定：先开面板再选档）。
- * 每个档案带「运行」按钮 → onRun('auto', id)；顶部「不循环单圈」→ onRun('auto', undefined)。
- * 仿 WorkflowListPanel 的滑出面板 + fetch-on-visible + 整存整取模式。
+ * 由 Toolbar「无人值守」按钮触发显示，选择单次执行或保存的循环配置。
+ * 循环配置 → onRun('auto', id)；运行一次 → onRun('auto', undefined)。
+ * 工作区内的配置抽屉；打开时保留工具栏、画布和当前视角。
  *
  * UI 只提供 relative 节拍设置。
  */
@@ -13,10 +13,12 @@ import type { WorkflowMode } from '../../types';
 import { deleteProfile, listProfiles, saveProfiles } from '../profile-client';
 import type { AutoProfile } from '../profile-client';
 import { useLocale } from '../../../i18n/LocaleContext';
+import './profile-panel.css';
 
 interface ProfilePanelProps {
   visible: boolean;
   workflowId: string;
+  workflowName?: string;
   onClose: () => void;
   onRun: (mode: WorkflowMode, profileId?: string) => void;
 }
@@ -33,7 +35,7 @@ function blankProfile(name = '新档案'): AutoProfile {
   };
 }
 
-export function ProfilePanel({ visible, workflowId, onClose, onRun }: ProfilePanelProps) {
+export function ProfilePanel({ visible, workflowId, workflowName, onClose, onRun }: ProfilePanelProps) {
   const { t } = useLocale();
   const [profiles, setProfiles] = useState<AutoProfile[]>([]);
   const [editing, setEditing] = useState<AutoProfile | null>(null);
@@ -61,7 +63,7 @@ export function ProfilePanel({ visible, workflowId, onClose, onRun }: ProfilePan
   const persist = useCallback(async (next: AutoProfile[]) => {
     await saveProfiles(workflowId, next, t('tradewind.profile.saveFailed'));
     setProfiles(next);
-  }, [workflowId]);
+  }, [workflowId, t]);
 
   const saveEdited = useCallback(async (p: AutoProfile) => {
     const idx = profiles.findIndex(x => x.id === p.id);
@@ -90,9 +92,10 @@ export function ProfilePanel({ visible, workflowId, onClose, onRun }: ProfilePan
   if (!visible) return null;
 
   return (
-    <div className="tw-profile mo-slide-in-left">
+    <aside className="tw-profile mo-slide-in-right" aria-label={t('tradewind.profile.title')}>
       <div className="tw-profile__header">
-        <span className="tw-profile__title">{t('tradewind.profile.title')}</span>
+        <div className="tw-profile__scope"><span className="tw-profile__title">{t('tradewind.profile.title')}</span>
+          {workflowName && <strong title={workflowName}>{workflowName}</strong>}</div>
         <button className="tw-profile__close" onClick={onClose} aria-label={t('tradewind.profile.close')}>×</button>
       </div>
       <div className="tw-profile__body">
@@ -106,7 +109,7 @@ export function ProfilePanel({ visible, workflowId, onClose, onRun }: ProfilePan
               onEdit={setEditing} onDelete={remove}
             />}
       </div>
-    </div>
+    </aside>
   );
 }
 
@@ -124,6 +127,7 @@ function ProfileList({ profiles, loading, onRun, onClose, onNew, onEdit, onDelet
   const { t } = useLocale();
   return (
     <>
+      <p className="tw-profile__hint">{t('tradewind.profile.runHint')}</p>
       <button
         className="tw-profile__single"
         onClick={() => { onRun('auto', undefined); onClose(); }}
@@ -142,7 +146,7 @@ function ProfileList({ profiles, loading, onRun, onClose, onNew, onEdit, onDelet
             <span className="tw-profile__item-name">{p.name}</span>
             <span className="tw-profile__item-meta">
               {t('tradewind.profile.interval', { seconds: p.cadence.gapSec })} · {p.lapBound === null ? t('tradewind.profile.perpetualShort') : t('tradewind.profile.lapsShort', { count: p.lapBound })}
-              {' · '}{p.carryOver === 'accumulate' ? t('tradewind.profile.accumulateShort') : t('tradewind.profile.resetShort')}
+              {' · '}{t(`tradewind.profile.${p.carryOver}Short`)}
             </span>
           </div>
           <div className="tw-profile__item-actions">

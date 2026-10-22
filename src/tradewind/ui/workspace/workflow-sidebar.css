@@ -1,0 +1,87 @@
+.tw-workflow-sidebar { width: 304px; min-width: 260px; max-width: 35vw; flex: 0 0 304px; height: 100%; min-height: 0;
+  display: flex; flex-direction: column; border-right: 1px solid var(--glass-border);
+  background: var(--glass-bg-soft); backdrop-filter: blur(var(--glass-blur)); color: var(--color-text-primary); }
+.tw-workflow-sidebar__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 18px 18px 14px; flex: none; }
+.tw-workflow-sidebar__heading h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.tw-workflow-sidebar__heading > div { display: flex; align-items: center; gap: 7px; }
+.tw-workflow-sidebar__new { display: flex; align-items: center; gap: 5px; padding: 5px 9px;
+  border: 1px solid var(--glass-border-hover); border-radius: 7px; background: transparent;
+  font-size: 12px; color: var(--color-text-primary); white-space: nowrap; cursor: pointer; }
+.tw-workflow-sidebar__new:hover { background: var(--glass-bg-hover); }
+.tw-workflow-sidebar__refresh { width: 24px; height: 24px; padding: 0; border: 0; background: transparent;
+  color: var(--color-text-secondary); cursor: pointer; font-size: 19px; }
+.tw-workflow-sidebar__refresh[data-busy=true] { animation: tw-workflow-reading 800ms linear infinite; }
+@keyframes tw-workflow-reading { to { transform: rotate(360deg); } }
+.tw-workflow-sidebar__mode-row { display: flex; align-items: center; gap: 8px; padding: 0 14px 14px; flex: none; }
+.tw-workflow-sidebar__modes { display: grid; grid-template-columns: 1fr 1fr; flex: 1; min-width: 0;
+  padding: 4px; gap: 3px; border: 1px solid var(--glass-border); border-radius: 9px; background: var(--glass-bg-soft); }
+.tw-workflow-sidebar__modes button { min-width: 0; display: flex; align-items: center; justify-content: center;
+  gap: 6px; padding: 8px 4px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--color-text-secondary); font-size: 12px; cursor: pointer; line-height: 1.5;
+  transition: background 180ms ease, color 180ms ease, box-shadow 180ms ease; }
+.tw-workflow-sidebar__modes button.is-active { color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-text-primary) 9%, transparent); box-shadow: var(--shadow-sm); }
+.tw-workflow-sidebar__modes small { color: var(--color-text-tertiary); font-size: 10px; }
+.tw-workflow-sidebar__search { margin: 0 14px 14px; display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px; border: 1px solid var(--glass-border); border-radius: 8px; color: var(--color-text-tertiary);
+  background: var(--glass-bg-soft); flex: none; }
+.tw-workflow-sidebar__search:focus-within { border-color: var(--color-accent); }
+.tw-workflow-sidebar__search svg { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.5; flex: none; }
+.tw-workflow-sidebar__search input { width: 100%; min-width: 0; margin: 0; padding: 0; border: 0; border-radius: 0;
+  outline: 0; background: transparent; color: var(--color-text-primary); font: inherit; font-size: 12px; box-shadow: none; }
+.tw-workflow-sidebar__search input:focus { outline: 0; box-shadow: none; }
+.tw-workflow-sidebar__search input::placeholder { color: var(--color-text-tertiary); }
+.tw-workflow-sidebar__body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 0 14px 20px; }
+.tw-workflow-sidebar__hint, .tw-workflow-sidebar__error { margin: 0; padding: 12px 3px; font-size: 12px; line-height: 1.7;
+  color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.tw-workflow-sidebar__error { color: var(--color-error); }
+.tw-workflow-card { position: relative; flex: none; border: 1px solid var(--glass-border); border-radius: 11px;
+  background: var(--glass-bg); transition: border-color 180ms ease, background 180ms ease, transform 180ms ease; }
+.tw-workflow-card:hover { background: var(--glass-bg-hover); border-color: var(--glass-border-hover); transform: translateY(-1px); }
+.tw-workflow-card.is-active { background: color-mix(in srgb, var(--color-text-primary) 7%, var(--glass-bg));
+  border-color: color-mix(in srgb, var(--color-text-primary) 40%, var(--glass-border)); }
+.tw-workflow-card[data-state=running] { --tw-card-state-color: var(--color-info, #3b82f6); }
+.tw-workflow-card[data-state=attention] { --tw-card-state-color: var(--color-warning, #eab308); }
+.tw-workflow-card[data-state=error] { --tw-card-state-color: var(--color-error, #ef4444); }
+.tw-workflow-card[data-state=completed] { --tw-card-state-color: var(--color-success, #22c55e); }
+.tw-workflow-card[data-state] { border-color: color-mix(in srgb, var(--tw-card-state-color) 48%, var(--glass-border));
+  background: color-mix(in srgb, var(--tw-card-state-color) 8%, var(--glass-bg));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--tw-card-state-color) 78%, transparent); }
+.tw-workflow-card[data-state]:hover, .tw-workflow-card[data-state].is-active {
+  border-color: color-mix(in srgb, var(--tw-card-state-color) 72%, var(--glass-border));
+  background: color-mix(in srgb, var(--tw-card-state-color) 12%, var(--glass-bg)); }
+.tw-workflow-card[data-state] .tw-run-state { background: var(--tw-card-state-color); }
+.tw-workflow-card:not([data-state]) .tw-run-state--completed { background: var(--color-text-tertiary); }
+.tw-workflow-card__main { display: flex; flex-direction: column; align-items: stretch; width: 100%; min-height: 108px;
+  padding: 15px; gap: 8px; text-align: left; border: 0; border-radius: 11px; background: transparent;
+  color: var(--color-text-primary); cursor: pointer; }
+.tw-workflow-card__main strong { font-size: 13px; line-height: 1.55; font-weight: 600; padding-right: 14px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.tw-workflow-card__status { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-text-secondary); }
+.tw-workflow-card__activity { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; color: var(--color-text-secondary); }
+.tw-workflow-card__draft { align-self: flex-start; padding: 1px 5px; border: 1px solid var(--glass-border-hover);
+  border-radius: 4px; font-size: 10px; color: var(--color-text-secondary); }
+.tw-workflow-card__meta { margin-top: auto; display: flex; gap: 8px; flex-wrap: wrap;
+  font-size: 10px; color: var(--color-text-tertiary); line-height: 1.6; }
+.tw-workflow-card__meta time::before { content: '·'; margin-right: 8px; }
+.tw-workflow-card__delete-trigger { position: absolute; top: 8px; right: 7px; width: 23px; height: 23px;
+  padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--color-text-tertiary);
+  font-size: 17px; cursor: pointer; opacity: 0; transition: opacity 150ms ease; }
+.tw-workflow-card:hover .tw-workflow-card__delete-trigger, .tw-workflow-card:focus-within .tw-workflow-card__delete-trigger { opacity: 1; }
+.tw-workflow-card__delete-trigger:hover { color: var(--color-error); background: var(--glass-bg-hover); }
+.tw-workflow-card__confirm { padding: 0 13px 12px; display: grid; gap: 8px; }
+.tw-workflow-card__confirm small { font-size: 11px; color: var(--color-text-secondary); line-height: 1.7; }
+.tw-workflow-card__confirm > div { display: flex; justify-content: flex-end; gap: 7px; }
+.tw-workflow-card__confirm button { padding: 4px 7px; background: var(--glass-bg); color: var(--color-text-secondary);
+  border: 1px solid var(--glass-border-hover); border-radius: 5px; font-size: 11px; cursor: pointer; }
+.tw-workflow-card__confirm button.is-danger { color: var(--color-error); border-color: color-mix(in srgb, var(--color-error) 40%, transparent); }
+.tw-workflow-sidebar button:disabled { opacity: .45; cursor: not-allowed; }
+.tw-workflow-sidebar button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+@media (pointer: coarse) { .tw-workflow-card__delete-trigger { opacity: 1; } }
+@media (max-width: 1100px) { .tw-workflow-sidebar { width: 270px; min-width: 230px; flex-basis: 270px; }
+  .tw-workflow-sidebar__modes button { font-size: 11px; gap: 4px; } }
+@media (prefers-reduced-motion: reduce) { .tw-workflow-sidebar button, .tw-workflow-card { transition: none; }
+  .tw-workflow-sidebar__refresh[data-busy=true] { animation: none; }
+  .tw-workflow-card:hover { transform: none; } }

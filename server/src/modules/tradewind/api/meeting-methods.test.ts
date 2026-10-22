@@ -7,16 +7,20 @@ import type { TradewindMeetingCommands } from '../application/meeting-commands.j
 
 test('Agent 通过同一会议命令口管理成员、发话并结会', async () => {
   const calls: string[] = [];
+  const signal = new AbortController().signal;
+  const signals: Array<AbortSignal | undefined> = [];
   const meetingCommands: TradewindMeetingCommands = {
     end: async input => { calls.push(`end:${input.executionId}`); return { minutes: '纪要' }; },
     join: async input => { calls.push(`join:${input.participantNodeId}`); return { participants: [] }; },
     leave: async input => { calls.push(`leave:${input.participantNodeId}`); return { participants: [] }; },
     reorder: async input => { calls.push(`order:${input.order.join(',')}`); return { participants: [] }; },
-    speak: async input => {
+    speak: async (input, options) => {
+      signals.push(options?.signal);
       calls.push(`speak:${input.nodeId}:${input.message}`);
       return { completed: true, nodeId: input.nodeId, runId: 'round-1' };
     },
-    messageChair: async input => {
+    messageChair: async (input, options) => {
+      signals.push(options?.signal);
       calls.push(`chair:${input.nodeId}:${input.message}`);
       return { completed: true, nodeId: input.nodeId };
     },
@@ -27,7 +31,7 @@ test('Agent 通过同一会议命令口管理成员、发话并结会', async ()
   const agent = {
     actor: { type: 'agent' as const, id: 'agent-a', actingAs: 'human' as const },
     audience: 'agent' as const, enabledFeatures: new Set(['tradewind' as const]),
-    permissions: new Set(['intervene' as const]), requestId: 'req-1',
+    permissions: new Set(['intervene' as const]), requestId: 'req-1', signal,
   };
   for (const [method, input] of [
     ['joinMeeting', { executionId: 'exec-1', nodeId: 'meeting', participantNodeId: 'reviewer' }],
@@ -41,4 +45,5 @@ test('Agent 通过同一会议命令口管理成员、发话并结会', async ()
     'join:reviewer', 'order:reviewer', 'speak:meeting:讨论验收',
     'chair:meeting:归纳分歧', 'leave:reviewer', 'end:exec-1',
   ]);
+  assert.deepEqual(signals, [signal, signal]);
 });

@@ -1,3 +1,4 @@
+import { createMonsoonExternalSessionPort } from '../../monsoon/public.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -48,8 +49,8 @@ test('Agent 从目标发现到运行记录完成指定会话任务闭环', async
   await sessions.create({ id: 'session-worker', agentId: 'worker', agentName: 'Worker',
     title: '工作记录', messages: [], model: 'test:model', systemPrompt: '',
     createdAt: now, updatedAt: now, revision: 1, messageRevision: 1 });
-  const feature = createTideFeature({ dataDir, execute: async (deps, task, _manual, runId) => {
-    const target = await resolveTarget(deps.dataDir, task);
+  const feature = createTideFeature({ dataDir, seasonSessions: createMonsoonExternalSessionPort(dataDir), execute: async (deps, task, _manual, runId) => {
+    const target = await resolveTarget(deps.dataDir, task, deps.seasonSessions);
     await saveTurn(deps.dataDir, task, target, 'Worker', 'test:model', '',
       task.prompt, '已完成巡检');
     const record = { taskId: task.id, runId, timestamp: new Date().toISOString(),

@@ -5,7 +5,7 @@
  * 沙箱校验：搜索范围受 _resolve.js 约束。
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync, realpathSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { resolvePath } from './_resolve.js'
 
@@ -34,7 +34,7 @@ export default async function (args, ctx) {
   const fileFilter = args.filePattern ? new RegExp(args.filePattern) : null
   const results = []
 
-  searchDir(startDir, startDir, regex, fileFilter, results)
+  searchDir(startDir, startDir, regex, fileFilter, results, ctx, new Set())
   if (results.length === 0) return `未找到匹配 "${args.pattern}" 的内容`
 
   const lines = results.slice(0, MAX_RESULTS).map(r => {
@@ -62,11 +62,19 @@ function isBinary(content) {
   return false
 }
 
-function searchDir(root, dir, regex, fileFilter, results) {
+function searchDir(root, dir, regex, fileFilter, results, ctx, visited) {
   if (results.length >= MAX_RESULTS) return
+  ctx.signal?.throwIfAborted()
 
   let entries
-  try { entries = readdirSync(dir) }
+  try {
+    resolvePath(dir, ctx)
+    const real = realpathSync(dir)
+    const key = process.platform === 'win32' ? real.toLowerCase() : real
+    if (visited.has(key)) return
+    visited.add(key)
+    entries = readdirSync(dir)
+  }
   catch { return }
 
   for (const name of entries) {
@@ -74,10 +82,10 @@ function searchDir(root, dir, regex, fileFilter, results) {
 
     const full = join(dir, name)
     let st
-    try { st = statSync(full) } catch { continue }
+    try { resolvePath(full, ctx); st = statSync(full) } catch { continue }
 
     if (st.isDirectory()) {
-      searchDir(root, full, regex, fileFilter, results)
+      searchDir(root, full, regex, fileFilter, results, ctx, visited)
     } else if (st.isFile() && st.size <= MAX_FILE_BYTES) {
       if (fileFilter && !fileFilter.test(name)) continue
       const ext = name.includes('.') ? '.' + name.split('.').pop().toLowerCase() : ''

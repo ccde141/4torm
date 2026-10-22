@@ -3,7 +3,7 @@ import { inspectOperation, invokeFeature, type CollaborationProbeItem } from '..
 import type { Locale } from '../../../i18n/locale';
 import { isLatestCycloneRun, readLatestCycloneFact } from './cyclone-operation-record';
 import { nextActivityCursor } from './activity-page-cursor';
-import { applyExternalPrivateActivity, privateChatFact,
+import { applyExternalPrivateActivity, privateChatFact, privateChatPhaseMatches,
   type ExternalPrivateActivity, type ExternalPrivateActivityResponse,
   type PrivateChatKind } from './external-private-activity';
 
@@ -24,7 +24,7 @@ export function usePrivateChatActivity(
   const [activity, setActivity] = useState<ExternalPrivateActivity | null>(null);
   const [fact, setFact] = useState<CollaborationProbeItem | null>(null);
   const [error, setError] = useState('');
-  const operationId = `${kind === 'seat' ? 'seat' : 'room'}:${workshopId}:${targetId}`;
+  const operationId = `${kind === 'chair' ? 'room' : kind}:${workshopId}:${targetId}`;
 
   useEffect(() => {
     current.current = null; cursor.current = 0; consumedRunId.current = '';
@@ -56,7 +56,7 @@ export function usePrivateChatActivity(
         );
         if (stopped) return;
         if (payload && (payload.operationId !== operationId
-          || payload.phase !== (kind === 'seat' ? 'seat-chat' : 'chair-chat'))) {
+          || !privateChatPhaseMatches(payload.phase, kind))) {
           throw new Error('Private chat activity identity mismatch');
         }
         setError('');

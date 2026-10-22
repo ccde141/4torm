@@ -51,21 +51,14 @@ test('Agent 能力定义由模块清单生成并按当前配置过滤', async ()
     toolMode: 'selected', tools: ['start_workflow'],
   }));
   const definitions = await selected.tools({ agentId: 'agent-a', sessionId: 'session-a' });
+  assert.equal(definitions.length, 1);
   const { frameworkCapability, ...definition } = definitions[0]!;
   assert.equal(frameworkCapability?.id, 'tradewind');
   assert.equal(frameworkCapability?.title, '信风工作流');
   assert.match(frameworkCapability?.guidance ?? '', /DAG/);
-  assert.deepEqual(definition, {
-    name: 'start_workflow',
-    description: '启动一个已经保存的信风工作流。',
-    parameters: {
-      type: 'object', additionalProperties: false,
-      required: ['workflowId'], properties: {
-        workflowId: { type: 'string', minLength: 1 }, initialInput: { type: 'string' },
-        mode: { enum: ['manual', 'auto'] }, profileId: { type: 'string' },
-      },
-    },
-  });
+  const start = module.manifest.methods.find(method => method.id === 'startWorkflow')!;
+  assert.deepEqual(definition, { ...start.agentTool, parameters: start.inputSchema });
+  assert.match(definition.description, /manual.*auto/);
 
   const disabled = new AgentCollaborationGateway(new CollaborationRouter([module]), async () => ({
     toolMode: 'selected', tools: [],
@@ -118,7 +111,7 @@ test('没有声明 Agent 工具归属的底层调用口不会被网关开放', a
     toolMode: 'all', tools: [],
   }));
   await assert.rejects(() => gateway.invoke({
-    feature: 'tradewind', method: 'stopWorkflow', input: {},
+    feature: 'tradewind', method: 'submitHumanGate', input: {},
   }, { agentId: 'agent-a', sessionId: 'session-a' }), error =>
     (error as { data?: { code?: string } }).data?.code === 'FEATURE_AGENT_METHOD_UNAVAILABLE');
 });
@@ -135,9 +128,10 @@ test('Agent 能力清单只展示具备固定工具归属的高层调用口', ()
     ]), requestId: 'session-a',
   });
   assert.deepEqual(manifests[0]?.methods.map(method => method.id),
-    ['startWorkflow', 'sendNodeMessage']);
+    ['startWorkflow', 'stopWorkflow', 'abortNodeRound', 'pauseNodeRound', 'resumeNodeRound', 'sendNodeMessage']);
   assert.equal(manifests[0]?.methods[0]?.agentTool?.name, 'start_workflow');
-  assert.equal(manifests[0]?.methods[1]?.agentTool?.name, 'message_workflow_node');
+  assert.equal(manifests[0]?.methods.find(method => method.id === 'sendNodeMessage')?.agentTool?.name, 'message_workflow_node');
+  assert.equal(manifests[0]?.methods.some(method => method.id === 'submitHumanGate'), false);
 });
 
 test('可交互主 Agent 通过同一网关读取受预算限制的全局快照', async () => {

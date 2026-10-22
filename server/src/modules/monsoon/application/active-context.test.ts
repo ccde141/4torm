@@ -42,3 +42,13 @@ test('unfinished placeholder is excluded but interrupted tool evidence is preser
   assert.equal(context.filter(item => item.role === 'tool').length, 1);
   assert.equal(context.at(-1)?.content.includes('人类停止'), true);
 });
+
+test('legacy tool evidence restores MCP media references and its failure status', () => {
+  const toolImages = [{ id: 'f4f82d73-4c42-4b3f-95b5-a8646ab58d9f', name: 'screen.png', mimeType: 'image/png', size: 8 }];
+  const context = projectMonsoonContext({ messages: [message('answer', 'assistant', 'done', {
+    toolSteps: [{ tool: 'mcp:demo:observe', args: {}, result: 'metadata', ok: false, toolImages }],
+  })] });
+  assert.deepEqual(context.find(message => message.role === 'tool')?.toolImages, toolImages);
+  assert.equal(context.find(message => message.role === 'tool')?.toolOk, false);
+  assert.doesNotMatch(JSON.stringify(context), /base64|data:image/);
+});

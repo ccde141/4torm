@@ -1,5 +1,6 @@
 import type { ContextMessage } from '../types.js';
 import { normalizeSystemMessages } from '../system-messages.js';
+import { projectChatToolImages } from './tool-image-projection.js';
 import {
   mapProviderMessages,
 } from '../provider-messages.js';
@@ -25,7 +26,7 @@ export function compileModelMessages(
   const providerSafeMessages = normalizeSystemMessages(messages);
   if (options.toolTransport === 'text') {
     return mapProviderMessages(
-      encodeNativeToolHistoryForText(providerSafeMessages, options.forwardToolNames),
+      projectChatToolImages(encodeNativeToolHistoryForText(providerSafeMessages, options.forwardToolNames)),
       options.forwardToolNames, options.identity,
     );
   }
@@ -37,7 +38,7 @@ export function compileModelMessages(
         ? message.content : `Error: ${message.content}` }
       : message);
   return mapProviderMessages(
-    safeHistory,
+    projectChatToolImages(safeHistory),
     historyNames,
     options.identity);
 }

@@ -40,3 +40,19 @@ test('季风与潮汐使用不同的协作身份', async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('工作队受限入口只指导本轮已开放能力', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), '4torm-member-prompt-'));
+  try {
+    const prompt = await buildConversationSystemPrompt({ rolePrompt: '核验资料',
+      toolDefs: [{ name: 'read_file', description: '读取文件', parameters: { type: 'object',
+        properties: { filePath: { type: 'string' } }, required: ['filePath'] } }],
+      workspace: '.', workspaceAbs: root, projectDir: root, sandboxLevel: 'project',
+      skillIds: [], dataDir: root, agentId: 'fixture', native: false,
+      allowAsk: false, allowDelegate: false, providedToolsOnly: true,
+      surfaceMeta: '你是当前会话工作队的成员，向主 Agent 回报结果或阻塞。' });
+    assert.match(prompt, /工作队的成员/);
+    assert.match(prompt, /read_file/);
+    assert.doesNotMatch(prompt, /memory_write|memory_list|长期的一对一|### ask|### delegate|创建新工具|register_tool/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

@@ -20,5 +20,5 @@ test('Agent 公告工具仅有读取和追加，不接收伪造落款或改写�
   const input = handlers.postCollaborationBulletin.parse({ workshopId: 'cyc-a', text: '进展' });
   await handlers.postCollaborationBulletin.invoke({ actor: { type: 'agent', id: 'agent-a' } } as never,
     input);
-  assert.deepEqual(call, ['cyc-a', '进展', 'agent-a']);
+  assert.deepEqual(call, ['cyc-a', '进展', 'agent-a', 'agent']);
 });

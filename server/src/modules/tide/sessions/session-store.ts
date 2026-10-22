@@ -1,13 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { atomicWriteFile } from '../../../engine/shared/atomic-io.js';
-import { SeasonSessionPort } from './season-session-port.js';
+import { requireSeasonSessionPort, type SeasonSessionPort } from './season-session-port.js';
 import { archiveTideSession } from './session-archive.js';
 import { readSessionDir, readSessionJson, removeSessionPath, statSessionPath } from './session-io.js';
 import { migrateOldTideSessions, updateTideSessionIndex } from './session-migration.js';
 import { tideSessionRoot, tideTaskSessionDir } from './session-paths.js';
 import type { ArchiveResult, TideMessage, TideSession } from './session-types.js';
-import type { ContextMessage } from '../../../engine/shared/types.js';
 import { readOwnedTideSession, type TideSessionOwner } from './session-reader.js';
 
 export type { ArchiveResult, TideMessage, TideSession } from './session-types.js';
@@ -21,11 +20,11 @@ export async function readTideSession(
   return readOwnedTideSession(dataDir, agentId, sessionId, owner);
 }
 export async function readSeasonSession(
-  dataDir: string,
+  port: SeasonSessionPort | undefined,
   agentId: string,
   sessionId: string,
 ): Promise<TideSession | null> {
-  return new SeasonSessionPort(dataDir).read(agentId, sessionId);
+  return requireSeasonSessionPort(port).read(agentId, sessionId);
 }
 
 export async function writeTideSession(
@@ -39,15 +38,6 @@ export async function writeTideSession(
   await fs.mkdir(dir, { recursive: true });
   await atomicWriteFile(path.join(dir, `${session.id}.json`), JSON.stringify(session, null, 2));
   await updateTideSessionIndex(dir, session.id);
-}
-
-export async function appendSeasonTurn(
-  dataDir: string, agentId: string, sessionId: string, expectedRevision: number,
-  user: TideMessage, assistant: TideMessage,
-  activeContext?: ContextMessage[],
-): Promise<void> {
-  await new SeasonSessionPort(dataDir).append(agentId, sessionId,
-    expectedRevision, user, assistant, activeContext);
 }
 
 export async function deleteTideSession(

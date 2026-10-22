@@ -7,6 +7,10 @@ export const CANVAS_NODE_ITEMS = [
   { type: 'output', labelKey: 'tradewind.canvas.node.output', icon: '◼', color: 'var(--color-success)' },
 ] as const;
 
+export function nodeItemsForMode(orchestration: 'strict' | 'handoff') {
+  return CANVAS_NODE_ITEMS.filter(item => orchestration !== 'handoff' || item.type !== 'meeting');
+}
+
 export function contextMenuKind(target: {
   nodeId: string | null;
   edgeId: string | null;

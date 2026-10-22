@@ -40,6 +40,16 @@ test('generation limits distinguish hard model capacities from ordinary output d
   });
 });
 
+test('DeepSeek unknown model capacity still respects the provider output ceiling', async () => {
+  const budget = await resolveProviderGenerationBudget({
+    ...deepseek, model: 'future-deepseek-model',
+    generationDefaults: { maxOutputTokens: 1_000_000 },
+  }, { maxContentTokens: 500_000, reasoningReserveTokens: 32_000 });
+  assert.equal(budget.maxOutputTokens, 393_216);
+  assert.equal(budget.maxContentTokens, Math.floor(393_216 * 500_000 / 532_000));
+  assert.equal(budget.inputTokens, undefined, 'output ceiling must not invent a context window');
+});
+
 test('reasoning reserve follows normalized defaults and final custom thinking switches', async () => {
   const scenarios: Array<[ProviderModelIdentity, number]> = [
     [{ ...deepseek, generationDefaults: { thinkingMode: 'disabled' } }, 20_000],

@@ -13,6 +13,7 @@ export interface SaveWorkflowResult {
   workflowId: string;
   name: string;
   revision: string;
+  orchestration?: 'strict' | 'handoff';
 }
 
 export function saveWorkflow(input: SaveWorkflowInput, fallback = '保存工作流失败') {
@@ -31,6 +32,7 @@ export interface WorkflowSummary {
   nodeCount: number;
   updatedAt: string;
   revision: string;
+  orchestration?: 'strict' | 'handoff';
 }
 
 export interface WorkflowChangeEvent {

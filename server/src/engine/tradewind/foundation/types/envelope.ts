@@ -10,6 +10,13 @@
  */
 
 export interface Envelope {
+  /** 条件交接的入口身份保持不变；激活与每次交接具有独立身份。旧严格流可缺省。 */
+  envelopeId?: string;
+  activationId?: string;
+  sourceActivationId?: string;
+  handoffId?: string;
+  sentAt?: string;
+  receivedAt?: string;
   /** 来源节点 ID，用于上下文注入时的来源标注 */
   source: string;
 

@@ -81,14 +81,14 @@ test('resume turn marks the ask, streams one reply request and persists the answ
   assert.equal(h.finalized(), true);
 });
 
-test('resumed turn refreshes usage per model call and clears unavailable counts', async () => {
+test('resumed turn retains current context facts and defers usage refresh until completion', async () => {
   const h = harness(async () => sse(accepted,
     { type: 'usage', usage: { promptTokens: 20, completionTokens: 2, totalTokens: 22 } },
     { type: 'usage', usage: null },
     { type: 'answer', content: '已继续', rawContent: '已继续' }, { type: 'done' }));
   await resumeMonsoonTurn({ sessionId: session.id, agent, model: agent.model,
     askMessageId: ask.id, waitingRunId: 'run-before-ask', answer: '继续' }, h.ports);
-  assert.equal(h.refreshes(), 4); // existing resume refreshes + two model usage updates
+  assert.equal(h.refreshes(), 2); // final save and the separate title update
   assert.equal(h.saved.at(-1)?.tokenUsage, undefined);
 });
 

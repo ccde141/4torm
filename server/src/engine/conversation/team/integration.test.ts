@@ -50,6 +50,8 @@ test('team tools use real member SessionRunner, preserve context and adopt a cha
   const first = JSON.parse(await extension.call('team_wait', {}));
   assert.equal(first.reports[0].outcome, 'completed');
   assert.equal(first.reports[0].content, 'result-1');
+  assert.match(requests[0].messages[0].content, /工作队中的成员/);
+  assert.doesNotMatch(requests[0].messages[0].content, /长期的一对一|memory_write|memory_list|### ask|### delegate/);
   const updated = await teams.extension({ ...opts, model: 'test:second' });
   await updated.call('team_dispatch', { memberId: created.memberId, task: 'Second assignment', requestId: 'second' });
   const second = JSON.parse(await updated.call('team_wait', {}));

@@ -8,6 +8,8 @@ import { saveRoom } from './room-store.js';
 import { trackRoomModelUsage } from './room-token-usage.js';
 import type { RoomData, RoomMessage } from './types.js';
 import { clearCycloneChairContext } from './chair-context.js';
+import type { CompactionProgress } from '../shared/compaction/index.js';
+import { finishCycloneCompaction } from './compaction-progress.js';
 
 interface MeetingCallerOptions {
   dataDir: string;
@@ -18,6 +20,7 @@ interface MeetingCallerOptions {
   messages: ContextMessage[];
   onNotice?: (notice: CompactionNotice) => void;
   onCompacted?: () => void;
+  onProgress?: (progress: CompactionProgress) => void;
 }
 
 export function cycloneMeetingContext(records: readonly RoomMessage[]): ContextMessage[] {
@@ -58,21 +61,28 @@ export async function createRoomCompactionCaller(options: MeetingCallerOptions):
         { type: 'cyclone-room-context-compact', roomId: room.id, reason,
           publicMessages: room.publicMessages, modelMessages: before });
     },
-    commit: plan => commitRoom(options, plan),
+    commit: (plan, signal) => commitRoom(options, plan, signal),
     onNotice: async notice => {
       const next = { ...room, compactionNotice: notice };
       await saveRoom(dataDir, workshopId, next);
       Object.assign(room, next);
       options.onNotice?.(notice);
     },
+    onProgress: async progress => {
+      const next = { ...room, compaction: progress };
+      await saveRoom(dataDir, workshopId, next);
+      Object.assign(room, next);
+      options.onProgress?.(progress);
+    },
     onCompacted: options.onCompacted,
   });
 }
 
-async function commitRoom(options: MeetingCallerOptions, plan: CompactionCommit): Promise<void> {
+async function commitRoom(options: MeetingCallerOptions, plan: CompactionCommit, signal?: AbortSignal): Promise<void> {
   const { dataDir, workshopId, room } = options;
   const consumed = Math.min(plan.prefix.length, room.publicMessages.length);
   const next: RoomData = { ...room,
+    compaction: room.compaction ? finishCycloneCompaction(room.compaction) : undefined,
     publicMessages: [{ speaker: '系统', content: `[群聊历史摘要]\n${plan.summary}`, timestamp: Date.now() },
       ...room.publicMessages.slice(consumed)], tokenUsage: undefined,
     publicLatestTokenUsage: undefined, publicUsageIncomplete: undefined,
@@ -81,6 +91,6 @@ async function commitRoom(options: MeetingCallerOptions, plan: CompactionCommit)
   };
   clearCycloneChairContext(next);
   next.chairTokenUsage = undefined;
-  await saveRoom(dataDir, workshopId, next);
+  await saveRoom(dataDir, workshopId, next, signal);
   Object.assign(room, next);
 }

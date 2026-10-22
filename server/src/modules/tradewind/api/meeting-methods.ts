@@ -29,8 +29,9 @@ export function tradewindMeetingHandlers(
   };
 }
 
-function handler<T>(parse: (value: unknown) => T, invoke: (input: T) => Promise<unknown>): ModuleMethodHandler {
-  return { parse, invoke: (_context, input) => invoke(input as T) };
+function handler<T>(parse: (value: unknown) => T,
+  invoke: (input: T, options?: { signal?: AbortSignal }) => Promise<unknown>): ModuleMethodHandler {
+  return { parse, invoke: (context, input) => invoke(input as T, { signal: context.signal }) };
 }
 
 function parseIdentity(value: unknown): MeetingIdentity {

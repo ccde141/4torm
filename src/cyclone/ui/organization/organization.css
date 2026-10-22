@@ -14,7 +14,7 @@
 .cyclone-org__minimap .react-flow__minimap-svg { background:transparent; }
 .cyclone-org-workspace { position:relative; display:flex; flex:1; min-height:0; flex-direction:column; }
 .cyclone-org-workspace__tabs { z-index:9; display:flex; gap:4px; padding:8px 12px; border-bottom:1px solid var(--glass-border); background:var(--glass-bg); }
-.cyclone-org-workspace__tabs button { padding:6px 13px; border:1px solid transparent; border-radius:var(--radius-sm); background:transparent; color:var(--color-text-secondary); cursor:pointer; }
+.cyclone-org-workspace__tabs button { display:inline-flex; align-items:center; gap:6px; padding:6px 13px; border:1px solid transparent; border-radius:var(--radius-sm); background:transparent; color:var(--color-text-secondary); cursor:pointer; }
 .cyclone-org-workspace__tabs button.active { border-color:var(--glass-border-hover); background:var(--glass-bg-hover); color:var(--color-text-primary); }
 .cyclone-org-workspace__loading { margin:auto; color:var(--color-text-secondary); }
 .cyclone-workspace-tabs { display:flex; min-width:0; gap:3px; padding:7px 10px 0; overflow-x:auto; border-bottom:1px solid var(--glass-border); background:var(--glass-bg-strong); }

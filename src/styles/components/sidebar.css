@@ -81,20 +81,12 @@
 .sidebar__toggle:active { transform: scale(0.94); }
 
 .sidebar__body {
-  width: var(--sidebar-width);
+  width: 100%;
+  min-width: 0;
   min-height: 0;
   flex: 1;
   display: flex;
   flex-direction: column;
-  opacity: 1;
-  visibility: visible;
-  transition: opacity var(--motion-enter-duration) var(--motion-enter-ease);
-}
-
-.sidebar--collapsed .sidebar__body {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
 }
 
 .sidebar__brand-icon {
@@ -183,6 +175,47 @@
   position: relative;
 }
 
+.sidebar__nav-text { white-space: nowrap; }
+
+.sidebar__nav-item:focus-visible,
+.sidebar__toggle:focus-visible,
+.sidebar__link:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  color: var(--color-text-primary);
+}
+
+.sidebar--collapsed .sidebar__nav {
+  padding: var(--space-3) 4px;
+}
+
+.sidebar--collapsed .sidebar__nav-group {
+  margin-bottom: var(--space-3);
+}
+
+.sidebar--collapsed .sidebar__nav-group + .sidebar__nav-group {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--glass-border);
+}
+
+.sidebar--collapsed .sidebar__nav-label,
+.sidebar--collapsed .sidebar__nav-text,
+.sidebar--collapsed .sidebar__nav-badge {
+  display: none;
+}
+
+.sidebar--collapsed .sidebar__nav-item {
+  width: calc(var(--sidebar-collapsed-width) - 8px);
+  justify-content: center;
+  min-height: 36px;
+  padding: 0;
+  gap: 0;
+}
+
+.sidebar--collapsed .sidebar__nav-item:hover {
+  transform: none;
+}
+
 .sidebar__nav-item::before {
   content: '';
   position: absolute;
@@ -260,6 +293,18 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+.sidebar--collapsed .sidebar__footer { padding: var(--space-2) 4px; }
+.sidebar--collapsed .sidebar__footer :is(.sidebar__language, .sidebar__links-label,
+  .sidebar__footer-logo-box, .sidebar__badge),
+.sidebar--collapsed .sidebar__link > span { display: none; }
+.sidebar--collapsed .sidebar__link {
+  width: calc(var(--sidebar-collapsed-width) - 8px);
+  justify-content: center;
+  min-height: 32px;
+  padding: 0;
+  gap: 0;
 }
 
 .sidebar__language {

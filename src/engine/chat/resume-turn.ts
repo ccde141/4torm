@@ -5,7 +5,7 @@ import type { TaskBoard } from '../../utils/taskboard';
 import { streamUrl } from '../../lib/apiBase';
 import { MonsoonMessageProjection } from './monsoon-projection';
 import { reconcileMonsoonInterruption } from './run-reconciliation';
-import { readMonsoonEvents } from './sse-events';
+import { readMonsoonEvents, type MonsoonBrowserEvent } from './sse-events';
 import { retainStopped } from './stream-retention';
 import { StreamTerminal } from './stream-terminal';
 import { findLatestAnswerableAsk } from './pending-ask';
@@ -39,6 +39,7 @@ export interface ResumeTurnPorts {
   rejected?(detail: string): void;
   uncertain?(detail: string): void;
   finalize(completed: boolean): void;
+  onCompaction?(event: MonsoonBrowserEvent): void;
 }
 
 interface ResumeState {
@@ -146,6 +147,7 @@ async function consumeReply(
   ports: ResumeTurnPorts,
 ): Promise<void> {
   for await (const event of readMonsoonEvents(response.body)) {
+    ports.onCompaction?.(event);
     if (event.type === 'reply-accepted') {
       if (state.accepted || event.waitingRunId !== input.waitingRunId
         || event.answer !== input.answer) throw new Error('季风回复确认与当前提问不匹配');
@@ -166,7 +168,6 @@ async function consumeReply(
     if (Object.hasOwn(effect, 'usage')) {
       if (effect.usage) state.session.tokenUsage = effect.usage;
       else delete state.session.tokenUsage;
-      ports.refreshSessions(input.agent);
     }
     if (effect.flush) state.flusher.update(state.messages, effect.flush === 'immediate');
   }

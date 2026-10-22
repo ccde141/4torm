@@ -1,13 +1,13 @@
-/**
- * 潮汐 — 新建任务表单
- */
-
-import { useState, useEffect } from 'react';
-import { createTask, type CreateTaskInput, type TidePushMode } from '../../api/tide';
+/** 潮汐任务创建：保存状态与交互；布局、时间与会话选项留在本岛。 */
+import { useState, useEffect, useId, useRef } from 'react';
+import { createTask, type CreateTaskInput } from '../../api/tide';
 import { getSessionsByAgent } from '../../store/chat';
-import { inputStyle, actionBtnStyle } from './tide-styles';
 import { useLocale } from '../../i18n/LocaleContext';
-import { parseTideRepeatCountInput } from './tide-form-values';
+import { buildTideSchedule, parseTideScheduleForm, validateTideScheduleForm } from './tide-form-values';
+import TideScheduleFields from './TideScheduleFields';
+import TideDeliveryFields, { type TideDeliveryValue } from './TideDeliveryFields';
+import TideRepeatField from './TideRepeatField';
+import TideIcon from './TideIcon';
 
 interface CreateFormProps {
   agentId: string;
@@ -15,172 +15,103 @@ interface CreateFormProps {
   onCancel: () => void;
 }
 
-interface SessionOpt { id: string; title: string; }
-
 export default function CreateForm({ agentId, onDone, onCancel }: CreateFormProps) {
   const { t } = useLocale();
+  const id = useId();
   const [name, setName] = useState('');
-  const [scheduleH, setScheduleH] = useState(0);
-  const [scheduleM, setScheduleM] = useState(5);
-  const [scheduleS, setScheduleS] = useState(0);
+  const [scheduleForm, setScheduleForm] = useState(() => parseTideScheduleForm('every 5m'));
   const [prompt, setPrompt] = useState('');
   const [repeatCount, setRepeatCount] = useState(-1);
-  const [pushMode, setPushMode] = useState<TidePushMode>('accumulate');
-  const [windowN, setWindowN] = useState(1);
-  const [targetSessionId, setTargetSessionId] = useState('');
-  const [selfLoop, setSelfLoop] = useState(false);
-  const [sessions, setSessions] = useState<SessionOpt[]>([]);
+  const [delivery, setDelivery] = useState<TideDeliveryValue>({
+    pushMode: 'accumulate', windowN: 1, targetSessionId: '', selfLoop: false,
+  });
+  const [sessions, setSessions] = useState<{ id: string; title: string }[]>([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [sessionError, setSessionError] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const inFlight = useRef(false);
 
-  // designated 模式：拉当前 agent 的季风会话
   useEffect(() => {
-    if (pushMode !== 'designated' || !agentId) return;
-    getSessionsByAgent(agentId).then(list =>
-      setSessions(list.map(s => ({ id: s.id, title: s.title || s.id })))
-    );
-  }, [pushMode, agentId]);
-
-  const validateN = (n: number): string | null => {
-    if (!Number.isInteger(n) || n < 1) return t('tide.create.validation.nMin');
-    if (n >= 2 && n % 2 !== 0) return t('tide.create.validation.nEven');
-    return null;
-  };
+    if (delivery.pushMode !== 'designated' || delivery.selfLoop || !agentId) return;
+    let current = true;
+    setLoadingSessions(true); setSessionError(''); setSessions([]);
+    void getSessionsByAgent(agentId).then(list => {
+      if (current) setSessions(list.map(session => ({ id: session.id, title: session.title || session.id })));
+    }).catch(cause => {
+      if (current) setSessionError(cause instanceof Error ? cause.message : String(cause));
+    }).finally(() => { if (current) setLoadingSessions(false); });
+    return () => { current = false; };
+  }, [delivery.pushMode, delivery.selfLoop, agentId]);
 
   const submit = async () => {
+    if (inFlight.current) return;
     setError('');
-    if (!name.trim() || !prompt.trim()) {
-      setError(t('tide.create.validation.required'));
-      return;
-    }
+    if (!name.trim() || !prompt.trim()) { setError(t('tide.create.validation.required')); return; }
     if (!agentId) { setError(t('tide.create.validation.agent')); return; }
+    const { pushMode, selfLoop, windowN, targetSessionId } = delivery;
     if (pushMode === 'accumulate' && !selfLoop) {
-      const nErr = validateN(windowN);
-      if (nErr) { setError(nErr); return; }
+      if (!Number.isInteger(windowN) || windowN < 1) { setError(t('tide.create.validation.nMin')); return; }
+      if (windowN >= 2 && windowN % 2 !== 0) { setError(t('tide.create.validation.nEven')); return; }
     }
-    if (pushMode === 'designated' && !targetSessionId) {
+    if (pushMode === 'designated' && !selfLoop && !targetSessionId) {
       setError(t('tide.create.validation.session')); return;
     }
-    if (scheduleH < 0 || scheduleM < 0 || scheduleM > 59 || scheduleS < 0 || scheduleS > 59) {
-      setError(t('tide.create.validation.range')); return;
-    }
-    if (scheduleH === 0 && scheduleM === 0 && scheduleS === 0) {
-      setError(t('tide.create.validation.interval')); return;
-    }
-    const schedule = `every ${scheduleH}h${scheduleM}m${scheduleS}s`;
-    setSubmitting(true);
+    const scheduleError = validateTideScheduleForm(scheduleForm);
+    if (scheduleError) { setError(t(`tide.create.validation.${scheduleError}`)); return; }
+    const schedule = buildTideSchedule(scheduleForm);
+    inFlight.current = true; setSubmitting(true);
     try {
       const input: CreateTaskInput = {
-        name: name.trim(),
-        schedule,
-        prompt: prompt.trim(),
-        agentId,
-        repeatCount,
-        pushMode,
-        windowN,
-        selfLoop,
-        targetSessionId: pushMode === 'designated' ? targetSessionId : undefined,
+        name: name.trim(), schedule, prompt: prompt.trim(), agentId,
+        repeatCount: selfLoop ? -1 : repeatCount,
+        pushMode: selfLoop ? 'accumulate' : pushMode, windowN: selfLoop ? 2 : windowN, selfLoop,
+        targetSessionId: !selfLoop && pushMode === 'designated' ? targetSessionId : undefined,
       };
       await createTask(input);
       onDone();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSubmitting(false);
-    }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { inFlight.current = false; setSubmitting(false); }
   };
 
-  return (
-    <div style={{ marginTop: 'var(--space-2)', padding: 'var(--space-3)', background: 'var(--glass-bg)', backdropFilter: 'blur(var(--glass-blur))', WebkitBackdropFilter: 'blur(var(--glass-blur))', border: '1px solid var(--glass-border)', borderRadius: 'var(--border-radius-md)' }}>
-      <input
-        placeholder={t('tide.create.namePlaceholder')}
-        value={name}
-        onChange={e => setName(e.target.value)}
-        style={inputStyle}
-      />
-      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', whiteSpace: 'nowrap' }}>{t('tide.create.interval')}</span>
-        <input type="number" min={0} value={scheduleH} onChange={e => setScheduleH(parseInt(e.target.value, 10) || 0)}
-          style={{ ...inputStyle, width: '56px', marginBottom: 0 }} />
-        <span style={{ fontSize: '10px', color: 'var(--color-text-tertiary)' }}>{t('tide.create.hour')}</span>
-        <input type="number" min={0} max={59} value={scheduleM} onChange={e => setScheduleM(parseInt(e.target.value, 10) || 0)}
-          style={{ ...inputStyle, width: '56px', marginBottom: 0 }} />
-        <span style={{ fontSize: '10px', color: 'var(--color-text-tertiary)' }}>{t('tide.create.minute')}</span>
-        <input type="number" min={0} max={59} value={scheduleS} onChange={e => setScheduleS(parseInt(e.target.value, 10) || 0)}
-          style={{ ...inputStyle, width: '56px', marginBottom: 0 }} />
-        <span style={{ fontSize: '10px', color: 'var(--color-text-tertiary)' }}>{t('tide.create.second')}</span>
-      </div>
-      <textarea
-        placeholder={t('tide.create.promptPlaceholder')}
-        value={prompt}
-        onChange={e => setPrompt(e.target.value)}
-        rows={3}
-        style={{ ...inputStyle, fontFamily: 'inherit', resize: 'vertical' }}
-      />
-
-      {/* self-loop 勾选 */}
-      <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
-        <input type="checkbox" checked={selfLoop} onChange={e => setSelfLoop(e.target.checked)} />
-        {t('tide.create.selfLoop')}
-      </label>
-
-      {/* 推送模式：self-loop 时禁用 */}
-      <div style={{ marginBottom: 'var(--space-2)' }}>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', display: 'block', marginBottom: '4px' }}>{t('tide.create.pushTarget')}</span>
-        <select
-          value={selfLoop ? 'accumulate' : pushMode}
-          disabled={selfLoop}
-          onChange={e => setPushMode(e.target.value as TidePushMode)}
-          style={{ ...inputStyle, marginBottom: 0 }}
-        >
-          <option value="accumulate">{t('tide.create.accumulate')}</option>
-          <option value="designated">{t('tide.create.designated')}</option>
-        </select>
-      </div>
-
-      {/* accumulate + 非 self-loop：N 输入 */}
-      {pushMode === 'accumulate' && !selfLoop && (
-        <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{t('tide.create.windowRounds')}</span>
-          <input
-            type="number" min={1} step={1}
-            value={windowN}
-            onChange={e => setWindowN(parseInt(e.target.value, 10) || 1)}
-            style={{ ...inputStyle, width: '70px', marginBottom: 0 }}
-          />
-           <span style={{ fontSize: '10px', color: 'var(--color-text-tertiary)' }}>{t('tide.create.windowHint')}</span>
+  return <div className="tide-form-shell">
+    <form className="tide-form" aria-labelledby={`${id}-title`} aria-busy={submitting}
+      onSubmit={event => { event.preventDefault(); void submit(); }}>
+      <header className="tide-form__header">
+        <span className="tide-form__symbol"><TideIcon name="clock" /></span>
+        <div><h2 id={`${id}-title`}>{t('tide.create.title')}</h2><p>{t('tide.create.description')}</p></div>
+        <button type="button" className="tide-form__close" onClick={onCancel} disabled={submitting}
+          aria-label={t('tide.create.cancel')}><TideIcon name="close" /></button>
+      </header>
+      <fieldset className="tide-form__body" disabled={submitting}>
+        <div className="tide-form__field tide-form__name">
+          <label htmlFor={`${id}-name`}>{t('tide.create.namePlaceholder')}</label>
+          <input id={`${id}-name`} value={name} placeholder={t('tide.create.nameExample')}
+            onChange={event => { setName(event.target.value); setError(''); }} />
         </div>
-      )}
-
-      {/* designated：会话下拉 */}
-      {pushMode === 'designated' && !selfLoop && (
-        <select
-          value={targetSessionId}
-          onChange={e => setTargetSessionId(e.target.value)}
-          style={inputStyle}
-        >
-          <option value="">{t('tide.create.selectSession')}</option>
-          {sessions.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
-        </select>
-      )}
-
-      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{t('tide.create.repeat')}</span>
-        <input
-          type="number"
-          value={repeatCount}
-          onChange={e => setRepeatCount(parseTideRepeatCountInput(e.target.value))}
-          style={{ ...inputStyle, width: '60px', marginBottom: 0 }}
-        />
-        <span style={{ fontSize: '10px', color: 'var(--color-text-tertiary)' }}>{t('tide.create.repeatHint')}</span>
-      </div>
-      {error && <div style={{ color: '#ef4444', fontSize: 'var(--text-xs)', marginBottom: 'var(--space-2)' }}>{error}</div>}
-      <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-        <button onClick={submit} disabled={submitting} style={{ ...actionBtnStyle, color: 'var(--color-accent)' }}>
-          {submitting ? t('tide.create.creating') : t('tide.create.create')}
-        </button>
-        <button onClick={onCancel} style={actionBtnStyle}>{t('tide.create.cancel')}</button>
-      </div>
-    </div>
-  );
+        <div className="tide-form__columns">
+          <section className="tide-form__section" aria-labelledby={`${id}-schedule`}>
+            <h3 id={`${id}-schedule`}><TideIcon name="calendar" />{t('tide.create.scheduleTitle')}</h3>
+            <TideScheduleFields value={scheduleForm} onChange={patch => { setScheduleForm(value => ({ ...value, ...patch })); setError(''); }} />
+            <div className="tide-form__repeat-section"><TideRepeatField value={delivery.selfLoop ? -1 : repeatCount}
+              onChange={value => { setRepeatCount(value); setError(''); }} disabled={delivery.selfLoop} /></div>
+          </section>
+          <section className="tide-form__section tide-form__instructions">
+            <label className="tide-form__section-label" htmlFor={`${id}-prompt`}>
+              <TideIcon name="message" />{t('tide.create.promptLabel')}</label>
+            <textarea id={`${id}-prompt`} value={prompt} placeholder={t('tide.create.promptExample')} rows={8}
+              onChange={event => { setPrompt(event.target.value); setError(''); }} />
+          </section>
+        </div>
+        <TideDeliveryFields value={delivery} onChange={patch => { setDelivery(value => ({ ...value, ...patch })); setError(''); }}
+          sessions={sessions} loading={loadingSessions} sessionError={sessionError} />
+      </fieldset>
+      {error && <p role="alert" className="tide-form__error">{error}</p>}
+      <footer className="tide-form__actions">
+        <button type="button" className="tide-form__button" onClick={onCancel} disabled={submitting}>{t('tide.create.cancel')}</button>
+        <button type="submit" className="tide-form__button tide-form__button--primary" disabled={submitting}>
+          {submitting ? t('tide.create.creating') : t('tide.create.create')}<TideIcon name="arrow" /></button>
+      </footer>
+    </form>
+  </div>;
 }

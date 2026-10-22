@@ -11,6 +11,7 @@ const read = (relative: string) => fs.readFileSync(
 test('tradewind shell localizes chrome without changing workflow protocol values', () => {
   const source = [
     read('pages/TradeWindPage.tsx'),
+    read('workspace/useWorkspaceCommands.ts'),
     read('panels/Toolbar.tsx'),
     read('panels/WorkflowListPanel.tsx'),
   ].join('\n');
@@ -53,7 +54,7 @@ test('tradewind info panel localizes status without translating streamed payload
   assert.match(source, /tradewind\.info\.nodeProgress/);
   assert.match(source, /tradewind\.info\.currentEnvelope/);
   assert.match(source, /e\.split\('当前信封：'\)/);
-  assert.match(source, /<pre style=\{preStyle\}>\{finalOutput\}<\/pre>/);
+  assert.match(source, /BoundedText text=\{\(finalOutput\) \?\? ''\}/);
   assert.match(source, /subscribeAll\(handler\)/);
 });
 
@@ -150,11 +151,12 @@ test('tradewind canvas localizes menus and node chrome without changing node typ
 
 test('tradewind validation localizes framework errors while preserving node labels', () => {
   const validation = read('workflow-validation.ts');
-  const page = read('pages/TradeWindPage.tsx');
+  const page = read('workspace/useWorkspaceCommands.ts');
   assert.match(validation, /tradewind\.validation\.autoMeeting/);
   assert.match(validation, /tradewind\.validation\.missingOutput/);
   assert.match(validation, /\{ name: node\.label \}/);
-  assert.match(page, /validateGraph\(graph, mode, t\)/);
+  assert.match(page, /prepareValidatedStart/);
+  assert.match(read('workspace/validation-client.ts'), /'validateWorkflow', \{ graph, mode \}/);
   assert.match(validation, /node\.type === 'human-gate'/);
   assert.match(validation, /node\.type === 'entry'/);
   assert.match(validation, /node\.type === 'output'/);

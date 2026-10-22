@@ -16,6 +16,11 @@ export function waitingTermination(): ReActTermination {
   return { status: 'waiting' };
 }
 
+export function modelOutputLimitError(source: string): FrameworkErrorData {
+  return reactErrorData('MODEL_OUTPUT_LIMIT', 'protocol',
+    '模型输出达到长度上限，本次回复未完成；已有内容和已执行结果已保留，被截断的工具调用未执行。请调整输出限额或缩小任务后继续。', source);
+}
+
 export function abortedTermination(): ReActTermination {
   return { status: 'aborted' };
 }

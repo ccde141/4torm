@@ -94,17 +94,19 @@ export function convectionSessionHandlers(
     },
     resetContext: {
       parse: parseReset,
-      invoke: async (_context, input) => {
+      invoke: async (context, input) => {
         const value = input as { sessionId: string; mode: 'clean' | 'summary' };
-        return sessions.resetContext(value.sessionId, value.mode);
+        return sessions.resetContext(value.sessionId, value.mode, context.signal);
       },
     },
     compactContext: {
       parse: parseSession,
-      invoke: async (_context, input) => sessions.resetContext((input as { sessionId: string }).sessionId, 'summary'),
+      invoke: async (context, input) => sessions.resetContext((input as { sessionId: string }).sessionId, 'summary', context.signal),
     },
-    compactChairContext: action(parseSession, input => sessions.changeChairContext(input.sessionId, 'summary')),
-    resetChairContext: action(parseSession, input => sessions.changeChairContext(input.sessionId, 'clean')),
+    compactChairContext: { parse: parseSession, invoke: (context, input) =>
+      sessions.changeChairContext((input as { sessionId: string }).sessionId, 'summary', context.signal) },
+    resetChairContext: { parse: parseSession, invoke: (context, input) =>
+      sessions.changeChairContext((input as { sessionId: string }).sessionId, 'clean', context.signal) },
   };
 }
 

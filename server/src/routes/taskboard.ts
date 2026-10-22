@@ -31,6 +31,8 @@ export async function taskboardRoutes(app: FastifyInstance): Promise<void> {
       tasks: body?.tasks,
     });
     if (execution.conflict) return reply.status(409).send(execution);
+    if (execution.errorCode) return reply.status(500).send(execution);
+    if (!execution.ok) return reply.status(400).send(execution);
     return reply.send(execution);
   });
 }

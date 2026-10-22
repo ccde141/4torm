@@ -1,0 +1,10 @@
+.tool-result-images { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 10px; margin-top: 10px; max-width: 720px; }
+.tool-result-image { margin: 0; min-width: 0; overflow: hidden; border: 1px solid var(--border-color); border-radius: var(--radius-md, 10px); background: color-mix(in srgb, var(--color-bg-secondary) 36%, transparent); }
+.tool-result-image a { display: block; line-height: 0; }
+.tool-result-image a:focus-visible, .tool-result-image button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.tool-result-image img { display: block; width: 100%; max-height: 320px; object-fit: contain; }
+.tool-result-image figcaption { display: flex; gap: 12px; justify-content: space-between; padding: 7px 10px; color: var(--color-text-secondary); font-size: var(--text-xs); }
+.tool-result-image figcaption span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-result-image figcaption span:last-child { flex-shrink: 0; }
+.tool-result-image__missing { min-height: 88px; padding: 16px; display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; color: var(--color-text-secondary); font-size: var(--text-sm); }
+.tool-result-image button { min-height: 32px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: inherit; background: transparent; padding: 4px 10px; cursor: pointer; }

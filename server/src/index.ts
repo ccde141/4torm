@@ -8,10 +8,9 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { storageRoutes } from './routes/storage.js';
-import { llmProxyRoutes } from './routes/llm-proxy.js';
 import { skinRoutes } from './routes/skin.js';
 import { skinVideoRoutes } from './routes/skin-video.js';
 import { toolRoutes } from './routes/tools.js';
@@ -23,14 +22,17 @@ import { delegateRoutes } from './routes/delegate.js';
 import { tideRoutes } from './routes/tide.js';
 import { createTideFeature } from './modules/tide/public.js';
 import { internalContext } from './engine/collaboration/internal-context.js';
-import { createMonsoonFeature, monsoonRoutes } from './modules/monsoon/public.js';
+import { createMonsoonFeature, createMonsoonCompactionPort, monsoonRoutes } from './modules/monsoon/public.js';
 import { createTradewindFeature } from './modules/tradewind/public.js';
 import { createConvectionFeature } from './modules/convection/public.js';
 import { createCycloneFeature } from './modules/cyclone/public.js';
 import { applyDeveloperMode } from './config/developer-mode.js';
+import { readPublicBrowserOrigin } from './config/browser-origin.js';
+import { installTransportShutdown } from './config/transport-shutdown.js';
 import { installRequestLogging } from './config/request-logger.js';
 import { drainAtomicWrites } from './engine/shared/atomic-io.js';
 import { drainCycloneDispatches, resumeCycloneDispatches } from './engine/cyclone/dispatch-queue.js';
+import { recoverCycloneContacts, shutdownCycloneContacts } from './engine/cyclone/contact-communication.js';
 import { initMcpManager, shutdownMcpManager } from './engine/shared/mcp-manager.js';
 import { performGracefulShutdown } from './services/graceful-shutdown.js';
 import { getAllAgentActivities } from './engine/shared/agent-activity.js';
@@ -50,9 +52,23 @@ import { loadTransportCredentials } from './config/transport.js';
 import { agentRoutes } from './modules/agents/public.js';
 import { createRuntimeSettingsPort } from './modules/runtime-settings/public.js';
 import { runtimeSettingsRoutes } from './routes/runtime-settings.js';
-import { enforceLocalBrowserOrigin, localCorsOrigin } from './utils/sse.js';
+import { enforceBrowserOrigin, browserCorsOrigin } from './utils/sse.js';
+import { createConnectionAccess, readConnectionConfiguration } from './config/connection-access.js';
+import { connectionRoutes } from './routes/connection.js';
+import { drainProviderWrites } from './model-runtime/config/provider-store.js';
+import { toolMediaRoutes } from './routes/tool-media.js';
 
 applyDeveloperMode();
+// Validate before allocating transport/runtime resources; this setting grants no identity.
+readPublicBrowserOrigin();
+const connectionConfig = readConnectionConfiguration();
+// A process-private capability authorizes only server-to-server tool execution.
+process.env.FOURTORM_INTERNAL_TOKEN = randomBytes(32).toString('hex');
+if (!process.env.TOOL_BRIDGE_URL) {
+  const bridgeHost = ['::', '::1'].includes(connectionConfig.host) ? '[::1]'
+    : connectionConfig.host === 'localhost' ? 'localhost' : '127.0.0.1';
+  process.env.TOOL_BRIDGE_URL = `https://${bridgeHost}:${process.env.PORT || '3001'}`;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
@@ -71,12 +87,21 @@ const app = Fastify({
   bodyLimit: 30 * 1024 * 1024, // 30MB（自定义底纹图片 20MB 经 base64 膨胀约 27MB）
 }) as unknown as FastifyInstance;
 
-app.addHook('onRequest', enforceLocalBrowserOrigin);
-await app.register(cors, { origin: localCorsOrigin });
+installTransportShutdown(app);
+app.addHook('onRequest', enforceBrowserOrigin);
+await app.register(cors, { origin: browserCorsOrigin, credentials: true,
+  exposedHeaders: ['x-4torm-auth-required'] });
+const connectionAccess = createConnectionAccess({
+  configuration: connectionConfig,
+  internalToken: process.env.FOURTORM_INTERNAL_TOKEN,
+  desktopBrowser: Boolean(process.env.FOURTORM_DESKTOP_BRIDGE) && !connectionConfig.accessToken,
+});
+app.addHook('onRequest', connectionAccess.guard);
 
 // 全局错误兜底：旧 error 字段兼容，并附加稳定错误身份；未知异常不泄露堆栈。
 installFrameworkErrorHandler(app);
-installHumanIdentityPort(app);
+installHumanIdentityPort(app, connectionAccess.identity);
+await app.register(connectionRoutes, { prefix: '/api/connection', access: connectionAccess });
 
 // 让路由能访问 dataDir
 app.decorate('dataDir', DATA_DIR);
@@ -95,8 +120,14 @@ app.addContentTypeParser(
 // 初始化数据目录
 import fs from 'node:fs';
 fs.mkdirSync(DATA_DIR, { recursive: true });
-const tideFeature = createTideFeature({ dataDir: DATA_DIR });
 const monsoonFeature = createMonsoonFeature({ dataDir: DATA_DIR });
+const monsoonCompaction = createMonsoonCompactionPort(DATA_DIR);
+const tideFeature = createTideFeature({ dataDir: DATA_DIR, seasonSessions: monsoonFeature.externalSessions,
+  seasonCompaction: async (agentId, sessionId, onNotice, signal) => {
+    const prepared = await monsoonCompaction.prepare({ agentId, sessionId });
+    try { await prepared.run({ signal: signal ?? new AbortController().signal, onChunk: () => {}, onNotice }); }
+    finally { prepared.dispose?.(); }
+  } });
 const tradewindFeature = createTradewindFeature({ dataDir: DATA_DIR });
 const convectionFeature = createConvectionFeature({ dataDir: DATA_DIR });
 const cycloneFeature = createCycloneFeature({ dataDir: DATA_DIR });
@@ -112,6 +143,7 @@ const collaborationRouter = createCollaborationRuntime({
   cycloneModule: cycloneFeature.module,
   presencePort: { read: getAllAgentActivities },
 });
+cycloneFeature.connectSupervisorRouter(collaborationRouter);
 installRequestLogging(app, [
   monsoonFeature.module.manifest, convectionFeature.module.manifest,
   cycloneFeature.module.manifest, tradewindFeature.module.manifest, tideFeature.module.manifest,
@@ -122,11 +154,13 @@ tideFeature.scheduler.bindScheduledTrigger(taskId => collaborationRouter.invoke(
 configureAgentCollaborationGateway(new AgentCollaborationGateway(
   collaborationRouter, agentId => loadAgent(DATA_DIR, agentId),
 ));
-configureDynamicToolNames(() => readAgentCollaborationCatalog().map(tool => tool.name));
+configureDynamicToolNames(() => [...readAgentCollaborationCatalog().map(tool => tool.name),
+  ...cycloneFeature.supervisorToolNames()]);
 
 // 启动自愈：释放 Agent 死锁，并把中断的信风运行标记为 crashed
 import { recoverStartupState } from './services/startup-recovery.js';
 const recovery = await recoverStartupState(DATA_DIR);
+await recoverCycloneContacts(DATA_DIR);
 const crashedObservations = await executionObserver.restore(path.join(DATA_DIR, 'runtime', 'execution-observations.json'));
 if (recovery.releasedAgents.length > 0) {
   console.log(`[startup] 释放死锁 Agent: ${recovery.releasedAgents.join(', ')}`);
@@ -154,9 +188,9 @@ if (recovery.crashedTideRuns > 0) {
 
 // 注册路由
 await app.register(storageRoutes, { prefix: '/api/storage' });
+await app.register(toolMediaRoutes, { prefix: '/api/tool-media', router: collaborationRouter });
 await app.register(runtimeSettingsRoutes, { prefix: '/api/settings', router: collaborationRouter });
 await app.register(taskboardRoutes, { prefix: '/api/taskboard' });
-await app.register(llmProxyRoutes, { prefix: '/api/llm' });
 await app.register(modelRuntimeRoutes, { prefix: '/api/model-runtime' });
 await app.register(skinRoutes, { prefix: '/skin' });
 await app.register(skinVideoRoutes, { prefix: '/api/skin-video' });
@@ -255,12 +289,20 @@ function requestShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
   console.log(`[shutdown] 收到 ${signal}，开始排空运行时写入`);
   shutdownPromise = performGracefulShutdown({
     stopScheduler: () => tideFeature.scheduler.stop(),
+    stopMonsoon: () => monsoonFeature.runtime.shutdown(),
     stopTradewind: stopActiveTradewindExecution,
     drainTide: () => tideFeature.scheduler.drain(),
-    drainCyclone: drainCycloneDispatches,
+    drainCyclone: async () => {
+      await cycloneFeature.shutdown();
+      await shutdownCycloneContacts(DATA_DIR);
+      await drainCycloneDispatches();
+    },
     drainConvection: () => convectionFeature.discussionRounds.shutdown(),
     stopBackgroundExecutions: () => backgroundExecutions.shutdown(),
-    drainWrites: async () => { await executionObserver.flush(); await drainAtomicWrites(); },
+    drainWrites: async () => {
+      await Promise.all([executionObserver.flush(), drainProviderWrites()]);
+      await drainAtomicWrites();
+    },
     shutdownMcp: shutdownMcpManager,
     closeServer: () => app.close(),
   }).then(() => {
@@ -276,8 +318,8 @@ process.once('SIGINT', () => requestShutdown('SIGINT'));
 process.once('SIGTERM', () => requestShutdown('SIGTERM'));
 
 try {
-  // 默认只接受本机桌面与 Vite 代理；local-human 身份口不具备远程账号认证。
-  await app.listen({ port: PORT, host: 'localhost' });
+  // Local mode remains loopback-only; a public listener requires configured identity.
+  await app.listen({ port: PORT, host: connectionConfig.host });
   console.log(`4torm HTTPS/2 server listening on :${PORT}`);
 } catch (err) {
   app.log.error(err);

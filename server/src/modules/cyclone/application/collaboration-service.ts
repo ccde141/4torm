@@ -4,6 +4,8 @@ import type { RoomMode } from '../../../engine/cyclone/types.js';
 import type { ResolvedOutputBudget } from '../../../engine/collaboration/contracts.js';
 import type { CycloneRoomService } from './room-service.js';
 import type { CycloneWorkshopService } from './workshop-service.js';
+import type { CycloneSupervisorService } from './supervisor-service.js';
+import type { CycloneSupervisorSummary } from '../domain/supervisor-view.js';
 
 export interface CollaborationGroupMember {
   agentId: string;
@@ -16,6 +18,8 @@ export interface CollaborationGroupMember {
 export interface CreateCollaborationGroupInput {
   title: string;
   chairAgentId?: string;
+  supervisorAgentId?: string;
+  supervisorRolePrompt?: string;
   members: CollaborationGroupMember[];
   room: { title: string; topic: string; mode?: RoomMode };
 }
@@ -24,6 +28,7 @@ export interface CollaborationGroupResult {
   workshopId: string;
   title: string;
   chairAgentId?: string;
+  supervisor?: CycloneSupervisorSummary;
   seats: Array<{ seatId: string; agentId: string; title: string }>;
   room: { roomId: string; title: string; topic: string; mode: RoomMode };
 }
@@ -32,6 +37,7 @@ export interface CollaborationGroupView {
   workshopId: string;
   title: string;
   chairAgentId?: string;
+  supervisor?: CycloneSupervisorSummary;
   seats: Array<{ id: string; agentId: string; title: string; duty?: string; pending: boolean }>;
   rooms: Array<{
     id: string; title: string; topic: string; mode: RoomMode; participantSeatIds: string[];
@@ -53,6 +59,7 @@ export class CycloneCollaborationService {
     private readonly dataDir: string,
     private readonly workshops: CycloneWorkshopService,
     private readonly rooms: CycloneRoomService,
+    private readonly supervisor?: Pick<CycloneSupervisorService, 'configureInitial' | 'summary'>,
   ) {}
 
   async create(input: CreateCollaborationGroupInput): Promise<CollaborationGroupResult> {
@@ -70,9 +77,14 @@ export class CycloneCollaborationService {
         workshopId: draft.id, ...input.room,
         participantSeatIds: seats.map(seat => seat.seatId),
       }, false);
+      if (input.supervisorAgentId) await this.supervisor!.configureInitial(draft.id, {
+        agentId: input.supervisorAgentId, rolePrompt: input.supervisorRolePrompt ?? '',
+      });
+      const supervisor = this.supervisor ? await this.supervisor.summary(draft.id) : undefined;
       await this.workshops.publish(draft.id);
       return {
         workshopId: draft.id, title: draft.title, chairAgentId: draft.chairAgentId,
+        ...(supervisor ? { supervisor } : {}),
         seats, room: {
           roomId: room.id, title: room.title, topic: room.topic, mode: room.mode ?? 'build',
         },
@@ -93,6 +105,7 @@ export class CycloneCollaborationService {
     const bounded = boundMessages(selected, budget.textChars ?? 8_000, budget.textLines ?? 160);
     return {
       workshopId: summary.id, title: summary.title, chairAgentId: summary.chairAgentId,
+      ...(this.supervisor ? { supervisor: await this.supervisor.summary(workshopId) } : {}),
       seats: summary.seats, rooms: rooms.map(room => ({
         id: room.id, title: room.title, topic: room.topic, mode: room.mode ?? 'build',
         participantSeatIds: [...room.participantSeatIds],
@@ -103,6 +116,8 @@ export class CycloneCollaborationService {
   }
 
   private async preflight(input: CreateCollaborationGroupInput): Promise<void> {
+    if (input.supervisorAgentId && !this.supervisor) throw groupError(
+      'CYCLONE_GROUP_SUPERVISOR_UNAVAILABLE', 'validation', '主管配置服务尚未就绪');
     const titles = new Set<string>();
     for (const member of input.members) {
       if (titles.has(member.title)) throw groupError(
@@ -112,6 +127,7 @@ export class CycloneCollaborationService {
     }
     const agentIds = new Set(input.members.map(member => member.agentId));
     if (input.chairAgentId) agentIds.add(input.chairAgentId);
+    if (input.supervisorAgentId) agentIds.add(input.supervisorAgentId);
     for (const agentId of agentIds) {
       if (!await loadAgent(this.dataDir, agentId)) throw groupError(
         'CYCLONE_GROUP_AGENT_NOT_FOUND', 'validation', '协作组引用的 Agent 不存在', { agentId },

@@ -13,6 +13,7 @@
  */
 
 import type { ToolDef } from '../shared/tool-defs-loader';
+import { SUB_AGENT_MAX_ROUNDS } from '../shared/sub-agent-budget.js';
 import { recallMemory } from '../shared/agent-memory';
 import { buildSandboxSection, type SandboxLevel } from '../shared/sandbox-prompt';
 import { buildSelfManagementSection, buildTextToolProtocol } from '../shared/prompt';
@@ -46,20 +47,9 @@ function buildDelegateSection(): string {
 
 ### 任务拆分原则（重要，违反将导致 SubAgent 超限失败）
 
-SubAgent 有严格的工具调用次数上限（单次最多 25 轮）。超过此上限任务直接失败。
+SubAgent 有严格的工具调用次数上限（单次最多 ${SUB_AGENT_MAX_ROUNDS} 轮）。应给收口和验证预留余量。
 
-你必须提前估算任务需要的步数。如果一个任务需要约 5 步以上工具调用，就必须拆分为多个 delegate。
-
-硬性规则：
-- 一个 delegate 最多读取 3-5 个文件
-- 读取 6 个以上文件 → 至少拆成 2 个 delegate
-- 探索搜索 + 读取 + 分析 → 每个环节单独 delegate
-- 不要把"扫描整个模块"或"审计整个项目"塞给单个 SubAgent
-- 宁可多派 3-4 个小任务，也不要一个大任务超限失败
-
-正确拆分示例：
-❌ 错误："审计 src/ 目录下所有模块" → 1 个 SubAgent → 必超限
-✅ 正确：拆成 "审计 src/auth/" + "审计 src/api/" + "审计 src/store/" → 3 个并行
+按实际复杂度和可并行性拆分：边界清晰的小任务可直接交给一个 SubAgent；相互独立的大模块分别委托。不要只按文件数量机械拆分，也不要把缺少明确完成标准的整项目探索交给一个子任务。
 
 ### 必须 delegate 的场景
 1. 用户要求分析/理解一个项目、模块、或代码库
@@ -104,6 +94,8 @@ export interface PromptBuildOpts {
   allowDelegate?: boolean;
   /** 当前功能区的身份段；缺省为季风。 */
   surfaceMeta?: string;
+  /** The supplied tool list is the complete execution permission set. */
+  providedToolsOnly?: boolean;
 }
 
 function buildSelfDispatchSection(allowAsk: boolean, allowDelegate: boolean): string {
@@ -201,13 +193,14 @@ export async function buildConversationSystemPrompt(opts: PromptBuildOpts): Prom
   if (allowAsk) parts.push(buildAskSection());
 
   // 8. 能力扩展（查看 / 创建工具、技能、MCP）— 与对流/气旋/信风共用 shared 单一来源
-  parts.push(buildSelfManagementSection({
+  if (!opts.providedToolsOnly) parts.push(buildSelfManagementSection({
     allowToolRegistration: Boolean(opts.sessionId),
     native: opts.native,
   }));
 
   // 9. 长期记忆（条目化 + 相关性召回，替代旧 MEMORY.md 全文注入）
   //    userMessage 作 taskHint：feedback 常驻档必带，情境档按相关性挑。召回失败静默降级。
+  if (opts.providedToolsOnly) return parts.join('\n\n');
   try {
     const memSection = await recallMemory(opts.dataDir, opts.agentId, opts.userMessage);
     if (memSection) parts.push(memSection);

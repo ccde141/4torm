@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState, type Dispatch, type RefObject,
   type SetStateAction } from 'react';
-import { streamUrl } from '../../../lib/apiBase';
+import { createBackendEventSource } from '../../../lib/backend-client';
 import { fetchConvectionRead } from './convection-load-retry';
 import { restoreConvectionMessage } from './convection-message-map';
 import type { ConvectionTurnMessage } from './ConvectionTurnCard';
-import { applyExternalChairEvent, applyExternalPublicEvent,
+import { applyExternalChairEvent, applyExternalPublicEvent, restoreConvectionCompaction,
   type ExternalChairMessage, type ExternalRoundEvent } from './convection-external-events';
 import type { ConvectionRound } from './convection-round-state';
-import { applyConvectionUsage, type ConvectionUsage } from './convection-token-usage';
+import { applyConvectionUsage, beginConvectionUsage, mergeConvectionSessions, restoreConvectionUsage,
+  type ConvectionUsage, type ConvectionUsagePending } from './convection-token-usage';
 import { compactionFeedbackEvent, compactionFeedbackMessage, type StoredCompactionFeedback } from '../../../components/common/compaction-feedback';
+import { compactionActivity, reduceCompactionActivity, type CompactionActivity } from '../../../components/common/compaction-activity';
 
 export interface ConvectionRoomSummary {
   id: string; title: string; chairAgentId: string; participantAgentIds: string[];
@@ -16,6 +18,7 @@ export interface ConvectionRoomSummary {
   tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   publicLatestTokenUsage?: ConvectionUsage;
   chairTokenUsage?: ConvectionUsage;
+  usagePending?: ConvectionUsagePending;
   updatedAt: string;
 }
 
@@ -27,9 +30,11 @@ interface LiveView {
 interface Snapshot {
   type: 'snapshot'; sessions: ConvectionRoomSummary[];
   live?: LiveView; chairLive?: LiveView; missingSessionId?: string;
+  compactionProgress?: unknown; chairCompactionProgress?: unknown;
 }
 
 type FeedEvent = Snapshot | { type: 'session-changed'; sessionId: string }
+  | { type: 'context-event'; sessionId: string; scope: 'public' | 'chair'; event: ExternalRoundEvent }
   | { type: 'round-start'; sessionId: string; runId: string;
       round: 'public' | 'chair'; message: string }
   | { type: 'round-event'; sessionId: string; runId: string;
@@ -49,6 +54,8 @@ interface FeedBindings {
   setChairMessages: Dispatch<SetStateAction<ExternalChairMessage[]>>;
   setPublicNotice: Dispatch<SetStateAction<string>>;
   setChairNotice: Dispatch<SetStateAction<string>>;
+  setPublicCompaction: Dispatch<SetStateAction<CompactionActivity | undefined>>;
+  setChairCompaction: Dispatch<SetStateAction<CompactionActivity | undefined>>;
   onMissingSession: (sessionId: string) => void;
 }
 
@@ -59,9 +66,8 @@ export function useConvectionConferenceFeed(bindings: FeedBindings): boolean {
   useEffect(() => {
     if (!bindings.active) return;
     const sessionId = bindings.sessionId;
-    const url = streamUrl(`/api/convection/events${sessionId
+    const source = createBackendEventSource(`/api/convection/events${sessionId
       ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`);
-    const source = new EventSource(url, { withCredentials: true });
     let closed = false;
     let progressRevision = 0;
     let roomsRevision = 0;
@@ -71,7 +77,14 @@ export function useConvectionConferenceFeed(bindings: FeedBindings): boolean {
     const handle = (event: FeedEvent) => {
       if (closed) return;
       if (event.type === 'snapshot') {
-        latest.current.setSessions(event.sessions);
+        latest.current.setPublicCompaction(current => restoreConvectionCompaction(current, event.compactionProgress));
+        latest.current.setChairCompaction(current => restoreConvectionCompaction(current, event.chairCompactionProgress));
+        const pending = event.live?.activeRound?.round ?? (event.compactionProgress && compactionActivity(event.compactionProgress)?.phase === 'running'
+          ? 'public' : compactionActivity(event.chairCompactionProgress)?.phase === 'running' ? 'chair' : null);
+        latest.current.setSessions(current => mergeConvectionSessions(current, event.sessions,
+          sessionId && pending ? { sessionId, round: pending } : undefined));
+        if (sessionId && !pending && !localRunning()) latest.current.setSessions(current =>
+          restoreConvectionUsage(current, sessionId, event.sessions.find(session => session.id === sessionId) ?? {}));
         if (event.missingSessionId) latest.current.onMissingSession(event.missingSessionId);
         else if (sessionId && event.live?.activeRound && !localRunning()) {
           runId = event.live.activeRound.runId;
@@ -81,13 +94,35 @@ export function useConvectionConferenceFeed(bindings: FeedBindings): boolean {
           latest.current.setActiveRunId(runId);
           void restoreActive(sessionId, event, () => closed || runId !== expectedRunId
             || progressRevision !== expectedRevision, latest);
+        } else if (sessionId && !localRunning()) {
+          runId = null;
+          latest.current.setActiveRound(pending);
+          latest.current.setActiveRunId(null);
+          const expectedRevision = progressRevision;
+          void reloadMessages(sessionId, latest, () => closed || runId !== null
+            || progressRevision !== expectedRevision);
+        }
+      } else if (event.type === 'context-event' && event.sessionId === sessionId) {
+        progressRevision += 1;
+        if (event.event.type === 'compact-start') latest.current.setSessions(current =>
+          beginConvectionUsage(current, sessionId, event.scope));
+        const setter = event.scope === 'public' ? latest.current.setPublicCompaction : latest.current.setChairCompaction;
+        setter(current => reduceCompactionActivity(current, event.event));
+        if (!localRunning()) {
+          if (event.event.type === 'compact-start') latest.current.setActiveRound(event.scope);
+          else { latest.current.setActiveRound(null);
+            latest.current.setSessions(current => restoreConvectionUsage(current, sessionId, {}));
+            const expectedRevision = progressRevision;
+            void reloadMessages(sessionId, latest, () => closed || runId !== null || progressRevision !== expectedRevision); }
         }
       } else if (event.type === 'session-changed') {
         const expectedRoomsRevision = ++roomsRevision;
         void reloadRooms(latest, () => closed || roomsRevision !== expectedRoomsRevision,
           sessionId);
         if (event.sessionId === sessionId && !localRunning() && !runId) {
-          void reloadMessages(sessionId, latest, () => closed || runId !== null);
+          const expectedRevision = progressRevision;
+          void reloadMessages(sessionId, latest, () => closed || runId !== null
+            || progressRevision !== expectedRevision || roomsRevision !== expectedRoomsRevision);
         }
       } else if (event.sessionId === sessionId && !localRunning()) {
         if (event.type === 'round-start' && runId !== event.runId) {
@@ -95,13 +130,20 @@ export function useConvectionConferenceFeed(bindings: FeedBindings): boolean {
           runId = event.runId;
           latest.current.setActiveRound(event.round);
           latest.current.setActiveRunId(event.runId);
+          latest.current.setSessions(current => beginConvectionUsage(current, sessionId, event.round));
           appendPrompt(latest.current, event.round, event.message);
         } else if (event.type === 'round-event' && (!runId || runId === event.runId)) {
           progressRevision += 1;
           runId = event.runId;
           latest.current.setActiveRound(event.round);
           latest.current.setActiveRunId(event.runId);
+          latest.current.setSessions(current => beginConvectionUsage(current, sessionId, event.round));
           applyProgress(latest.current, sessionId, event.round, event.event);
+          if (event.event.type === 'compact-done') {
+            const expectedRevision = progressRevision;
+            void reloadMessages(sessionId, latest,
+              () => closed || progressRevision !== expectedRevision, event.round);
+          }
         } else if (event.type === 'round-end' && (!runId || runId === event.runId)) {
           progressRevision += 1;
           runId = null;
@@ -131,6 +173,7 @@ function applyProgress(bindings: FeedBindings, sessionId: string, round: 'public
   event: ExternalRoundEvent): void {
   const feedback = compactionFeedbackEvent(event);
   if (feedback !== undefined) (round === 'public' ? bindings.setPublicNotice : bindings.setChairNotice)(feedback ?? '');
+  (round === 'public' ? bindings.setPublicCompaction : bindings.setChairCompaction)(current => reduceCompactionActivity(current, event));
   if (event.type === 'usage') {
     bindings.setSessions(current => applyConvectionUsage(current, sessionId, round, event.usage));
     return;
@@ -146,7 +189,7 @@ async function reloadRooms(latest: RefObject<FeedBindings>, stale: () => boolean
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const rooms = await response.json() as ConvectionRoomSummary[];
     if (stale()) return;
-    latest.current.setSessions(rooms);
+    latest.current.setSessions(current => mergeConvectionSessions(current, rooms));
     if (selectedSessionId && !rooms.some(room => room.id === selectedSessionId)) {
       latest.current.onMissingSession(selectedSessionId);
     }
@@ -154,18 +197,25 @@ async function reloadRooms(latest: RefObject<FeedBindings>, stale: () => boolean
 }
 
 async function reloadMessages(sessionId: string, latest: RefObject<FeedBindings>,
-  stale: () => boolean): Promise<void> {
+  stale: () => boolean, ongoingRound?: 'public' | 'chair'): Promise<void> {
   try {
     const response = await fetchConvectionRead(`/api/convection/session/${sessionId}/status`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json() as { publicMessages?: ConvectionTurnMessage[];
       chairMessages?: ExternalChairMessage[]; compactionNotice?: StoredCompactionFeedback;
-      chairCompactionNotice?: StoredCompactionFeedback };
+      chairCompactionNotice?: StoredCompactionFeedback; compactionProgress?: unknown; chairCompactionProgress?: unknown;
+      publicLatestTokenUsage?: ConvectionUsage; chairTokenUsage?: ConvectionUsage };
     if (stale()) return;
-    latest.current.setMessages((data.publicMessages ?? []).map(restoreConvectionMessage));
-    latest.current.setChairMessages(data.chairMessages ?? []);
+    latest.current.setMessages(current => [...(data.publicMessages ?? []).map(restoreConvectionMessage),
+      ...(ongoingRound ? current.filter(message => message.streaming) : [])]);
+    latest.current.setChairMessages(current => [...(data.chairMessages ?? []),
+      ...(ongoingRound ? current.filter(message => message.streaming) : [])]);
     latest.current.setPublicNotice(compactionFeedbackMessage(data.compactionNotice));
     latest.current.setChairNotice(compactionFeedbackMessage(data.chairCompactionNotice));
+    restoreCompaction(latest.current, data);
+    const pending = ongoingRound ?? (compactionActivity(data.compactionProgress)?.phase === 'running'
+      ? 'public' : compactionActivity(data.chairCompactionProgress)?.phase === 'running' ? 'chair' : null);
+    latest.current.setSessions(current => restoreConvectionUsage(current, sessionId, data, pending));
   } catch (error) { console.error('[convection] conference message sync failed', error); }
 }
 
@@ -176,10 +226,14 @@ async function restoreActive(sessionId: string, event: Snapshot,
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json() as { publicMessages?: ConvectionTurnMessage[];
       chairMessages?: ExternalChairMessage[]; compactionNotice?: StoredCompactionFeedback;
-      chairCompactionNotice?: StoredCompactionFeedback };
+      chairCompactionNotice?: StoredCompactionFeedback; compactionProgress?: unknown; chairCompactionProgress?: unknown;
+      publicLatestTokenUsage?: ConvectionUsage; chairTokenUsage?: ConvectionUsage };
     if (stale() || !event.live?.activeRound) return;
+    const round = event.live.activeRound.round;
     latest.current.setPublicNotice(compactionFeedbackMessage(data.compactionNotice));
     latest.current.setChairNotice(compactionFeedbackMessage(data.chairCompactionNotice));
+    restoreCompaction(latest.current, data);
+    latest.current.setSessions(current => restoreConvectionUsage(current, sessionId, data, round));
     const draft = event.live.activeRound.round === 'chair'
       ? event.chairLive?.messages.at(-1) : event.live.messages.at(-1);
     latest.current.setMessages([...((data.publicMessages ?? []).map(restoreConvectionMessage)),
@@ -193,10 +247,17 @@ async function restoreActive(sessionId: string, event: Snapshot,
   } catch (error) { console.error('[convection] live meeting restore failed', error); }
 }
 
+function restoreCompaction(bindings: FeedBindings, data: { compactionProgress?: unknown; chairCompactionProgress?: unknown }): void {
+  bindings.setPublicCompaction(current => restoreConvectionCompaction(current, data.compactionProgress));
+  bindings.setChairCompaction(current => restoreConvectionCompaction(current, data.chairCompactionProgress));
+}
+
 async function finishRound(sessionId: string, error: string | undefined,
   latest: RefObject<FeedBindings>, stale: () => boolean): Promise<void> {
   await reloadMessages(sessionId, latest, stale);
   if (stale()) return;
+  // A terminal feed is enough to release candidates even if its status reload was unreachable.
+  latest.current.setSessions(current => restoreConvectionUsage(current, sessionId, {}));
   if (error) latest.current.setMessages(current => [...current,
     { speaker: '系统', content: error, timestamp: new Date().toISOString() }]);
   latest.current.setActiveRound(null);

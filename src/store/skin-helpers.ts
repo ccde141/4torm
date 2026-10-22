@@ -7,6 +7,7 @@
  * 拆自 store/skin.ts，避免主文件超 300 行。
  */
 
+import { backendFetch } from '../lib/backend-client';
 const STORAGE_BASE = '/api/storage';
 
 export function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
@@ -64,7 +65,7 @@ class StorageError extends Error {
 
 export async function readJson<T>(filePath: string): Promise<T | null> {
   try {
-    const res = await fetch(`${STORAGE_BASE}/read?path=${encodeURIComponent(filePath)}`);
+    const res = await backendFetch(`${STORAGE_BASE}/read?path=${encodeURIComponent(filePath)}`);
     if (!res.ok) throw new StorageError(`读取失败: ${res.status}`);
     return await res.json();
   } catch {
@@ -73,7 +74,7 @@ export async function readJson<T>(filePath: string): Promise<T | null> {
 }
 
 export async function writeJson<T>(filePath: string, data: T): Promise<void> {
-  const res = await fetch(`${STORAGE_BASE}/write?path=${encodeURIComponent(filePath)}`, {
+  const res = await backendFetch(`${STORAGE_BASE}/write?path=${encodeURIComponent(filePath)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data, null, 2),
@@ -101,7 +102,7 @@ function readFileAsBase64(file: File): Promise<string> {
  */
 export async function uploadBinary(filePath: string, file: File): Promise<void> {
   const base64 = await readFileAsBase64(file);
-  const res = await fetch(
+  const res = await backendFetch(
     `${STORAGE_BASE}/upload?path=${encodeURIComponent(filePath)}`,
     {
       method: 'PUT',
@@ -115,7 +116,7 @@ export async function uploadBinary(filePath: string, file: File): Promise<void> 
 /** 删除指定路径文件（清除自定义图片时调用，忽略失败） */
 export async function deleteFile(filePath: string): Promise<void> {
   try {
-    await fetch(`${STORAGE_BASE}/delete?path=${encodeURIComponent(filePath)}`, {
+    await backendFetch(`${STORAGE_BASE}/delete?path=${encodeURIComponent(filePath)}`, {
       method: 'DELETE',
     });
   } catch {
@@ -128,5 +129,6 @@ export async function deleteFile(filePath: string): Promise<void> {
  * @param version 通常用上传时间戳，换图后 URL 变化即可绕过缓存
  */
 export function fileUrl(filePath: string, version: number): string {
+  // Persist a logical path so moving the backend does not pin skins to its old host.
   return `${STORAGE_BASE}/file?path=${encodeURIComponent(filePath)}&v=${version}`;
 }

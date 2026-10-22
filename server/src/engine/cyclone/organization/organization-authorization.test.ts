@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { FrameworkError } from '../../shared/framework-error.js';
-import { addSeat } from '../seat-store.js';
+import { addSeat, saveSeat } from '../seat-store.js';
 import { createWorkshop } from '../workshop-store.js';
 import {
   listAuthorizedTargets,
@@ -57,6 +57,15 @@ function assertCode(error: unknown, code: string): boolean {
   assert.equal(error.data.code, code);
   return true;
 }
+
+test('遗留同名工位拒绝歧义寻址，并允许用工位 ID 保持授权寻址', async t => {
+  const { dataDir, workshop, a, b, c } = await fixture(t, false);
+  c.title = b.title;
+  await saveSeat(dataDir, workshop.id, c);
+  await assert.rejects(resolveAuthorizedTarget(dataDir, workshop.id, a.id, b.title, 'contact'),
+    error => assertCode(error, 'CYCLONE_TARGET_SEAT_AMBIGUOUS'));
+  assert.equal((await resolveAuthorizedTarget(dataDir, workshop.id, a.id, c.id, 'contact')).id, c.id);
+});
 
 test('同组和双向外连同时开放 contact 与 dispatch', async (t) => {
   const { dataDir, workshop, a, b, c, d } = await fixture(t);

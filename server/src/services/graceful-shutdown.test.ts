@@ -7,6 +7,7 @@ test('优雅退出按停止生产者到关闭服务的顺序执行', async () =>
 
   await performGracefulShutdown({
     stopScheduler: () => { order.push('scheduler'); },
+    stopMonsoon: async () => { order.push('monsoon'); },
     stopTradewind: async () => { order.push('tradewind'); },
     drainTide: async () => { order.push('tide'); },
     drainCyclone: async () => { order.push('cyclone'); },
@@ -18,7 +19,7 @@ test('优雅退出按停止生产者到关闭服务的顺序执行', async () =>
   }, 100);
 
   assert.deepEqual(order, [
-    'scheduler', 'tradewind', 'tide', 'cyclone', 'convection',
+    'scheduler', 'monsoon', 'tradewind', 'tide', 'cyclone', 'convection',
     'background', 'writes', 'mcp', 'server',
   ]);
 });
@@ -26,6 +27,7 @@ test('优雅退出按停止生产者到关闭服务的顺序执行', async () =>
 test('优雅退出超过上限时明确失败', async () => {
   await assert.rejects(performGracefulShutdown({
     stopScheduler: () => {},
+    stopMonsoon: async () => {},
     stopTradewind: () => new Promise<void>(() => {}),
     drainTide: async () => {},
     drainCyclone: async () => {},

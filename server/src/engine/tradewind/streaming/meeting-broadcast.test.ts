@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { broadcastToMeeting, setMeetingIdentity, clearMeetingIdentity } from './meeting-broadcast.js';
+import { broadcastToMeeting, setMeetingIdentity, clearMeetingIdentity, subscribeMeeting } from './meeting-broadcast.js';
 import { subscribeUnified } from './unified-stream.js';
 
 test('会议统一流事件带注册时的工作流与执行身份', () => {
@@ -15,6 +15,22 @@ test('会议统一流事件带注册时的工作流与执行身份', () => {
     clearMeetingIdentity('identity-meeting');
     unsubscribe();
   }
+});
+
+test('same meeting node IDs stream only to subscribers of the exact execution', () => {
+  const a: string[] = []; const b: string[] = [];
+  setMeetingIdentity('same-node', 'wf-a', 'A');
+  setMeetingIdentity('same-node', 'wf-b', 'B');
+  const stopA = subscribeMeeting('same-node', event => a.push(event.type), 'A');
+  const stopB = subscribeMeeting('same-node', event => b.push(event.type), 'B');
+  try {
+    broadcastToMeeting('same-node', { type: 'phase-change', phase: 'discussion' }, 'A');
+    assert.deepEqual(a, ['phase-change']); assert.deepEqual(b, []);
+    assert.throws(() => broadcastToMeeting('same-node', { type: 'phase-change', phase: 'discussion' }), /execution|执行/);
+    clearMeetingIdentity('same-node', 'A');
+    broadcastToMeeting('same-node', { type: 'phase-change', phase: 'discussion' }, 'B');
+    assert.deepEqual(b, ['phase-change']);
+  } finally { stopA(); stopB(); clearMeetingIdentity('same-node', 'A'); clearMeetingIdentity('same-node', 'B'); }
 });
 
 test('旧执行的迟到清理不能清除新执行的会议身份', () => {

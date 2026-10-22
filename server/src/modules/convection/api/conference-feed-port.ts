@@ -12,7 +12,8 @@ type Rooms = Awaited<ReturnType<ConvectionSessionService['list']>>;
 export interface PreparedConvectionFeed {
   subscribe(listener: (event: ConvectionConferenceEvent) => void): () => void;
   snapshot(): Promise<{ sessions: Rooms; live?: DiscussionView; chairLive?: DiscussionView;
-    missingSessionId?: string }>;
+    missingSessionId?: string; compactionProgress?: import('../../../engine/shared/compaction/contracts.js').CompactionProgress;
+    chairCompactionProgress?: import('../../../engine/shared/compaction/contracts.js').CompactionProgress }>;
 }
 
 export function convectionFeedManifest(): ModuleTransportManifest {
@@ -40,7 +41,9 @@ export function convectionFeedHandler(
         }
         const budget = { items: 30, textChars: 16_000, textLines: 320 };
         const live = await discussions.read(sessionId, budget);
-        return { sessions: rooms, live,
+        const session = await sessions.require(sessionId);
+        return { sessions: rooms, live, compactionProgress: session.compactionProgress,
+          chairCompactionProgress: session.chairCompactionProgress,
           ...(live.activeRound?.round === 'chair' ? {
             chairLive: await discussions.read(sessionId, budget, 'chair'),
           } : {}) };

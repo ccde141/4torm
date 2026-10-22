@@ -10,6 +10,10 @@ export function activeTideContext(messages: readonly TideMessage[]): ContextMess
       active = structuredClone(message.nativeContext);
       continue;
     }
+    if (message.contextExact && message.nativeContext) {
+      active.push(...structuredClone(message.nativeContext));
+      continue;
+    }
     if (message.role === 'user' || message.role === 'assistant' || message.role === 'system') {
       active.push({ role: message.role, content: message.content });
     } else if (message.role === 'tool-call' || message.role === 'tool-result') {

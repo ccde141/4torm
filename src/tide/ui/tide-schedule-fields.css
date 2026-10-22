@@ -1,0 +1,51 @@
+.tide-schedule { display: grid; gap: 20px; min-width: 0; }
+.tide-schedule__modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
+  padding: 0; margin: 0; border: 0; min-width: 0; }
+.tide-schedule__sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.tide-schedule__mode { position: relative; display: flex; align-items: center; gap: 12px; min-height: 62px;
+  padding: 14px 16px; border: 1px solid var(--glass-border); border-radius: 14px;
+  background: var(--glass-bg-soft); color: var(--color-text-secondary); cursor: pointer;
+  font-size: var(--text-sm); font-weight: 500; transition: border-color 160ms ease, background 160ms ease, color 160ms ease; }
+.tide-schedule__mode:hover { background: var(--glass-bg); border-color: var(--glass-border-hover); }
+.tide-schedule__mode[data-selected=true] { color: var(--color-text-primary);
+  border-color: color-mix(in srgb, var(--color-accent) 52%, var(--glass-border));
+  background: color-mix(in srgb, var(--color-accent-subtle) 55%, var(--glass-bg-soft)); }
+.tide-schedule__mode:focus-within { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.tide-schedule__mode-icon { display: flex; flex-shrink: 0; color: var(--color-text-tertiary); }
+.tide-schedule__mode[data-selected=true] .tide-schedule__mode-icon { color: var(--color-accent); }
+.tide-schedule__radio-mark { width: 15px; height: 15px; margin-left: auto; flex-shrink: 0;
+  border: 1px solid var(--glass-border-hover); border-radius: 50%; }
+.tide-schedule__mode[data-selected=true] .tide-schedule__radio-mark { border: 4px solid var(--color-accent); }
+.tide-schedule__daily { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tide-schedule__caption { color: var(--color-text-secondary); font-size: var(--text-sm); }
+.tide-schedule__clock { display: flex; align-items: center; padding: 4px 12px; border: 1px solid var(--glass-border);
+  border-radius: 14px; background: var(--glass-bg-soft); }
+.tide-schedule__clock-icon { display: flex; color: var(--color-text-tertiary); margin-right: 12px; }
+.tide-schedule__clock-part { display: flex; align-items: center; }
+.tide-schedule__clock input { width: 46px; height: 46px; border: 0; border-radius: 8px; padding: 0;
+  color: var(--color-text-primary); background: transparent; font: inherit; font-size: 24px; font-weight: 500;
+  font-variant-numeric: tabular-nums; text-align: center; }
+.tide-schedule__clock-separator { color: var(--color-text-tertiary); font-size: 22px; padding: 0 2px; }
+.tide-schedule__clock input:hover { background: var(--glass-bg); }
+.tide-schedule__clock input:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 0; }
+.tide-schedule__clock input[aria-invalid=true] { box-shadow: inset 0 -2px var(--color-danger, #ef4444); }
+.tide-schedule__hint { flex-basis: 100%; margin: 0; color: var(--color-text-tertiary); font-size: var(--text-xs); line-height: 1.65; }
+.tide-schedule__interval { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.tide-schedule__duration { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 14px;
+  border: 1px solid var(--glass-border); border-radius: 14px; background: var(--glass-bg-soft); }
+.tide-schedule__duration:focus-within { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.tide-schedule__duration input { width: 100%; min-width: 0; height: 38px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--color-text-primary); font: inherit; font-size: 21px;
+  font-variant-numeric: tabular-nums; appearance: textfield; -moz-appearance: textfield; }
+.tide-schedule__duration input::-webkit-inner-spin-button, .tide-schedule__duration input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.tide-schedule__duration input:focus { outline: none; }
+.tide-schedule__duration > span { color: var(--color-text-tertiary); font-size: var(--text-xs); white-space: nowrap; }
+@media (max-width: 520px) {
+  .tide-schedule__modes { gap: 8px; }
+  .tide-schedule__mode { padding: 12px; gap: 8px; min-height: 58px; }
+  .tide-schedule__radio-mark { display: none; }
+  .tide-schedule__interval { gap: 8px; }
+  .tide-schedule__duration { padding: 7px 10px; }
+}
+@media (prefers-reduced-motion: reduce) { .tide-schedule__mode { transition: none; } }

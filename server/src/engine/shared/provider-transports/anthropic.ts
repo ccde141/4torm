@@ -1,5 +1,6 @@
 import type { ContextMessage, ProviderReasoningEnvelope } from '../types.js';
 import type { ToolDef } from '../tool-defs-loader.js';
+import { providerRequestHeaders } from '../../../model-runtime/providers/runtime-fetch.js';
 import { mapAnthropicTools } from './anthropic-tools.js';
 import {
   completeHistoricalToolNameMap,
@@ -50,12 +51,8 @@ export function buildAnthropicRequest(input: AnthropicRequestInput): AnthropicRe
     ? downgradeIncompleteNativeToolHistory(history, historyNames)
     : history;
   const { system, messages } = mapMessages(safeHistory, historyNames);
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'anthropic-version': '2023-06-01',
-    ...(input.customHeaders ?? {}),
-  };
-  if (input.apiKey && !hasHeader(headers, 'x-api-key')) headers['x-api-key'] = input.apiKey;
+  const headers = Object.fromEntries(providerRequestHeaders(input, 'anthropic-messages',
+    { 'Content-Type': 'application/json' }));
 
   const body: Record<string, unknown> = {
     model: input.model,
@@ -73,10 +70,6 @@ export function buildAnthropicRequest(input: AnthropicRequestInput): AnthropicRe
 function messagesUrl(baseUrl: string): string {
   const clean = baseUrl.replace(/\/+$/, '');
   return clean.endsWith('/messages') ? clean : `${clean}/messages`;
-}
-
-function hasHeader(headers: Record<string, string>, target: string): boolean {
-  return Object.keys(headers).some(name => name.toLowerCase() === target);
 }
 
 function mapMessages(messages: ContextMessage[], forwardMap: Map<string, string>) {
@@ -103,7 +96,9 @@ function mapMessage(
     return {
       role: 'user',
       content: [{
-        type: 'tool_result', tool_use_id: message.toolCallId, content: message.content,
+        type: 'tool_result', tool_use_id: message.toolCallId,
+        content: message.images?.length
+          ? [{ type: 'text', text: message.content }, ...imageBlocks(message)] : message.content,
         ...(message.toolOk === false ? { is_error: true } : {}),
       }],
     };
@@ -113,14 +108,7 @@ function mapMessage(
     ? [{ type: 'text', text: message.content }]
     : [];
   if (message.role === 'user') {
-    content.push(...(message.images ?? []).map(image => ({
-      type: 'image',
-      source: {
-        type: 'base64',
-        media_type: image.mimeType,
-        data: image.dataUrl.slice(image.dataUrl.indexOf(',') + 1),
-      },
-    })));
+    content.push(...imageBlocks(message));
   }
   if (message.role === 'assistant' && message.reasoningEnvelope?.field === 'anthropic_thinking') {
     content.unshift(...message.reasoningEnvelope.value.filter(isContentBlock));
@@ -134,6 +122,13 @@ function mapMessage(
     });
   }
   return { role: message.role === 'assistant' ? 'assistant' : 'user', content };
+}
+
+function imageBlocks(message: ContextMessage): ContentBlock[] {
+  return (message.images ?? []).map(image => ({ type: 'image', source: {
+    type: 'base64', media_type: image.mimeType,
+    data: image.dataUrl.slice(image.dataUrl.indexOf(',') + 1),
+  } }));
 }
 
 function parseToolInput(name: string, value: string): Record<string, unknown> {

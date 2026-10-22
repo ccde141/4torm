@@ -1,3 +1,4 @@
+import { backendFetch } from '../../../lib/backend-client';
 import { useEffect, useState } from 'react';
 import type { TeamSnapshot } from './types';
 
@@ -11,7 +12,7 @@ export function useTeam(agentId: string, sessionId: string, mainBusy: boolean) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     async function read() {
       try {
-        const response = await fetch('/api/collaboration/invoke', {
+        const response = await backendFetch('/api/collaboration/invoke', {
           method: 'POST', signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

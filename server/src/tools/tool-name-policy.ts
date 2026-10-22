@@ -9,6 +9,9 @@ const TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const VIRTUAL_NAMES = new Set([
   // Runtime-owned calls never dispatch to custom/skill executors.
   'done', 'memory_write', 'memory_list', 'memory_read', 'browser',
+  'seat_memory_read', 'seat_memory_write',
+  'seat_activity_read', 'seat_dispatch_read',
+  'contact_read', 'supervisor_message', 'supervisor_memory',
   'inspect_execution', 'wait_execution', 'terminate_execution',
   'team_start', 'team_create', 'team_dispatch', 'team_read', 'team_wait',
   'team_ack', 'team_review', 'team_dismiss',

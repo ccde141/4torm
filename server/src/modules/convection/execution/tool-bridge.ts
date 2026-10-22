@@ -6,8 +6,9 @@ import {
 import type { McpToolOutcome } from '../../../engine/shared/mcp-types.js';
 
 export interface ConvectionToolCallParams {
+  mediaAccess?: import('../../../engine/shared/tool-media-access.js').ToolMediaAccess;
   tool: string;
-  args: Record<string, string>;
+  args: Record<string, unknown>;
   agentId: string;
   workspaceDir: string;
   signal?: AbortSignal;
@@ -35,6 +36,7 @@ export async function callToolOutcome(
 ): Promise<McpToolOutcome> {
   if (!params.tool) throw new Error('tool name must not be empty');
   return execToolUnifiedOutcome({
+    mediaAccess: params.mediaAccess,
     tool: params.tool,
     args: params.args,
     agentId: params.agentId,

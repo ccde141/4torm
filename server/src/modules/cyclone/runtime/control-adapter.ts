@@ -1,22 +1,32 @@
 import type { CycloneCommands } from '../application/execution-commands.js';
 import { CycloneExecutionRegistry } from './execution-registry.js';
 import type { CycloneRunRepository } from '../infrastructure/run-repository.js';
+import { assertCycloneAcceptingPreparations, trackCyclonePreparationStart } from '../application/execution-preparation.js';
 
 export function createCycloneCommands(
   executions: CycloneExecutionRegistry,
   runs?: CycloneRunRepository,
 ): CycloneCommands {
-  return {
-    begin: async input => {
+  const commands: CycloneCommands = {
+    begin: input => trackCyclonePreparationStart(commands, async () => {
+      assertCycloneAcceptingPreparations(commands);
       const receipt = executions.begin(input);
+      let persisted = false;
       try {
         await runs?.start(receipt);
+        persisted = true;
+        assertCycloneAcceptingPreparations(commands);
         return receipt;
       } catch (error) {
-        executions.finish(receipt.operationId, receipt.runId);
+        // A start which races shutdown is still responsible for its acquired lock and disk fact.
+        try {
+          if (persisted) await runs?.finish(receipt.operationId, receipt.runId, 'aborted',
+            error instanceof Error ? error.message : String(error), []);
+        }
+        finally { executions.finish(receipt.operationId, receipt.runId); }
         throw error;
       }
-    },
+    }),
     abort: async input => {
       executions.abort(input.operationId, input.runId);
       return { stopped: true, ...input };
@@ -35,4 +45,5 @@ export function createCycloneCommands(
       return { finished: true, ...input };
     },
   };
+  return commands;
 }

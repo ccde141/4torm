@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { executeBrowserTool } from './browser-tool-adapter.js';
+import { defaultBrowserEngine } from './browser-engine.js';
 
 const observation = { scope: 'conversation' as const, ownerId: 'session-a' };
 
@@ -30,7 +31,7 @@ test('forwards a skill-authorized browser action only to its owned runtime', asy
   });
 
   assert.equal(result, 'clicked');
-  assert.deepEqual(calls, [{ ...observation, action: 'click', targetId: 'target-0-1234567890', revision: '3', engine: 'system-edge' }]);
+  assert.deepEqual(calls, [{ ...observation, action: 'click', targetId: 'target-0-1234567890', revision: '3', engine: defaultBrowserEngine() }]);
 });
 
 test('forwards an abort signal to the owned browser runtime', async () => {

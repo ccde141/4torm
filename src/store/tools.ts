@@ -1,3 +1,4 @@
+import { backendFetch } from '../lib/backend-client';
 export interface ToolDef {
   name: string;
   description: string;
@@ -50,7 +51,7 @@ export function buildToolsPrompt(tools: ToolDef[]): string {
 }
 
 export async function getTools(): Promise<ToolDef[]> {
-  const response = await fetch('/api/tools/catalog');
+  const response = await backendFetch('/api/tools/catalog');
   if (!response.ok) throw new Error(`加载工具目录失败: ${response.status}`);
   const body = await response.json() as { tools?: ToolDef[] };
   return Array.isArray(body.tools) ? body.tools : [];
@@ -59,7 +60,7 @@ export async function getTools(): Promise<ToolDef[]> {
 /** 只保存用户自定义工具；框架工具由服务端固定清单维护。 */
 export async function saveTools(tools: ToolDef[]): Promise<void> {
   const custom = tools.filter(tool => tool.source === 'custom' || tool.readonly === false);
-  const response = await fetch('/api/tools/custom', {
+  const response = await backendFetch('/api/tools/custom', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ tools: custom }),

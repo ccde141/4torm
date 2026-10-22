@@ -1,4 +1,4 @@
-import { frameworkError } from '../../../engine/shared/framework-error.js';
+import { FrameworkError, frameworkError } from '../../../engine/shared/framework-error.js';
 import {
   MonsoonSessionRegistry, type MonsoonRuntimeSnapshot, type SessionLeaseFactory,
 } from '../runtime/session-registry.js';
@@ -14,6 +14,10 @@ export class MonsoonRuntime {
   private readonly sessions: MonsoonSessionRegistry;
   private readonly records = new Map<string, MonsoonRunRecord>();
   private readonly notifier = new OperationNotifier();
+  private readonly preparing = new Set<Promise<unknown>>();
+  private readonly executing = new Set<Promise<void>>();
+  private stopping = false;
+  private shutdownTask?: Promise<void>;
 
   constructor(
     private readonly repository: MonsoonRunRepository,
@@ -30,11 +34,20 @@ export class MonsoonRuntime {
   }
 
   async prepare(sessionId: string, spec: MonsoonTurnSpec): Promise<MonsoonTurn> {
+    this.assertAccepting();
+    const pending = this.prepareRunner(sessionId, spec);
+    this.preparing.add(pending);
+    try { return await pending; }
+    finally { this.preparing.delete(pending); }
+  }
+
+  private async prepareRunner(sessionId: string, spec: MonsoonTurnSpec): Promise<MonsoonTurn> {
     const runner = this.sessions.reserve(sessionId, spec.agentId, () => this.adapter.create(spec));
     if (!runner) throw frameworkError({ code: 'MONSOON_SESSION_BUSY', kind: 'conflict',
       message: '会话正在执行中', source: 'monsoon.runtime', retryable: false });
     try {
       await this.adapter.ready(runner);
+      this.assertAccepting();
       return runner;
     } catch (error) {
       this.sessions.clear(sessionId, runner);
@@ -53,6 +66,7 @@ export class MonsoonRuntime {
   }
 
   claimResume(sessionId: string, runner: MonsoonTurn): boolean {
+    if (this.stopping) return false;
     return this.sessions.claimResume(sessionId, runner);
   }
 
@@ -130,11 +144,53 @@ export class MonsoonRuntime {
     return this.notifier.subscribe({ operationId: sessionId, runId }, listener);
   }
 
-  async shutdown(): Promise<void> {
+  isStopping(): boolean { return this.stopping; }
+
+  /** Covers context compilation and journal admission as well as runner readiness. */
+  async trackPreparation<T>(work: () => Promise<T>): Promise<T> {
+    this.assertAccepting();
+    const pending = Promise.resolve().then(() => { this.assertAccepting(); return work(); });
+    this.preparing.add(pending);
+    try { return await pending; }
+    finally { this.preparing.delete(pending); }
+  }
+
+  /** The completion includes event journals and terminal persistence, not just model output. */
+  async trackExecution(work: () => Promise<void>): Promise<void> {
+    this.assertAccepting();
+    const pending = Promise.resolve().then(work);
+    this.executing.add(pending);
+    // Observe rejection on the cleanup branch without replacing the caller's rejected promise.
+    void pending.then(() => this.executing.delete(pending), () => this.executing.delete(pending));
+    return pending;
+  }
+
+  shutdown(): Promise<void> {
+    if (!this.shutdownTask) {
+      this.stopping = true;
+      this.shutdownTask = Promise.resolve().then(() => this.drainShutdown());
+    }
+    return this.shutdownTask;
+  }
+
+  private async drainShutdown(): Promise<void> {
     const errors: unknown[] = [];
+    const preparations = Promise.allSettled([...this.preparing]);
+    const executions = Promise.allSettled([...this.executing]);
     try { this.sessions.shutdown(); } catch (error) { errors.push(error); }
     try { await this.adapter.shutdown(); } catch (error) { errors.push(error); }
+    for (const result of [...await preparations, ...await executions]) {
+      if (result.status === 'rejected' && !(result.reason instanceof FrameworkError
+        && result.reason.data.code === 'MONSOON_RUNTIME_CLOSING')) errors.push(result.reason);
+    }
     if (errors.length) throw new AggregateError(errors, '季风模块关闭失败');
+  }
+
+  private assertAccepting(): void {
+    if (this.stopping) throw frameworkError({
+      code: 'MONSOON_RUNTIME_CLOSING', kind: 'conflict', message: '季风模块正在关闭',
+      source: 'monsoon.runtime', retryable: false,
+    });
   }
 
   private async store(record: MonsoonRunRecord): Promise<void> {

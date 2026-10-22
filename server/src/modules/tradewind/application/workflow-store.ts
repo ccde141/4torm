@@ -1,4 +1,4 @@
-import type { WorkflowGraph } from '../../../engine/tradewind/foundation/types/index.js';
+import type { WorkflowGraph, WorkflowOrchestration } from '../../../engine/tradewind/foundation/types/index.js';
 
 export interface WorkflowDefinition {
   schemaVersion: 1;
@@ -10,6 +10,7 @@ export interface WorkflowDefinition {
 }
 
 export interface WorkflowSummary {
+  orchestration?: WorkflowOrchestration;
   workflowId: string;
   name: string;
   nodeCount: number;

@@ -1,3 +1,4 @@
+import { backendFetch } from '../../../lib/backend-client';
 const STARTUP_RETRY_DELAYS = [200, 400, 800, 1_200, 2_000] as const;
 const RETRYABLE_STATUS = new Set([500, 502, 503, 504]);
 
@@ -13,7 +14,7 @@ function wait(ms: number): Promise<void> {
  */
 export async function fetchConvectionRead(
   input: RequestInfo | URL,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = backendFetch,
   waitForRetry: (ms: number) => Promise<void> = wait,
 ): Promise<Response> {
   for (let attempt = 0; ; attempt++) {

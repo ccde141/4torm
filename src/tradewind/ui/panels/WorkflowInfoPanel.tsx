@@ -1,3 +1,4 @@
+import BoundedText from '../../../engine/text-display/BoundedText';
 /**
  * 信风工作流信息侧板
  *
@@ -168,13 +169,13 @@ export function WorkflowInfoPanel({
                 {env && (
                   <details style={{ marginTop: 'var(--space-2)' }}>
                     <summary style={summaryStyle}>{t('tradewind.info.currentEnvelope')}</summary>
-                    <pre style={preStyle}>{env}</pre>
+                    <pre style={preStyle}><BoundedText text={(env) ?? ''} /></pre>
                   </details>
                 )}
                 {ans && (
                   <details style={{ marginTop: 'var(--space-2)' }}>
                     <summary style={summaryStyle}>{t('tradewind.info.handoffOutput')}</summary>
-                    <pre style={preStyle}>{ans}</pre>
+                    <pre style={preStyle}><BoundedText text={(ans) ?? ''} /></pre>
                   </details>
                 )}
               </div>
@@ -184,7 +185,7 @@ export function WorkflowInfoPanel({
         {finalOutput && (
           <>
             <div style={sectionTitleStyle}>{t('tradewind.info.finalOutput')}</div>
-            <pre style={preStyle}>{finalOutput}</pre>
+            <pre style={preStyle}><BoundedText text={(finalOutput) ?? ''} /></pre>
           </>
         )}
       </div>

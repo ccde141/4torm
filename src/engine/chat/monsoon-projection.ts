@@ -75,7 +75,7 @@ export class MonsoonMessageProjection {
     if (!message) return {};
     if (event.type === 'tool-call') {
       this.current = appendToolStep(this.current, this.assistantId,
-        requiredText(event.tool, 'tool'), isRecord(event.args) ? event.args as Record<string, string> : {});
+        requiredText(event.tool, 'tool'), isRecord(event.args) ? event.args : {});
       this.patch({ streamingPhase: 'tool-exec', phaseElapsed: 0,
         streamingTool: event.tool, streamingArgumentChars: undefined });
       return { flush: 'immediate' };
@@ -87,6 +87,7 @@ export class MonsoonMessageProjection {
           before: typeof meta.before === 'string' ? meta.before : undefined,
           pendingAutomation: meta.pendingAutomation as ToolStep['pendingAutomation'],
           workflowExecution: meta.workflowExecution as ToolStep['workflowExecution'],
+          toolImages: event.toolImages as ToolStep['toolImages'],
         });
       this.patch({ streamingPhase: 'llm-waiting', phaseElapsed: 0,
         streamingTool: undefined, streamingArgumentChars: undefined });

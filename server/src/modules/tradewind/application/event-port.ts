@@ -5,5 +5,5 @@ export interface PreparedTradewindEventStream {
 
 export interface TradewindEventPort {
   unified(): PreparedTradewindEventStream;
-  meeting(nodeId: string): PreparedTradewindEventStream;
+  meeting(nodeId: string, executionId?: string): PreparedTradewindEventStream;
 }

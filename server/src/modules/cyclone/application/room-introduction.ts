@@ -11,6 +11,7 @@ export interface StartRoomIntroductionInput {
 export interface PreparedCycloneRoomIntroduction {
   execution: CycloneExecutionSnapshot;
   run(onEvent?: (event: unknown) => void): Promise<void>;
+  dispose(cause?: unknown): Promise<void>;
 }
 
 export interface CycloneRoomIntroductionPort {

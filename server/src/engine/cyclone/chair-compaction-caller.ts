@@ -6,6 +6,8 @@ import { archiveCycloneCompaction } from './compaction-archive.js';
 import { saveRoom } from './room-store.js';
 import type { RoomData } from './types.js';
 import { cycloneChairBoundaries, rememberChairContextBoundary } from './chair-context.js';
+import type { CompactionProgress } from '../shared/compaction/index.js';
+import { finishCycloneCompaction } from './compaction-progress.js';
 
 /** A room's chair private thread is separate from its public meeting history. */
 export function createChairCompactionCaller(options: {
@@ -17,6 +19,7 @@ export function createChairCompactionCaller(options: {
   messages: ContextMessage[];
   initialPromptTokens?: number;
   onNotice?: (notice: CompactionNotice) => void;
+  onProgress?: (progress: CompactionProgress) => void;
 }): LLMCaller {
   const { dataDir, workshopId, room, agent } = options;
   return createCompactionCaller({ llm: options.llm, dataDir, area: 'cycloneConversation',
@@ -30,10 +33,11 @@ export function createChairCompactionCaller(options: {
         { type: 'cyclone-chair-context-compact', roomId: room.id, reason,
           publicMessages: room.publicMessages, chairMessages: room.chairMessages, modelMessages: before });
     },
-    commit: async plan => {
-      const next = { ...room, chairActiveContext: structuredClone(plan.messages.slice(1)), chairTokenUsage: undefined };
+    commit: async (plan, signal) => {
+      const next = { ...room, chairActiveContext: structuredClone(plan.messages.slice(1)), chairTokenUsage: undefined,
+        chairCompaction: room.chairCompaction ? finishCycloneCompaction(room.chairCompaction) : undefined };
       rememberChairContextBoundary(next);
-      await saveRoom(dataDir, workshopId, next);
+      await saveRoom(dataDir, workshopId, next, signal);
       Object.assign(room, next);
     },
     onNotice: async notice => {
@@ -41,6 +45,12 @@ export function createChairCompactionCaller(options: {
       await saveRoom(dataDir, workshopId, next);
       Object.assign(room, next);
       options.onNotice?.(notice);
+    },
+    onProgress: async progress => {
+      const next = { ...room, chairCompaction: progress };
+      await saveRoom(dataDir, workshopId, next);
+      Object.assign(room, next);
+      options.onProgress?.(progress);
     },
   });
 }

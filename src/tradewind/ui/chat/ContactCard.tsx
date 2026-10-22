@@ -1,3 +1,4 @@
+import BoundedText from '../../../engine/text-display/BoundedText';
 import { useState } from 'react';
 import type { ChatMessage } from '../../../types';
 import { useLocale } from '../../../i18n/LocaleContext';
@@ -51,7 +52,7 @@ export default function ContactCard({ toolCall }: {
         {expanded && result && (
           <div className="tw-tool-card__body">
             <pre className="tw-tool-card__pre" style={{ maxHeight: '300px' }}>
-              {result}
+              <BoundedText text={(result) ?? ''} />
             </pre>
           </div>
         )}

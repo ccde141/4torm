@@ -1,9 +1,13 @@
+import type { CompactionActivity } from '../../../components/common/compaction-activity';
+import { reduceCycloneCompaction } from './cyclone-compaction-activity';
 import type { TaskBoard } from '../../../utils/taskboard';
 import { normalizeDelegateProgressAtToolBoundary } from '../../../engine/chat/delegate-progress';
 import { formatStreamStatus, getToolTarget } from '../../../components/chat/stream-status';
 import type { Locale } from '../../../i18n/locale';
+import type { ToolImageRef } from '../../../engine/tool-media';
 import type { CycloneUsage } from './cyclone-token-usage';
 import { compactionFeedbackEvent } from '../../../components/common/compaction-feedback';
+import { projectContactResult } from './contact-result';
 import {
   appendReplyBlock, appendReplyText, findReplyBlock, reconcileReplyAnswer,
   type CycloneReplySegment,
@@ -16,7 +20,9 @@ export interface Live {
   activityTarget?: string;
   taskboard?: TaskBoard | null;
   tokenUsage?: CycloneUsage | null;
+  lastKnownTokenUsage?: CycloneUsage;
   compactionNotice?: string | null;
+  compaction?: CompactionActivity | null;
 }
 
 export function emptyLive(locale: Locale = 'zh-CN'): Live {
@@ -24,10 +30,14 @@ export function emptyLive(locale: Locale = 'zh-CN'): Live {
 }
 
 export function applySeatEvent(ev: any, live: Live, locale: Locale = 'zh-CN'): void {
+  live.compaction = reduceCycloneCompaction(live.compaction, ev);
   const feedback = compactionFeedbackEvent(ev);
   if (feedback !== undefined) live.compactionNotice = feedback;
   switch (ev.type) {
-    case 'usage': live.tokenUsage = ev.usage ?? null; break;
+    case 'usage':
+      live.tokenUsage = ev.usage ?? null;
+      if (ev.usage) live.lastKnownTokenUsage = ev.usage;
+      break;
     case 'token':
       appendReplyText(live.segments, ev.content); live.phase = formatStreamStatus('model-output', 0, undefined, undefined, locale); live.activityTarget = undefined; break;
     case 'reasoning':
@@ -36,13 +46,32 @@ export function applySeatEvent(ev: any, live: Live, locale: Locale = 'zh-CN'): v
       live.phase = formatStreamStatus('tool-preparing', Math.round((ev.elapsed || 0) / 1000), ev.tool, ev.argumentChars, locale);
       live.activityTarget = undefined; break;
     case 'tool-call':
-      appendReplyBlock(live.segments, { kind: 'tool', tool: ev.tool, args: ev.args, status: 'running' });
+      appendReplyBlock(live.segments, ev.tool === 'contact' ? { kind: 'contact',
+        id: `tool-contact:${live.segments.reduce((count, segment) => count + segment.blocks.length, 0)}`,
+        target: String(ev.args?.target ?? ''), message: String(ev.args?.message ?? ''), status: 'running' }
+        : { kind: 'tool', tool: ev.tool, args: ev.args, status: 'running' });
       live.phase = formatStreamStatus('tool-exec', 0, ev.tool, undefined, locale);
       live.activityTarget = getToolTarget(ev.args); break;
     case 'tool-result': {
       if (ev.meta && 'taskboard' in ev.meta) live.taskboard = ev.meta.taskboard;
+      if (ev.tool === 'contact') {
+        const contact = findReplyBlock(live.segments, item => item.kind === 'contact'
+          && item.id.startsWith('tool-contact:') && !item.communicationId);
+        if (contact?.kind === 'contact') Object.assign(contact, projectContactResult(ev.result, ev.ok));
+        live.phase = ''; live.activityTarget = undefined; break;
+      }
       const block = findReplyBlock(live.segments, item => item.kind === 'tool' && item.status === 'running');
-      if (block?.kind === 'tool') { block.result = ev.result; block.status = ev.ok ? 'success' : 'error'; }
+      if (block?.kind === 'tool') {
+        block.result = ev.result;
+        if (ev.toolImages?.length) block.toolImages = ev.toolImages;
+        block.status = ev.ok ? 'success' : 'error';
+      }
+      if (ev.tool === 'contact_read') {
+        const result = projectContactResult(ev.result);
+        const contact = findReplyBlock(live.segments, item => item.kind === 'contact'
+          && !!result.communicationId && item.communicationId === result.communicationId);
+        if (contact?.kind === 'contact') Object.assign(contact, result);
+      }
       live.phase = formatStreamStatus('llm-waiting', 0, undefined, undefined, locale); live.activityTarget = undefined; break;
     }
     case 'heartbeat': {
@@ -86,7 +115,7 @@ export function applySeatEvent(ev: any, live: Live, locale: Locale = 'zh-CN'): v
       live.phase = locale === 'en-US' ? `Contacting ${ev.target}...` : `联络 ${ev.target}...`; break;
     case 'contact-done': {
       const block = findReplyBlock(live.segments, item => item.kind === 'contact' && item.id === ev.contactId);
-      if (block?.kind === 'contact') { block.reply = ev.reply; block.status = ev.ok ? 'success' : 'error'; }
+      if (block?.kind === 'contact') Object.assign(block, projectContactResult(ev.reply, ev.ok));
       live.phase = ''; break;
     }
     case 'answer': reconcileReplyAnswer(live.segments, ev.content); live.phase = ''; break;
@@ -95,10 +124,10 @@ export function applySeatEvent(ev: any, live: Live, locale: Locale = 'zh-CN'): v
   }
 }
 
-function completeDelegateTool(steps: Array<{ tool?: string; result?: unknown; ok?: boolean }>, ev: any): void {
+function completeDelegateTool(steps: Array<{ tool?: string; result?: unknown; ok?: boolean; toolImages?: ToolImageRef[] }>, ev: any): void {
   for (let index = steps.length - 1; index >= 0; index--) {
     if (steps[index].tool === ev.tool && steps[index].result === undefined) {
-      steps[index].result = ev.result; steps[index].ok = ev.ok; return;
+      steps[index].result = ev.result; steps[index].ok = ev.ok; steps[index].toolImages = ev.toolImages; return;
     }
   }
 }

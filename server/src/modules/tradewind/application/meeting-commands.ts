@@ -26,6 +26,6 @@ export interface TradewindMeetingCommands {
   join(input: MeetingParticipantCommand): Promise<{ participants: MeetingParticipantView[] }>;
   leave(input: MeetingParticipantCommand): Promise<{ participants: MeetingParticipantView[] }>;
   reorder(input: MeetingOrderCommand): Promise<{ participants: MeetingParticipantView[] }>;
-  speak(input: MeetingMessageCommand): Promise<{ completed: true; nodeId: string; runId: string }>;
-  messageChair(input: MeetingMessageCommand): Promise<{ completed: true; nodeId: string }>;
+  speak(input: MeetingMessageCommand, options?: { signal?: AbortSignal }): Promise<{ completed: true; nodeId: string; runId: string }>;
+  messageChair(input: MeetingMessageCommand, options?: { signal?: AbortSignal }): Promise<{ completed: true; nodeId: string }>;
 }

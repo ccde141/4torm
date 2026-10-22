@@ -22,6 +22,8 @@ import { BUILTIN_EVENT_IDS } from '../foundation/types';
 import type { InputBuffer } from '../foundation/input-buffer';
 import type { EnvelopeRouter } from '../foundation/envelope-router';
 import type { EventBus } from '../foundation/event-bus';
+import type { HandoffRuntime } from './handoff-runtime.js';
+import type { HandoffSelection } from '../foundation/handoff-target.js';
 
 export interface ContextBuilderDeps {
   executionId: string;
@@ -34,6 +36,7 @@ export interface ContextBuilderDeps {
   router: EnvelopeRouter;
   eventBus: EventBus;
   signal: AbortSignal;
+  handoff?: HandoffRuntime;
   onStateChange?: (nodeId: string, state: NodeState) => void;
   onToken?: (nodeId: string, chunk: string) => void;
 }
@@ -96,17 +99,21 @@ export class ContextBuilder {
       runDir: deps.runDir,
       dataDir: deps.dataDir,
       mode: deps.mode,
+      ...(deps.handoff ? { orchestration: 'handoff' as const, handoffRoutes: deps.handoff.routes(nodeId) } : {}),
       signal: deps.signal,
       nodeAgentMap,
       nodeLabelMap,
       nodeRoleMap,
 
       waitForInputs(): Promise<Envelope[]> {
+        if (deps.handoff) return deps.handoff.wait(nodeId);
         if (!buffer) return Promise.resolve([]);
         return buffer.waitReady();
       },
 
-      sendHandoff(content: string, eventTypeId: string, sourcePort?: number, header?: EnvelopeHeader): Promise<void> {
+      sendHandoff(content: string, eventTypeId: string, sourcePort?: number, header?: EnvelopeHeader,
+        selection?: HandoffSelection): Promise<void> {
+        if (deps.handoff) return deps.handoff.send(nodeId, content, eventTypeId, header, selection);
         const env = {
           source: nodeId,
           content,
@@ -130,8 +137,8 @@ export class ContextBuilder {
         deps.onStateChange?.(nodeId, state);
       },
 
-      emit(eventTypeId: string, payload?: unknown): void {
-        deps.eventBus.emit({
+      emit(eventTypeId: string, payload?: unknown) {
+        return deps.eventBus.emit({
           timestamp: new Date().toISOString(),
           nodeId,
           eventTypeId,

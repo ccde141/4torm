@@ -7,10 +7,11 @@
  * - rework（实线红）：Human Gate 打回路径
  */
 import { BaseEdge, getSmoothStepPath, type EdgeProps } from '@xyflow/react';
+import { handoffReturnPath } from './handoff-return-path';
 
 export function TradeWindEdge(props: EdgeProps) {
   const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data } = props;
-  const d = (data ?? {}) as { kind?: string; rework?: boolean };
+  const d = (data ?? {}) as { kind?: string; rework?: boolean; orchestration?: string };
   const kind = d.kind ?? 'handoff';
   const isRework = !!d.rework;
 
@@ -21,6 +22,7 @@ export function TradeWindEdge(props: EdgeProps) {
   });
 
   const isNote = kind === 'note';
+  const returnPath = !isNote ? handoffReturnPath(d.orchestration, sourceX, sourceY, targetX, targetY) : undefined;
 
   let stroke: string;
   let strokeWidth = 2;
@@ -41,8 +43,10 @@ export function TradeWindEdge(props: EdgeProps) {
 
   return (
     <BaseEdge
-      path={edgePath}
-      style={{ stroke, strokeWidth, strokeDasharray: dash, opacity }}
+      id={props.id}
+      path={returnPath ?? edgePath}
+      markerEnd={props.markerEnd}
+      style={{ stroke, strokeWidth, strokeDasharray: returnPath ? '5 4' : dash, opacity, ...props.style }}
     />
   );
 }

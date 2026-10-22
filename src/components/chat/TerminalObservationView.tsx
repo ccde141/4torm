@@ -1,6 +1,8 @@
+import { backendFetch } from '../../lib/backend-client';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { formatObservationElapsed } from './taskboard-observations';
-import { renderTerminalLines, type TerminalChunk } from './terminal-output';
+import type { TerminalChunk } from './terminal-output';
+import TerminalOutputRows from './TerminalOutputRows';
 import { useLocale } from '../../i18n/LocaleContext';
 import type { FrameworkErrorKind } from '../../api/error-contract';
 
@@ -29,16 +31,17 @@ export default function TerminalObservationView({ scope, ownerId, observationId,
   const [item, setItem] = useState<ObservationDetail | null>(null);
   const [error, setError] = useState('');
   const [following, setFollowing] = useState(true);
+  const [viewEpoch, setViewEpoch] = useState(0);
   const [clock, setClock] = useState(() => Date.now());
   const outputRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
-  const output = item ? renderTerminalLines(item.output) : [];
+  const latestScrollEpoch = useRef(0);
 
   useEffect(() => {
     let disposed = false;
     const load = async () => {
       const query = new URLSearchParams({ scope, ownerId });
-      const response = await fetch(`/api/tools/observations/${encodeURIComponent(observationId)}?${query}`);
+      const response = await backendFetch(`/api/tools/observations/${encodeURIComponent(observationId)}?${query}`);
       if (!response.ok) throw new Error(t('chat.execution.readFailed'));
       const data = await response.json() as { item: ObservationDetail };
       if (!disposed) { setItem(data.item); setError(''); }
@@ -58,8 +61,12 @@ export default function TerminalObservationView({ scope, ownerId, observationId,
 
   useLayoutEffect(() => {
     const element = outputRef.current;
-    if (element && followRef.current) element.scrollTop = element.scrollHeight;
-  }, [output]);
+    if (element && followRef.current) {
+      if (latestScrollEpoch.current === viewEpoch) element.scrollTop = element.scrollHeight;
+      else element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' });
+    }
+    latestScrollEpoch.current = viewEpoch;
+  }, [item?.output, viewEpoch]);
 
   useEffect(() => {
   if (!item || !isActive(item.status)) return;
@@ -76,9 +83,9 @@ export default function TerminalObservationView({ scope, ownerId, observationId,
     }
   };
   const backToBottom = () => {
+    setViewEpoch(epoch => epoch + 1);
     followRef.current = true;
     setFollowing(true);
-    outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight, behavior: 'smooth' });
   };
   const elapsed = item && formatObservationElapsed(item.startedAt, item.finishedAt ?? clock);
   const statusText = (status?: Status) => {
@@ -111,7 +118,7 @@ export default function TerminalObservationView({ scope, ownerId, observationId,
         <div style={outputWrapStyle}>
           <div ref={outputRef} onScroll={onScroll} style={outputStyle}>
             {item?.outputTruncated && <div style={truncatedStyle}>{t('chat.execution.truncated')}</div>}
-            {output.length ? output.map((line, index) => <div key={index} style={line.stream === 'stderr' ? stderrLineStyle : undefined}>{line.text || ' '}</div>) : t('chat.execution.waitingOutput')}
+            {item ? <TerminalOutputRows key={`${observationId}-${viewEpoch}`} chunks={item.output} /> : t('chat.execution.waitingOutput')}
           </div>
           {!following && <button onClick={backToBottom} style={bottomStyle}>{t('chat.execution.latestOutput')}</button>}
         </div>
@@ -135,5 +142,4 @@ const errorStyle: React.CSSProperties = { margin: 'var(--space-3)', color: 'var(
 const outputWrapStyle: React.CSSProperties = { flex: 1, minHeight: 0, position: 'relative', padding: 'var(--space-2)' };
 const outputStyle: React.CSSProperties = { boxSizing: 'border-box', width: '100%', height: '100%', margin: 0, overflow: 'auto', padding: 'var(--space-3)', border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-sm)', background: 'rgba(5, 15, 22, 0.72)', color: '#d7e4e8', fontFamily: 'var(--font-mono)', fontSize: '11px', lineHeight: 1.55, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' };
 const truncatedStyle: React.CSSProperties = { marginBottom: 'var(--space-2)', paddingBottom: 'var(--space-2)', borderBottom: '1px solid rgba(219, 172, 93, 0.25)', color: '#dbac5d', fontSize: '10px' };
-const stderrLineStyle: React.CSSProperties = { color: '#eeaaa1' };
 const bottomStyle: React.CSSProperties = { position: 'absolute', right: 'var(--space-4)', bottom: 'var(--space-4)', appearance: 'none', border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-sm)', background: 'var(--glass-bg-strong)', color: 'var(--color-text-secondary)', padding: 'var(--space-1) var(--space-2)', cursor: 'pointer', fontSize: 'var(--text-xs)' };

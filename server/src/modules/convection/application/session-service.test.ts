@@ -7,6 +7,7 @@ import { ConvectionSessionService } from './session-service.js';
 import { tryAcquireSessionLock } from '../infrastructure/session-store.js';
 import { ConvectionConferenceFeed } from './conference-feed.js';
 import { buildConvectionChairContext, rememberChairContextBoundary } from '../execution/chair-context.js';
+import type { CompactionProgress } from '../../../engine/shared/compaction/contracts.js';
 
 test('会议创建、成员变更与删除向实时观察口报送身份', async t => {
   const feed = new ConvectionConferenceFeed();
@@ -147,9 +148,18 @@ test('手工压缩先归档，摘要失败时保留活动会话与私聊', async
 test('手工会议压缩摘要全量公共历史，保留独立会长私聊', async t => {
   const dataDir = await tempDataDir(t);
   let observed: string[] = [];
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const progress: CompactionProgress[] = [];
+  const warnings = t.mock.method(console, 'warn', () => undefined);
   const service = new ConvectionSessionService(dataDir, async session => {
     observed = session.publicMessages.map(message => message.content);
+    await Promise.resolve();
+    now += 12_000;
     return '完整压缩摘要';
+  }, undefined, undefined, (_id, _scope, event) => {
+    progress.push(structuredClone(event));
+    if (event.type === 'compact-done') throw new Error('injected observer failure');
   });
   const session = await service.create({ chairAgentId: 'chair', participantAgentIds: ['agent'] });
   session.publicMessages = [{ speaker: '人类', content: '最后一轮也压缩', timestamp: 1 }];
@@ -161,6 +171,78 @@ test('手工会议压缩摘要全量公共历史，保留独立会长私聊', as
   assert.equal(current.publicMessages.length, 1);
   assert.match(current.publicMessages[0]?.content ?? '', /完整压缩摘要/);
   assert.equal(current.chairMessages[0]?.content, '独立私聊');
+  assert.equal(current.compactionProgress?.startedAt, now - 12_000);
+  assert.equal(current.compactionProgress?.updatedAt, now);
+  assert.deepEqual(progress.at(-1), current.compactionProgress);
+  assert.equal(warnings.mock.callCount(), 1);
+});
+
+test('手工压缩在摘要返回前中止，活动历史不替换且终态可回读', async t => {
+  const dataDir = await tempDataDir(t);
+  const controller = new AbortController();
+  let release!: () => void;
+  let entered!: () => void;
+  const summarizing = new Promise<void>(resolve => { entered = resolve; });
+  const service = new ConvectionSessionService(dataDir, async (_session, signal) => {
+    assert.equal(signal, controller.signal);
+    entered();
+    await new Promise<void>(resolve => { release = resolve; });
+    return '这份未提交摘要不能进入上下文';
+  });
+  const session = await service.create({ chairAgentId: 'chair', participantAgentIds: ['agent'] });
+  session.publicMessages = [{ speaker: '人类', content: '完整活动原文', timestamp: 1 }];
+  session.chairMessages = [{ role: 'user', content: '独立私聊' }];
+  await service.save(session);
+  const pending = service.resetContext(session.id, 'summary', controller.signal);
+  await summarizing;
+  assert.equal((await service.require(session.id)).compactionProgress?.type, 'compact-start');
+  controller.abort(); release();
+  await assert.rejects(pending, { name: 'AbortError' });
+  const saved = await service.require(session.id);
+  assert.deepEqual(saved.publicMessages, session.publicMessages);
+  assert.deepEqual(saved.chairMessages, session.chairMessages);
+  assert.equal(saved.compactionProgress?.type, 'compact-failed');
+  assert.equal(saved.compactionProgress?.aborted, true);
+  // Cancellation releases the same mutation lease instead of creating a second execution lane.
+  await service.rename(session.id, '仍可继续工作');
+});
+
+test('手工压缩最终提交失败时，内存与磁盘仍为原始记录而非半份摘要', async t => {
+  const dataDir = await tempDataDir(t);
+  let observed: import('../infrastructure/session-store.js').ConvectionSessionData | undefined;
+  const service = new ConvectionSessionService(dataDir, async session => {
+    observed = session;
+    return '完整摘要';
+  });
+  const session = await service.create({ chairAgentId: 'chair', participantAgentIds: ['agent'] });
+  session.publicMessages = [{ speaker: '人类', content: '原文必须保留', timestamp: 1 }];
+  await service.save(session);
+  const save = service.save.bind(service);
+  service.save = next => next.compactionProgress?.type === 'compact-done'
+    ? Promise.reject(new Error('injected commit IO failure')) : save(next);
+  await assert.rejects(service.resetContext(session.id, 'summary'), /injected commit IO failure/);
+  assert.deepEqual(observed?.publicMessages, session.publicMessages);
+  const saved = await service.require(session.id);
+  assert.deepEqual(saved.publicMessages, session.publicMessages);
+  assert.equal(saved.compactionProgress?.type, 'compact-failed');
+});
+
+test('重启遗留的压缩开始记录被视为中断，已完整提交的摘要仍保持完成', async t => {
+  const dataDir = await tempDataDir(t);
+  const service = new ConvectionSessionService(dataDir, async () => '已完成摘要');
+  const session = await service.create({ chairAgentId: 'chair', participantAgentIds: ['agent'] });
+  session.publicMessages = [{ speaker: '人类', content: '重启前原文', timestamp: 1 }];
+  session.compactionProgress = { type: 'compact-start', id: 'previous-process', operation: 'compact',
+    reason: 'manual', startedAt: 1, updatedAt: 1 };
+  await service.save(session);
+  const interrupted = await service.require(session.id);
+  assert.equal(interrupted.compactionProgress?.type, 'compact-failed');
+  assert.equal(interrupted.compactionProgress?.aborted, true);
+  assert.deepEqual(interrupted.publicMessages, session.publicMessages);
+  await service.resetContext(session.id, 'summary');
+  const completed = await service.require(session.id);
+  assert.equal(completed.compactionProgress?.type, 'compact-done');
+  assert.match(completed.publicMessages[0].content, /已完成摘要/);
 });
 
 test('归档失败时手工重置真实失败且不清除原会话', async t => {

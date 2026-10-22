@@ -10,6 +10,8 @@
 import { useState } from 'react';
 import { useLocale } from '../../i18n/LocaleContext';
 import { reasoningSegments } from '../../engine/chat/stream-retention';
+import BoundedText from '../../engine/text-display/BoundedText';
+import { needsTextPaging } from '../../engine/text-display/text-pages';
 import './turn-process.css';
 
 interface Props {
@@ -47,7 +49,9 @@ export default function ReasoningBlock({ reasoning, isStreaming, defaultOpen, br
       </button>
       {open && (
         <div className="reasoning-block__body">
-          {reasoningSegments(reasoning, breaks).map((text, index) => <span key={index}>
+          {needsTextPaging(reasoning)
+            ? <BoundedText text={reasoning} followTail={isStreaming} />
+            : reasoningSegments(reasoning, breaks).map((text, index) => <span key={index}>
             {index > 0 && <hr className="turn-process-reasoning-divider" />}{text}
           </span>)}
           {isStreaming && <span className="thinking-cursor" />}

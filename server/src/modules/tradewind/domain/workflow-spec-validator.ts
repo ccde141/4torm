@@ -6,6 +6,8 @@
  */
 
 import type { WorkflowSpecNode, WorkflowSpecEdge, WorkflowSpec } from './workflow-spec.js';
+import { buildWorkflowGraph } from './workflow-spec.js';
+import { validateHandoffTopology } from '../../../engine/tradewind/foundation/workflow-validator-handoff.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -138,7 +140,7 @@ export function validateWorkflowSpec(
   }
 
   // ⑦ DAG 检测（环路）
-  const cycle = detectCycle(params.nodes, params.edges);
+  const cycle = params.orchestration === 'handoff' ? null : detectCycle(params.nodes, params.edges);
   if (cycle) {
     errors.push({
       field: 'edges',
@@ -146,6 +148,8 @@ export function validateWorkflowSpec(
     });
   }
 
+  if (params.orchestration === 'handoff') errors.push(...validateHandoffTopology(buildWorkflowGraph(params))
+    .map(error => ({ field: error.nodeId ? `nodes.${error.nodeId}` : 'edges', message: error.message })));
   return errors;
 }
 

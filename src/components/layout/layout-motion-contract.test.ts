@@ -15,13 +15,16 @@ test('the global sidebar collapses to a persistent accessible rail', () => {
   assert.match(sidebar, /aria-controls="app-sidebar-navigation"/);
   assert.match(sidebar, /aria-expanded={!collapsed}/);
   assert.match(sidebar, /className="sidebar__body"/);
-  assert.match(sidebar, /inert={collapsed}/);
+  assert.doesNotMatch(sidebar, /className="sidebar__body"[^>]*(?:inert|aria-hidden)/);
+  assert.match(sidebar, /title=\{t\(item.label\)\}/);
+  assert.match(sidebar, /aria-label=\{t\(item.label\)\}/);
   assert.doesNotMatch(sidebar, /!collapsed && <nav/);
   assert.match(sidebar, /t\(collapsed \? 'nav\.expand' : 'nav\.collapse'\)/);
   assert.match(locale, /'nav\.expand': '展开功能区'/);
   assert.match(locale, /'nav\.collapse': 'Collapse navigation'/);
   assert.match(styles, /sidebar--collapsed/);
-  assert.match(styles, /\.sidebar__body[\s\S]*width: var\(--sidebar-width\)/);
+  assert.match(styles, /\.sidebar__body[\s\S]*width: 100%/);
+  assert.match(styles, /\.sidebar--collapsed \.sidebar__nav-item[\s\S]*justify-content: center/);
   assert.match(styles, /\.sidebar__toggle[\s\S]*background: transparent/);
   assert.match(styles, /--sidebar-collapsed-width/);
 });
@@ -74,7 +77,7 @@ test('feature navigation names the feature before its managed object', () => {
   for (const page of ['chat', 'convection', 'cyclone', 'tradewind', 'tide']) {
     assert.ok(app.includes(`'page.${page}.title'`), `missing page title key: ${page}`);
   }
-  for (const label of ['季风 · 对话', '对流 · 会议室', '气旋 · 工作室', '信风 · 工作流', '潮汐 · 自动化']) {
+  for (const label of ['季风 · 智能体对话', '对流 · 多方会议室', '气旋 · 团队协作室', '信风 · 工作流编排', '潮汐 · 自动化任务']) {
     assert.ok(locale.includes(label), `missing localized feature title: ${label}`);
   }
 });

@@ -12,10 +12,10 @@ interface Input { workflowId: string; executionId: string; nodeId: string;
   scope: 'public' | 'chair'; limit: number; round?: number }
 
 export async function readAgentMeetingConversation(dataDir: string, input: Input) {
-  const active = getActiveTradewindOrchestrator();
+  const active = getActiveTradewindOrchestrator({ ...input, dataDir });
   const sameExecution = active?.getWorkflowId() === input.workflowId
     && active.getExecutionId() === input.executionId;
-  const meeting = sameExecution ? activeMeetings.get(input.nodeId) : undefined;
+  const meeting = sameExecution ? activeMeetings.get(input.nodeId, input.executionId) : undefined;
   if (meeting?.executionId === input.executionId
     && (input.round === undefined || input.round === meeting.session.round)) {
     const session = meeting.session;

@@ -59,8 +59,11 @@ const textPrompt = buildMeetingAgentPrompt(
   [{ label: '执行员', role: '执行' }],
   false,
 );
-assert.match(textPrompt, /"type":"tool_call","name":"contact"/);
+assert.match(textPrompt, /### contact/);
+assert.match(textPrompt, /target: string \[必填\]/);
 assert.match(textPrompt, /最终自然语言回答会被公开/);
+assert.match(textPrompt, /工具调用与结果也会进入公共会议记录/);
+assert.doesNotMatch(textPrompt, /工具调用过程不会展示/);
 assert.match(textPrompt, /平等的协作者/);
 assert.match(textPrompt, /独立判断/);
 assert.match(textPrompt, /不以迎合代替讨论/);

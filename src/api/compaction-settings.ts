@@ -1,3 +1,4 @@
+import { backendFetch } from '../lib/backend-client';
 import { errorFromResponse } from './error-contract';
 
 export const COMPACTION_AREAS = ['monsoon', 'convection', 'cycloneConversation',
@@ -18,7 +19,7 @@ export async function testCompactionModel(model: string): Promise<void> {
   await request('/api/settings/compaction/test-model', 'POST', { model });
 }
 async function request(url: string, method = 'GET', body?: unknown): Promise<unknown> {
-  const response = await fetch(url, { method, ...(body !== undefined ? {
+  const response = await backendFetch(url, { method, ...(body !== undefined ? {
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   } : {}) });
   if (!response.ok) throw await errorFromResponse(response);

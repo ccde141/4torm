@@ -5,7 +5,7 @@ import type { CycloneAgentReadService, CycloneThreadTarget } from '../applicatio
 const id = { type: 'string', pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$' };
 const cursor = { type: 'string', maxLength: 160 };
 const limit = { type: 'integer', minimum: 1, maximum: 50 };
-const threadKeys = { workshopId: id, target: { type: 'string', enum: ['seat', 'room', 'chair'] },
+const threadKeys = { workshopId: id, target: { type: 'string', enum: ['seat', 'room', 'chair', 'supervisor'] },
   targetId: id };
 
 export function cycloneAgentReadManifests(): ModuleMethodManifest[] {
@@ -15,7 +15,7 @@ export function cycloneAgentReadManifests(): ModuleMethodManifest[] {
     method('listCollaborationWorkshops', 'list_collaboration_workshops',
       '列出已有气旋工作室、工位数和房间数，分页返回。', [], { limit, cursor }),
     method('readCollaborationThread', 'read_collaboration_thread',
-      '按工作室和目标读取群聊、工位私聊或会长私聊的最近 24 条消息；长正文只给预览，使用游标续读。',
+      '按工作室和目标读取群聊、工位、会长或主管的最近 24 条普通对话；主管用 target=supervisor、targetId=supervisor。长正文只给预览，使用游标续读。',
       ['workshopId', 'target', 'targetId'], { ...threadKeys,
         limit: { ...limit, maximum: 24 }, cursor }),
     method('readCollaborationMessage', 'read_collaboration_message',
@@ -111,7 +111,7 @@ function nonnegative(value: unknown): number {
 }
 
 function target(value: unknown): CycloneThreadTarget {
-  if (value !== 'seat' && value !== 'room' && value !== 'chair') throw invalid();
+  if (value !== 'seat' && value !== 'room' && value !== 'chair' && value !== 'supervisor') throw invalid();
   return value;
 }
 

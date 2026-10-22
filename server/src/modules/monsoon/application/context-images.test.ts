@@ -99,3 +99,28 @@ test('compaction inserts before the current pending reply, never an older failed
     assert.deepEqual(port.activeContext(saved).map(message => message.content), ['facts']);
   });
 });
+
+test('tool image references survive text and native exact-context persistence without becoming attachment bytes', async () => {
+  await fixture(async dataDir => {
+    const timestamp = new Date().toISOString();
+    const toolImages = [{ id: 'f4f82d73-4c42-4b3f-95b5-a8646ab58d9f', name: 'screen.png', mimeType: 'image/png', size: 8 }];
+    const runtime: ContextMessage[] = [
+      { role: 'assistant', content: '', toolCalls: [{ id: 'call-a', name: 'mcp:demo:observe', arguments: '{}' }] },
+      { role: 'tool', content: '{"observation_id":"obs-a"}', toolCallId: 'call-a', toolOk: true, toolImages },
+      { role: 'assistant', content: 'done' },
+    ];
+    const sessions = new FileMonsoonSessionRepository(dataDir);
+    await sessions.create({ id: 'session-tool', agentId: 'agent-a', agentName: 'A', title: 'MCP',
+      model: 'p:m', systemPrompt: '', createdAt: timestamp, updatedAt: timestamp,
+      messages: [{ id: 'human', role: 'user', content: 'Inspect.', timestamp },
+        { id: 'answer', role: 'assistant', content: 'done', timestamp,
+          nativeContext: persistMonsoonContext(runtime) }] });
+    const reloaded = await sessions.get('agent-a', 'session-tool');
+    assert.ok(reloaded);
+    const context = await new MonsoonContextPort(dataDir).modelContext(reloaded);
+    assert.deepEqual(context.map(message => message.content), ['Inspect.', '', '{"observation_id":"obs-a"}', 'done']);
+    assert.deepEqual(context[2].toolImages, toolImages);
+    assert.equal(context[2].toolOk, true);
+    assert.doesNotMatch(JSON.stringify(reloaded), /data:image|base64/);
+  });
+});

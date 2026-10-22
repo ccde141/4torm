@@ -1,5 +1,7 @@
+import { backendFetch } from '../../../lib/backend-client';
+import BoundedText from '../../../engine/text-display/BoundedText';
 import { useEffect, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import { renderTextWithCode } from '../../../engine/markdown';
 import type { en } from './messages';
 import { memberStatus, reportStatus, type TeamContextMessage, type TeamMember, type TeamReport } from './types';
 
@@ -9,10 +11,10 @@ export function ReportHistory({ reports, w }: { reports: TeamReport[]; w: Words 
     {!reports.length && <p>{w.noReports}</p>}
     {[...reports].reverse().map(report => <article key={report.id} className="session-team-exchange">
       <small>{w[reportStatus(report)]}</small>
-      <details><summary>{w.dispatch}</summary><p>{report.task}</p></details>
+      <details><summary>{w.dispatch}</summary><p><BoundedText text={report.task} /></p></details>
       <details open={reports.at(-1)?.id === report.id}>
         <summary>{w.reply} · {w[reportStatus(report)]}</summary>
-        <small>{w.execution} · {w[report.outcome as keyof Words] ?? report.outcome}</small><div className="session-team-markdown"><ReactMarkdown>{report.content}</ReactMarkdown></div>
+        <small>{w.execution} · {w[report.outcome as keyof Words] ?? report.outcome}</small><div className="session-team-markdown">{renderTextWithCode(report.content)}</div>
       </details>
       {report.review && <details className="session-team-verdict"><summary>{w.review}</summary><p>{report.review.reason}</p></details>}
     </article>)}
@@ -28,7 +30,7 @@ function MemberTranscript({ agentId, sessionId, memberId, revision, w }: {
   useEffect(() => {
     const controller = new AbortController();
     const params = new URLSearchParams({ agentId, sessionId, memberId });
-    void fetch(`/api/conversation/team/context?${params}`, { signal: controller.signal }).then(async response => {
+    void backendFetch(`/api/conversation/team/context?${params}`, { signal: controller.signal }).then(async response => {
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
       const body: { messages: TeamContextMessage[] } = await response.json();
       if (!controller.signal.aborted) { setMessages(body.messages); setError(''); }
@@ -43,12 +45,12 @@ function MemberTranscript({ agentId, sessionId, memberId, revision, w }: {
     {!messages && !error && <p>{w.loading}</p>}
     {visible?.length === 0 && <p>{w.noContext}</p>}
     {visible?.map((message, index) => <article key={index} className={`session-team-message is-${message.role}`}>
-      {message.role === 'assistant' && message.content && <><small>{w.assistant}</small><div className="session-team-markdown"><ReactMarkdown>{message.content}</ReactMarkdown></div></>}
+      {message.role === 'assistant' && message.content && <><small>{w.assistant}</small><div className="session-team-markdown">{renderTextWithCode(message.content)}</div></>}
       {message.role !== 'assistant' && <details open={query.trim() ? true : undefined}>
         <summary>{w[message.role]}<span className="session-team-preview">{message.content.replace(/\s+/g, ' ').slice(0, 100)}</span></summary>
-        <p>{message.content}</p>
+        <p><BoundedText text={message.content} /></p>
       </details>}
-      {message.toolCalls?.map(call => <details key={call.id}><summary>{call.name}</summary><pre>{call.arguments}</pre></details>)}
+      {message.toolCalls?.map(call => <details key={call.id}><summary>{call.name}</summary><pre><BoundedText text={(call.arguments) ?? ''} /></pre></details>)}
     </article>)}
   </section>;
 }

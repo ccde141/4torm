@@ -3,6 +3,7 @@ import TerminalObservationView from './TerminalObservationView';
 import VisualObservationView from './VisualObservationView';
 import { getExecutionSurfaceCapability } from './execution-surface-capability';
 import { shouldUseNativeExecutionSurface, type ExecutionSurfaceItem } from './execution-surface';
+import { getDesktopExecutionSurface } from '../../lib/desktop';
 
 type Scope = 'conversation' | 'cyclone';
 type Props = { scope: Scope; ownerId: string; item: ExecutionSurfaceItem; onBack: () => void; suspendNativeSurface?: boolean };
@@ -12,6 +13,6 @@ export default function ExecutionSurfaceViewport({ scope, ownerId, item, onBack,
   const capability = getExecutionSurfaceCapability(item.viewer);
   const props = { scope, ownerId, observationId: item.id, onBack };
   if (capability.renderMode === 'terminal') return <TerminalObservationView {...props} />;
-  if (shouldUseNativeExecutionSurface(item, Boolean(window.desktop))) return <NativeObservationView {...props} suspended={suspendNativeSurface} />;
+  if (shouldUseNativeExecutionSurface(item, Boolean(getDesktopExecutionSurface()))) return <NativeObservationView {...props} suspended={suspendNativeSurface} />;
   return <VisualObservationView {...props} />;
 }

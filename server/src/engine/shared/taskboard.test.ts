@@ -118,3 +118,38 @@ test('并发更新同一 revision 时只有一个写入成功', async (t) => {
   assert.equal(results.filter(result => /版本冲突/.test(result.result)).length, 1);
   assert.equal(readTaskboard(target)?.revision, 2);
 });
+
+for (const raw of ['{broken', '', '{}', '{"tasks":[]}']) {
+  test(`损坏任务板不会伪装空板或被覆盖、清空: ${JSON.stringify(raw)}`, async t => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-taskboard-corrupt-'));
+    t.after(() => fs.rm(dir, { recursive: true, force: true }));
+    const file = path.join(dir, 'session.taskboard.json');
+    await fs.writeFile(file, raw);
+    assert.throws(() => readTaskboard(file), /任务板数据损坏/);
+    for (const action of ['get', 'set', 'clear']) {
+      const result = await execTaskBoard(file, { action, expectedRevision: 0,
+        tasks: [{ title: 'new', status: 'todo' }] });
+      assert.equal(result.ok, false);
+      assert.equal(result.errorCode, 'TASKBOARD_STORE_CORRUPT');
+      assert.equal(await fs.readFile(file, 'utf8'), raw);
+    }
+  });
+}
+
+test('任务板读 IO 错误不会触发清空；缺 revision 的历史有效板兼容为零', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-taskboard-io-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'session.taskboard.json');
+  await fs.mkdir(file);
+  for (const action of ['get', 'set', 'clear']) {
+    const result = await execTaskBoard(file, { action, expectedRevision: 0,
+      tasks: [{ title: 'new', status: 'todo' }] });
+    assert.equal(result.ok, false);
+    assert.equal(result.errorCode, 'TASKBOARD_STORE_IO');
+    assert.equal((await fs.stat(file)).isDirectory(), true);
+  }
+  await fs.rmdir(file);
+  await fs.writeFile(file, JSON.stringify({ goal: 'legacy', tasks: [{ id: 'one', title: 'old', status: 'todo' }],
+    updatedAt: 1 }));
+  assert.equal(readTaskboard(file)?.revision, 0);
+});

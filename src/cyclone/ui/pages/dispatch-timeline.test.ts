@@ -65,6 +65,16 @@ test('带入讨论的系统消息保留为人类侧异步回执而非归档摘�
   assert.equal(message.dispatchId, 'dispatch-a');
 });
 
+test('群聊压缩分隔线只识别系统写入的历史前缀', () => {
+  const messages = publicToFeed([
+    { speaker: '系统', content: '[群聊历史摘要]\n已确认事项', timestamp: 1 },
+    { speaker: '人类', content: '[群聊历史摘要]\n引用格式', timestamp: 2 },
+    { speaker: '研究员', content: '重置前的群聊摘要仅为引用', timestamp: 3 },
+    { speaker: '系统', content: '普通状态通知', timestamp: 4 },
+  ]);
+  assert.deepEqual(messages.map(message => message.isArchiveSummary), [true, false, false, false]);
+});
+
 test('成员变更保留为专用系统时间线而非 Agent 或归档消息', () => {
   const [message] = publicToFeed([{
     id: 'membership-a', speaker: '系统', content: '研究员加入会议', timestamp: 1,

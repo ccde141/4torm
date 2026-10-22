@@ -3,6 +3,7 @@ import RoomFeedRow from './RoomFeedRow';
 import { buildDispatchTimeline, type CycloneDispatch } from './dispatch-timeline';
 import type { DispatchAction } from './useWorkshopDispatches';
 import type { FeedMsg } from './room-stream-events';
+import type { ToolMediaScope } from '../../../engine/tool-media';
 
 interface TimelineEntry {
   key: string;
@@ -14,13 +15,14 @@ interface TimelineEntry {
 
 export default function RoomTimeline({ history, roundFeed, dispatches, highlightedId,
   editingMessageIndex, editMessageContent, onEditContent, onStartEdit, onSaveEdit,
-  onCancelEdit, onDelete, onDispatchAction, onOpenSeat }: {
+  onCancelEdit, onDelete, onDispatchAction, onOpenSeat, mediaScope }: {
   history: FeedMsg[]; roundFeed: FeedMsg[] | null; dispatches: CycloneDispatch[];
   highlightedId: string | null; editingMessageIndex: number | null; editMessageContent: string;
   onEditContent: (value: string) => void; onStartEdit: (message: FeedMsg) => void;
   onSaveEdit: () => void; onCancelEdit: () => void; onDelete: (message: FeedMsg) => void;
   onDispatchAction: (id: string, action: DispatchAction) => Promise<void>;
   onOpenSeat: (seatId: string) => void;
+  mediaScope?: ToolMediaScope;
 }) {
   const messages: TimelineEntry[] = [
     ...history.map((message, index) => ({ key: message.key, turnId: message.turnId, message, index, prefix: 'h' as const })),
@@ -47,6 +49,6 @@ export default function RoomTimeline({ history, roundFeed, dispatches, highlight
       onStartEdit={() => onStartEdit(message)} onSaveEdit={onSaveEdit}
       onCancelEdit={onCancelEdit} onDelete={() => onDelete(message)}
       dispatches={dispatches} highlightedId={highlightedId}
-      onDispatchAction={onDispatchAction} onOpenSeat={onOpenSeat} />;
+      onDispatchAction={onDispatchAction} onOpenSeat={onOpenSeat} mediaScope={mediaScope} />;
   });
 }

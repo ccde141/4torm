@@ -26,6 +26,39 @@ test('DeepSeek formal defaults drive output budget but inherit sampling values',
   assert.equal(resolveRequestTemperature(baseIdentity, 0.4), 0.4);
 });
 
+test('DeepSeek output ceilings constrain explicit and legacy budgets without changing smaller values', () => {
+  assert.equal(resolveMaxOutputTokens(baseIdentity, 1_000_000), 393_216);
+  const legacy = { ...baseIdentity, generationDefaults: { maxOutputTokens: 1_000_000 } };
+  assert.equal(resolveMaxOutputTokens(legacy), 393_216);
+  assert.equal(resolveRequestTemperature(legacy), undefined);
+  assert.deepEqual(legacy.generationDefaults, { maxOutputTokens: 1_000_000 });
+  assert.equal(resolveMaxOutputTokens(baseIdentity, 393_216), 393_216);
+  assert.equal(resolveMaxOutputTokens(baseIdentity, 64), 64);
+});
+
+test('DeepSeek final custom output parameters cannot bypass its request ceiling', () => {
+  for (const model of ['deepseek-v4-flash', 'deepseek-chat', 'future-deepseek-model']) {
+    const identity = { ...baseIdentity, model,
+      generationDefaults: { maxOutputTokens: 1_000_000 },
+      customRequestParameters: { max_tokens: 1_000_000 } };
+    const body = normalizeChatRequestBody(identity, { model, messages: [], max_tokens: 1024 });
+    assert.equal(body.max_tokens, 393_216);
+    assert.equal(identity.customRequestParameters.max_tokens, 1_000_000);
+  }
+  const lower = normalizeChatRequestBody({ ...baseIdentity,
+    customRequestParameters: { max_tokens: 256 },
+  }, { model: baseIdentity.model, messages: [], max_tokens: 1_000_000 });
+  assert.equal(lower.max_tokens, 256);
+});
+
+test('DeepSeek rejects malformed final output values before request dispatch', () => {
+  for (const max_tokens of [0, -1, 0.5, '1000000', null]) {
+    assert.throws(() => normalizeChatRequestBody({ ...baseIdentity,
+      customRequestParameters: { max_tokens },
+    }, { model: baseIdentity.model, messages: [] }), /max_tokens.*正整数/);
+  }
+});
+
 test('DeepSeek V4 auto mode preserves API default thinking and removes ignored sampling', () => {
   const body = normalizeChatRequestBody(baseIdentity, {
     model: baseIdentity.model, messages: [], max_tokens: 8192,

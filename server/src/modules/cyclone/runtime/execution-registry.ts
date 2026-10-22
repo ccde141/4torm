@@ -8,7 +8,8 @@ import type {
 import { cycloneOperationId, type CycloneTargetKind } from '../domain/operation-snapshot.js';
 
 type AcquireLock = (workshopId: string, targetId: string) => (() => void) | null;
-type LockPorts = Record<CycloneTargetKind, AcquireLock>;
+type LockPorts = Pick<Record<CycloneTargetKind, AcquireLock>, 'seat' | 'room'>
+  & Partial<Pick<Record<CycloneTargetKind, AcquireLock>, 'supervisor'>>;
 
 interface ActiveExecution extends CycloneExecutionSnapshot {
   controller: AbortController;
@@ -22,7 +23,7 @@ export class CycloneExecutionRegistry implements CycloneExecutionPort {
 
   begin(target: CycloneExecutionTarget): CycloneExecutionSnapshot {
     const operationId = cycloneOperationId(target.targetKind, target.workshopId, target.targetId);
-    const release = this.locks[target.targetKind](target.workshopId, target.targetId);
+    const release = this.locks[target.targetKind]?.(target.workshopId, target.targetId);
     if (!release) throw executionError('CYCLONE_EXECUTION_BUSY', '目标正在处理其他任务');
     const entry: ActiveExecution = {
       ...target, operationId, runId: `cyclone-run-${randomUUID()}`,

@@ -56,6 +56,12 @@ test('同一事项的两次运行重启后仍能按各自 runId 读取', async t
   assert.equal((await reloaded.get(second.operationId, second.runId))?.status, 'failed');
   assert.equal((await reloaded.latest(execution.operationId))?.runId, second.runId);
   assert.equal((await reloaded.list()).length, 1);
+  const history = await reloaded.history(execution.workshopId);
+  assert.equal(history.length, 2);
+  assert.equal(history.find(item => item.runId === second.runId)?.status, 'failed');
+  history[0].status = 'running';
+  assert.equal((await reloaded.history('another-workshop')).length, 0);
+  assert.equal((await reloaded.history()).some(item => item.status === 'running'), false);
 });
 
 test('气旋启动恢复把遗留运行状态校正为 crashed 且不重跑', async () => {

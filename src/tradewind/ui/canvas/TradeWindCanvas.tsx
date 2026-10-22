@@ -14,6 +14,7 @@ import {
   BackgroundVariant,
   MiniMap,
   Controls,
+  MarkerType,
   type ReactFlowInstance,
   type NodeTypes,
   type EdgeTypes,
@@ -28,12 +29,16 @@ import { NoteNode } from './nodes/NoteNode';
 import { HumanGateNode } from './nodes/HumanGateNode';
 import { TradeWindEdge } from './edges/TradeWindEdge';
 import { ContextMenu, type ContextMenuState } from './ContextMenu';
+import { WorkflowInitialViewport, type WorkflowViewportMemory } from './WorkflowInitialViewport';
 import type { WorkflowStoreState, WorkflowStoreActions } from '../hooks/useWorkflowStore';
 import type { ExecutionPhase } from '../hooks/execution-phase';
 
 interface TradeWindCanvasProps {
   store: WorkflowStoreState & WorkflowStoreActions;
   executionPhase: ExecutionPhase;
+  active?: boolean;
+  executionId?: string | null;
+  viewports?: WorkflowViewportMemory;
 }
 
 const nodeTypes: NodeTypes = {
@@ -51,12 +56,18 @@ const edgeTypes: EdgeTypes = {
 
 const MENU_INIT: ContextMenuState = { visible: false, x: 0, y: 0, nodeId: null, edgeId: null, flowPosition: null };
 
-export function TradeWindCanvas({ store, executionPhase }: TradeWindCanvasProps) {
+export function TradeWindCanvas({ store, executionPhase, active = true, executionId, viewports }: TradeWindCanvasProps) {
   const rfInstance = useRef<ReactFlowInstance | null>(null);
   const [menu, setMenu] = useState<ContextMenuState>(MENU_INIT);
-  const renderedNodes = useMemo(() => store.nodes.map(node => node.type === 'output'
-    ? { ...node, data: { ...node.data, runtimePhase: executionPhase } }
-    : node), [store.nodes, executionPhase]);
+  const renderedNodes = useMemo<import('@xyflow/react').Node[]>(() => store.nodes.map(node => ({ ...node, data: {
+    ...node.data, workflowId: store.workflowId, executionId,
+    ...(node.type === 'output' ? { runtimePhase: executionPhase } : {}),
+  } })), [store.nodes, store.workflowId, executionPhase, executionId]);
+  const renderedEdges = useMemo<import('@xyflow/react').Edge[]>(() => store.edges.map(edge => ({ ...edge,
+    data: { ...edge.data, orchestration: store.orchestration },
+    ...(store.orchestration === 'handoff' && edge.data?.kind !== 'note'
+      ? { markerEnd: { type: MarkerType.ArrowClosed } } : {}),
+  })), [store.edges, store.orchestration]);
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: { id: string }) => {
@@ -134,7 +145,8 @@ export function TradeWindCanvas({ store, executionPhase }: TradeWindCanvasProps)
     <div className="tw-canvas" ref={canvasRef}>
       <ReactFlow
         nodes={renderedNodes}
-        edges={store.edges}
+        edges={renderedEdges}
+        deleteKeyCode={active ? ['Backspace', 'Delete'] : null}
         onNodesChange={store.onNodesChange}
         onEdgesChange={store.onEdgesChange}
         onConnect={store.onConnect}
@@ -149,9 +161,9 @@ export function TradeWindCanvas({ store, executionPhase }: TradeWindCanvasProps)
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         defaultEdgeOptions={{ type: 'tradewind' }}
-        fitView
         proOptions={{ hideAttribution: true }}
       >
+        <WorkflowInitialViewport active={active} workflowId={store.workflowId} memory={viewports} />
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="rgba(255,255,255,0.04)" />
         <Controls showInteractive={false} className="tw-controls" />
         <MiniMap
@@ -164,6 +176,7 @@ export function TradeWindCanvas({ store, executionPhase }: TradeWindCanvasProps)
         />
       </ReactFlow>
       <ContextMenu
+        orchestration={store.orchestration}
         menu={menu}
         onClose={() => setMenu(MENU_INIT)}
         onDelete={(id) => store.deleteNode(id)}

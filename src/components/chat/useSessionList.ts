@@ -10,17 +10,19 @@ import {
 } from '../../store/chat';
 import type { Agent, ChatMessage } from '../../types';
 import type { ChatSession } from '../../store/chat';
-import { streamUrl } from '../../lib/apiBase';
 import { createLatestRequestGuard } from '../../lib/latest-request';
-import { ensureSessionListRefresher } from './session-list-state';
+import { ensureSessionListRefresher, projectSessionUsage, type SessionUsageDisplay } from './session-list-state';
 import { useLocale } from '../../i18n/LocaleContext';
-import { errorMessage } from '../../api/error-contract';
+import { useMonsoonCompaction } from './useMonsoonCompaction';
+import type { MonsoonBrowserEvent } from '../../engine/chat/sse-events';
 
 /** 流注册表钩子（来自 useStreamRunners）：让切会话/删会话与后台流协同。 */
 interface StreamHooks {
   background: (sessionId: string) => void;
   reconnect: (sessionId: string) => boolean;
   kill: (sessionId: string) => void;
+  isRunning?: (sessionId: string) => boolean;
+  onCompaction?: (sessionId: string, event: MonsoonBrowserEvent) => void;
 }
 
 export function useSessionList(
@@ -35,6 +37,7 @@ export function useSessionList(
 ) {
   const { t: translate } = useLocale();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [displayUsage, setDisplayUsage] = useState<SessionUsageDisplay>({});
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState('');
@@ -44,13 +47,18 @@ export function useSessionList(
   const listRefresher = useRef<((agentId: string) => Promise<void>) | null>(null);
   // HMR may retain the old sequence ref in this slot without rerunning the id-based effect.
   visibleAgentIdRef.current = selectedAgent?.id ?? null;
+  const isRunning = streamHooks?.isRunning;
 
   useEffect(() => {
     visibleAgentIdRef.current = selectedAgent?.id ?? null;
   }, [selectedAgent?.id]);
 
   const refreshSessions = useCallback((agent: Agent) => ensureSessionListRefresher(
-    listRefresher, getSessionsByAgent, () => visibleAgentIdRef.current, setSessions)(agent.id), []);
+    listRefresher, getSessionsByAgent, () => visibleAgentIdRef.current, fresh => {
+      setSessions(fresh);
+      setDisplayUsage(previous => projectSessionUsage(previous, fresh,
+        id => isRunning?.(id) ?? false));
+    })(agent.id), [isRunning]);
 
   const selectAgent = useCallback((agent: Agent) => {
     sessionRequestGuard.current.cancel();
@@ -72,7 +80,7 @@ export function useSessionList(
     if (activeSessionId) {
       const prevId = activeSessionId;
       streamHooks?.background(prevId);
-      markSessionRead(prevId).catch(() => {});
+      markSessionRead(prevId).catch(error => console.warn('[chat] 标记会话已读失败', error));
       setSessions(prev => prev.map(p => p.id === prevId ? { ...p, unreadCount: 0 } : p));
     }
     setActiveSessionId(sessionId);
@@ -84,7 +92,7 @@ export function useSessionList(
         if (s.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
         // 切入即已读：推进 lastReadAt 并清未读（reconnect 分支此前漏更新，导致活流会话红点清不掉）
         const lastReadAt = new Date().toISOString();
-        saveSession({ ...s, lastReadAt }).catch(() => {});
+        markSessionRead(sessionId).catch(error => console.warn('[chat] 标记会话已读失败', error));
         setSessions(prev => prev.map(p => p.id === sessionId ? { ...p, lastReadAt, unreadCount: 0 } : p));
       });
       return;
@@ -100,7 +108,7 @@ export function useSessionList(
       if (!cachedMsgs || s.messages !== cachedMsgs) setMessages(s.messages);
       if (s.model && models.some(m => m.key === s.model)) setSelectedModel(s.model);
       s.lastReadAt = new Date().toISOString();
-      saveSession({ ...s, lastReadAt: s.lastReadAt }).catch(() => {});
+      markSessionRead(sessionId).catch(error => console.warn('[chat] 标记会话已读失败', error));
       setSessions(prev => prev.map(p => p.id === sessionId ? { ...p, lastReadAt: s.lastReadAt, unreadCount: 0 } : p));
     });
   }, [activeSessionId, setMessages, models, setSelectedModel, setStreaming, streamHooks]);
@@ -164,134 +172,23 @@ export function useSessionList(
     });
   }, [activeSessionId, setMessages, streamHooks, selectedAgent, refreshSessions, translate]);
 
-  const compactSession = useCallback(async (session: ChatSession) => {
-    if (!selectedAgent) return;
-
-    // 插入一条临时"压缩中"气泡
-    const tempId = `compact-${Date.now()}`;
-    const tempMsg: ChatMessage = {
-      id: tempId,
-      role: 'system',
-      content: translate('chat.compact.start'),
-      timestamp: new Date().toISOString(),
-      agentId: session.agentId,
-    };
-    const msgsWithTemp = [...session.messages, tempMsg];
-    setMessages(msgsWithTemp);
-
-    // 非阻塞提示：把临时气泡改写成结果文案，绝不用 alert()——alert 会同步冻住整个渲染进程，
-    // 表现为压缩返回后输入框打不了字、关掉弹窗才恢复。气泡是临时态，不落盘，刷新即消失。
-    const notice = (text: string) => setMessages(
-      msgsWithTemp.map(m => (m.id === tempId ? { ...m, content: text } : m)),
-    );
-
-    try {
-      const res = await fetch(streamUrl('/api/conversation/compact'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          agentId: session.agentId,
-          sessionId: session.id,
-          model: selectedModel || session.model,
-        }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: translate('chat.compact.requestFailed') }));
-        notice(`⚠️ ${errorMessage(data, res.statusText)}`);
-        return;
-      }
-
-      // SSE 流式读取
-      const reader = res.body?.getReader();
-      if (!reader) { setMessages(session.messages); return; }
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let summary = '';
-      let compressedCount = 0;
-      let compactionNotice = '';
-
-      let receivedDone = false;
-
-      const processLine = async (line: string) => {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) return;
-          const payload = trimmed.slice(5).trim();
-          if (!payload) return;
-
-          try {
-            const evt = JSON.parse(payload);
-            if (evt.type === 'start') {
-              compressedCount = evt.compressedCount || 0;
-              const updated = msgsWithTemp.map(m =>
-                m.id === tempId ? { ...m, content: translate('chat.compact.progress', { count: compressedCount }) } : m,
-              );
-              setMessages(updated);
-            } else if (evt.type === 'token') {
-              summary += evt.content;
-              const updated = msgsWithTemp.map(m =>
-                m.id === tempId ? { ...m, content: translate('chat.compact.generating', { summary }) } : m,
-              );
-              setMessages(updated);
-            } else if (evt.type === 'compaction-notice') {
-              compactionNotice = String(evt.message ?? '');
-              setMessages(msgsWithTemp.map(m => m.id === tempId
-                ? { ...m, compactionNotice } : m));
-            } else if (evt.type === 'done') {
-              receivedDone = true;
-              const fresh = await getSession(session.id);
-              if (fresh) {
-                setMessages(compactionNotice ? fresh.messages.map((message, index) =>
-                  index === fresh.messages.length - 1 ? { ...message, compactionNotice } : message)
-                  : fresh.messages);
-                setSessions(prev => prev.map(s =>
-                  s.id === session.id ? { ...s, updatedAt: fresh.updatedAt, tokenUsage: fresh.tokenUsage } : s,
-                ));
-              }
-            } else if (evt.type === 'error') {
-              receivedDone = true;
-              notice(translate('chat.compact.failed', { detail: errorMessage(evt, translate('chat.compact.requestFailed')) }));
-            }
-          } catch { /* 非 JSON 行忽略 */ }
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) await processLine(line);
-      }
-      // 收尾：flush 解码器 + 处理末尾未换行终结的残留
-      buffer += decoder.decode();
-      if (buffer) for (const line of buffer.split('\n')) await processLine(line);
-
-      // fallback：流断开但没收到 done/error 事件，尝试重新加载会话
-      if (!receivedDone) {
-        const fresh = await getSession(session.id);
-        if (fresh) {
-          setMessages(fresh.messages);
-          setSessions(prev => prev.map(s =>
-            s.id === session.id ? { ...s, updatedAt: fresh.updatedAt, tokenUsage: fresh.tokenUsage } : s,
-          ));
-        }
-      }
-    } catch (e) {
-      notice(translate('chat.compact.failed', { detail: (e as Error).message }));
-    }
-  }, [selectedAgent, selectedModel, setMessages, translate]);
+  const compaction = useMonsoonCompaction({ agentId: selectedAgent?.id, sessionId: activeSessionId,
+    model: selectedModel, progress: streamHooks?.onCompaction,
+    apply: fresh => {
+      setMessages(fresh.messages);
+      setDisplayUsage(previous => projectSessionUsage(previous, [fresh], () => false));
+      setSessions(previous => previous.map(session => session.id === fresh.id
+        ? { ...session, updatedAt: fresh.updatedAt, tokenUsage: fresh.tokenUsage } : session));
+    } });
 
   return {
-    sessions, setSessions, activeSessionId,
+    sessions, setSessions, displayUsage, activeSessionId,
     editingTitle, setEditingTitle, editTitleValue, setEditTitleValue, titleInputRef,
     refreshSessions,
     selectAgent, selectSession,
     renameSession, startRename,
     newSession, deleteSession: deleteSessionFn,
-    compactSession,
+    ...compaction,
     setActiveSessionId,
   };
 }

@@ -19,6 +19,7 @@ import type {
 } from '../foundation/types';
 import { BUILTIN_EVENT_IDS } from '../foundation/types';
 import { markEnvelopePending, markEnvelopeDone } from '../foundation/node-status-store';
+import { ExecutionRegistry } from '../execution/execution-registry';
 
 /** 人类提交的内容（编辑后的信封文本） */
 export interface GateSubmission {
@@ -35,7 +36,7 @@ export interface ActiveHumanGate {
   executionId: string;
 }
 
-export const activeHumanGates = new Map<string, ActiveHumanGate>();
+export const activeHumanGates = new ExecutionRegistry<ActiveHumanGate>(gate => gate.executionId);
 
 export class HumanGateExecutor implements NodeExecutor {
   readonly type = 'human-gate';
@@ -78,20 +79,20 @@ export class HumanGateExecutor implements NodeExecutor {
         ctx.emit(BUILTIN_EVENT_IDS.HUMAN_GATE_ARRIVE, { contentLength: envelopeContent.length });
 
         // 挂起等待人类编辑并提交
+        let onAbort: (() => void) | undefined;
         const submission = await new Promise<GateSubmission>((resolve) => {
           activeHumanGates.set(ctx.nodeId, {
             envelopeContent,
             arrivedAt: Date.now(),
             resolve,
             executionId: ctx.executionId,
-          });
+          }, ctx.executionId);
           // abort 兜底：工作流停止时用原内容继续
-          ctx.signal.addEventListener('abort', () => {
-            resolve({ content: envelopeContent });
-          }, { once: true });
+          onAbort = () => resolve({ content: envelopeContent });
+          ctx.signal.addEventListener('abort', onAbort, { once: true });
         });
-
-        activeHumanGates.delete(ctx.nodeId);
+        if (onAbort) ctx.signal.removeEventListener('abort', onAbort);
+        activeHumanGates.delete(ctx.nodeId, ctx.executionId);
 
         if (ctx.signal.aborted) return;
 
@@ -99,7 +100,7 @@ export class HumanGateExecutor implements NodeExecutor {
         await ctx.sendHandoff(submission.content, BUILTIN_EVENT_IDS.HANDOFF);
         ctx.emit(BUILTIN_EVENT_IDS.WORK_DONE);
       } finally {
-        activeHumanGates.delete(ctx.nodeId);
+        activeHumanGates.delete(ctx.nodeId, ctx.executionId);
         markEnvelopeDone(ctx.executionId, ctx.nodeId);
       }
     }

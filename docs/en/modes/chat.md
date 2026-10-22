@@ -41,15 +41,21 @@ In the Console, select the agent card, open **Tools**, enable the Convection, Cy
 | Workspace | What the agent can do |
 |---|---|
 | **Convection** | Create meetings, arrange members and speaking order, start discussions, chat privately with the meeting assistant, and read selected discussion rounds. |
-| **Cyclone** | Set up workshops, seats, and group rooms; assign work to individual seats; share requirements on the bulletin board; and inspect seat replies and dispatch results. |
-| **Tradewind** | Create, adjust, and start workflows, inspect node execution, and add information to nodes or meetings. You release pause points. |
-| **Tide** | Create and adjust scheduled tasks, enable, pause, or run them immediately, and inspect run records. Results can stay in an independent Tide conversation or be appended to a selected Monsoon conversation belonging to the agent running the task. |
+| **Cyclone** | Set up workshops, seats, and rooms; configure a supervisor and delegate coordination or assign seats directly; inspect project activity, bulletins, and deliveries. |
+| **Tradewind** | Create, adjust, and start either workflow mode; manage loop profiles; read runs, envelopes, and archived conversations; add information to nodes or meetings. You release pause points. |
+| **Tide** | Create interval or daily tasks, adjust, pause, enable, or run them immediately, and inspect records. Results stay in an independent Tide conversation or append to a designated Monsoon conversation. |
 
 For example:
 
 > Check this project's code structure and test coverage. Set up a Cyclone workshop and have two seats handle the checks separately, then compare their findings in a group discussion. Follow their progress and bring me the final report and any questions that need my decision.
 
 Research, file writing, and command execution suit individual seats. Group discussions are for sharing goals, resolving disagreements, and bringing findings together.
+
+To have a workshop supervisor coordinate the project, you can add:
+
+> Configure a supervisor for this workshop to arrange seat assignments and follow deliveries. Confirm its binding and available seats, then give it the project goal. Read its replies and dispatch records to report progress.
+
+Enable the corresponding Cyclone capabilities first. The supervisor coordinates, seats execute work, and rooms host discussion; see [Cyclone](./cyclone).
 
 The agent can inspect status, wait for tasks to finish, read results, and arrange the next step. You can also open the corresponding workspace to inspect seat conversations, meeting discussions, node results, or task run records.
 

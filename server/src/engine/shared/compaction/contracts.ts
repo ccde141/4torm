@@ -9,6 +9,19 @@ export type CompactionArea = typeof COMPACTION_AREAS[number];
 export type CompactionReason = 'threshold' | 'provider-overflow' | 'manual';
 export type CompactionMode = 'partial' | 'full';
 
+export interface CompactionProgress {
+  type: 'compact-start' | 'compact-done' | 'compact-failed';
+  id: string;
+  operation: 'compact' | 'reset';
+  startedAt: number;
+  updatedAt: number;
+  reason: CompactionReason;
+  message?: string;
+  aborted?: boolean;
+  summaryLength?: number;
+  archivedMessages?: number;
+}
+
 export interface CompactionPolicy {
   version: 1;
   enabled: boolean;
@@ -71,8 +84,10 @@ export interface CompactionOptions {
   protectedPrefixCount?: number;
   boundaries?: (messages: readonly ContextMessage[]) => readonly number[];
   archive?: (before: ContextMessage[], reason: CompactionReason) => Promise<void>;
-  commit?: (plan: CompactionCommit) => Promise<void>;
+  commit?: (plan: CompactionCommit, signal?: AbortSignal) => Promise<void>;
   onNotice?: (notice: CompactionNotice) => void | Promise<void>;
+  /** Observation only: progress delivery cannot undo a successful durable commit. */
+  onProgress?: (event: CompactionProgress) => void | Promise<void>;
   onCompacted?: (plan: CompactionCommit) => void | Promise<void>;
   onSummaryChunk?: (text: string) => void;
   summarize?: (input: CompactionSummaryInput) => Promise<string>;

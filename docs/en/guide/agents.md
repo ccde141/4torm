@@ -4,11 +4,11 @@
 
 The Console is the management entry point for every agent. Agents created here persist and can be reused in Monsoon, Convection, Cyclone, Tradewind, and Tide. You configure one agent, not a temporary role tied to a conversation.
 
-Each card shows the agent's name, role, current status, recent activity, default model, and workspace. The summary shows the total agent count, the number confirmed idle, and the conversation count. Select the whole card to open details and change its configuration.
+Each card shows the agent's name, role, current status, recent activity, default model, and workspace. The summary shows the total agent count, idle count, and conversation count. Select the whole card to open details and change its configuration.
 
 Status and recent activity come from actual feature runs. If some activity cannot be read, the card indicates incomplete information. An unavailable model configuration is shown separately.
 
-![Example agent cards in the Console](/images/guide/agent-console-overview.webp)
+![Example agent cards in the Console](/images/guide/agent-console-current.png)
 
 ## View Agent Details
 
@@ -18,13 +18,15 @@ Select a card to open the detail window. Its navigation includes **Overview**, *
 - **Statistics** counts only visible items explicitly attributed to this agent. It indicates when some features could not be read.
 - **Configuration, Prompt, Tools, Skills, and Memory** contain the agent's persistent settings. Save configuration changes to apply them.
 
-![Agent details and current status](/images/guide/agent-detail.webp)
+![Agent details and current status](/images/guide/agent-detail-current.png)
 
 ## Create an Agent
 
 Select **Create Agent** in the upper-right corner. The form has **Basic**, **Prompt**, **Tools**, and **Skills** tabs. You can finish the remaining settings later by opening the agent's card.
 
-![Basic settings while creating an agent](/images/guide/agent-create.webp)
+The **Prompt** tab starts with a general collaboration prompt covering fact-checking, tool use, handoffs, and reporting results. Adapt it to the Agent's purpose. It is a starting point for newly created Agents and does not replace prompts already saved for existing Agents.
+
+![Basic settings while creating an agent](/images/guide/agent-create-current.png)
 
 - **Name** is how the agent appears throughout the app.
 - **Role** is a short UI label. It does not replace the role prompt.
@@ -45,7 +47,7 @@ The agent receives instructions for enabled capabilities. Your selection determi
 
 Foundation, custom, and MCP tools appear in separate sections. Select the tools you need, then click **Save** to apply the changes.
 
-![Framework capability groups on the agent Tools page](/images/guide/agent-configuration.webp)
+![Framework capability groups on the agent Tools page](/images/guide/agent-configuration-current.png)
 
 Installed skills are enabled for a new agent by default and can be deselected individually. Their instructions do not occupy conversation context continuously; the agent loads a skill through `use_skill` when needed. Tools bundled with a skill are added with that skill and need not be selected again in the ordinary tool list.
 
@@ -64,6 +66,8 @@ Ordinary conversations can use their current model or a fixed compaction model. 
 If the preferred model cannot complete compaction, the system reports the reason and tries a different configured fallback model. If that also fails, it preserves the original content and displays the error. The automatic compaction switch controls threshold-triggered compaction. If the model API explicitly reports that the input exceeds its limit, the system still attempts compaction before continuing the current request, even with automatic compaction disabled.
 
 To compact manually, send `/compact` to summarize the current conversation's entire history while archiving the original records. Independent Tide conversations use the **Compact session** button in the task details.
+
+During compaction, the interface shows progress and provides **Stop compaction**. Stopping or failing preserves the original content, and you can start compaction again when needed. The conversation's summary changes only after it has been saved successfully. Select the **History summary** divider to expand the summary. During replies and compaction, the last known usage remains visible until the count is refreshed when the operation ends.
 
 ## Modify or Delete an Agent
 

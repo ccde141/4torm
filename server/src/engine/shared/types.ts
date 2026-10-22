@@ -34,12 +34,22 @@ export interface ProviderImage {
   dataUrl: string;
 }
 
+/** MCP 工具产物的持久引用；原始图片不写进消息、工具事件或归档 JSON。 */
+export interface ToolImageRef {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
 /** 单条上下文消息 */
 export interface ContextMessage {
   role: ContextRole;
   content: string;
-  /** 仅允许出现在 user 消息中。 */
+  /** 已解析的图片；工具图片仅在构造供应商请求时临时填入，不写回历史。 */
   images?: ProviderImage[];
+  /** 工具返回的图片引用，与本条工具结果一起保存和压缩。 */
+  toolImages?: ToolImageRef[];
   /** Provider 原生推理内容；与正文分开，但需随 assistant 历史原样回传。 */
   reasoningContent?: string;
   /** 供应商要求逐字回传的结构化推理块，不用于界面展示。 */

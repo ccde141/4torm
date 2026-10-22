@@ -21,7 +21,7 @@ export function cycloneAgentBulletinManifests(): ModuleMethodManifest[] {
     id: 'postCollaborationBulletin', kind: 'command', permission: 'design',
     audiences: ['agent', 'internal'],
     agentTool: { name: 'post_collaboration_bulletin',
-      description: '向气旋公告板追加一条信息；作者由框架记录为当前 Agent，不能改写或删除旧条目。' },
+      description: '向气旋公告板追加一条信息；作者由框架记录当前执行身份，不能改写或删除旧条目。' },
     inputSchema: { type: 'object', additionalProperties: false,
       required: ['workshopId', 'text'], properties: {
         workshopId: id, text: { type: 'string', minLength: 1, maxLength: 1_200 },
@@ -41,7 +41,8 @@ export function cycloneAgentBulletinHandlers(
     postCollaborationBulletin: { parse: parsePost, invoke: (context, input) => {
       if (context.actor.type !== 'agent') throw invalidActor();
       const { workshopId, text } = input as ReturnType<typeof parsePost>;
-      return service.post(workshopId, text, context.actor.id);
+      return service.post(workshopId, text, context.actor.id,
+        context.audience === 'internal' && context.requestId.startsWith('supervisor:') ? 'supervisor' : 'agent');
     } },
   };
 }

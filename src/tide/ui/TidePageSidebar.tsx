@@ -3,8 +3,9 @@ import { useLocale } from '../../i18n/LocaleContext';
 import { PresenceItems } from '../../components/common/PresenceItems';
 import TaskItem from './TideTaskItem';
 import { formatRelative } from './tide-styles';
-import { agentBtn, leftPanelStyle, sectionLabel, sessItem } from './tide-page-styles';
+import { agentBtn, leftPanelStyle, sectionLabel } from './tide-page-styles';
 import { isOptimisticTideRun } from './tide-runtime';
+import TideIcon from './TideIcon';
 
 interface Props {
   entities: TideEntities;
@@ -63,16 +64,17 @@ export default function TidePageSidebar({ entities, manualRuns, onAgent, onTask,
         {entities.sessionList.length === 0 && <div style={{ fontSize: 'var(--text-xs)',
           color: 'var(--color-text-tertiary)', padding: 'var(--space-2)' }}>
           {t('tide.page.noSessions')}</div>}
-        {entities.sessionList.map(session => <div key={`${session.agentId}:${session.id}`}
+        {entities.sessionList.map(session => <button type="button" key={`${session.agentId}:${session.id}`}
+          className="tide-session-link" aria-pressed={selectedSessionId === session.id}
           onClick={() => onSession(session.id)}
-          style={{ ...sessItem, background: selectedSessionId === session.id
-            ? 'var(--color-accent-subtle)' : 'transparent' }}>
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-primary)',
-            fontWeight: 'var(--font-medium)' }} className="text-truncate">{session.title}</div>
-          <div style={{ fontSize: '10px', color: 'var(--color-text-tertiary)' }}>
+          title={session.title}>
+          <TideIcon name="message" /><span className="tide-session-link__content">
+          <strong className="text-truncate">{session.title}</strong>
+          <small>
             {t('tide.page.sessionMeta', { count: session.messageCount,
-              time: formatRelative(session.updatedAt, locale) })}</div>
-        </div>)}
+              time: formatRelative(session.updatedAt, locale) })}</small>
+          </span>
+        </button>)}
       </div>
     </div>}
   </div>;

@@ -4,24 +4,29 @@ import { activeNodeRunners } from '../../../engine/tradewind/nodes/agent.js';
 import { activeMeetings } from '../../../engine/tradewind/nodes/meeting.js';
 import { tradewindRunDir } from '../../../services/data-paths.js';
 import { getActiveTradewindOrchestrator } from '../../../services/tradewind-execution.js';
+import { sameTradewindDataRoot } from '../../../services/tradewind-execution-registry.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
-import type { TradewindReadPort } from '../application/read-port.js';
+import type { TradewindReadPort, TradewindReadIdentity } from '../application/read-port.js';
 import { nodeStatuses } from './node-status-view.js';
 import { projectAgentNodeConversation } from './agent-node-view.js';
 import type { NodeSnapshot } from '../../../engine/tradewind/execution/node-runner.js';
 import { readAgentMeetingConversation } from './agent-meeting-read.js';
 import { readTokenUsageFile } from '../../../engine/tradewind/execution/token-usage.js';
+import { projectNodeHistory } from '../../../engine/tradewind/execution/node-history-view.js';
+import type { ContextMessage } from '../../../engine/shared/types.js';
 
 export function createTradewindReadPort(dataDir: string): TradewindReadPort {
   return {
-    nodeStatuses,
-    nodeStatus: nodeId => {
-      const runner = activeNodeRunners.get(nodeId);
+    nodeStatuses: identity => nodeStatuses({ ...identity, dataDir }),
+    nodeStatus: (nodeId, identity) => {
+      const runner = activeNodeRunners.get(nodeId, resolveExecution(identity, dataDir));
       if (!runner) throw missing('节点尚未激活');
+      if (!sameTradewindDataRoot(runner.getDataDir(), dataDir)) throw missing('节点执行身份不匹配');
+      if (identity?.workflowId && runner.getIdentity().workflowId !== identity.workflowId) throw missing('节点执行身份不匹配');
       return { busy: runner.isBusy(), ...runner.getIdentity() };
     },
-    nodeSnapshot: nodeId => nodeSnapshot(dataDir, nodeId),
-    meetingStatus: nodeId => meetingStatus(nodeId),
+    nodeSnapshot: (nodeId, identity) => nodeSnapshot(dataDir, nodeId, identity),
+    meetingStatus: (nodeId, identity) => meetingStatus(nodeId, identity, dataDir),
     agentNodeConversation: input => agentNodeConversation(dataDir, input),
     agentMeetingConversation: input => readAgentMeetingConversation(dataDir, input),
   };
@@ -30,10 +35,10 @@ export function createTradewindReadPort(dataDir: string): TradewindReadPort {
 async function agentNodeConversation(
   dataDir: string, input: { workflowId: string; executionId: string; nodeId: string; limit: number },
 ) {
-  const active = getActiveTradewindOrchestrator();
+  const active = getActiveTradewindOrchestrator({ ...input, dataDir });
   const sameExecution = active?.getWorkflowId() === input.workflowId
     && active.getExecutionId() === input.executionId;
-  const runner = sameExecution ? activeNodeRunners.get(input.nodeId) : undefined;
+  const runner = sameExecution ? activeNodeRunners.get(input.nodeId, input.executionId) : undefined;
   if (runner) return projectAgentNodeConversation(runner.getSnapshot(), input);
   const runDir = tradewindRunDir(dataDir, input.workflowId, input.executionId);
   const meta = await readJson(path.join(runDir, 'meta.json'));
@@ -46,7 +51,7 @@ async function agentNodeConversation(
       message: '节点会话记录格式无效', source: 'tradewind.read', retryable: false });
   }
   const tokenUsage = await readTokenUsageFile(path.join(runDir, 'nodes', input.nodeId, 'usage.json'));
-  const snapshot: NodeSnapshot = { messages: raw as NodeSnapshot['messages'],
+  const snapshot: NodeSnapshot = { messages: projectNodeHistory(raw as ContextMessage[]),
     roundLog: [], busy: false, lastSeq: 0, tokenUsage };
   return projectAgentNodeConversation(snapshot, input);
 }
@@ -70,20 +75,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-async function nodeSnapshot(dataDir: string, nodeId: string) {
-  const runner = activeNodeRunners.get(nodeId);
+async function nodeSnapshot(dataDir: string, nodeId: string, identity?: TradewindReadIdentity) {
+  const requestedExecution = resolveExecution(identity, dataDir);
+  const runner = activeNodeRunners.get(nodeId, requestedExecution);
+  if (runner && !sameTradewindDataRoot(runner.getDataDir(), dataDir)) throw missing('节点执行身份不匹配');
+  if (runner && identity?.workflowId && runner.getIdentity().workflowId !== identity.workflowId) throw missing('节点执行身份不匹配');
   if (runner) return { ...runner.getSnapshot(), ...runner.getIdentity() };
-  const orchestrator = getActiveTradewindOrchestrator();
-  const executionId = orchestrator?.getExecutionId();
-  const workflowId = orchestrator?.getWorkflowId();
+  const orchestrator = getActiveTradewindOrchestrator({ ...identity, dataDir });
+  const executionId = identity?.executionId ?? orchestrator?.getExecutionId();
+  const workflowId = identity?.workflowId ?? orchestrator?.getWorkflowId();
   if (executionId && workflowId) {
-    const file = path.join(tradewindRunDir(dataDir, workflowId, executionId),
+    const directory = tradewindRunDir(dataDir, workflowId, executionId);
+    const meta = await readJson(path.join(directory, 'meta.json'));
+    if (!isRecord(meta) || meta.workflowId !== workflowId || meta.executionId !== executionId) {
+      throw missing('节点执行身份不匹配');
+    }
+    const file = path.join(directory,
       'nodes', nodeId, 'messages.json');
     try {
       const messages = JSON.parse(await fs.readFile(file, 'utf8')) as unknown;
       if (!Array.isArray(messages)) throw new Error('节点消息记录格式无效');
       const tokenUsage = await readTokenUsageFile(path.join(path.dirname(file), 'usage.json'));
-      return { messages: messages.slice(1), roundLog: [], busy: false, lastSeq: 0,
+      return { messages: projectNodeHistory((messages as ContextMessage[]).slice(1)), roundLog: [], busy: false, lastSeq: 0,
         tokenUsage, workflowId, executionId };
     } catch (error) {
       if (!isMissingFile(error)) throw error;
@@ -92,9 +105,11 @@ async function nodeSnapshot(dataDir: string, nodeId: string) {
   return { messages: [], roundLog: [], busy: false, lastSeq: 0 };
 }
 
-function meetingStatus(nodeId: string) {
-  const meeting = activeMeetings.get(nodeId);
+function meetingStatus(nodeId: string, identity?: TradewindReadIdentity, dataDir?: string) {
+  const meeting = activeMeetings.get(nodeId, resolveExecution(identity, dataDir));
   if (!meeting) throw missing('No active meeting');
+  if (dataDir && !sameTradewindDataRoot(meeting.dataDir, dataDir)) throw missing('会议执行身份不匹配');
+  if (identity?.workflowId && meeting.workflowId !== identity.workflowId) throw missing('会议执行身份不匹配');
   return {
     nodeId, workflowId: meeting.workflowId, executionId: meeting.executionId,
     round: meeting.session.round,
@@ -106,9 +121,15 @@ function meetingStatus(nodeId: string) {
     publicMessages: meeting.session.publicMessages,
     chairMessages: meeting.session.chairMessages,
     compactionNotice: meeting.session.compactionNotice,
+    compactions: meeting.session.compactions,
     tokenUsage: meeting.session.usageRecorder.state,
     streamingCurrent: meeting.session.streamingCurrent || null,
   };
+}
+
+function resolveExecution(identity?: TradewindReadIdentity, dataDir?: string): string | undefined {
+  if (identity?.executionId) return identity.executionId;
+  return getActiveTradewindOrchestrator({ ...identity, dataDir })?.getExecutionId();
 }
 
 function isMissingFile(error: unknown): boolean {

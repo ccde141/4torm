@@ -1,3 +1,4 @@
+import type { ToolArguments } from './tool-arguments.js';
 import { callLLM } from './llm-bridge.js';
 import type { LoadedAgent } from './agent-loader.js';
 import type { ToolDef } from './tool-defs-loader.js';
@@ -8,6 +9,7 @@ import {
   type LLMCaller,
   type ToolCallOutcome,
   type ToolCaller,
+  type ReActLoopResult,
 } from './react/native-loop.js';
 
 export interface NativeSubAgentResult {
@@ -20,8 +22,8 @@ export interface NativeSubAgentResult {
 export type NativeSubAgentEvent =
   | { type: 'token'; data: { t: string } }
   | { type: 'reasoning'; data: { t: string } }
-  | { type: 'tool_call'; data: { tool: string; args: Record<string, string> } }
-  | { type: 'tool_result'; data: { tool: string; result: string; ok: boolean } }
+  | { type: 'tool_call'; data: { tool: string; args: ToolArguments } }
+  | { type: 'tool_result'; data: { tool: string; result: string; ok: boolean; toolImages?: import('./types.js').ToolImageRef[] } }
   | { type: 'done'; data: NativeSubAgentResult };
 
 export interface NativeSubAgentParams {
@@ -41,12 +43,13 @@ export interface NativeSubAgentParams {
   parentSandboxLevel: SandboxLevel;
 }
 
-interface LoopResult { content: string; turns: number }
+type LoopResult = Pick<ReActLoopResult, 'content' | 'turns' | 'termination'>;
 interface AbortLink { signal: AbortSignal; dispose: () => void }
 interface Runtime {
   params: NativeSubAgentParams;
   messages: ContextMessage[];
   doneSummary?: string;
+  protocolError?: string;
   toolRounds: number;
   doneController: AbortController;
   mainAbort: AbortLink;
@@ -100,10 +103,15 @@ function createMessages(params: NativeSubAgentParams): ContextMessage[] {
 async function executeRuntimeTool(
   runtime: Runtime,
   tool: string,
-  args: Record<string, string>,
+  args: ToolArguments,
 ): Promise<string | ToolCallOutcome> {
   if (tool === 'done') {
-    runtime.doneSummary = args.summary || '';
+    if (typeof args.summary !== 'string' || !args.summary.trim()) {
+      runtime.protocolError = 'done requires a non-empty summary.';
+      runtime.doneController.abort();
+      return { result: runtime.protocolError, ok: false };
+    }
+    runtime.doneSummary = args.summary;
     runtime.doneController.abort();
     return '已收到完成信号';
   }
@@ -119,6 +127,7 @@ async function executeRuntimeTool(
     );
     runtime.params.emitEvent({ type: 'tool_result', data: {
       tool, result: outcome.result, ok: outcome.ok,
+      ...(outcome.toolImages?.length ? { toolImages: outcome.toolImages } : {}),
     } });
     return outcome;
   } catch (cause) {
@@ -171,7 +180,7 @@ async function runLoop(runtime: Runtime, maxTurns: number, signal: AbortSignal):
     signal,
     onEvent: event => emitLoopEvent(runtime, event),
   });
-  return { content: result.content, turns: result.turns };
+  return result;
 }
 
 function finish(runtime: Runtime, result: NativeSubAgentResult): NativeSubAgentResult {
@@ -187,11 +196,11 @@ function success(runtime: Runtime): NativeSubAgentResult {
   });
 }
 
-async function remindDone(runtime: Runtime): Promise<void> {
+async function remindDone(runtime: Runtime): Promise<LoopResult | undefined> {
   runtime.messages.push({ role: 'user', content: '请调用 done 工具提交你的结果。' });
   if (runtime.params.signal.aborted) return;
   try {
-    await runLoop(runtime, 5, runtime.mainAbort.signal);
+    return await runLoop(runtime, 5, runtime.mainAbort.signal);
   } catch (cause) {
     if (!runtime.doneSummary && !runtime.params.signal.aborted) throw cause;
   }
@@ -203,7 +212,7 @@ async function runFallback(runtime: Runtime, main: LoopResult): Promise<NativeSu
     content: '轮次已耗尽。立即调用 done 汇报已完成的工作，不要再调用其他工具。',
   });
   const fallbackAbort = linkAbortSignals(runtime.params.signal, runtime.doneController.signal);
-  let retry: LoopResult = { content: '', turns: 0 };
+  let retry: LoopResult = main;
   try {
     retry = await runLoop(runtime, 3, fallbackAbort.signal);
   } catch (cause) {
@@ -213,6 +222,8 @@ async function runFallback(runtime: Runtime, main: LoopResult): Promise<NativeSu
   }
 
   const rounds = runtime.params.maxRounds + retry.turns;
+  const failure = terminalFailure(runtime, retry);
+  if (failure) return finish(runtime, failure);
   if (runtime.doneSummary !== undefined) {
     return finish(runtime, { status: 'timeout', summary: runtime.doneSummary, rounds });
   }
@@ -226,15 +237,32 @@ async function runFallback(runtime: Runtime, main: LoopResult): Promise<NativeSu
 }
 
 async function finishAfterMain(runtime: Runtime, main: LoopResult): Promise<NativeSubAgentResult> {
+  const failure = terminalFailure(runtime, main);
+  if (failure) return finish(runtime, failure);
   if (runtime.doneSummary !== undefined) return success(runtime);
   if (runtime.params.signal.aborted) {
     return finish(runtime, {
       status: 'aborted', summary: 'SubAgent 被外部中止', rounds: runtime.toolRounds,
     });
   }
-  await remindDone(runtime);
+  const reminder = await remindDone(runtime);
+  const reminderFailure = reminder && terminalFailure(runtime, reminder);
+  if (reminderFailure) return finish(runtime, reminderFailure);
   if (runtime.doneSummary !== undefined) return success(runtime);
   return runFallback(runtime, main);
+}
+
+function terminalFailure(runtime: Runtime, result: LoopResult): NativeSubAgentResult | undefined {
+  if (runtime.protocolError) return {
+    status: 'error', summary: 'SubAgent 协议错误', rounds: runtime.toolRounds, error: runtime.protocolError,
+  };
+  if (runtime.doneSummary !== undefined) return;
+  const termination = result.termination;
+  if (termination.status === 'failed'
+    || (termination.status === 'anomaly' && termination.error.code !== 'REACT_TURN_LIMIT')) {
+    return { status: 'error', summary: result.content || 'SubAgent 执行失败',
+      rounds: runtime.toolRounds, error: termination.error.message };
+  }
 }
 
 export async function runNativeSubAgent(

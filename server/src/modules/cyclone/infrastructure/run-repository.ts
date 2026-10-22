@@ -13,6 +13,7 @@ import type {
 
 export class CycloneRunRepository {
   private readonly latestByOperation = new Map<string, CycloneRunSnapshot>();
+  private readonly recordsByRun = new Map<string, CycloneRunSnapshot>();
   private readonly notifier = new OperationNotifier();
   private initializing: Promise<number> | null = null;
   private initialized = false;
@@ -36,6 +37,7 @@ export class CycloneRunRepository {
     };
     await this.persist(record);
     this.latestByOperation.set(record.operationId, record);
+    this.recordsByRun.set(runKey(record), record);
     this.notifier.publish(record);
     return structuredClone(record);
   }
@@ -57,6 +59,7 @@ export class CycloneRunRepository {
     };
     await this.persist(record);
     this.latestByOperation.set(operationId, record);
+    this.recordsByRun.set(runKey(record), record);
     this.notifier.publish(record);
     return structuredClone(record);
   }
@@ -92,17 +95,13 @@ export class CycloneRunRepository {
       .map(record => structuredClone(record));
   }
 
-  async history(): Promise<CycloneRunSnapshot[]> {
+  async history(workshopId?: string): Promise<CycloneRunSnapshot[]> {
     await this.initialize();
-    let entries: string[];
-    try {
-      entries = await fs.readdir(cycloneRuntimeDir(this.dataDir));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw storageError('CYCLONE_RUNS_READ_FAILED', '气旋运行记录读取失败', error);
-    }
-    return Promise.all(entries.filter(name => name.endsWith('.json'))
-      .map(name => this.read(path.join(cycloneRuntimeDir(this.dataDir), name))));
+    // Runs enter this projection only after their durable write succeeds. A console
+    // refresh must not re-read every workshop's historical files on every poll.
+    return [...this.recordsByRun.values()]
+      .filter(record => workshopId === undefined || record.workshopId === workshopId)
+      .map(record => structuredClone(record));
   }
 
   subscribe(operationId: string, runId: string, listener: () => void): () => void {
@@ -134,6 +133,10 @@ export class CycloneRunRepository {
       const previous = this.latestByOperation.get(record.operationId);
       if (!previous || compareRuns(record, previous) > 0) {
         this.latestByOperation.set(record.operationId, record);
+      }
+      const priorRun = this.recordsByRun.get(runKey(record));
+      if (!priorRun || record.updatedAt >= priorRun.updatedAt) {
+        this.recordsByRun.set(runKey(record), record);
       }
     }
     this.initialized = true;
@@ -171,6 +174,10 @@ export class CycloneRunRepository {
   }
 }
 
+function runKey(record: CycloneRunSnapshot): string {
+  return `${record.operationId}\0${record.runId}`;
+}
+
 function runFile(dataDir: string, operationId: string, runId: string): string {
   const name = createHash('sha256').update(operationId).update('\0').update(runId).digest('hex');
   return path.join(cycloneRuntimeDir(dataDir), `${name}.json`);
@@ -195,10 +202,11 @@ function parseRecord(value: unknown): CycloneRunSnapshot {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('record');
   const record = value as Partial<CycloneRunSnapshot>;
   const statuses: CycloneRunStatus[] = ['running', 'completed', 'aborted', 'failed', 'crashed'];
-  const phases = ['seat-chat', 'seat-resume', 'seat-compact', 'chair-chat', 'room-intro', 'room-speak'];
+  const phases = ['seat-chat', 'seat-resume', 'seat-compact', 'chair-chat', 'room-intro', 'room-speak',
+    'supervisor-chat', 'supervisor-resume', 'supervisor-compact'];
   if (!identifier(record.operationId) || !identifier(record.runId)
     || !identifier(record.workshopId) || !identifier(record.targetId)
-    || (record.targetKind !== 'seat' && record.targetKind !== 'room')
+    || !['seat', 'room', 'supervisor'].includes(record.targetKind ?? '')
     || !record.phase || !phases.includes(record.phase)
     || !record.status || !statuses.includes(record.status)
     || !timestamp(record.startedAt) || !timestamp(record.updatedAt)

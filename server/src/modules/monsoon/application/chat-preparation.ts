@@ -1,5 +1,5 @@
 import type { LoadedAgent } from '../../../engine/shared/agent-loader.js';
-import type { ContextMessage, NativeToolCall } from '../../../engine/shared/types.js';
+import type { ContextMessage, NativeToolCall, ProviderReasoningEnvelope, ToolImageRef } from '../../../engine/shared/types.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
 import type { ConversationImageRef } from '../infrastructure/attachments.js';
 import type { MonsoonTurn, MonsoonTurnSpec } from '../runtime/turn-contract.js';
@@ -9,8 +9,11 @@ export interface MonsoonChatMessage {
   content: string;
   images?: ConversationImageRef[];
   reasoningContent?: string;
+  reasoningEnvelope?: ProviderReasoningEnvelope;
   toolCalls?: NativeToolCall[];
   toolCallId?: string;
+  toolOk?: boolean;
+  toolImages?: ToolImageRef[];
 }
 
 export interface MonsoonChatInput {

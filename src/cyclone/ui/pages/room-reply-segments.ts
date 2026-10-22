@@ -1,7 +1,11 @@
+import { projectContactResult } from './contact-result';
+import type { ToolImageRef } from '../../../engine/tool-media';
+
 export interface FeedTool {
   tool: string;
-  args: Record<string, string>;
+  args: Record<string, unknown>;
   result?: string;
+  toolImages?: ToolImageRef[];
   status: 'running' | 'success' | 'error';
 }
 
@@ -18,7 +22,7 @@ export function appendRoomText(segments: RoomReplySegment[], content: string): v
 }
 
 export function appendRoomTool(
-  segments: RoomReplySegment[], tool: string, args: Record<string, string>,
+  segments: RoomReplySegment[], tool: string, args: Record<string, unknown>,
 ): void {
   const current = segments.at(-1);
   const item: FeedTool = { tool, args, status: 'running' };
@@ -27,7 +31,7 @@ export function appendRoomTool(
 }
 
 export function completeRoomTool(
-  segments: RoomReplySegment[], result: string, ok: boolean,
+  segments: RoomReplySegment[], result: string, ok: boolean, toolImages?: ToolImageRef[],
 ): void {
   for (let index = segments.length - 1; index >= 0; index--) {
     const segment = segments[index];
@@ -35,7 +39,9 @@ export function completeRoomTool(
     const tool = segment.tools.findLast(item => item.status === 'running');
     if (tool) {
       tool.result = result;
-      tool.status = ok ? 'success' : 'error';
+      tool.toolImages = toolImages;
+      tool.status = tool.tool === 'contact' || tool.tool === 'contact_read'
+        ? projectContactResult(result, ok).status : ok ? 'success' : 'error';
       return;
     }
   }

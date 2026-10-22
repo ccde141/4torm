@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { agentTaskboardFile } from '../../services/data-paths.js';
+import { FrameworkError } from './framework-error.js';
 
 export type TaskStatus = 'todo' | 'doing' | 'done' | 'blocked';
 export interface Task { id: string; title: string; status: TaskStatus; note?: string }
@@ -20,6 +21,7 @@ export interface TaskBoardExecution {
   ok: boolean;
   meta?: { taskboard: TaskBoard | null };
   conflict?: true;
+  errorCode?: string;
 }
 
 const STATUSES: TaskStatus[] = ['todo', 'doing', 'done', 'blocked'];
@@ -33,16 +35,30 @@ export function taskboardTempFile(filePath: string): string {
 }
 
 export function readTaskboard(fp: string): TaskBoard | null {
+  let raw: string;
   try {
-    const parsed = JSON.parse(fs.readFileSync(fp, 'utf-8')) as Partial<TaskBoard>;
-    return { ...parsed, revision: validRevision(parsed.revision) } as TaskBoard;
-  } catch {
-    return null;
+    raw = fs.readFileSync(fp, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new FrameworkError({ code: 'TASKBOARD_STORE_IO', kind: 'io',
+      message: '任务板读取失败，原文件已保留。', source: 'taskboard.store', retryable: false }, { cause: error });
   }
-}
-
-function validRevision(value: unknown): number {
-  return Number.isInteger(value) && (value as number) >= 0 ? value as number : 0;
+  try {
+    const parsed = JSON.parse(raw) as Partial<TaskBoard> | null;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+      || typeof parsed.goal !== 'string' || !Array.isArray(parsed.tasks)
+      || typeof parsed.updatedAt !== 'number' || !Number.isFinite(parsed.updatedAt)
+      || (parsed.revision !== undefined && (!Number.isSafeInteger(parsed.revision) || parsed.revision < 0))
+      || parsed.tasks.some(task => !task || typeof task !== 'object'
+        || typeof task.id !== 'string' || typeof task.title !== 'string'
+        || !STATUSES.includes(task.status) || (task.note !== undefined && typeof task.note !== 'string'))) {
+      throw new Error('invalid taskboard');
+    }
+    return { ...parsed, revision: parsed.revision ?? 0 } as TaskBoard;
+  } catch (error) {
+    throw new FrameworkError({ code: 'TASKBOARD_STORE_CORRUPT', kind: 'io',
+      message: '任务板数据损坏，原文件已保留，请修复后再继续。', source: 'taskboard.store', retryable: false }, { cause: error });
+  }
 }
 
 function normalizeTasks(raw: unknown): Task[] {
@@ -81,13 +97,18 @@ export async function execTaskBoard(
   if (!boardFile) {
     return { result: '任务板需要会话上下文（本次调用缺少会话定位），当前环境暂不支持任务板。', ok: false };
   }
-  const previous = mutationQueues.get(boardFile) ?? Promise.resolve();
+  const absolute = path.resolve(boardFile);
+  const key = process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+  const previous = mutationQueues.get(key) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(() => execTaskBoardMutation(boardFile, args));
-  mutationQueues.set(boardFile, current);
+  mutationQueues.set(key, current);
   try {
     return await current;
+  } catch (error) {
+    if (error instanceof FrameworkError) return { result: error.message, ok: false, errorCode: error.data.code };
+    throw error;
   } finally {
-    if (mutationQueues.get(boardFile) === current) mutationQueues.delete(boardFile);
+    if (mutationQueues.get(key) === current) mutationQueues.delete(key);
   }
 }
 
@@ -128,8 +149,12 @@ function execTaskBoardMutation(
   fs.mkdirSync(path.dirname(fp), { recursive: true });
   // 原子写：先写 .tmp 再 renameSync 覆盖，防止进程中途被杀留下半截 JSON 损坏任务板。
   const tmp = taskboardTempFile(fp);
-  fs.writeFileSync(tmp, JSON.stringify(board, null, 2), 'utf-8');
-  fs.renameSync(tmp, fp);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(board, null, 2), 'utf-8');
+    fs.renameSync(tmp, fp);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
   return { result: `任务板已更新：${summarizeTaskboard(board)}`, ok: true, meta: { taskboard: board } };
 }
 

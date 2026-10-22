@@ -4,6 +4,7 @@ import type { ToolPreparationProgress } from '../shared/tool-progress.js';
 import type { SandboxLevel } from '../shared/sandbox-prompt.js';
 import type { ToolDef } from '../shared/tool-defs-loader.js';
 import type { FrameworkErrorKind } from '../shared/framework-error.js';
+import type { CompactionProgress } from '../shared/compaction/index.js';
 import type { ConversationInputEvent } from './input-runtime.js';
 import type { DelegateToolEvent } from './delegate-tool.js';
 import type { SessionToolExtension } from './session-tool-dispatcher.js';
@@ -13,12 +14,14 @@ import type { LLMCaller } from '../shared/react/native-loop.js';
 export type ConversationEvent =
   | ConversationInputEvent
   | DelegateToolEvent
+  | CompactionProgress
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
   | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
   | ({ type: 'tool-progress' } & ToolPreparationProgress)
-  | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
+  | { type: 'tool-call'; tool: string; args: Record<string, unknown> }
+  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown;
+      toolImages?: import('../shared/types.js').ToolImageRef[] }
   | { type: 'ask'; question: string; options?: string[] }
   | { type: 'answer'; content: string; rawContent: string;
       native?: boolean; nativeContext?: ContextMessage[] }
@@ -36,6 +39,7 @@ export type ConversationEvent =
   | { type: 'done' };
 
 export interface SessionRunnerOpts {
+  toolMediaScope?: import('../shared/tool-media-access.js').ToolMediaScope;
   mainAgent?: boolean;
   extension?: SessionToolExtension & { createHandoff?: () => TeamHandoff };
   memberTools?: string[];

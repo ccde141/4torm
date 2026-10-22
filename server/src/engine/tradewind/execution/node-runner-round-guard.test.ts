@@ -68,7 +68,10 @@ test('节点快照公开当前轮次身份与来源', () => {
   });
   assert.equal(nodeRunner.getSnapshot().runId, 'round-current');
   assert.match(runner, /roundSource\?: MessageSource \| null/);
-  assert.match(runner, /roundSource: this\.pausedMsg\?\.source \?\? this\.currentRoundSource/);
+  Object.assign(nodeRunner, { pausedMsg: { source: 'envelope', content: 'paused delivery' } });
+  assert.equal(nodeRunner.getSnapshot().roundSource, 'human');
+  Object.assign(nodeRunner, { busy: false, currentRoundSource: null, roundIdentity: null });
+  assert.equal(nodeRunner.getSnapshot().roundSource, 'envelope');
 });
 
 test('运行状态探针不复制对话和轮次事件', () => {

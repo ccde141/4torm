@@ -1,8 +1,9 @@
+export interface TradewindReadIdentity { executionId?: string; workflowId?: string }
 export interface TradewindReadPort {
-  nodeStatuses(): unknown;
-  nodeStatus(nodeId: string): unknown;
-  nodeSnapshot(nodeId: string): Promise<unknown>;
-  meetingStatus(nodeId: string): unknown;
+  nodeStatuses(identity?: TradewindReadIdentity): unknown;
+  nodeStatus(nodeId: string, identity?: TradewindReadIdentity): unknown;
+  nodeSnapshot(nodeId: string, identity?: TradewindReadIdentity): Promise<unknown>;
+  meetingStatus(nodeId: string, identity?: TradewindReadIdentity): unknown;
   agentNodeConversation(input: { workflowId: string; executionId: string;
     nodeId: string; limit: number }): Promise<unknown>;
   agentMeetingConversation(input: { workflowId: string; executionId: string;

@@ -14,6 +14,10 @@ import type { NodeRunner, NodeRunnerEvent, NodeRunnerOpts } from './node-runner'
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolCallOutcome } from '../../shared/react/native-loop.js';
+import { SUB_AGENT_MAX_ROUNDS } from '../../shared/sub-agent-budget.js';
+import { subAgentReport } from '../../shared/sub-agent-result.js';
+import { rememberToolImages } from '../../shared/tool-media-access.js';
+import type { ToolImageRef } from '../../shared/types.js';
 
 // ── Delegate ─────────────────────────────────────────────────────
 
@@ -28,13 +32,14 @@ export async function execDelegate(
   const delegateId = `del-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
   emit({ type: 'delegate-start', task, delegateId });
+  const images: ToolImageRef[] = [];
 
   const result = await runSubAgent({
     task, context, systemPrompt: subSystemPrompt,
     agentId: opts.agentId,
     dataDir: opts.dataDir,
     signal: opts.signal,
-    maxRounds: 100,
+    maxRounds: SUB_AGENT_MAX_ROUNDS,
     parentSandboxLevel: opts.sandboxLevel,
     emit: (ev: SubAgentEvent) => {
       switch (ev.type) {
@@ -45,11 +50,19 @@ export async function execDelegate(
           emit({ type: 'delegate-tool-call', delegateId, tool: ev.data.tool, args: ev.data.args });
           break;
         case 'tool_result':
-          emit({ type: 'delegate-tool-result', delegateId, tool: ev.data.tool, result: ev.data.result, ok: ev.data.ok });
+          if (ev.data.toolImages?.length) {
+            images.push(...ev.data.toolImages);
+            rememberToolImages({ dataDir: opts.dataDir, feature: 'tradewind', target: {
+              workflowId: opts.workflowId, executionId: opts.executionId, nodeId: opts.nodeId, kind: 'node' } }, ev.data.toolImages);
+          }
+          emit({ type: 'delegate-tool-result', delegateId, tool: ev.data.tool, result: ev.data.result, ok: ev.data.ok,
+            ...(ev.data.toolImages?.length ? { toolImages: ev.data.toolImages } : {}) });
           break;
       }
     },
   });
+
+  const summary = subAgentReport(result);
 
   // 归档 sub-agent meta + context
   if (opts.persistDir) {
@@ -62,12 +75,13 @@ export async function execDelegate(
         rounds: result.rounds,
         timestamp: new Date().toISOString(),
       }, null, 2));
-      await fs.writeFile(path.join(subDir, 'summary.txt'), result.summary);
+      await fs.writeFile(path.join(subDir, 'summary.txt'), summary);
     } catch { /* 归档失败不阻塞 */ }
   }
 
-  emit({ type: 'delegate-done', delegateId, summary: result.summary, status: result.status });
-  return { result: `[${result.status}] ${result.summary}`, ok: result.status === 'success' };
+  emit({ type: 'delegate-done', delegateId, summary, status: result.status });
+  return { result: `[${result.status}] ${summary}`, ok: result.status === 'success',
+    ...(images.length ? { toolImages: images.slice(-4) } : {}) };
 }
 
 // ── Contact ──────────────────────────────────────────────────────
@@ -79,13 +93,14 @@ export async function execContact(
   /** 本轮正在服务的 contact 源节点 ID（非 contact 轮为 null）——死锁提示分流用 */
   currentContactFrom?: string | null,
 ): Promise<ToolCallOutcome> {
+  opts.signal.throwIfAborted();
   const target = args.target || '';
   const message = args.message || '';
 
   emit({ type: 'contact-start', target });
 
   // 1. 查找目标 runner
-  const found = findRunnerByLabel(target);
+  const found = findRunnerByLabel(target, opts.executionId);
   if (!found) {
     const err = `联络失败：找不到名为「${target}」的协作者。请检查团队名册中的名称。`;
     emit({ type: 'contact-done', target, result: err, ok: false });
@@ -96,7 +111,7 @@ export async function execContact(
   //    - 是：目标此刻确实在等你回复本轮 contact，"在当前回复里处理"是准确可行的建议。
   //    - 否：目标的请求还排在你队列里（或它在等别的链路），本轮你根本没在处理它，
   //      让它"当场处理"会误导。此时应先做完手头的活，它的请求会另轮到你处理。
-  const canWait = tryRegisterWait(opts.nodeId, found.nodeId);
+  const canWait = tryRegisterWait(opts.nodeId, found.nodeId, opts.executionId);
   if (!canWait) {
     const servingTarget = currentContactFrom != null && currentContactFrom === found.nodeId;
     const err = servingTarget
@@ -118,28 +133,23 @@ async function completeContact(
     const contactContent = `[系统信息：来自协作者「${selfLabel}」的联络]\n\n${message}`;
 
     const answer = await new Promise<string>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('contact 超时（20 分钟未响应）'));
-      }, 20 * 60 * 1000);
-
-      runner.push({
-        source: 'contact',
-        content: contactContent,
-        contactFrom: opts.nodeId,
-        onComplete: (output) => {
-          clearTimeout(timeout);
-          resolve(output);
-        },
-        onFailure: (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        },
-      });
-
-      opts.signal.addEventListener('abort', () => {
+      const finish = (error?: Error, output?: string) => {
         clearTimeout(timeout);
-        reject(new Error('工作流已停止'));
-      }, { once: true });
+        opts.signal.removeEventListener('abort', onAbort);
+        if (error) reject(error);
+        else resolve(output ?? '');
+      };
+      const onAbort = () => finish(new DOMException('本轮联络已中止', 'AbortError'));
+      const timeout = setTimeout(() => {
+        finish(new Error('contact 超时（20 分钟未响应）'));
+      }, 20 * 60 * 1000);
+      opts.signal.addEventListener('abort', onAbort, { once: true });
+      if (opts.signal.aborted) { onAbort(); return; }
+
+      try {
+        runner.push({ source: 'contact', content: contactContent, contactFrom: opts.nodeId,
+          onComplete: output => finish(undefined, output), onFailure: finish });
+      } catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
     });
 
     emit({ type: 'contact-done', target, result: answer, ok: true });
@@ -149,6 +159,6 @@ async function completeContact(
     emit({ type: 'contact-done', target, result: err, ok: false });
     return { result: err, ok: false };
   } finally {
-    clearWait(opts.nodeId);
+    clearWait(opts.nodeId, opts.executionId);
   }
 }

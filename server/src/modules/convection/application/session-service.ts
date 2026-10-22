@@ -14,6 +14,8 @@ import {
 import { prepareCompactionArchive } from '../../../engine/shared/compaction-archive.js';
 import { summarizeConvectionSession } from './manual-summary.js';
 import { clearConvectionChairContext } from '../execution/chair-context.js';
+import { runConvectionContextChange, type ConvectionCompactionSink } from './compaction-progress.js';
+import type { CompactionProgress } from '../../../engine/shared/compaction/contracts.js';
 
 export interface CreateConvectionSessionInput {
   chairAgentId: string;
@@ -30,15 +32,16 @@ export interface ResetConvectionContextResult {
   summaryFailed: boolean;
 }
 
-type SummarizeSession = (session: ConvectionSessionData) => Promise<string>;
+type SummarizeSession = (session: ConvectionSessionData, signal?: AbortSignal) => Promise<string>;
 
 export class ConvectionSessionService {
   constructor(
     private readonly dataDir: string,
-    private readonly summarize: SummarizeSession = session =>
-      summarizeConvectionSession(dataDir, session),
+    private readonly summarize: SummarizeSession = (session, signal) =>
+      summarizeConvectionSession(dataDir, session, signal),
     private readonly hasAgent?: (agentId: string) => Promise<boolean>,
     private readonly onChange?: (sessionId: string) => void,
+    private readonly onCompaction?: ConvectionCompactionSink,
   ) {}
 
   list(): Promise<ConvectionSessionSummary[]> {
@@ -65,8 +68,8 @@ export class ConvectionSessionService {
     return session;
   }
 
-  async save(session: ConvectionSessionData): Promise<void> {
-    await saveSession(this.dataDir, session);
+  async save(session: ConvectionSessionData, signal?: AbortSignal): Promise<void> {
+    await saveSession(this.dataDir, session, signal);
     this.onChange?.(session.id);
   }
 
@@ -178,25 +181,29 @@ export class ConvectionSessionService {
     });
   }
 
-  async changeChairContext(sessionId: string, mode: 'clean' | 'summary') {
+  async changeChairContext(sessionId: string, mode: 'clean' | 'summary', signal?: AbortSignal) {
     return this.withMutationLock(sessionId, async () => {
       const { changeConvectionChairContext } = await import('./chair-context.js');
-      return changeConvectionChairContext(this.dataDir, await this.require(sessionId),
-        mode, next => this.save(next));
+      return runConvectionContextChange(await this.require(sessionId), 'chair', mode,
+        next => this.save(next), (session, completed) => changeConvectionChairContext(
+          this.dataDir, session, mode, (next, commitSignal) => this.save(next, commitSignal), signal, completed), signal, this.onCompaction);
     });
   }
 
   async resetContext(
     sessionId: string,
     mode: 'clean' | 'summary',
+    signal?: AbortSignal,
   ): Promise<ResetConvectionContextResult> {
-    return this.withMutationLock(sessionId, () => this.resetLocked(sessionId, mode));
+    return this.withMutationLock(sessionId, async () => runConvectionContextChange(
+      await this.require(sessionId), 'public', mode, next => this.save(next),
+      (session, completed) => this.resetLocked(session, mode, signal, completed), signal, this.onCompaction));
   }
 
-  private async resetLocked(sessionId: string, mode: 'clean' | 'summary'):
+  private async resetLocked(session: ConvectionSessionData, mode: 'clean' | 'summary',
+    signal?: AbortSignal, completed?: CompactionProgress):
     Promise<ResetConvectionContextResult> {
-    const session = await this.require(sessionId);
-    const state = session.compactState ?? { disabled: false, archiveSeq: 0 };
+    const state = { ...(session.compactState ?? { disabled: false, archiveSeq: 0 }) };
     const archive = await prepareCompactionArchive(state, {
       archiveDir: path.join(sessionWorkspace(this.dataDir, session.id), 'bak'),
       fileName: sequence => `${String(sequence).padStart(3, '0')}.json`,
@@ -211,19 +218,23 @@ export class ConvectionSessionService {
     // retaining both active histories so another attempt cannot overwrite the archive.
     session.compactState = state;
     await this.save(session);
-    const summary = mode === 'summary' ? (await this.summarize(session)).trim() : undefined;
+    const summary = mode === 'summary' ? (await this.summarize(session, signal)).trim() : undefined;
     if (mode === 'summary' && !summary) throw new Error('会议压缩摘要为空，已保留原会话');
-    session.publicMessages = summary ? [{
+    signal?.throwIfAborted();
+    if (completed) completed.updatedAt = Date.now();
+    const next: ConvectionSessionData = { ...session, compactionProgress: completed };
+    next.publicMessages = summary ? [{
       speaker: '系统', content: `[会话归档摘要]\n\n${summary}`, timestamp: Date.now(),
     }] : [];
-    if (mode === 'clean') session.chairMessages = [];
-    clearConvectionChairContext(session);
-    session.tokenUsage = undefined;
-    session.publicLatestTokenUsage = undefined;
-    session.publicUsageIncomplete = undefined;
-    session.chairTokenUsage = undefined;
-    session.compactState = state;
-    await this.save(session);
+    if (mode === 'clean') next.chairMessages = [];
+    clearConvectionChairContext(next);
+    next.tokenUsage = undefined;
+    next.publicLatestTokenUsage = undefined;
+    next.publicUsageIncomplete = undefined;
+    next.chairTokenUsage = undefined;
+    next.compactState = state;
+    await this.save(next, signal);
+    Object.assign(session, next);
     return {
       ok: true, mode, archived: `${String(archive.sequence).padStart(3, '0')}.json`,
       ...(summary ? { summary } : {}),

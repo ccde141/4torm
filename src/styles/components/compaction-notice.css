@@ -15,3 +15,26 @@
   to { opacity: 1; transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) { .compaction-notice { animation: none; } }
+
+.compaction-status { display: flex; align-items: center; gap: 8px; flex: none; padding: 7px 12px;
+  font-size: var(--text-xs,12px); line-height: 1.5; color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.compaction-status__mark { width: 12px; height: 12px; display: inline-grid; place-items: center; flex: none; }
+.compaction-status--running .compaction-status__mark { border: 1.5px solid var(--glass-border-hover);
+  border-top-color: var(--color-accent); border-radius: 50%; animation: compaction-status-spin 1s linear infinite; }
+.compaction-status--completed .compaction-status__mark { color: var(--color-success); }
+.compaction-status--failed { color: var(--color-danger, #ef4444); }
+@keyframes compaction-status-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .compaction-status--running .compaction-status__mark { animation: none; } }
+
+.compaction-history { flex: none; width: 100%; padding: var(--space-2) 0; }
+.compaction-history__divider { display: flex; align-items: center; gap: var(--space-3); }
+.compaction-history__line { flex: 1; height: 1px; background: var(--glass-border-hover); }
+.compaction-history__toggle { background: none; border: none; border-radius: var(--radius-sm);
+  padding: 2px 8px; color: var(--color-text-tertiary); font-size: var(--text-xs); white-space: nowrap;
+  text-shadow: var(--text-halo); cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo); }
+.compaction-history__toggle:hover { background: var(--glass-bg); color: var(--color-accent); }
+.compaction-history__toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.compaction-history__body { position: relative; margin-top: var(--space-2); padding: var(--space-3);
+  color: var(--color-text-secondary); font-size: var(--text-xs); line-height: 1.6;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow-y: auto; }

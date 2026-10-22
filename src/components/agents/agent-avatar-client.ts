@@ -1,3 +1,4 @@
+import { backendFetch, backendUrl } from '../../lib/backend-client';
 export const MAX_AVATAR_SOURCE_BYTES = 20 * 1024 * 1024;
 const AVATAR_SIZE = 256;
 
@@ -9,7 +10,7 @@ export function validateAvatarFile(file: Pick<File, 'type' | 'size'>): string | 
 }
 
 export function avatarUrl(agentId: string, version: number): string {
-  return `/api/agents/${encodeURIComponent(agentId)}/avatar?v=${version}`;
+  return backendUrl(`/api/agents/${encodeURIComponent(agentId)}/avatar?v=${version}`);
 }
 
 function canvasToWebp(canvas: HTMLCanvasElement): Promise<string> {
@@ -61,7 +62,7 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
 }
 
 export async function uploadAgentAvatar(agentId: string, dataUrl: string): Promise<number> {
-  const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/avatar`, {
+  const response = await backendFetch(`/api/agents/${encodeURIComponent(agentId)}/avatar`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl }),
   });
   if (!response.ok) throw new Error(await errorMessage(response, '头像上传失败'));
@@ -70,6 +71,6 @@ export async function uploadAgentAvatar(agentId: string, dataUrl: string): Promi
 }
 
 export async function removeAgentAvatar(agentId: string): Promise<void> {
-  const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/avatar`, { method: 'DELETE' });
+  const response = await backendFetch(`/api/agents/${encodeURIComponent(agentId)}/avatar`, { method: 'DELETE' });
   if (!response.ok) throw new Error(await errorMessage(response, '头像移除失败'));
 }

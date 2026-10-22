@@ -32,7 +32,7 @@ export interface MonsoonSession {
   messageRevision: number;
 }
 
-export type SessionWriteMode = 'content' | 'rename';
+export type SessionWriteMode = 'content' | 'rename' | 'read';
 
 export function parseMonsoonSession(
   value: unknown,

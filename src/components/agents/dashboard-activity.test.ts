@@ -38,9 +38,11 @@ test('活动源知道 Agent 忙但运行未关联时，保留工作中且不伪�
   assert.equal(state.kind, 'running');
   assert.equal(state.item, undefined);
   assert.equal(state.label, '工作中 · 气旋');
+  assert.equal(state.feature, 'cyclone');
   const conversation = projectAgentActivity({ ...agent, busy: true,
     activeSurfaces: ['conversation'] }, true, snapshot([]), false);
   assert.equal(conversation.label, '工作中 · 季风');
+  assert.equal(conversation.feature, 'monsoon');
 });
 
 test('等待状态、模型不可用和确切空闲分别表达', () => {

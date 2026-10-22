@@ -37,7 +37,9 @@ export async function reconcileWorkflowRemote(
   let data: WorkflowDefinition;
   try { data = await read(id); }
   catch (error) {
-    if (valid() && error instanceof ClientFrameworkError && error.kind === 'not_found') {
+    // A superseded read owns neither the current graph nor its error state.
+    if (!valid()) return;
+    if (error instanceof ClientFrameworkError && error.kind === 'not_found') {
       handleRemoteWorkflowDelete(tracker, id, storage, openBlank);
       return;
     }

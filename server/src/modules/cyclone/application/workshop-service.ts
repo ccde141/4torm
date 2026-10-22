@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { openHostDirectory } from '../../../services/host-directory-opener.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
 import {
   applyBulletinOps,
@@ -27,6 +27,7 @@ import {
   saveWorkshopOrganization,
 } from '../../../engine/cyclone/organization/organization-store.js';
 import type { CycloneChangeFeed } from './change-feed.js';
+import type { SeatHistorySource } from '../../../engine/cyclone/seat-history.js';
 
 export interface CreateWorkshopInput { title?: string; chairAgentId?: string }
 export type WorkshopBulletinOperation = BulletinOp;
@@ -126,17 +127,21 @@ export class CycloneWorkshopService {
     return readBulletinHistory(this.dataDir, workshopId);
   }
 
-  async mutateBulletin(workshopId: string, operations: BulletinOp[]) {
+  async mutateBulletin(workshopId: string, operations: BulletinOp[], source: SeatHistorySource = 'human') {
     await this.require(workshopId);
+    const author = source === 'supervisor' ? '工作室主管' : source === 'human' ? '人类' : '系统';
+    const attributed = source === 'supervisor'
+      ? operations.map(op => op.op === 'remove' ? op : { ...op, author }) : operations;
     const bulletin = operations.length
-      ? await applyBulletinOps(this.dataDir, workshopId, operations, '人类')
+      ? await applyBulletinOps(this.dataDir, workshopId, attributed, author)
       : await readBulletin(this.dataDir, workshopId);
     return { ...bulletin, changes: await readBulletinHistory(this.dataDir, workshopId) };
   }
 
-  async revertBulletin(workshopId: string, sequence: number) {
+  async revertBulletin(workshopId: string, sequence: number, source: SeatHistorySource = 'human') {
     await this.require(workshopId);
-    const bulletin = await revertBulletinChange(this.dataDir, workshopId, sequence, '人类');
+    const author = source === 'supervisor' ? '工作室主管' : source === 'human' ? '人类' : '系统';
+    const bulletin = await revertBulletinChange(this.dataDir, workshopId, sequence, author);
     return { ...bulletin, changes: await readBulletinHistory(this.dataDir, workshopId) };
   }
 
@@ -154,16 +159,9 @@ export class CycloneWorkshopService {
     await this.require(workshopId);
     const workspacePath = workshopWorkspace(this.dataDir, workshopId);
     await fs.mkdir(workspacePath, { recursive: true });
-    const command = platformCommand(workspacePath);
-    spawn(command.bin, command.args, { detached: true, stdio: 'ignore' }).unref();
+    await openHostDirectory(workspacePath);
     return workspacePath;
   }
-}
-
-function platformCommand(workspacePath: string): { bin: string; args: string[] } {
-  if (process.platform === 'win32') return { bin: 'explorer.exe', args: [workspacePath] };
-  if (process.platform === 'darwin') return { bin: 'open', args: [workspacePath] };
-  return { bin: 'xdg-open', args: [workspacePath] };
 }
 
 function workshopNotFound(workshopId: string) {

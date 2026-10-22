@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { backendFetch } from '../../lib/backend-client';
+import { useRef } from 'react';
 import { mayApplyAskSnapshot } from '../../engine/chat/ask-status';
 import { decidePendingAskInputRoute, findLatestAnswerableAsk } from '../../engine/chat/pending-ask';
 import { deleteConversationAttachment, uploadImageDraft } from '../../engine/chat/image-attachments';
@@ -46,10 +47,8 @@ interface MonsoonActionOptions {
 
 export function useMonsoonActions(options: MonsoonActionOptions) {
   const sending = useRef(false);
-  const compactingRef = useRef(false);
   const replying = useRef(new Set<string>());
   const askCheckSequence = useRef(0);
-  const [compacting, setCompacting] = useState(false);
   const pendingAsk = findLatestAnswerableAsk(options.messages);
   const askFeedback = useAskReplyFeedback(options.activeSessionId, pendingAsk, options.streaming);
 
@@ -98,11 +97,11 @@ export function useMonsoonActions(options: MonsoonActionOptions) {
     if (route === 'steer' || options.human.pending.some(entry => options.human.isWorking(entry.input.id))) {
       await steer(options, text, drafts.length > 0); return;
     }
-    if (compactingRef.current || sending.current) return;
+    if (options.sessions.compacting || sending.current) return;
     sending.current = true;
     if (text === '/compact' && !drafts.length) {
       sending.current = false;
-      await compact(options, compactingRef, setCompacting);
+      await compact(options);
       return;
     }
     try { await submit(options, text); }
@@ -112,6 +111,7 @@ export function useMonsoonActions(options: MonsoonActionOptions) {
   const stop = () => {
     const sessionId = options.activeSessionId;
     if (!sessionId) return;
+    if (options.sessions.compacting) { options.sessions.cancelCompaction(); return; }
     const runner = options.runners.runners.current.get(sessionId);
     if (!runner || runner.userStopped) return;
     if (!runner.runId) { options.images.setError('执行标识尚未建立，无法安全停止'); return; }
@@ -135,7 +135,7 @@ export function useMonsoonActions(options: MonsoonActionOptions) {
       if (findLatestAnswerableAsk(session.messages)?.id === pendingAsk?.id) await askFeedback.check();
     } catch (error) { options.images.setError(String(error)); }
   };
-  return { answer, send, stop, compacting, askFeedback, checkAsk };
+  return { answer, send, stop, compacting: options.sessions.compacting, askFeedback, checkAsk };
 }
 
 async function resumeAsk(options: MonsoonActionOptions, agent: Agent, sessionId: string,
@@ -143,7 +143,8 @@ async function resumeAsk(options: MonsoonActionOptions, agent: Agent, sessionId:
   feedback: { accepted(): void; rejected(detail: string): void; uncertain(detail: string): void }) {
   await resumeMonsoonTurn({ sessionId, agent, model: options.selectedModel,
     askMessageId: messageId, waitingRunId, answer }, {
-    request: fetch, loadSession: getSession,
+    request: backendFetch, loadSession: getSession,
+    onCompaction: event => options.runners.onCompaction(sessionId, event),
     begin: (abort, initial) => {
       options.runners.register(sessionId, abort, initial);
       if (options.activeSessionIdRef.current === sessionId) options.setStreaming(true);
@@ -162,7 +163,10 @@ async function resumeAsk(options: MonsoonActionOptions, agent: Agent, sessionId:
     saveFailureMessage: detail => options.translate('chat.page.replySaveFailed', { detail }),
     persistenceError: options.images.setError,
     ...feedback,
-    finalize: completed => options.runners.finalize(sessionId, completed),
+    finalize: completed => {
+      options.runners.finalize(sessionId, completed);
+      void options.sessions.refreshSessions(agent);
+    },
   });
 }
 
@@ -172,15 +176,12 @@ async function steer(options: MonsoonActionOptions, text: string, hasImages: boo
   catch (error) { options.images.setError(String(error)); }
 }
 
-async function compact(options: MonsoonActionOptions, lock: React.RefObject<boolean>,
-  setCompacting: (value: boolean) => void) {
+async function compact(options: MonsoonActionOptions) {
   options.setInput('');
   if (!options.activeSessionId) return;
   const session = await getSession(options.activeSessionId);
   if (!session) return;
-  lock.current = true; setCompacting(true);
-  try { await options.sessions.compactSession(session); }
-  finally { lock.current = false; setCompacting(false); }
+  await options.sessions.compactSession(session);
 }
 
 async function submit(options: MonsoonActionOptions, text: string) {
@@ -228,10 +229,14 @@ function launch(options: MonsoonActionOptions, value: Parameters<typeof launchMo
   return launchMonsoonTurn(value, {
     hasRunner: id => options.runners.runners.current.has(id),
     register: options.runners.register, emit: options.runners.emit,
+    onCompaction: options.runners.onCompaction,
     present: id => options.activeSessionIdRef.current === id
       ? void options.runners.reconnect(id) : options.runners.background(id),
     isAbandoned: id => options.runners.runners.current.get(id)?.abandoned ?? false,
-    finalize: options.runners.finalize, saveSession,
+    finalize: (id, completed) => {
+      options.runners.finalize(id, completed);
+      void options.sessions.refreshSessions(value.agent);
+    }, saveSession,
     refreshSessions: options.sessions.refreshSessions, generateMessageId,
     applyTaskboard: (id, board) => {
       if (options.activeSessionIdRef.current === id) options.taskboard.applyAgent(board);

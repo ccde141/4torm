@@ -19,3 +19,4 @@ export type { PreparedCycloneSeatCompaction } from './application/seat-compactio
 export type { PreparedCycloneChairChat } from './application/chair-chat.js';
 export type { PreparedCycloneRoomIntroduction } from './application/room-introduction.js';
 export type { PreparedCycloneRoomRound } from './application/collaboration-round.js';
+export type { PreparedSupervisorChat } from './application/supervisor-service.js';

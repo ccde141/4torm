@@ -13,6 +13,8 @@ import { ContextBuilder } from './context-builder';
 import { NodeActivator } from './node-activator';
 import { ArchiveManager, type ExecutionMeta } from './archive-manager';
 import type { LoopContext } from './orchestrator';
+import { HandoffRuntime } from './handoff-runtime.js';
+import { HandoffOutputExecutor } from './handoff-output.js';
 
 interface WorkflowBootstrapInput {
   executionId: string;
@@ -38,6 +40,8 @@ interface WorkflowBootstrapInput {
 
 interface PreparedWorkflowExecution {
   archive: ArchiveManager;
+  handoff?: HandoffRuntime;
+  settle(): Promise<void>;
   activate(): void;
 }
 
@@ -47,18 +51,30 @@ export async function prepareWorkflowExecution(
   // 顺序与原编排器一致：工作区 → buffer/router/context/activator → meta → 快照 → 活动与联系表。
   await fs.mkdir(path.join(input.dataDir, 'tradewind', 'workflows', input.workflowId, 'workspace'),
     { recursive: true });
+  assertPreparing(input);
   prepareBuffers(input);
-  const activator = createActivator(input);
+  const handoff = input.graph.orchestration === 'handoff' ? new HandoffRuntime(input) : undefined;
+  const activator = createActivator(input, handoff);
   const archive = new ArchiveManager(input.runDir, input.executionId, input.workflowId, input.trigger);
   // 准备阶段也交给生命周期持有，保持外部 stop 对已准备归档的可见性。
   input.onArchive(archive);
   await archive.writeStart();
+  assertPreparing(input);
   await saveGraphSnapshot(input);
+  assertPreparing(input);
   registerActivities(input);
   registerContacts(input);
   const notes = noteContents(input);
   const downstream = downstreamLabels(input);
-  return { archive, activate: () => activateNodes(input, activator, notes, downstream) };
+  return { archive, handoff, settle: () => activator.whenIdle(),
+    activate: () => activateNodes(input, activator, notes, downstream) };
+}
+
+function assertPreparing(input: WorkflowBootstrapInput): void {
+  if (!input.signal.aborted) return;
+  const error = new Error('工作流启动已停止');
+  error.name = 'AbortError';
+  throw error;
 }
 
 function prepareBuffers(input: WorkflowBootstrapInput): void {
@@ -68,18 +84,20 @@ function prepareBuffers(input: WorkflowBootstrapInput): void {
   }
 }
 
-function createActivator(input: WorkflowBootstrapInput): NodeActivator {
+function createActivator(input: WorkflowBootstrapInput, handoff?: HandoffRuntime): NodeActivator {
   const router = new EnvelopeRouter(input.graph.edges, input.inputBuffers);
   const builder = new ContextBuilder({
     executionId: input.executionId, workflowId: input.workflowId,
     runDir: input.runDir, dataDir: input.dataDir, mode: input.mode,
     nodes: input.nodes, inputBuffers: input.inputBuffers, router,
     eventBus: input.eventBus, signal: input.signal, onToken: input.onToken,
+    handoff,
   });
   const nodeTypes = new Map(input.graph.nodes.map(node => [node.id, node.type]));
   return new NodeActivator({
     nodeTypes,
     getExecutor: type => {
+      if (handoff && type === 'output') return new HandoffOutputExecutor(handoff);
       const executor = input.executors.get(type);
       if (!executor) throw new Error(`No executor for type: ${type}`);
       return executor;
@@ -92,7 +110,9 @@ function createActivator(input: WorkflowBootstrapInput): NodeActivator {
 async function saveGraphSnapshot(input: WorkflowBootstrapInput): Promise<void> {
   try {
     await fs.writeFile(path.join(input.runDir, 'graph-snapshot.json'), JSON.stringify(input.graph, null, 2));
-  } catch { /* 非关键快照沿用原行为，不替代初始 meta 的提交要求。 */ }
+  } catch (error) {
+    if (input.graph.orchestration === 'handoff') throw error;
+  }
 }
 
 function registerActivities(input: WorkflowBootstrapInput): void {
@@ -108,7 +128,7 @@ function registerActivities(input: WorkflowBootstrapInput): void {
 function registerContacts(input: WorkflowBootstrapInput): void {
   const labels: Record<string, string> = {};
   for (const node of input.graph.nodes) labels[node.id] = node.label || node.id;
-  initContactRegistry(labels, activeNodeRunners);
+  initContactRegistry(labels, activeNodeRunners, input.executionId);
 }
 
 function noteContents(input: WorkflowBootstrapInput): Map<string, string[]> {

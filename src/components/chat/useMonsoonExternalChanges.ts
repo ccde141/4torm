@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
-import { streamUrl } from '../../lib/apiBase';
+import { createBackendEventSource } from '../../lib/backend-client';
 import { getSession } from '../../store/chat';
 import type { Agent, ChatMessage } from '../../types';
 import { applyExternalSessionSnapshot, parseMonsoonSessionSignal,
@@ -49,7 +49,7 @@ export function useMonsoonExternalChanges(options: Options): void {
       }).catch(fail);
     };
     refreshRef.current = refreshCurrent;
-    const source = new EventSource(streamUrl('/api/tide/changes'), { withCredentials: true });
+    const source = createBackendEventSource('/api/tide/changes');
     source.onopen = () => {
       refreshList();
       const sessionId = activeSessionIdRef.current;

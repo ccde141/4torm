@@ -1,6 +1,6 @@
-import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { convectionSessionWorkspace } from '../../../services/data-paths.js';
+import { openHostDirectory } from '../../../services/host-directory-opener.js';
 
 export class ConvectionWorkspaceOpener {
   constructor(private readonly dataDir: string) {}
@@ -8,14 +8,7 @@ export class ConvectionWorkspaceOpener {
   async open(sessionId: string): Promise<string> {
     const workspacePath = convectionSessionWorkspace(this.dataDir, sessionId);
     await fs.mkdir(workspacePath, { recursive: true });
-    const command = platformCommand(workspacePath);
-    spawn(command.bin, command.args, { detached: true, stdio: 'ignore' }).unref();
+    await openHostDirectory(workspacePath);
     return workspacePath;
   }
-}
-
-function platformCommand(workspacePath: string): { bin: string; args: string[] } {
-  if (process.platform === 'win32') return { bin: 'explorer.exe', args: [workspacePath] };
-  if (process.platform === 'darwin') return { bin: 'open', args: [workspacePath] };
-  return { bin: 'xdg-open', args: [workspacePath] };
 }

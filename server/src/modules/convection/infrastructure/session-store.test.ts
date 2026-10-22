@@ -58,3 +58,26 @@ test('隔离的损坏索引跨实例仍失败，不能以新会话覆盖旧目�
   await fs.writeFile(file, JSON.stringify([old.id]));
   assert.deepEqual((await listSessions(dataDir)).map(item => item.id), [old.id]);
 });
+
+test('主文件已提交但索引遗漏时重建投影，后续创建保留旧会话', async t => {
+  const dataDir = await temporaryData(t);
+  const original = await createSession(dataDir, { chairAgentId: 'chair', participantAgentIds: ['agent'] });
+  const indexFile = convectionSessionIndexFile(dataDir);
+  await fs.writeFile(indexFile, '[]');
+  assert.deepEqual((await listSessions(dataDir)).map(item => item.id), [original.id]);
+  await fs.rm(indexFile);
+  const next = await createSession(dataDir, { chairAgentId: 'chair', participantAgentIds: ['agent'] });
+  assert.deepEqual(new Set((await listSessions(dataDir)).map(item => item.id)), new Set([original.id, next.id]));
+  assert.deepEqual(new Set(JSON.parse(await fs.readFile(indexFile, 'utf8'))), new Set([original.id, next.id]));
+});
+
+test('重建遇到损坏的孤儿主文件持续报错并保留原数据', async t => {
+  const dataDir = await temporaryData(t);
+  const original = await createSession(dataDir, { chairAgentId: 'chair', participantAgentIds: ['agent'] });
+  const indexFile = convectionSessionIndexFile(dataDir);
+  await fs.writeFile(indexFile, '[]');
+  await fs.writeFile(path.join(path.dirname(indexFile), `${original.id}.json`), '{damaged');
+  await assert.rejects(listSessions(dataDir), /损坏/);
+  await assert.rejects(listSessions(dataDir), /隔离/);
+  assert.equal(await fs.readFile(indexFile, 'utf8'), '[]');
+});

@@ -25,7 +25,8 @@ export function cycloneCollaborationManifests(includeRound = false): ModuleMetho
       type: 'object', additionalProperties: false,
       required: ['title', 'members', 'room'],
       properties: {
-        title: textSchema, chairAgentId: idSchema,
+        title: textSchema, chairAgentId: idSchema, supervisorAgentId: idSchema,
+        supervisorRolePrompt: { type: 'string', maxLength: 2_000 },
         members: {
           type: 'array', minItems: 1, maxItems: 12,
           items: {
@@ -113,7 +114,10 @@ function parseWorkshop(value: unknown): { workshopId: string } {
 }
 
 function parseGroup(value: unknown): CreateCollaborationGroupInput {
-  const record = exactRecord(value, ['title', 'chairAgentId', 'members', 'room']);
+  const record = exactRecord(value, ['title', 'chairAgentId', 'supervisorAgentId', 'supervisorRolePrompt', 'members', 'room']);
+  if (record.supervisorRolePrompt !== undefined && record.supervisorAgentId === undefined) throw invalidInput();
+  if (record.supervisorRolePrompt !== undefined && (typeof record.supervisorRolePrompt !== 'string'
+    || record.supervisorRolePrompt.length > 2_000)) throw invalidInput();
   if (!Array.isArray(record.members) || record.members.length < 1 || record.members.length > 12) {
     throw invalidInput();
   }
@@ -121,6 +125,8 @@ function parseGroup(value: unknown): CreateCollaborationGroupInput {
   return {
     title: text(record.title),
     ...(record.chairAgentId === undefined ? {} : { chairAgentId: id(record.chairAgentId) }),
+    ...(record.supervisorAgentId === undefined ? {} : { supervisorAgentId: id(record.supervisorAgentId),
+      supervisorRolePrompt: String(record.supervisorRolePrompt ?? '').trim() }),
     members: record.members.map(member),
     room: {
       title: text(room.title), topic: text(room.topic),

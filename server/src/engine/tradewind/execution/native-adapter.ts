@@ -38,6 +38,7 @@ export interface NativeAdapterParams {
   signal?: AbortSignal;
   /** 自动模式：显式终结工具门（传入则启用 shared native loop 的 completion 语义） */
   completion?: { tool: string };
+  retainFinalContext?: boolean;
 }
 
 /**
@@ -77,6 +78,7 @@ export async function runTradewindReActNative(
     onEvent: onLoopEvent,
     signal,
     completion,
+    retainFinalContext: params.retainFinalContext,
     // 信风不注入 onToolError：无 ask、无挂起语义
   });
 

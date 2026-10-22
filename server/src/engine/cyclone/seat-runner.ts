@@ -1,3 +1,5 @@
+import { subAgentReport } from '../shared/sub-agent-result.js';
+import { SUB_AGENT_MAX_ROUNDS } from '../shared/sub-agent-budget.js';
 /**
  * 气旋工位执行器 —— 无常驻实例，状态全落 SeatData 文件
  *
@@ -18,6 +20,7 @@ import type { SandboxLevel } from '../shared/sandbox-prompt';
 import { loadAgent } from '../shared/agent-loader';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader';
 import { execToolUnifiedOutcome } from '../shared/exec-tool';
+import { legacyToolArguments } from '../shared/tool-arguments.js';
 import {
   executeBackgroundExecutionToolOutcome,
   isBackgroundExecutionTool,
@@ -33,6 +36,7 @@ import {
 import { runReActLoop } from '../shared/react/text-loop';
 import type { ReActTermination } from '../shared/react/outcome.js';
 import { buildSeatToolCatalog } from './seat-tool-catalog';
+import { assertSeatCollaborationTool, seatCollaborationPolicy } from './seat-collaboration.js';
 import { buildSeatSystemPrompt } from './seat-prompt';
 import { workshopWorkspace } from './paths';
 import { loadSeat, saveSeat, tryAcquireSeatLock } from './seat-store';
@@ -40,8 +44,11 @@ import { seatTaskboardFile } from './paths';
 import { execTaskBoard } from '../shared/taskboard';
 import { execBulletin, readBulletinSync } from './bulletin';
 import { execContactOutcome } from './contact';
+import { readContactCommunicationOutcome } from './contact-communication.js';
+import { reportToSupervisor, withSupervisorReporting } from './supervisor-tools.js';
 import { listOtherSeats, listWorkshopSeats } from './contact-registry';
 import type { SeatContextMessage, SeatData } from './types';
+import { rememberToolImages } from '../shared/tool-media-access.js';
 import path from 'node:path';
 import { toSeatProgressEvent } from './loop-event-forwarder';
 import { createSeatCompactionCaller } from './conversation-compaction-caller.js';
@@ -49,6 +56,7 @@ import { createSeatDispatchRecord, deliverSeatDispatchReceipts } from './seat-di
 import { dispatchAcceptance } from './dispatch-acceptance.js';
 import { kickDispatchQueue } from './dispatch-queue.js';
 import { recordSeatAssistantResult } from './seat-reasoning.js';
+import { executeSeatFactTool, isSeatFactTool } from './seat-fact-tools.js';
 import {
   prepareToolRegistration,
   type ToolRegistrationProposal,
@@ -63,6 +71,7 @@ import {
 
 /** 工位执行事件（流式推送用） */
 export type SeatEvent =
+  | import('../shared/compaction/contracts.js').CompactionProgress
   | import('../shared/compaction/contracts.js').CompactionNotice
   | { type: 'input-accepted' }
   | { type: 'queue-wait' }
@@ -70,12 +79,13 @@ export type SeatEvent =
   | { type: 'reasoning'; content: string }
   | ({ type: 'tool-progress' } & ToolPreparationProgress)
   | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
-  | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown }
+  | { type: 'tool-call'; tool: string; args: Record<string, unknown> }
+  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown;
+      toolImages?: import('../shared/types.js').ToolImageRef[] }
   | { type: 'delegate-start'; task: string; delegateId: string }
   | { type: 'delegate-token'; delegateId: string; content: string }
-  | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
-  | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
+  | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, unknown> }
+  | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean; toolImages?: import('../shared/types.js').ToolImageRef[] }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
   | { type: 'contact-start'; target: string; message: string; contactId: string }
   | { type: 'contact-done'; contactId: string; reply: string; ok: boolean }
@@ -104,30 +114,40 @@ export function makeLLM(dataDir: string, model: string, temperature: number): LL
 async function execDelegate(
   dataDir: string, agentId: string, sandboxLevel: string,
   args: Record<string, string>, signal: AbortSignal | undefined, onEvent: (ev: SeatEvent) => void,
+  mediaAccess?: import('../shared/tool-media-access.js').ToolMediaAccess,
 ): Promise<ToolCallOutcome> {
   const { runSubAgent } = await import('../shared/sub-agent-runner');
   const delegateId = `del-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   onEvent({ type: 'delegate-start', task: args.task || '', delegateId });
-  const abortCtrl = new AbortController();
-  signal?.addEventListener('abort', () => abortCtrl.abort(), { once: true });
+  const delegateSignal = signal ?? new AbortController().signal;
+  const images: import('../shared/types.js').ToolImageRef[] = [];
   const result = await runSubAgent({
     task: args.task || '',
     context: args.context || '',
     systemPrompt: args.systemPrompt || '',
     agentId,
     dataDir,
-    signal: abortCtrl.signal,
+    signal: delegateSignal,
     timeout: 1_200_000,
-    maxRounds: 100,
+    maxRounds: SUB_AGENT_MAX_ROUNDS,
     parentSandboxLevel: sandboxLevel as SandboxLevel,
     emit: (ev) => {
       if (ev.type === 'token') onEvent({ type: 'delegate-token', delegateId, content: ev.data.t });
       else if (ev.type === 'tool_call') onEvent({ type: 'delegate-tool-call', delegateId, tool: ev.data.tool, args: ev.data.args });
-      else if (ev.type === 'tool_result') onEvent({ type: 'delegate-tool-result', delegateId, tool: ev.data.tool, result: ev.data.result, ok: ev.data.ok });
+      else if (ev.type === 'tool_result') {
+        if (ev.data.toolImages?.length) {
+          images.push(...ev.data.toolImages);
+          if (mediaAccess) rememberToolImages(mediaAccess, ev.data.toolImages);
+        }
+        onEvent({ type: 'delegate-tool-result', delegateId, tool: ev.data.tool, result: ev.data.result, ok: ev.data.ok,
+          ...(ev.data.toolImages?.length ? { toolImages: ev.data.toolImages } : {}) });
+      }
     },
   });
-  onEvent({ type: 'delegate-done', delegateId, summary: result.summary, status: result.status });
-  return { result: `[${result.status}] ${result.summary}`, ok: result.status === 'success' };
+  const summary = subAgentReport(result);
+  onEvent({ type: 'delegate-done', delegateId, summary, status: result.status });
+  return { result: `[${result.status}] ${summary}`, ok: result.status === 'success',
+    ...(images.length ? { toolImages: images.slice(-4) } : {}) };
 }
 
 /** 构造工位工具调用器：ask 抛挂起信号，delegate 派子，contact 联络其他工位，其余走 shared/execToolUnified */
@@ -145,17 +165,50 @@ export function makeToolCaller(opts: {
   const sourceTurnId = `seat-turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   let dispatchOrder = 0;
   return {
-    async call(tool, args) {
+    async call(tool, rawArgs) {
+      const args = legacyToolArguments(rawArgs);
+      try { await assertSeatCollaborationTool(dataDir, workshopId, seatId, tool); }
+      catch (error) {
+        const result = (error as Error).message;
+        onEvent({ type: 'tool-call', tool, args });
+        onEvent({ type: 'tool-result', tool, result, ok: false });
+        return { result, ok: false };
+      }
       if (isCycloneMemoryTool(tool)) {
         onEvent({ type: 'tool-call', tool, args });
         try {
-          const result = (await executeCycloneMemoryTool(dataDir, agentId, tool, args))!;
+          const result = (await executeCycloneMemoryTool(dataDir, agentId, tool, args, { workshopId, seatId }))!;
           onEvent({ type: 'tool-result', tool, result, ok: true });
           return result;
         } catch (error) {
           const result = `记忆工具执行失败: ${(error as Error).message}`;
           onEvent({ type: 'tool-result', tool, result, ok: false });
           return { result, ok: false };
+        }
+      }
+      if (isSeatFactTool(tool)) {
+        onEvent({ type: 'tool-call', tool, args });
+        try {
+          const result = await executeSeatFactTool(dataDir, { workshopId, seatId }, tool, args);
+          onEvent({ type: 'tool-result', tool, result, ok: true });
+          return result;
+        } catch (error) {
+          const result = `工位事实查询失败：${(error as Error).message}`;
+          onEvent({ type: 'tool-result', tool, result, ok: false });
+          return { result, ok: false };
+        }
+      }
+      if (tool === 'contact_read' || tool === 'supervisor_message') {
+        onEvent({ type: 'tool-call', tool, args });
+        try {
+          const outcome = tool === 'contact_read'
+            ? await readContactCommunicationOutcome({ dataDir, workshopId, fromSeatId: seatId }, args)
+            : await reportToSupervisor(dataDir, workshopId, seatId, args);
+          onEvent({ type: 'tool-result', tool, ...outcome });
+          return outcome;
+        } catch (error) {
+          const outcome = { result: (error as Error).message, ok: false };
+          onEvent({ type: 'tool-result', tool, ...outcome }); return outcome;
         }
       }
       if (tool === 'ask') {
@@ -184,7 +237,8 @@ export function makeToolCaller(opts: {
         }
       }
       if (tool === 'delegate') {
-        return execDelegate(dataDir, agentId, sandboxLevel, args, signal, onEvent);
+        return execDelegate(dataDir, agentId, sandboxLevel, args, signal, onEvent,
+          { dataDir, feature: 'cyclone', target: { workshopId, kind: 'seat', targetId: seatId } });
       }
       if (tool === 'dispatch') {
         onEvent({ type: 'tool-call', tool, args });
@@ -237,17 +291,18 @@ export function makeToolCaller(opts: {
           scope: 'cyclone',
           ownerId: `${workshopId}:${seatId}`,
         });
-        onEvent({ type: 'tool-result', tool, result: outcome.result, ok: outcome.ok });
+        onEvent({ type: 'tool-result', tool, ...outcome });
         return outcome;
       }
-      onEvent({ type: 'tool-call', tool, args });
+      onEvent({ type: 'tool-call', tool, args: rawArgs });
       try {
         const outcome = await execToolUnifiedOutcome({
-          tool, args, agentId, workspaceDir: wsDir, sandboxLevel, signal,
+          tool, args: rawArgs, agentId, workspaceDir: wsDir, sandboxLevel, signal,
+          mediaAccess: { dataDir, feature: 'cyclone', target: { workshopId, kind: 'seat', targetId: seatId } },
           observation: { scope: 'cyclone', ownerId: `${workshopId}:${seatId}` },
           onObservationId: onExecution,
         });
-        onEvent({ type: 'tool-result', tool, result: outcome.result, ok: outcome.ok });
+        onEvent({ type: 'tool-result', tool, ...outcome });
         return outcome;
       } catch (e) {
         const err = `工具执行失败: ${(e as Error).message}`;
@@ -291,7 +346,7 @@ async function driveSeat(ctx: DriveCtx): Promise<{
   const wsDir = wsRelPath(dataDir, workshopId);
   let generatedContextStart = messages.length;
   const llm = createSeatCompactionCaller({ dataDir, workshopId, seat, messages, agent,
-    llm: makeLLM(dataDir, agent.model, agent.temperature), onNotice: onEvent,
+    llm: makeLLM(dataDir, agent.model, agent.temperature), onNotice: onEvent, onProgress: onEvent,
     onCompacted: plan => {
       generatedContextStart = 2 + Math.max(0, generatedContextStart - 1 - plan.prefix.length);
     },
@@ -360,8 +415,10 @@ async function driveSeat(ctx: DriveCtx): Promise<{
 
   seat.pending = undefined;
   await saveSeat(dataDir, workshopId, seat);
-  onEvent({ type: 'answer', content: result.content, rawContent: result.rawContent });
-  onEvent({ type: 'done' });
+  if (result.termination.status !== 'failed' && result.termination.status !== 'anomaly') {
+    onEvent({ type: 'answer', content: result.content, rawContent: result.rawContent });
+    onEvent({ type: 'done' });
+  }
   return {
     content: result.content, rawContent: result.rawContent, termination: result.termination,
     executionIds: [...executionIds],
@@ -380,10 +437,11 @@ async function prepare(
   if (!seat) throw new Error(`工位不存在：${seatId}`);
   const agent = await loadAgent(dataDir, seat.agentId);
   if (!agent) throw new Error(`工位绑定的 agent 不存在或已删除：${seat.agentId}`);
-  const toolDefs = withCycloneMemoryTools(
+  const toolDefs = await withSupervisorReporting(dataDir, workshopId, withCycloneMemoryTools(
     await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode),
-  );
-  const memorySection = await buildCycloneMemoryPrompt(dataDir, agent.id, taskHint);
+    { workshopId, seatId },
+  ));
+  const memorySection = await buildCycloneMemoryPrompt(dataDir, agent.id, taskHint, { workshopId, seatId });
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
   const [contactTargets, dispatchTargets] = await Promise.all([
     listOtherSeats(dataDir, workshopId, seatId),
@@ -421,6 +479,7 @@ export async function chatSeatWithinExecution(
   dataDir: string, workshopId: string, seatId: string,
   humanMessage: string, onEvent: (ev: SeatEvent) => void, signal?: AbortSignal,
 ): ReturnType<typeof chatSeat> {
+  signal?.throwIfAborted();
   const queuedSeat = await loadSeat(dataDir, workshopId, seatId);
   if (!queuedSeat) throw new Error(`工位不存在：${seatId}`);
   return withAgentActivity(queuedSeat.agentId, 'cyclone', async () => {
@@ -430,18 +489,19 @@ export async function chatSeatWithinExecution(
         if (seat.agentId !== queuedSeat.agentId) throw new Error(`工位「${queuedSeat.title}」已更换 Agent，本轮已跳过`);
         if (seat.pending) throw new Error('工位处于挂起状态，请先回复其提问（resume）');
         await deliverSeatDispatchReceipts(dataDir, workshopId, seat);
-        const runtimeToolDefs = buildSeatToolCatalog(toolDefs, contactTargets, dispatchTargets);
+        const runtimeToolDefs = buildSeatToolCatalog(toolDefs, contactTargets, dispatchTargets, seatCollaborationPolicy(seat));
         const system: SeatContextMessage = {
           role: 'system', content: buildSeatSystemPrompt({
             dataDir, workshopId, seat, agent,
-            toolDefs: native ? toolDefs : runtimeToolDefs,
+            toolDefs: runtimeToolDefs,
             native, contactTargets, memorySection,
             wsRelPath: wsRelPath(dataDir, workshopId), bulletinSeenAt: seat.bulletinSeenAt,
           }),
         };
         seat.messages.push({ role: 'user', content: humanMessage });
         seat.compactionNotice = undefined;
-        await saveSeat(dataDir, workshopId, seat);
+        seat.compaction = undefined;
+        await saveSeat(dataDir, workshopId, seat, signal);
         onEvent({ type: 'input-accepted' });
         const messages = [system, ...seat.messages];
         return driveSeat({
@@ -492,16 +552,17 @@ export async function resumeSeatWithinExecution(
         if (seat.agentId !== queuedSeat.agentId) throw new Error(`工位「${queuedSeat.title}」已更换 Agent，本轮已跳过`);
         // 原生 tool result 已持久化；回执只能在回答落位后注入。
         await deliverSeatDispatchReceipts(dataDir, workshopId, seat);
-        const runtimeToolDefs = buildSeatToolCatalog(toolDefs, contactTargets, dispatchTargets);
+        const runtimeToolDefs = buildSeatToolCatalog(toolDefs, contactTargets, dispatchTargets, seatCollaborationPolicy(seat));
         const system: SeatContextMessage = {
           role: 'system', content: buildSeatSystemPrompt({
             dataDir, workshopId, seat, agent,
-            toolDefs: native ? toolDefs : runtimeToolDefs,
+            toolDefs: runtimeToolDefs,
             native, contactTargets, memorySection,
             wsRelPath: wsRelPath(dataDir, workshopId), bulletinSeenAt: seat.bulletinSeenAt,
           }),
         };
         seat.compactionNotice = undefined;
+        seat.compaction = undefined;
         await saveSeat(dataDir, workshopId, seat);
         onEvent({ type: 'input-accepted' });
         const messages = [system, ...seat.messages];

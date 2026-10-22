@@ -9,11 +9,10 @@ import { removeAgentAvatar, uploadAgentAvatar } from './agent-avatar-client';
 import { normalizeAgentPermission } from './agent-permission';
 import { useSkillSelection, useToolSelection } from './useAgentCapabilitySelection';
 import { useLocale } from '../../i18n/LocaleContext';
-import AgentToolCapabilities, { type McpToolItem } from './AgentToolCapabilities';
+import AgentToolCapabilities from './AgentToolCapabilities';
+import { useMcpToolCatalog } from './useMcpToolCatalog';
 import '../../styles/components/config-modal.css';
 import '../../styles/components/agent-permission.css';
-
-interface McpToolGroups { groups: Record<string, McpToolItem[]>; }
 
 interface CreateMode { mode: 'create'; onClose: () => void; onSave: () => void; }
 interface EmbeddedMode { mode: 'embedded'; agent: Agent; tab: AgentConfigTab;
@@ -21,7 +20,7 @@ interface EmbeddedMode { mode: 'embedded'; agent: Agent; tab: AgentConfigTab;
 type Props = CreateMode | EmbeddedMode;
 
 export default function AgentConfigModal(props: Props) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const { onClose } = props;
   const isCreate = props.mode === 'create';
   const embedded = props.mode === 'embedded';
@@ -46,11 +45,10 @@ export default function AgentConfigModal(props: Props) {
   const [allModels, setAllModels] = useState<{ key: string; label: string }[]>([]);
   const { allTools, checkedTools, setCheckedTools, catalogError } = useToolSelection(agent?.config, isCreate, tab === 'tools');
   const { allSkills, checkedSkills, setCheckedSkills, skillPreviews } = useSkillSelection(agent?.config, isCreate);
-  const [mcpGroups, setMcpGroups] = useState<Record<string, McpToolItem[]>>({});
+  const mcp = useMcpToolCatalog(tab === 'tools');
 
   useEffect(() => {
     getAllModels().then(setAllModels);
-    fetch('/api/mcp/tools').then(r => r.json()).then((d: McpToolGroups) => setMcpGroups(d.groups || {})).catch(() => {});
   }, []);
 
   const close = () => onClose();
@@ -207,8 +205,13 @@ export default function AgentConfigModal(props: Props) {
               {catalogError && <div className="agent-avatar-field__error" role="alert">
                 {t('config.toolCatalogFailed', { error: catalogError })}
               </div>}
+              <button type="button" className="config-btn config-btn-cancel" disabled={mcp.loading} onClick={mcp.refresh}>
+                {locale === 'en-US' ? (mcp.loading ? 'Loading MCP tools…' : 'Refresh MCP tools')
+                  : (mcp.loading ? '正在获取 MCP 工具…' : '刷新 MCP 工具')}
+              </button>
+              {mcp.error && <div className="agent-avatar-field__error" role="alert">{mcp.error}</div>}
               <AgentToolCapabilities allTools={allTools} checkedTools={checkedTools}
-                mcpGroups={mcpGroups} onChange={setCheckedTools} />
+                mcpGroups={mcp.groups} onChange={setCheckedTools} />
             </div>
           )}
         </div>

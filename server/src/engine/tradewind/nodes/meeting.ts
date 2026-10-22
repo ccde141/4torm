@@ -39,6 +39,8 @@ import { activeNodeRunners } from './agent';
 import { EnvelopeDraft } from '../execution/envelope-draft';
 import path from 'node:path';
 import { getMeetingUsageFileName, getMeetingsDir } from '../foundation/archive-paths.js';
+import { ExecutionRegistry } from '../execution/execution-registry';
+import { finishMeetingCompactions, waitForMeetingCompactions } from '../execution/meeting-compaction-progress.js';
 
 /** 活跃会议注册表：nodeId → { session, resolve } */
 export interface ActiveMeeting {
@@ -64,7 +66,7 @@ export interface ActiveMeeting {
   teamRoster: Array<{ label: string; role: string }>;
 }
 
-export const activeMeetings = new Map<string, ActiveMeeting>();
+export const activeMeetings = new ExecutionRegistry<ActiveMeeting>(meeting => meeting.executionId);
 
 export class MeetingExecutor implements NodeExecutor {
   readonly type = 'meeting';
@@ -148,6 +150,7 @@ export class MeetingExecutor implements NodeExecutor {
 
     // 创建内存态 session
     const session = createMeetingSession({
+      executionId: ctx.executionId, workflowId: ctx.workflowId,
       nodeId: ctx.nodeId,
       meetingLabel,
       chairAgentId: config.chairAgentId,
@@ -192,6 +195,14 @@ export class MeetingExecutor implements NodeExecutor {
       teamRoster,
     });
     setMeetingIdentity(ctx.nodeId, ctx.workflowId, ctx.executionId);
+    ctx.signal.addEventListener('abort', () => {
+      void waitForMeetingCompactions(session).then(() => {
+        if (activeMeetings.get(ctx.nodeId, ctx.executionId)?.session !== session) return;
+        activeMeetings.delete(ctx.nodeId, ctx.executionId);
+        clearMeetingIdentity(ctx.nodeId, ctx.executionId);
+      });
+      endResolve?.({ minutes: '', transcript: '' });
+    }, { once: true });
 
     // 入会摘要阶段（信封注入 + 全员摘要发言）
     // 通过 /events SSE 推送 token 级进度
@@ -207,25 +218,28 @@ export class MeetingExecutor implements NodeExecutor {
         envelopeContent,
         signal: ctx.signal,
         onEvent: (ev) => {
-          broadcastToMeeting(ctx.nodeId, ev);
+          broadcastToMeeting(ctx.nodeId, ev, ctx.executionId);
         },
       });
     } catch (e) {
-      if (activeMeetings.get(ctx.nodeId)?.executionId === ctx.executionId) activeMeetings.delete(ctx.nodeId);
+      finishMeetingCompactions(session, (e as Error).name === 'AbortError',
+        e instanceof Error ? e.message : String(e));
+      activeMeetings.delete(ctx.nodeId, ctx.executionId);
       clearMeetingIdentity(ctx.nodeId, ctx.executionId);
       if ((e as Error).name === 'AbortError') return;
       throw e;
     }
     if (ctx.signal.aborted) {
-      if (activeMeetings.get(ctx.nodeId)?.executionId === ctx.executionId) activeMeetings.delete(ctx.nodeId);
+      activeMeetings.delete(ctx.nodeId, ctx.executionId);
       clearMeetingIdentity(ctx.nodeId, ctx.executionId);
       return;
     }
 
-    broadcastToMeeting(ctx.nodeId, { type: 'phase-change', phase: 'discussion' });
+    broadcastToMeeting(ctx.nodeId, { type: 'phase-change', phase: 'discussion' }, ctx.executionId);
 
     // 挂起等待人类 end（Promise 由路由层 resolve）
     const endResult = await endResultPromise;
+    if (ctx.signal.aborted) return;
 
     // 注意：不立即删除 activeMeetings——会议结束后保留只读历史 + 会长私聊可用
     // 下次 runMeeting 会覆盖（同一节点新一轮）；orchestrator stop 时由 abort 级联清理
@@ -244,7 +258,7 @@ export class MeetingExecutor implements NodeExecutor {
     });
 
     for (const participant of participants) {
-      const runner = activeNodeRunners.get(participant.nodeId);
+      const runner = activeNodeRunners.get(participant.nodeId, ctx.executionId);
       if (runner) {
         runner.appendSystemMessage(broadcastBlock);
       } else {

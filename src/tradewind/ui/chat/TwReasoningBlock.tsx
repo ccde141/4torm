@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import BoundedText from '../../../engine/text-display/BoundedText';
 import { useLocale } from '../../../i18n/LocaleContext';
 
 export default function TwReasoningBlock({ content, streaming }: {
@@ -19,7 +20,7 @@ export default function TwReasoningBlock({ content, streaming }: {
         <span>{streaming ? t('tradewind.chat.reasoning.running') : t('tradewind.chat.reasoning.title')}</span>
         <span className={`tw-chat-reasoning__arrow${open ? ' tw-chat-reasoning__arrow--open' : ''}`}>›</span>
       </button>
-      {open && <div className="tw-chat-reasoning__body">{content}</div>}
+      {open && <div className="tw-chat-reasoning__body"><BoundedText text={content} followTail={streaming} /></div>}
     </div>
   );
 }

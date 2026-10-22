@@ -1,6 +1,7 @@
 /** 历史消息按引用跳过流式重渲；切会话时消息引用会更新。 */
 
 import { memo } from 'react';
+import BoundedText from '../../engine/text-display/BoundedText';
 import StructuredMessage from './StructuredMessage';
 import ReasoningBlock from './ReasoningBlock';
 import TurnProcess from './TurnProcess';
@@ -21,13 +22,16 @@ import type { Agent } from '../../types';
 import { useLocale } from '../../i18n/LocaleContext';
 import type { AskStatus } from '../../engine/chat/ask-status';
 import { CompactionNotice } from '../common/CompactionNotice';
+import { CompactionHistory } from '../common/CompactionHistory';
+import type { ToolMediaScope } from '../../engine/tool-media';
 
 /** 流式与落定后的工具步骤共用渲染，保持原有顺序。 */
-function renderToolStep(step: ToolStep, key: string, timestamp: string, stopped?: boolean) {
+function renderToolStep(step: ToolStep, key: string, timestamp: string, stopped?: boolean, mediaScope?: ToolMediaScope) {
   const d = step.delegate;
   if (d) {
     return (
       <DelegateCard
+        mediaScope={mediaScope}
         key={`del-${key}`}
         toolCall={{
           toolName: 'delegate', params: { task: d.task },
@@ -45,12 +49,14 @@ function renderToolStep(step: ToolStep, key: string, timestamp: string, stopped?
   }
   return (
     <ToolCallMessage
+      mediaScope={mediaScope}
       interrupted={stopped && (step.status === 'running' || step.status === 'pending')}
       key={`tool-${key}`}
       toolCall={{
         toolName: step.tool,
         params: step.args as Record<string, unknown>,
         result: step.result,
+        toolImages: step.toolImages,
         status: step.status === 'done' ? 'success' : step.status === 'error' ? 'error' : 'pending',
         diff: step.diff,
         pendingAutomation: step.pendingAutomation,
@@ -59,8 +65,8 @@ function renderToolStep(step: ToolStep, key: string, timestamp: string, stopped?
   );
 }
 
-function renderToolSteps(steps: ToolStep[], messageId: string, timestamp: string, stopped?: boolean) {
-  return <ToolActivityList items={steps} stopped={stopped} renderItem={(step, i) => renderToolStep(step, `${messageId}-${i}`, timestamp, stopped)} />;
+function renderToolSteps(steps: ToolStep[], messageId: string, timestamp: string, stopped?: boolean, mediaScope?: ToolMediaScope) {
+  return <ToolActivityList items={steps} stopped={stopped} renderItem={(step, i) => renderToolStep(step, `${messageId}-${i}`, timestamp, stopped, mediaScope)} />;
 }
 
 export interface MessageItemProps {
@@ -69,6 +75,7 @@ export interface MessageItemProps {
   sessionId: string;
   /** 是否为正在流式输出的最后一条（= streaming && msg === messages[last]） */
   isStreaming: boolean;
+  compacting?: boolean;
   isEditing: boolean;
   editContent: string;
   setEditContent: (s: string) => void;
@@ -83,11 +90,13 @@ export interface MessageItemProps {
 }
 
 function MessageItemInner({
-  msg, agent, sessionId, isStreaming, isEditing, editContent, setEditContent,
+  msg, agent, sessionId, isStreaming, compacting, isEditing, editContent, setEditContent,
   onSaveEdit, onCancelEdit, onStartEdit, onDeleteMessage, onAskReply,
   askStatus, askStatusDetail, onAskCheck,
 }: MessageItemProps) {
   const { locale, t } = useLocale();
+  const mediaScope: ToolMediaScope | undefined = agent?.id
+    ? { feature: 'monsoon', agentId: agent.id, sessionId } : undefined;
   if (isEditing) {
     return (
       <div className={`chat__message chat__message--${msg.role}`}>
@@ -108,25 +117,12 @@ function MessageItemInner({
     );
   }
 
-  if ((msg as any).type === 'compact-marker') {
+  if (msg.type === 'compact-marker') {
     return (
-      <div className="chat__compact-marker">
+      <>
         <CompactionNotice message={msg.compactionNotice ?? ''} />
-        <span className="chat__compact-marker-line" />
-        <button
-          className="chat__compact-marker-toggle"
-          onClick={() => {
-            const el = document.getElementById(`compact-detail-${msg.id}`);
-            if (el) el.classList.toggle('chat__compact-detail--open');
-          }}
-        >
-          {t('chat.compacted')}
-        </button>
-        <span className="chat__compact-marker-line" />
-        <div id={`compact-detail-${msg.id}`} className="chat__compact-detail">
-          <div className="chat__compact-detail-content">{msg.content}</div>
-        </div>
-      </div>
+        <CompactionHistory content={msg.content} />
+      </>
     );
   }
 
@@ -140,6 +136,7 @@ function MessageItemInner({
     }
     return msg.toolCall.toolName === 'delegate' ? (
       <DelegateCard
+        mediaScope={mediaScope}
         toolCall={msg.toolCall}
         content={msg.content}
         timestamp={msg.timestamp}
@@ -149,6 +146,7 @@ function MessageItemInner({
       />
     ) : (
       <ToolCallMessage
+        mediaScope={mediaScope}
         toolCall={msg.toolCall}
         timestamp={msg.timestamp}
         actions={
@@ -183,6 +181,7 @@ function MessageItemInner({
       const elapsed = msg.phaseElapsed;
       const steps = msg.toolSteps;
       const lastRunningTool = steps?.findLast(s => s.status === 'running')?.tool;
+      if (compacting && !display && !steps?.length && !msg.reasoningContent) return null;
 
       let phaseLabel = msg.streamingStatus || '';
       if (!phaseLabel && phase) phaseLabel = formatStreamStatus(phase, elapsed, msg.streamingTool || lastRunningTool, msg.streamingArgumentChars, locale);
@@ -197,15 +196,15 @@ function MessageItemInner({
           </TurnProcess>
           <TurnProcess kind="tools" present={!!steps?.length}>
           {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
-          {steps && renderToolSteps(steps, msg.id, msg.timestamp)}
+          {steps && renderToolSteps(steps, msg.id, msg.timestamp, undefined, mediaScope)}
           </TurnProcess>
           {/* 流式文本气泡 */}
           <div className="chat__message chat__message--assistant">
             <AgentAvatar agent={agent} className="chat__avatar" fallback="AI" />
             <div className="chat__bubble">
-              {phaseLabel && <LivePhase phase={phase ?? 'llm-waiting'} elapsed={elapsed}
+              {!compacting && phaseLabel && <LivePhase phase={phase ?? 'llm-waiting'} elapsed={elapsed}
                 tool={msg.streamingTool || lastRunningTool} argumentChars={msg.streamingArgumentChars} notice={msg.streamingStatus} />}
-              {display && <div style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>{display}▍</div>}
+              {display && <div style={{ whiteSpace: 'pre-wrap', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}><BoundedText text={display} id={msg.id} followTail />{!compacting && '▍'}</div>}
               {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
             </div>
           </div>
@@ -226,7 +225,7 @@ function MessageItemInner({
           </TurnProcess>
           <TurnProcess kind="tools" present={!!toolSteps.length} stopped={msg.streamStopped}>
           {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
-          {renderToolSteps(toolSteps, msg.id, msg.timestamp, msg.streamStopped)}
+          {renderToolSteps(toolSteps, msg.id, msg.timestamp, msg.streamStopped, mediaScope)}
           </TurnProcess>
           <StructuredMessage
             tools={[]} agent={agent} answer={answer} bounded
@@ -291,6 +290,7 @@ function MessageItemInner({
 function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
   if (prev.msg !== next.msg) return false;
   if (prev.isStreaming !== next.isStreaming) return false;
+  if (prev.compacting !== next.compacting) return false;
   if (prev.isEditing !== next.isEditing) return false;
   if (prev.askStatus !== next.askStatus || prev.askStatusDetail !== next.askStatusDetail) return false;
   if (prev.agent?.id !== next.agent?.id || prev.agent?.name !== next.agent?.name) return false;

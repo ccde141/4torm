@@ -1,10 +1,13 @@
+import BoundedText from '../../engine/text-display/BoundedText';
 import { useState } from 'react';
 import type { ChatMessage } from '../../types';
 import { formatTimestamp } from '../../utils/time';
 import { visibleDelegateProgress } from '../../engine/chat/delegate-progress';
 import { useLocale } from '../../i18n/LocaleContext';
+import type { ToolImageRef, ToolMediaScope } from '../../engine/tool-media';
+import ToolResultImages from '../common/ToolResultImages';
 
-type Step = { type: 'tool' | 'thought'; tool?: string; args?: Record<string, string>; result?: string; ok?: boolean; text?: string };
+type Step = { type: 'tool' | 'thought'; tool?: string; args?: Record<string, unknown>; result?: string; ok?: boolean; text?: string; toolImages?: ToolImageRef[] };
 
 /**
  * DelegateCard — SubAgent 委托任务的折叠卡片
@@ -15,7 +18,8 @@ type Step = { type: 'tool' | 'thought'; tool?: string; args?: Record<string, str
  * - 折叠时：任务摘要 + 步骤计数 + 状态
  * - 展开后：结构化步骤列表 + 最终结果
  */
-export default function DelegateCard({ toolCall, content, actions, timestamp }: {
+export default function DelegateCard({ toolCall, content, actions, timestamp, mediaScope }: {
+  mediaScope?: ToolMediaScope;
   toolCall: NonNullable<ChatMessage['toolCall']> & { steps?: Step[] };
   content?: string;
   actions?: React.ReactNode;
@@ -113,6 +117,7 @@ export default function DelegateCard({ toolCall, content, actions, timestamp }: 
               <div style={{ marginTop: 'var(--space-2)' }}>
                 <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '4px' }}>{t('chat.delegate.executionSteps')}</div>
                 {toolSteps.map((s, i) => (
+                  <div key={i}>
                   <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: '6px', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', padding: '2px 0', color: s.ok === false ? '#ef4444' : 'var(--color-text-secondary)' }}>
                     <span style={{ color: s.result != null ? (s.ok ? '#22c55e' : '#ef4444') : '#eab308', flexShrink: 0 }}>
                       {s.result != null ? (s.ok ? '\u2713' : '\u2717') : '\u25cc'}
@@ -122,6 +127,8 @@ export default function DelegateCard({ toolCall, content, actions, timestamp }: 
                       {s.result.slice(0, 60)}
                     </span>}
                   </div>
+                  {mediaScope && s.toolImages?.length ? <ToolResultImages images={s.toolImages} scope={mediaScope} /> : null}
+                  </div>
                 ))}
               </div>
             )}
@@ -129,14 +136,14 @@ export default function DelegateCard({ toolCall, content, actions, timestamp }: 
             {thought && (
               <div style={{ marginTop: 'var(--space-2)' }}>
                 <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>{t('chat.delegate.reasoning')}</div>
-                <pre style={{ margin: 0, padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '200px', overflow: 'auto' }}>{thought}</pre>
+                <pre style={{ margin: 0, padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '200px', overflow: 'auto' }}><BoundedText text={(thought) ?? ''} /></pre>
               </div>
             )}
             {/* 最终结果 */}
             {summary && (
               <div style={{ marginTop: 'var(--space-2)' }}>
                 <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: '2px' }}>{t('chat.delegate.result')} {st.icon}</div>
-                <pre style={{ margin: 0, padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '300px', overflow: 'auto' }}>{summary}</pre>
+                <pre style={{ margin: 0, padding: 'var(--space-2)', background: 'var(--color-bg)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '300px', overflow: 'auto' }}><BoundedText text={(summary) ?? ''} /></pre>
               </div>
             )}
           </div>

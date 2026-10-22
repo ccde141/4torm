@@ -1,3 +1,4 @@
+import { createMonsoonExternalSessionPort } from '../../monsoon/public.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -25,7 +26,7 @@ test('designated 任务撞到运行中会话时记录失败而不立即重试', 
   const runs = new FileTideRunRepository(dataDir);
   await tasks.upsert(task);
 
-  const record = await runTideTask({ dataDir, tasks, runs }, task);
+  const record = await runTideTask({ dataDir, tasks, runs, seasonSessions: createMonsoonExternalSessionPort(dataDir) }, task);
   const updated = await tasks.get(task.id);
   assert.equal(record.status, 'error');
   assert.match(record.error || '', /指定的季风会话正在执行中/);

@@ -1,3 +1,5 @@
+import { modelRuntimeRequest } from './runtime-client';
+
 export interface LocalizedText {
   zh: string;
   en: string;
@@ -75,9 +77,7 @@ export interface ProviderCatalog {
 }
 
 export async function fetchProviderCatalog(): Promise<ProviderCatalog> {
-  const response = await fetch('/api/model-runtime/providers');
-  if (!response.ok) throw new Error(`Model provider catalog HTTP ${response.status}`);
-  const body: unknown = await response.json();
+  const body: unknown = await modelRuntimeRequest('/providers');
   if (!isProviderCatalog(body)) throw new Error('Invalid model provider catalog');
   return body;
 }

@@ -78,3 +78,45 @@ test('session API deletion is idempotent at the HTTP boundary', async t => {
   assert.equal((await app.inject({ method: 'DELETE', url: '/sessions/agent-a/session-a' })).statusCode, 200);
   assert.equal((await app.inject('/sessions/agent-a/session-a')).statusCode, 404);
 });
+
+test('read metadata uses the existing session gate and cannot replace messages or model state', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-session-read-'));
+  const app = Fastify();
+  installFrameworkErrorHandler(app);
+  const feature = createMonsoonFeature({ dataDir });
+  registerMonsoonSessions(app, new CollaborationRouter([feature.module]));
+  t.after(async () => { await app.close(); await fs.rm(dataDir, { recursive: true, force: true }); });
+  const created = await app.inject({ method: 'POST', url: '/sessions', payload: {
+    ...session(), messages: [{ id: 'run-a', role: 'assistant', content: 'stored',
+      timestamp: '2026-01-01T00:00:01.000Z', runCommitted: false }],
+  } });
+  const lastReadAt = '2026-01-01T00:00:02.000Z';
+  const payload = { expectedRevision: 1, mode: 'read', session: {
+    ...created.json(), messages: [], model: 'different-model', title: 'different-title', lastReadAt,
+  } };
+  const read = await app.inject({ method: 'PUT', url: '/sessions/agent-a/session-a', payload });
+  assert.equal(read.statusCode, 200);
+  assert.deepEqual(read.json().messages, created.json().messages);
+  assert.equal(read.json().model, 'model-a');
+  assert.equal(read.json().title, 'New');
+  assert.equal(read.json().lastReadAt, lastReadAt);
+  assert.equal(read.json().revision, 1);
+  assert.equal(read.json().messageRevision, 1);
+  assert.equal(read.json().updatedAt, created.json().updatedAt);
+  const older = await app.inject({ method: 'PUT', url: '/sessions/agent-a/session-a', payload: {
+    ...payload, session: { ...payload.session, lastReadAt: '2026-01-01T01:00:01+01:00' },
+  } });
+  assert.equal(older.statusCode, 200);
+  assert.equal(older.json().lastReadAt, lastReadAt);
+  const invalid = { ...payload, session: { ...payload.session, lastReadAt: 'invalid' } };
+  assert.equal((await app.inject({ method: 'PUT', url: '/sessions/agent-a/session-a', payload: invalid })).statusCode, 400);
+  assert.equal((await app.inject('/sessions/agent-a/session-a')).json().lastReadAt, lastReadAt);
+  const completed = await app.inject({ method: 'PUT', url: '/sessions/agent-a/session-a', payload: {
+    expectedRevision: 1, mode: 'content', session: { ...created.json(), messages: [{
+      ...created.json().messages[0], content: 'completed', runCommitted: true,
+    }] },
+  } });
+  assert.equal(completed.statusCode, 200);
+  assert.equal(completed.json().lastReadAt, lastReadAt);
+  assert.equal((await app.inject({ method: 'PUT', url: '/sessions/agent-a/session-a', payload })).statusCode, 409);
+});

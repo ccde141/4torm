@@ -13,12 +13,12 @@
 import fs from 'node:fs/promises';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import { atomicWriteFile } from '../../../engine/shared/atomic-io.js';
-import { frameworkError } from '../../../engine/shared/framework-error.js';
 import { readConvectionJson } from './quarantined-json.js';
+import { recoverConvectionCompaction } from './compaction-progress.js';
+import { readIndex, mutateIndex } from './session-index.js';
 import {
   convectionSessionFile,
   convectionSessionDir,
-  convectionSessionIndexFile,
   convectionSessionWorkspace,
   convectionSessionsDir,
 } from '../../../services/data-paths.js';
@@ -57,6 +57,8 @@ export interface ConvectionSessionData {
   /** Acknowledged by the next accepted human input; original notice remains in run events. */
   compactionNotice?: import('../../../engine/shared/compaction/contracts.js').CompactionNotice;
   chairCompactionNotice?: import('../../../engine/shared/compaction/contracts.js').CompactionNotice;
+  compactionProgress?: import('../../../engine/shared/compaction/contracts.js').CompactionProgress;
+  chairCompactionProgress?: import('../../../engine/shared/compaction/contracts.js').CompactionProgress;
   createdAt: string;
   updatedAt: string;
 }
@@ -74,7 +76,8 @@ export interface ConvectionMessage {
   /** Provider 原生 reasoning 旁路，不进入公共上下文。 */
   reasoning?: string;
   /** 本轮工具调用记录 */
-  toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string }>;
+  toolCalls?: Array<{ tool: string; args: Record<string, unknown>; result: string;
+    toolImages?: import('../../../engine/shared/types.js').ToolImageRef[] }>;
 }
 
 /** 会话列表摘要（前端列表用，不含完整消息） */
@@ -147,14 +150,19 @@ export async function createSession(
 
 /** 原子写：先写临时文件，再 rename 覆盖目标，防止半截 JSON */
 /** 保存会话（更新 updatedAt） */
-export async function saveSession(dataDir: string, session: ConvectionSessionData): Promise<void> {
+export async function saveSession(dataDir: string, session: ConvectionSessionData, signal?: AbortSignal): Promise<void> {
   session.updatedAt = new Date().toISOString();
-  await atomicWriteFile(convectionSessionFile(dataDir, session.id), JSON.stringify(session, null, 2));
+  await atomicWriteFile(convectionSessionFile(dataDir, session.id), JSON.stringify(session, null, 2), signal);
 }
 
 /** 加载单个会话 */
 export async function loadSession(dataDir: string, id: string): Promise<ConvectionSessionData | null> {
-  return readConvectionJson<ConvectionSessionData>(convectionSessionFile(dataDir, id));
+  const session = await readConvectionJson<ConvectionSessionData>(convectionSessionFile(dataDir, id));
+  if (session) {
+    session.compactionProgress = recoverConvectionCompaction(session.compactionProgress);
+    session.chairCompactionProgress = recoverConvectionCompaction(session.chairCompactionProgress);
+  }
+  return session;
 }
 
 /** 列出所有会话（摘要 + token 估算，按 updatedAt 降序） */
@@ -227,40 +235,6 @@ export async function isAgentInAnySession(
 // ── 并发锁（per-session 互斥） ───────────────────────────────
 
 const locks = new Map<string, Promise<void>>();
-const indexQueues = new Map<string, Promise<void>>();
-
-async function readIndex(dataDir: string): Promise<string[]> {
-  const value = await readConvectionJson<unknown>(convectionSessionIndexFile(dataDir));
-  if (value === null) return [];
-  if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
-    throw storeError('CONVECTION_STORE_INVALID', '对流会话索引格式无效');
-  }
-  return value;
-}
-
-async function mutateIndex(
-  dataDir: string,
-  mutate: (index: string[]) => string[],
-): Promise<void> {
-  const file = convectionSessionIndexFile(dataDir);
-  const previous = indexQueues.get(file) ?? Promise.resolve();
-  const current = previous.catch(() => {}).then(async () => {
-    await ensureDir(convectionSessionsDir(dataDir));
-    const next = mutate(await readIndex(dataDir));
-    await atomicWriteFile(file, JSON.stringify(next));
-  });
-  indexQueues.set(file, current);
-  try {
-    await current;
-  } finally {
-    if (indexQueues.get(file) === current) indexQueues.delete(file);
-  }
-}
-
-function storeError(code: string, message: string, cause?: unknown) {
-  return frameworkError({ code, kind: 'io', message, source: 'convection.store', retryable: false },
-    cause === undefined ? undefined : { cause });
-}
 
 /**
  * 尝试获取 session 锁。

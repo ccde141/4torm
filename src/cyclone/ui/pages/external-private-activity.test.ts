@@ -62,3 +62,11 @@ test('public room fact cannot pose as chair private chat completion', () => {
   assert.equal(privateChatFact({ ...fact, phase: 'chair-chat' }, 'chair')?.runId, 'run-c');
   assert.equal(privateChatFact({ ...fact, phase: 'chair-chat' }, 'seat'), null);
 });
+
+test('主管仅接受独立主管会话与接续事实，不混入工位或群聊', () => {
+  const fact = { operationId: 'supervisor:workshop-a:supervisor', runId: 'run-s', title: '主管', status: 'failed' as const };
+  assert.equal(privateChatFact({ ...fact, phase: 'supervisor-chat' }, 'supervisor')?.runId, 'run-s');
+  assert.equal(privateChatFact({ ...fact, phase: 'supervisor-resume' }, 'supervisor')?.runId, 'run-s');
+  assert.equal(privateChatFact({ ...fact, phase: 'seat-chat' }, 'supervisor'), null);
+  assert.equal(privateChatFact({ ...fact, phase: 'room-speak' }, 'supervisor'), null);
+});

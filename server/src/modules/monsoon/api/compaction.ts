@@ -16,6 +16,7 @@ export function registerMonsoonCompaction(app: FastifyInstance, router: Collabor
       reply.raw.once('close', () => abort.abort());
       const result = await prepared.run({ signal: abort.signal,
         onChunk: content => pushSSE(reply, { type: 'token', content }),
+        onProgress: progress => pushSSE(reply, progress),
         onNotice: notice => pushSSE(reply, notice) });
       pushSSE(reply, { type: 'done', ...result });
     } catch (error) {

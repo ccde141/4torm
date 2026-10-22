@@ -4,8 +4,10 @@
  * 与后端 /api/tide/* 端点对应。
  */
 
+import { backendFetch } from '../lib/backend-client';
 import { errorFromResponse } from './error-contract';
 import { invokeFeature } from './collaboration';
+import type { ToolImageRef } from '../engine/tool-media';
 
 const BASE = '/api/tide';
 
@@ -29,6 +31,20 @@ export interface TideRunState {
   status: 'queued' | 'running' | 'completed' | 'failed' | 'aborted' | 'crashed';
   usage?: TideUsageProgress;
   compactionNotice?: string;
+  compaction?: TideCompactionProgress;
+}
+
+export interface TideCompactionProgress {
+  type: 'compact-start' | 'compact-done' | 'compact-failed';
+  id: string;
+  operation: 'compact' | 'reset';
+  startedAt: number;
+  updatedAt: number;
+  reason: 'manual' | 'threshold' | 'provider-overflow';
+  message?: string;
+  aborted?: boolean;
+  summaryLength?: number;
+  archivedMessages?: number;
 }
 
 export interface TideTask {
@@ -55,11 +71,14 @@ export interface TideRunRecord {
   taskId: string;
   runId?: string;
   timestamp: string;
-  status: 'success' | 'error';
+  status: 'success' | 'error' | 'aborted';
   sessionId: string;
+  pushMode?: TidePushMode;
+  agentId?: string;
+  sessionState?: 'retained' | 'archived';
   answer: string;
   rawContent: string;
-  toolCalls: { tool: string; args: Record<string, string>; result: string }[];
+  toolCalls: { tool: string; args: Record<string, unknown>; result: string; toolImages?: ToolImageRef[] }[];
   turns: number;
   durationMs: number;
   error?: string;
@@ -75,13 +94,13 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
 }
 
 export async function listTasks(): Promise<TideTask[]> {
-  return jsonOrThrow(await fetch(`${BASE}/tasks`));
+  return jsonOrThrow(await backendFetch(`${BASE}/tasks`));
 }
 
 export async function getTaskDetail(taskId: string): Promise<{
   task: TideTask; recent: TideRunRecord[]; runState?: TideRunState | null;
 }> {
-  return jsonOrThrow(await fetch(`${BASE}/task/${taskId}`));
+  return jsonOrThrow(await backendFetch(`${BASE}/task/${taskId}`));
 }
 
 export interface CreateTaskInput {
@@ -127,7 +146,7 @@ export async function runNow(taskId: string): Promise<TideRunReceipt> {
 }
 
 export async function listRuns(taskId: string, limit = 20): Promise<TideRunRecord[]> {
-  return jsonOrThrow(await fetch(`${BASE}/task/${taskId}/runs?limit=${limit}`));
+  return jsonOrThrow(await backendFetch(`${BASE}/task/${taskId}/runs?limit=${limit}`));
 }
 
 // ── 会话内容 ────────────────────────────────────────────────────
@@ -137,15 +156,17 @@ export interface TideSession {
   agentId: string;
   agentName: string;
   title: string;
-  messages: Array<{ id: string; role: string; content: string; timestamp?: string;
+  messages: Array<{ id: string; role: string; content: string; timestamp?: string; toolImages?: ToolImageRef[];
     type?: 'compact-marker'; nativeContext?: Array<{ role: string; content: string; toolCallId?: string;
-      toolOk?: boolean; toolCalls?: Array<{ id: string; name: string; arguments: string }> }> }>;
+      toolOk?: boolean; toolImages?: ToolImageRef[]; toolCalls?: Array<{ id: string; name: string; arguments: string }> }> }>;
   model: string;
   systemPrompt: string;
   createdAt: string;
   updatedAt: string;
   tokenUsage?: TideTokenUsage;
   usage?: TideUsageProgress;
+  compaction?: TideCompactionProgress;
+  compactionNotice?: string;
 }
 
 export interface TideSessionSummary {
@@ -156,7 +177,7 @@ export interface TideSessionSummary {
 }
 
 export async function listTideSessions(agentId: string): Promise<TideSessionSummary[]> {
-  return jsonOrThrow(await fetch(`${BASE}/sessions/${agentId}`));
+  return jsonOrThrow(await backendFetch(`${BASE}/sessions/${agentId}`));
 }
 
 export async function deleteTideSession(taskId: string): Promise<void> {
@@ -164,9 +185,11 @@ export async function deleteTideSession(taskId: string): Promise<void> {
 }
 
 export async function getTideSession(agentId: string, sessionId: string): Promise<TideSession> {
-  return jsonOrThrow(await fetch(`${BASE}/session/${agentId}/${sessionId}`));
+  return jsonOrThrow(await backendFetch(`${BASE}/session/${agentId}/${sessionId}`));
 }
 
-export function compactTideSession(agentId: string, sessionId: string): Promise<{ compacted: boolean; notices: string[] }> {
-  return invokeFeature('tide', 'compactSession', { agentId, sessionId });
+export function compactTideSession(agentId: string, sessionId: string, signal?: AbortSignal): Promise<{
+  compacted: boolean; notices: string[]; updatedAt: number;
+}> {
+  return invokeFeature('tide', 'compactSession', { agentId, sessionId }, undefined, { signal });
 }

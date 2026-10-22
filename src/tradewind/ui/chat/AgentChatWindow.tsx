@@ -12,6 +12,7 @@
  * 信风独立副本，可自主演进。
  */
 
+import { backendFetch } from '../../../lib/backend-client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { subscribe, unsubscribe } from '../stream/unified-client';
 import { normalizeDelegateProgressAtToolBoundary } from '../../../engine/chat/delegate-progress';
@@ -22,13 +23,17 @@ import type { FrameworkErrorKind } from '../../../api/error-contract';
 import {
   createDelegateFrameBuffer, createSnapshotGate, createStatusRequestGate,
   mergeDelegateChunks, readNodeSnapshot, readNodeStatus, roundSourceFromSnapshot, shouldReplaySnapshotRound,
-  type NodeSnapshot,
+  projectNodeHistoryMessages, type NodeSnapshot, type NodeHistoryMessage,
 } from './agent-chat-runtime';
 import {
   abortNodeRound, pauseNodeRound, requestStop, resumeNodeRound, sendNodeMessage,
 } from '../execution-client';
-import { acceptsPanelEvent } from '../stream/panel-identity';
-import { latestProviderUsage, type ProviderUsage } from '../token-usage';
+import { acceptsPanelEvent, panelReadUrl } from '../stream/panel-identity';
+import { latestProviderUsage, updateProviderUsage, type ProviderUsage, type ProviderUsageDisplay, type ProviderUsageDisplayEvent } from '../token-usage';
+import { mergeNodeUserMessage } from './node-message-identity';
+import { compactionActivity, reduceCompactionActivity, type CompactionActivity } from '../../../components/common/compaction-activity';
+import { pendingCompaction, type CompactionEvent } from '../compaction-events';
+import type { ToolImageRef } from '../../../engine/tool-media';
 
 interface AgentChatWindowProps {
   nodeId: string;
@@ -53,22 +58,24 @@ type StreamEvent =
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
   | { type: 'usage'; usage: ProviderUsage | null }
-  | { type: 'tool-call'; tool: string; args: Record<string, string> }
-  | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: { before?: string } }
+  | { type: 'tool-call'; tool: string; args: Record<string, unknown> }
+  | { type: 'tool-result'; tool: string; result: string; ok: boolean; toolImages?: ToolImageRef[]; meta?: { before?: string } }
   | { type: 'delegate-start'; task: string; delegateId: string }
   | { type: 'delegate-token'; delegateId: string; content: string }
-  | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, string> }
-  | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean }
+  | { type: 'delegate-tool-call'; delegateId: string; tool: string; args: Record<string, unknown> }
+  | { type: 'delegate-tool-result'; delegateId: string; tool: string; result: string; ok: boolean; toolImages?: ToolImageRef[] }
   | { type: 'delegate-done'; delegateId: string; summary: string; status: string }
-  | { type: 'user-message'; content: string; source: string }
+  | { type: 'user-message'; content: string; source: string; messageId?: string; timestamp?: string;
+      actor?: { type: 'human' | 'agent' | 'system'; id?: string } }
   | { type: 'contact-start'; target: string }
   | { type: 'contact-done'; target: string; result: string; ok: boolean }
   | { type: 'answer'; content: string; rawContent: string }
   | { type: 'paused' }
   | { type: 'error'; message: string; code?: string; kind?: FrameworkErrorKind }
-  | { type: 'done' }
+  | { type: 'done'; outcome?: 'completed' | 'stopped' | 'error' }
+  | CompactionEvent
   | { type: 'compaction-notice'; message: string }
-  | { type: 'context-compacted'; messages: Array<{ role: string; content: string; reasoningContent?: string }> };
+  | { type: 'context-compacted'; messages: NodeHistoryMessage[] };
 
 
 // ── 组件 ──────────────────────────────────────────────────────────
@@ -79,12 +86,23 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [compactionNotice, setCompactionNotice] = useState<string | null>(null);
+  const [compaction, setCompaction] = useState<CompactionActivity>();
+  const submittingRef = useRef(false);
+  const manualCompactionRef = useRef(false);
   // 当前轮来源：'human' 可自由停止；'envelope'/'contact' 只能暂停/续跑或停整个工作流
   const [roundSource, setRoundSource] = useState<'human' | 'envelope' | 'contact' | null>(null);
   // 已暂停（扣住信封、待续跑）
   const [paused, setPaused] = useState(false);
   const [activity, setActivity] = useState<AgentChatActivity>('idle');
-  const [latestUsage, setLatestUsage] = useState<ProviderUsage | null | undefined>();
+  const [usageDisplay, setUsageDisplay] = useState<ProviderUsageDisplay>();
+  const usageScope = JSON.stringify([workflowId, executionId ?? null, nodeId]);
+  const usageScopeRef = useRef(usageScope);
+  usageScopeRef.current = usageScope;
+  const latestUsage = usageDisplay?.scope === usageScope ? usageDisplay.usage : undefined;
+  const updateUsage = useCallback((event: ProviderUsageDisplayEvent) => {
+    if (usageScope !== usageScopeRef.current) return;
+    setUsageDisplay(current => updateProviderUsage(current, usageScope, event));
+  }, [usageScope]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const msgIdRef = useRef(0);
@@ -93,6 +111,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
   const roundIdRef = useRef<string | null>(null);
   const statusRequestGateRef = useRef(createStatusRequestGate());
   const sealedRef = useRef(sealed);
+  const panelEpochRef = useRef(0);
 
   useEffect(() => { sealedRef.current = sealed; }, [sealed]);
 
@@ -104,6 +123,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
   //   3. 设 lastSeq，flush buffer 中 seq > lastSeq 的增量
   //   4. 之后实时应用，seq 去重防止重复
   useEffect(() => {
+    panelEpochRef.current++;
     let cancelled = false;
     let snapshotController: AbortController | null = null;
     let transportIssue = false;
@@ -149,9 +169,12 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
     setStreaming(false);
     setPaused(false);
     setRoundSource(null);
-    setLatestUsage(undefined);
+    setUsageDisplay(undefined);
     setError(null);
     setCompactionNotice(null);
+    setCompaction(undefined);
+    submittingRef.current = false;
+    manualCompactionRef.current = false;
     setActivity('idle');
 
     // applyEvent：纯 reducer，回放与实时共用（不含 seq 去重）
@@ -165,13 +188,25 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
           break;
 
         case 'usage':
-          setLatestUsage(ev.usage);
+          updateUsage({ type: 'usage', usage: ev.usage });
           break;
 
         case 'round-start':
+          updateUsage({ type: 'start', operation: 'node' });
           roundIdRef.current = ev.runId;
           setRoundSource(ev.source);
-          if (ev.source === 'human') setCompactionNotice(null);
+          setStreaming(true);
+          setActivity('waiting');
+          if (ev.source === 'human') {
+            setCompactionNotice(null);
+            setCompaction(current => reduceCompactionActivity(current, { type: 'input-accepted' }));
+          }
+          break;
+
+        case 'compact-start':
+        case 'compact-done':
+        case 'compact-failed':
+          setCompaction(current => reduceCompactionActivity(current, ev));
           break;
 
         case 'compaction-notice':
@@ -179,18 +214,16 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
           break;
 
         case 'context-compacted':
-          setMessages(ev.messages.filter(message => message.role !== 'tool').map(message => ({
-            id: nextId(), role: message.role === 'system' ? 'assistant' : message.role === 'user' ? 'user' : 'assistant',
-            content: message.content, reasoningContent: message.reasoningContent,
-            timestamp: new Date().toISOString(),
-          })));
+          delegateBuffer.flush();
+          flushStreamFrame();
           streamRef.current = null;
+          setMessages(projectNodeHistoryMessages(ev.messages, nextId));
           break;
 
         case 'user-message': {
-          // 后端注入的 user msg（envelope/contact）实时推送
-          const id = nextId();
-          setMessages(prev => [...prev, { id, role: 'user', content: ev.content, timestamp: new Date().toISOString() }]);
+          const id = ev.messageId ?? nextId();
+          setMessages(prev => mergeNodeUserMessage(prev, { id, role: 'user', content: ev.content,
+            timestamp: ev.timestamp ?? new Date().toISOString() }));
           // 记录本轮来源，决定停止按钮形态（envelope/contact 只能暂停/停工作流）
           if (ev.source === 'envelope' || ev.source === 'contact') setRoundSource(ev.source);
           setPaused(false);
@@ -247,7 +280,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
             const before = ev.meta?.before;
             const placeholderId = streamRef.current?.id;
             return placeholderId
-              ? finishLatestToolStep(prev, placeholderId, ev.result, ev.ok, { before })
+              ? finishLatestToolStep(prev, placeholderId, ev.result, ev.ok, { before, toolImages: ev.toolImages })
               : prev;
           });
           break;
@@ -307,7 +340,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
                 const steps = [...((msgs[i].toolCall as any).steps || [])];
                 for (let j = steps.length - 1; j >= 0; j--) {
                   if (steps[j].tool === ev.tool && steps[j].result == null) {
-                    steps[j] = { ...steps[j], result: ev.result, ok: ev.ok };
+                    steps[j] = { ...steps[j], result: ev.result, ok: ev.ok, toolImages: ev.toolImages };
                     break;
                   }
                 }
@@ -388,10 +421,12 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
           delegateBuffer.flush();
           flushStreamFrame();
           setError(ev.message);
+          setCompaction(current => reduceCompactionActivity(current, ev));
           setActivity('failed');
           break;
 
         case 'done':
+          updateUsage({ type: 'done', operation: 'node' });
           console.log('[AgentChat] SSE done');
           delegateBuffer.flush();
           flushStreamFrame();
@@ -400,12 +435,25 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
           setRoundSource(null);
           setPaused(false);
           setActivity(current => current === 'failed' ? 'failed' : 'idle');
+          if (manualCompactionRef.current && ev.outcome === 'completed') {
+            setInput(current => current.trim() === '/compact' ? '' : current);
+          }
+          manualCompactionRef.current = false;
+          setCompaction(current => {
+            if (current?.phase !== 'running') return current;
+            if (ev.outcome === 'stopped') return reduceCompactionActivity(current, { type: 'aborted' });
+            if (ev.outcome === 'error') return reduceCompactionActivity(current, { type: 'error' });
+            return current.id.startsWith('pending-') ? { ...current, phase: 'completed', updatedAt: Date.now() } : current;
+          });
           roundIdRef.current = null;
           break;
 
         case 'paused':
+          updateUsage({ type: 'done', operation: 'node' });
           // 信封轮暂停：react 已软中止，扣住信封待续跑。停 streaming 但保留 roundSource。
           delegateBuffer.flush();
+          flushStreamFrame();
+          setCompaction(current => reduceCompactionActivity(current, { type: 'aborted' }));
           streamRef.current = null;
           setStreaming(false);
           setPaused(true);
@@ -416,16 +464,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
     };
 
     // 渲染历史消息（snapshot.messages → ChatMessage[]）
-    const renderHistory = (msgs: Array<{ role: string; content: string; reasoningContent?: string }>) => {
-      const loaded = msgs.map(m => ({
-        id: nextId(),
-        role: m.role as 'user' | 'assistant' | 'system',
-        content: m.content,
-        reasoningContent: m.reasoningContent,
-        timestamp: new Date().toISOString(),
-      }));
-      setMessages(loaded);
-    };
+    const renderHistory = (msgs: NodeHistoryMessage[]) => setMessages(projectNodeHistoryMessages(msgs, nextId));
 
     const restoreSnapshot = (snap: NodeSnapshot<StreamEvent>) => {
       statusRequestGateRef.current.advanceEvent();
@@ -435,7 +474,10 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
       delegateBuffer.dispose();
       renderHistory(snap.messages);
       setCompactionNotice(snap.compactionNotice ?? null);
-      setLatestUsage(latestProviderUsage(snap.tokenUsage));
+      setCompaction(compactionActivity(snap.compaction));
+      if (snap.busy) updateUsage({ type: 'start', operation: 'node' });
+      updateUsage({ type: 'usage', usage: latestProviderUsage(snap.tokenUsage) });
+      if (!snap.busy) updateUsage({ type: 'done', operation: 'node' });
       setRoundSource(roundSourceFromSnapshot(snap));
       const replay = shouldReplaySnapshotRound(snap);
       roundIdRef.current = replay ? snap.runId ?? null : null;
@@ -455,7 +497,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
       const controller = new AbortController();
       snapshotController = controller;
       const generation = snapshotGate.start();
-      void fetch(`/api/tradewind/chat/${nodeId}/snapshot`, { signal: controller.signal })
+      void backendFetch(panelReadUrl(`/api/tradewind/chat/${encodeURIComponent(nodeId)}/snapshot`, { workflowId, executionId: executionId ?? null }), { signal: controller.signal })
         .then(response => readNodeSnapshot<StreamEvent>(response, { workflowId, executionId: executionId ?? null }))
         .then(snap => {
           if (cancelled) return;
@@ -509,7 +551,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
       }
       if (executionId) unsubscribe(nodeId, onStreamEvent);
     };
-  }, [nodeId, workflowId, executionId]);
+  }, [nodeId, workflowId, executionId, updateUsage]);
 
   // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
   useEffect(() => {
@@ -530,7 +572,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
     const gate = statusRequestGateRef.current;
     const ticket = gate.begin();
     const controller = new AbortController();
-    fetch(`/api/tradewind/chat/${nodeId}/status`, { signal: controller.signal })
+    backendFetch(panelReadUrl(`/api/tradewind/chat/${encodeURIComponent(nodeId)}/status`, { workflowId, executionId: executionId ?? null }), { signal: controller.signal })
       .then(response => readNodeStatus(response, { workflowId, executionId }))
       .then(s => {
         if (gate.shouldClearStreaming(ticket, s)) {
@@ -547,14 +589,33 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || streaming || sealed || !executionId) return;
+    if (!text || submittingRef.current || streaming || sealed || !executionId || compaction?.phase === 'running') return;
+    submittingRef.current = true;
+    updateUsage({ type: 'start', operation: 'node' });
+    const manual = text === '/compact';
+    manualCompactionRef.current = manual;
+    const pending = manual ? pendingCompaction('compact') : undefined;
+    if (pending) setCompaction(current => reduceCompactionActivity(current, pending));
     setError(null);
+    const epoch = panelEpochRef.current;
     try {
-      await sendNodeMessage(executionId, nodeId, text);
-      setInput('');
+      const receipt = await sendNodeMessage(executionId, nodeId, text);
+      if (epoch !== panelEpochRef.current) return;
+      if (receipt.messageId && text !== '/compact') setMessages(previous => mergeNodeUserMessage(previous, {
+        id: receipt.messageId!, role: 'user', content: text, timestamp: new Date().toISOString(),
+      }));
+      if (!manual) setInput(current => current.trim() === text ? '' : current);
     }
-    catch (cause) { setError((cause as Error).message); }
-  }, [executionId, input, streaming, nodeId, sealed]);
+    catch (cause) {
+      if (epoch !== panelEpochRef.current) return;
+      manualCompactionRef.current = false;
+      updateUsage({ type: 'done', operation: 'node' });
+      setError((cause as Error).message);
+      if (pending) setCompaction(current => current?.id === pending.id
+        ? reduceCompactionActivity(current, { ...pending, type: 'compact-failed',
+          updatedAt: Date.now(), message: (cause as Error).message }) : current);
+    } finally { if (epoch === panelEpochRef.current) submittingRef.current = false; }
+  }, [executionId, input, streaming, nodeId, sealed, compaction?.phase, updateUsage]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -597,9 +658,11 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
 
   const isEnvelopeRound = roundSource === 'envelope' || roundSource === 'contact';
   return <AgentChatView visible={visible} sealed={sealed} paused={paused} streaming={streaming}
+    mediaScope={executionId ? { feature: 'tradewind', workflowId, executionId, nodeId, kind: 'node' } : undefined}
     isEnvelopeRound={isEnvelopeRound} activity={activity} nodeLabel={nodeLabel} messages={messages}
     latestUsage={latestUsage}
     compactionNotice={compactionNotice}
+    compaction={compaction}
     error={error} input={input} messagesContainerRef={messagesContainerRef} messagesEndRef={messagesEndRef}
     onClose={onClose} onInput={setInput} onKeyDown={handleKeyDown} onSend={send} onStop={stop}
     onPauseRound={pauseRound} onResumeRound={resumeRound} onStopWorkflow={stopWorkflow} />;

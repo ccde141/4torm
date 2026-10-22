@@ -23,19 +23,19 @@ import { BUILTIN_EVENT_IDS } from '../foundation/types';
 import { loadAgent } from '../../shared/agent-loader';
 import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
 import { resolveNativeMode } from '../../shared/llm-bridge';
-import { buildTradewindSystemPrompt } from '../execution/prompt-builder';
+import { buildTradewindSystemPrompt, type TradewindPromptParams } from '../execution/prompt-builder';
 import { recallMemory } from '../../shared/agent-memory';
 import { NodeRunner } from '../execution/node-runner';
 import { consumeNodeContext } from '../foundation/node-context-store';
-import { markEnvelopePending, markEnvelopeDone } from '../foundation/node-status-store';
-import { abortableSleep, readDeliveryDelaySec } from '../execution/delivery-delay';
+import { runAgentEnvelopeLoop } from '../execution/agent-envelope-loop.js';
+import { ExecutionRegistry } from '../execution/execution-registry.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { atomicWriteFile } from '../../shared/atomic-io.js';
 import { waitForTaskFailureOrAbort } from '../execution/execution-lifetime.js';
 
 /** 活跃 NodeRunner 注册表：nodeId → NodeRunner */
-export const activeNodeRunners = new Map<string, NodeRunner>();
+export const activeNodeRunners = new ExecutionRegistry<NodeRunner>(runner => runner.getIdentity().executionId);
 
 export class AgentExecutor implements NodeExecutor {
   readonly type = 'agent';
@@ -107,8 +107,10 @@ export class AgentExecutor implements NodeExecutor {
     } catch { /* 召回失败静默降级，不阻断节点启动 */ }
 
     // 启动期 system prompt（信封内容稍后通过 user message 注入）
-    const systemPrompt = buildTradewindSystemPrompt({
-      rolePrompt: agent.rolePrompt || '你是一个工作流中的 Agent。',
+    const promptParams: TradewindPromptParams = {
+      rolePrompt: ctx.orchestration === 'handoff' && typeof ctx.nodeConfig.role === 'string'
+        ? `${agent.rolePrompt || ''}\n\n# 当前岗位任务\n${ctx.nodeConfig.role}`
+        : agent.rolePrompt || '你是一个工作流中的 Agent。',
       memorySection,
       toolDefs,
       notes,
@@ -129,7 +131,10 @@ export class AgentExecutor implements NodeExecutor {
       native: nativeDecision.native,
       autoMode: ctx.mode === 'auto',
       downstreamLabels,
-    });
+      orchestration: ctx.orchestration,
+      handoffRoutes: ctx.handoffRoutes,
+    };
+    const systemPrompt = buildTradewindSystemPrompt(promptParams);
 
     // 持久化路径（归档用，写 messages.json）
     const persistDir = path.join(ctx.runDir, 'nodes', ctx.nodeId);
@@ -156,6 +161,7 @@ export class AgentExecutor implements NodeExecutor {
       workspace: nodeWorkspace,
       sandboxLevel: agent.sandboxLevel,
       systemPrompt,
+      buildSystemPrompt: source => buildTradewindSystemPrompt({ ...promptParams, source }),
       compactionPrompt: agent.compactionPrompt,
       signal: ctx.signal,
       persistDir,
@@ -164,11 +170,16 @@ export class AgentExecutor implements NodeExecutor {
       contactTargets,
       native: nativeDecision.native,
       autoMode: ctx.mode === 'auto',
+      orchestration: ctx.orchestration,
+      handoffRoutes: ctx.handoffRoutes,
+      ...(ctx.orchestration === 'handoff' ? { recordEvent: async (type: string, payload: Record<string, unknown>) => {
+        await ctx.emit(type, payload);
+      } } : {}),
     });
 
     // 立刻注册到全局表（路由层通过此表向节点发人类消息）
     // 关键：工作流启动后人类立即可对话，无需等待上游信封
-    activeNodeRunners.set(ctx.nodeId, runner);
+    activeNodeRunners.set(ctx.nodeId, runner, ctx.executionId);
 
     // 消费节点上下文存储（例如：在本节点激活前已结束的会议纪要广播）
     const pendingContexts = consumeNodeContext(ctx.executionId, ctx.nodeId);
@@ -179,83 +190,22 @@ export class AgentExecutor implements NodeExecutor {
     // 后台任务：循环等待上游信封 → 投递到 runner → 完成后 sendHandoff
     // 循环原因：rework 打回 / 上游多次触发 / 持续监听
     // 不阻塞主流程，主流程立刻进入"挂起等待 abort"状态
-    const envelopeTask = (async () => {
-      while (!ctx.signal.aborted) {
-        try {
-          const envelopes = await ctx.waitForInputs();
-          if (ctx.signal.aborted) return;
-          // expected=0 时 waitReady 立即 resolve 空数组，无意义循环 → 退出
-          if (envelopes.length === 0) return;
-
-          // 标记节点处于"信封工作中"（前端显示琥珀色光环）
-          markEnvelopePending(ctx.executionId, ctx.nodeId);
-
-          try {
-            // 信封内容显化标注为系统信息（避免 LLM 误以为是人类闲聊）
-            const userMessage = envelopes.length === 1
-              ? `[系统信息：工作流上游传来的工作指令]\n\n${envelopes[0].content}`
-              : envelopes.map((e, i) =>
-                  `[系统信息：工作流上游传来的工作指令 ${i + 1}/${envelopes.length}]\n${e.content}`,
-                ).join('\n\n');
-
-            const result = await new Promise<{ output: string; autoOutcome?: 'completed' | 'anomaly' }>((resolve, reject) => {
-              runner.push({
-                source: 'envelope',
-                content: userMessage,
-                onComplete: (output, info) => resolve({ output, autoOutcome: info?.autoOutcome }),
-                onFailure: reject,
-              });
-              // abort 兜底：工作流停止时强制 resolve，避免 Promise 永挂
-              ctx.signal.addEventListener('abort', () => resolve({ output: '' }), { once: true });
-            });
-
-            // abort 后不投递下游，跳出循环
-            if (ctx.signal.aborted) return;
-
-            // 自动模式异常：模型未显式完成、已被强制封口。仍照常交接下游（内容即强制封口的信封），
-            // 但打异常事件（写 events.jsonl 日志 + 前端高亮），供人类事后介入。
-            if (result.autoOutcome === 'anomaly') {
-              ctx.emit(BUILTIN_EVENT_IDS.AUTO_ANOMALY, {
-                message: '自动模式：节点未显式调用 complete_task，已强制封口并交接下游',
-              });
-            }
-
-            // 投递延迟（前提①）：产出已生成，投递下游前盲等 N 秒，可被 abort 中断
-            const delaySec = readDeliveryDelaySec(ctx.nodeConfig);
-            if (delaySec > 0) {
-              ctx.emit(BUILTIN_EVENT_IDS.DELIVERY_DELAY, { seconds: delaySec });
-              const outcome = await abortableSleep(delaySec, ctx.signal);
-              if (outcome === 'aborted' || ctx.signal.aborted) return;
-            }
-
-            await ctx.sendHandoff(result.output, BUILTIN_EVENT_IDS.HANDOFF);
-            ctx.emit(BUILTIN_EVENT_IDS.WORK_DONE);
-          } finally {
-            markEnvelopeDone(ctx.executionId, ctx.nodeId);
-          }
-        } catch (e) {
-          // BufferAbortError = 工作流停止时的正常退出
-          if ((e as Error).name === 'BufferAbortError') return;
-          throw e;
-        }
-      }
-    })();
+    const envelopeTask = runAgentEnvelopeLoop(ctx, runner);
 
     try {
       // 正常待命由工作流 abort 收口；后台处理失败则立即抛给编排器。
       await waitForTaskFailureOrAbort(envelopeTask, ctx.signal);
       await envelopeTask;
     } finally {
+      let archiveFailure: unknown;
       try {
-        const archiveDir = path.join(ctx.runDir, 'nodes', ctx.nodeId);
-        await fs.mkdir(archiveDir, { recursive: true });
-        await fs.writeFile(
-          path.join(archiveDir, 'messages.json'),
-          JSON.stringify(runner.getMessages(), null, 2),
-        );
-      } catch { /* 归档失败不阻塞 */ }
-      if (activeNodeRunners.get(ctx.nodeId) === runner) activeNodeRunners.delete(ctx.nodeId);
+        await runner.flush();
+      } catch (error) {
+        if (ctx.orchestration === 'handoff') archiveFailure = error;
+      }
+      if (activeNodeRunners.get(ctx.nodeId, ctx.executionId) === runner) activeNodeRunners.delete(ctx.nodeId, ctx.executionId);
       ctx.setState('idle');
+      if (archiveFailure) throw archiveFailure;
     }
   }
 }

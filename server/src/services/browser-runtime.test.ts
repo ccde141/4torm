@@ -4,6 +4,7 @@ import { BrowserRuntime } from './browser-runtime.js';
 import { ExecutionObserver } from './execution-observer.js';
 import { VisualArtifactStore } from './visual-artifact-store.js';
 import { targetIdFor } from './browser-protocol.js';
+import { defaultBrowserEngine } from './browser-engine.js';
 
 const continueTargetId = targetIdFor({ index: 0, role: 'button', name: 'Continue' });
 
@@ -325,7 +326,7 @@ test('uses an injected browser driver instead of launching Playwright directly',
   assert.deepEqual(openInputs.map(input => {
     const value = input as { engine: string; url: string };
     return { engine: value.engine, url: value.url };
-  }), [{ engine: 'system-edge', url: 'https://driver.test' }]);
+  }), [{ engine: defaultBrowserEngine(), url: 'https://driver.test' }]);
   assert.match(result, /title: Driver page/);
 });
 

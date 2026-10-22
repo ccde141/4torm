@@ -21,6 +21,8 @@ import { DEFAULT_DUTY } from './types';
 import { loadSeat } from './seat-store';
 import type { ContactTarget } from './contact-registry';
 import { buildCycloneChairMeta, buildCycloneSeatMeta } from './meta-profiles.js';
+import { seatCollaborationPolicy } from './seat-collaboration.js';
+import { seatFactGuidance } from './seat-fact-tools.js';
 
 // ── 气旋原生准则文案 ────────────────────────────────────────
 
@@ -66,7 +68,7 @@ function buildBaselineSection(scene: 'solo' | 'room' | 'contact', fromTitle?: st
 - 你是工作室里与人类长期协作的执行工位，把明确的事做实、做完
 - 目标是让人类拿到可用的结果，而非只回一句话就交差
 - 需要决策或信息不足时主动用 ask 问清，别凭假设硬做
-- 有合适固定工位时，跨工位职责或需要持续上下文的事项优先 dispatch；本工位职责内的临时并行子任务可用 delegate`);
+- 当前清单开放 dispatch 且有合适固定工位时，跨工位职责或需要持续上下文的事项优先派发；本工位职责内的临时并行子任务可用 delegate`);
     parts.push(CYCLONE_THINKING);
     parts.push(`### 表达风格
 
@@ -102,6 +104,12 @@ function buildBaselineSection(scene: 'solo' | 'room' | 'contact', fromTitle?: st
 - 准确优于快速，风险和前提如实标注`);
   }
 
+  parts.push(seatFactGuidance(scene));
+  parts.push(`## 协作通讯状态
+
+- contact 返回 busy 且 delivered=false 时，本次未送达且已撤回。自行选择稍后再联系、等待或先推进其他工作；已接收仍在处理时，用 contact_read 按原 contactId 查询，不为催办重发同一请求。
+- dispatch 的登记回执不等于已接收；排队超过接入期限会撤回并报告忙线。以派发事实区分未送达、正在执行和已完成，不因一次忙线永久放弃整个任务。
+- 已配置工作室主管且本轮提供 supervisor_message 时，用它发送需要统筹的新信息、阻塞或协调请求。这是信息发送，不能给主管派活或改变人类目标。主管派发的正常结果已有自动回执，不重复发送同一份汇报。`);
   return parts.join('\n\n');
 }
 
@@ -165,11 +173,11 @@ export function buildSeatSystemPrompt(opts: {
     const roster = contactTargets.map(target => `- ${target.title}：${target.duty}`).join('\n');
     parts.push(`## 工位协作
 
-可用 contact 向其他工位同步询问并等待回复；可用 dispatch 把完整、可独立完成的任务异步交办，派发后继续当前工作，不要原地等待。两者的目标都必须使用以下工位名称：
+${seatCollaborationPolicy(seat).contact ? '可用 contact 向其他工位同步询问并等待回复。' : ''}${seatCollaborationPolicy(seat).dispatch ? '可用 dispatch 把完整、可独立完成的任务异步交办，派发后继续当前工作，不要原地等待。' : ''}当前协作工具只允许选择以下工位名称：
 
 ${roster}
 
-dispatch 参数：target=目标工位名称，task=包含目标、必要背景和交付要求的完整任务。`);
+${seatCollaborationPolicy(seat).dispatch ? 'dispatch 参数：target=目标工位名称，task=包含目标、必要背景和交付要求的完整任务。' : ''}`);
   }
 
   // 3.5 工作室公告板（全体工位共享，人与工位皆可写；带本工位变更注意力标记）

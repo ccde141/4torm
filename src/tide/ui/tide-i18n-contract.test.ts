@@ -17,17 +17,20 @@ test('tide task cards localize chrome without changing task payloads', () => {
 test('tide schedule display follows locale without changing its storage syntax', () => {
   assert.equal(formatSchedule('every 1h30m', 'zh-CN'), '1 小时 30 分钟');
   assert.equal(formatSchedule('every 1h30m', 'en-US'), '1 hr 30 min');
+  assert.equal(formatSchedule('daily 08:00', 'zh-CN'), '每天 08:00');
+  assert.equal(formatSchedule('daily 08:00', 'en-US'), 'Daily at 08:00');
   assert.equal(formatSchedule('cron 0 9 * * *', 'en-US'), 'cron 0 9 * * *');
 });
 
 test('tide create form localizes guidance without changing scheduler values', () => {
   const source = fs.readFileSync('src/tide/ui/TideCreateForm.tsx', 'utf8');
+  const delivery = fs.readFileSync('src/tide/ui/TideDeliveryFields.tsx', 'utf8');
   assert.match(source, /useLocale/);
-  assert.match(source, /tide\.create\.selfLoop/);
-  assert.match(source, /tide\.create\.validation\.interval/);
-  assert.match(source, /value="accumulate"/);
-  assert.match(source, /value="designated"/);
-  assert.match(source, /const schedule = `every \$\{scheduleH\}h\$\{scheduleM\}m\$\{scheduleS\}s`/);
+  assert.match(delivery, /tide\.create\.selfLoopTitle/);
+  assert.match(source, /validateTideScheduleForm/);
+  assert.match(delivery, /\['accumulate', 'designated'\]/);
+  assert.match(source, /const schedule = buildTideSchedule\(scheduleForm\)/);
+  assert.match(source, /TideScheduleFields/);
   assert.match(source, /prompt\.trim\(\)/);
   assert.match(source, /targetSessionId/);
 });
@@ -43,7 +46,7 @@ test('tide session rendering is separated from page polling', () => {
   assert.match(view, /visibleTideMessages\(session\)/);
   assert.match(view, /renderTextWithCode|StructuredMessage/);
   assert.match(view, /JSON\.stringify\(parsed\.args/);
-  assert.match(view, /parsed\.result\.slice/);
+  assert.match(view, /BoundedText text=\{parsed\.result\}/);
   assert.ok(view.split(/\r?\n/).length <= 300);
 });
 
@@ -56,7 +59,7 @@ test('tide session view localizes chrome without translating conversation conten
   assert.match(view, /answer=\{message\.content\}/);
   assert.match(view, /JSON\.parse\(content\)/);
   assert.match(view, /JSON\.stringify\(parsed\.args/);
-  assert.match(view, /parsed\.result\.slice/);
+  assert.match(view, /BoundedText text=\{parsed\.result\}/);
 });
 
 test('tide task detail is separated without moving page polling or request guards', () => {
@@ -77,15 +80,19 @@ test('tide task detail is separated without moving page polling or request guard
 
 test('tide task detail localizes chrome while preserving task and run payloads', () => {
   const detail = fs.readFileSync('src/tide/ui/TideTaskDetail.tsx', 'utf8');
+  const editor = fs.readFileSync('src/tide/ui/TideTaskEditor.tsx', 'utf8');
+  const overview = fs.readFileSync('src/tide/ui/TideTaskOverview.tsx', 'utf8');
+  const history = fs.readFileSync('src/tide/ui/TideRunHistory.tsx', 'utf8');
   assert.match(detail, /useLocale/);
-  assert.match(detail, /tide\.detail\.schedule/);
-  assert.match(detail, /tide\.detail\.runHistory/);
+  assert.match(overview, /tide\.detail\.schedule/);
+  assert.match(history, /tide\.detail\.runHistory/);
   assert.match(detail, /task\.name/);
   assert.match(detail, /task\.prompt/);
-  assert.match(detail, /run\.error/);
-  assert.match(detail, /run\.answer\.slice/);
+  assert.match(history, /run\.error/);
+  assert.match(history, /text\.slice\(0, 200\)/);
   assert.match(detail, /task\.pushMode === 'accumulate'/);
-  assert.match(detail, /`every \$\{form\.scheduleH\}h\$\{form\.scheduleM\}m\$\{form\.scheduleS\}s`/);
+  assert.match(detail, /buildTideSchedule\(form\)/);
+  assert.match(editor, /TideScheduleFields/);
 });
 
 test('tide page localizes shell without translating entity names or changing polling', () => {

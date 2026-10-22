@@ -1,3 +1,4 @@
+import { backendFetch } from '../../lib/backend-client';
 const BASE = '/api/storage';
 
 export class StorageError extends Error {
@@ -35,7 +36,7 @@ async function writeWithRetry(request: () => Promise<Response>): Promise<void> {
 }
 
 export async function readText(filePath: string): Promise<string | null> {
-  const res = await fetch(`${BASE}/read?path=${encodeURIComponent(filePath)}`);
+  const res = await backendFetch(`${BASE}/read?path=${encodeURIComponent(filePath)}`);
   if (res.status === 404) return null;
   if (!res.ok) throw new StorageError(`读取失败: ${res.status}`);
   return res.text();
@@ -68,7 +69,7 @@ function recoverJsonPrefix(text: string): unknown {
 }
 
 export async function readJson<T>(filePath: string): Promise<T | null> {
-  const res = await fetch(`${BASE}/read?path=${encodeURIComponent(filePath)}`);
+  const res = await backendFetch(`${BASE}/read?path=${encodeURIComponent(filePath)}`);
   if (res.status === 404) return null;
   if (!res.ok) throw new StorageError(`读取失败: ${res.status}`);
   const text = await res.text();
@@ -86,7 +87,7 @@ export async function readJson<T>(filePath: string): Promise<T | null> {
 }
 
 export async function writeText(filePath: string, content: string): Promise<void> {
-  await writeWithRetry(() => fetch(`${BASE}/write?path=${encodeURIComponent(filePath)}`, {
+  await writeWithRetry(() => backendFetch(`${BASE}/write?path=${encodeURIComponent(filePath)}`, {
     method: 'PUT',
     body: content,
   }));
@@ -94,7 +95,7 @@ export async function writeText(filePath: string, content: string): Promise<void
 
 export async function writeJson<T>(filePath: string, data: T): Promise<void> {
   const body = JSON.stringify(data, null, 2);
-  await writeWithRetry(() => fetch(`${BASE}/write?path=${encodeURIComponent(filePath)}`, {
+  await writeWithRetry(() => backendFetch(`${BASE}/write?path=${encodeURIComponent(filePath)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body,
@@ -102,10 +103,10 @@ export async function writeJson<T>(filePath: string, data: T): Promise<void> {
 }
 
 export async function deleteFile(filePath: string): Promise<void> {
-  const res = await fetch(`${BASE}/delete?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
+  const res = await backendFetch(`${BASE}/delete?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
   if (!res.ok) throw new StorageError(`删除失败: ${res.status}`);
 }
 
 export async function ensureDir(dirPath: string): Promise<void> {
-  await fetch(`${BASE}/mkdir?path=${encodeURIComponent(dirPath)}`, { method: 'POST' });
+  await backendFetch(`${BASE}/mkdir?path=${encodeURIComponent(dirPath)}`, { method: 'POST' });
 }

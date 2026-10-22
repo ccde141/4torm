@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { DisplayBlock, DisplayMessage } from './messageDisplay.js';
+import { applySeatEvent, emptyLive } from './seat-stream-events.js';
 import {
   appendReplyBlock,
   appendReplyText,
@@ -52,6 +53,21 @@ test('最终 answer 只补充尚未流式出现的尾段', () => {
   assert.deepEqual(describe(segments), [
     'text:第一波', 'block:read_file', 'text:第二波', 'text:最终总结',
   ]);
+});
+
+test('模型终态失败在已完成的工具后保留错误正文，不冒充最终 answer', () => {
+  const live = emptyLive();
+  applySeatEvent({ type: 'token', content: '先保存岗位资料。' }, live);
+  applySeatEvent({ type: 'tool-call', tool: 'seat_memory_write', args: {} }, live);
+  applySeatEvent({ type: 'tool-result', tool: 'seat_memory_write', result: 'saved', ok: true }, live);
+  applySeatEvent({ type: 'error', message: 'request budget reached' }, live);
+  assert.deepEqual(describe(live.segments), [
+    'text:先保存岗位资料。', 'block:seat_memory_write', 'text:\n[错误] request budget reached',
+  ]);
+  assert.equal(live.phase, '');
+  assert.deepEqual(live.segments[0].blocks[0], {
+    kind: 'tool', tool: 'seat_memory_write', args: {}, status: 'success', result: 'saved',
+  });
 });
 
 test('Ask 乐观回复替换原挂起卡，而不是追加重复卡', () => {

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { configureSupervisor, loadSupervisorTaskboard, reconcileSupervisorTaskboard, saveSupervisorTaskboard } from './supervisor-client.js';
+import { TaskboardConflictError, type TaskBoard } from '../../../utils/taskboard.js';
+import { applySeatEvent, emptyLive } from './seat-stream-events.js';
 import {
   addCycloneSeat,
   createCycloneRoom,
@@ -30,18 +33,89 @@ import {
   updateCycloneSeat,
 } from './cyclone-control-client.js';
 
+test('主管配置与人类消息管理使用工作室主管端点，不伪装成工位', async t => {
+  const calls: Array<{ url: string; method: string; body: unknown }> = [];
+  t.mock.method(globalThis, 'fetch', async (input: unknown, init?: RequestInit) => {
+    calls.push({ url: String(input), method: init?.method ?? 'GET', body: JSON.parse(String(init?.body)) });
+    return Response.json({ configured: true });
+  });
+  await configureSupervisor('workshop-a', 'agent-a', '统筹项目');
+  await editCyclonePrivateMessage('workshop-a', { kind: 'supervisor' }, 2, '补充范围');
+  await deleteCyclonePrivateMessage('workshop-a', { kind: 'supervisor' }, 3);
+  await resetCyclonePrivateContext('workshop-a', { kind: 'supervisor' }, 'clear');
+  assert.deepEqual(calls, [
+    { url: '/api/cyclone/workshop/workshop-a/supervisor/config', method: 'PUT', body: { agentId: 'agent-a', rolePrompt: '统筹项目' } },
+    { url: '/api/cyclone/workshop/workshop-a/supervisor/message', method: 'PATCH', body: { index: 2, content: '补充范围' } },
+    { url: '/api/cyclone/workshop/workshop-a/supervisor/message', method: 'PATCH', body: { index: 3 } },
+    { url: '/api/cyclone/workshop/workshop-a/supervisor/reset', method: 'POST', body: { mode: 'clear' } },
+  ]);
+});
+
+test('主管压缩消费 SSE 终态，不能把 error 当成功', async t => {
+  const controller = new AbortController();
+  t.mock.method(globalThis, 'fetch', async (input: unknown, init?: RequestInit) => {
+    assert.equal(String(input), '/api/cyclone/workshop/w/supervisor/compact');
+    assert.equal(init?.signal, controller.signal);
+    return new Response('data: {"type":"execution-start","operationId":"supervisor:w:supervisor","runId":"run-a"}\n\ndata: {"type":"error","message":"压缩模型离线"}\n\n',
+      { headers: { 'Content-Type': 'text/event-stream' } });
+  });
+  await assert.rejects(compactCyclonePrivateContext('w', { kind: 'supervisor' }, controller.signal), /压缩模型离线/);
+});
+
+test('主管任务板保留空板与版本冲突的真实结果', async t => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    if (calls === 1) return Response.json(null);
+    if (calls === 2) return Response.json({ result: 'cleared', meta: { taskboard: null } });
+    return Response.json({ error: '版本已变化', meta: { taskboard: null } }, { status: 409 });
+  });
+  assert.equal(await loadSupervisorTaskboard('w'), null);
+  assert.equal(await saveSupervisorTaskboard('w', null, 0), null);
+  await assert.rejects(saveSupervisorTaskboard('w', null, 0), error => error instanceof TaskboardConflictError);
+});
+
+test('主管任务板收尾读取同一工作室真实终态，迟到工具快照不退回2/6且清屏可生效', async t => {
+  const stale: TaskBoard = { goal: '核验六项', updatedAt: 20, revision: 2,
+    tasks: Array.from({ length: 6 }, (_, index) => ({ id: `t${index}`, title: `检查${index}`,
+      status: index < 2 ? 'done' : 'todo' })) };
+  const completed: TaskBoard = { ...stale, updatedAt: 50, revision: 5,
+    tasks: stale.tasks.map(task => ({ ...task, status: 'done' })) };
+  const urls: string[] = [];
+  let latest: TaskBoard | null = completed;
+  t.mock.method(globalThis, 'fetch', async input => {
+    urls.push(String(input)); return Response.json(latest);
+  });
+  const live = emptyLive();
+  applySeatEvent({ type: 'tool-result', tool: 'task_board', ok: true,
+    result: '已更新', meta: { taskboard: stale } }, live);
+  let board = reconcileSupervisorTaskboard(live.taskboard ?? null, await loadSupervisorTaskboard('current-workshop'));
+  assert.equal(board?.tasks.filter(task => task.status === 'done').length, 6);
+  board = reconcileSupervisorTaskboard(board, live.taskboard!);
+  assert.equal(board?.revision, 5);
+  latest = null;
+  board = reconcileSupervisorTaskboard(board, await loadSupervisorTaskboard('current-workshop'));
+  assert.equal(board, null);
+  const restarted = { ...stale, revision: 1, updatedAt: 70 };
+  assert.equal(reconcileSupervisorTaskboard(completed, restarted)?.revision, 1);
+  assert.deepEqual(urls, ['/api/cyclone/workshop/current-workshop/supervisor/taskboard',
+    '/api/cyclone/workshop/current-workshop/supervisor/taskboard']);
+});
+
 test('manual compact uses full-summary central ports for seats, chairs and public rooms', async () => {
   const originalFetch = globalThis.fetch;
   const calls: Array<Record<string, unknown>> = [];
+  const controller = new AbortController();
   globalThis.fetch = async (input, init) => {
     assert.equal(String(input), '/api/collaboration/invoke');
+    assert.equal(init?.signal, controller.signal);
     calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
     return Response.json({ ok: true });
   };
   try {
-    await compactCyclonePrivateContext('w', { kind: 'seat', seatId: 's' });
-    await compactCyclonePrivateContext('w', { kind: 'chair', roomId: 'r' });
-    await compactCycloneRoomContext('w', 'r');
+    await compactCyclonePrivateContext('w', { kind: 'seat', seatId: 's' }, controller.signal);
+    await compactCyclonePrivateContext('w', { kind: 'chair', roomId: 'r' }, controller.signal);
+    await compactCycloneRoomContext('w', 'r', 'public', controller.signal);
     assert.deepEqual(calls.map(call => [call.method, call.input]), [
       ['compactSeatContext', { workshopId: 'w', seatId: 's' }],
       ['compactChairContext', { workshopId: 'w', roomId: 'r' }],

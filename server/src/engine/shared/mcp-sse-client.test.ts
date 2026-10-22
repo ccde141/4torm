@@ -22,6 +22,7 @@ test('兼容 SSE 从 endpoint 事件完成握手与工具调用', async (t) => {
     res.statusCode = 202;
     res.end();
     if (body.id === undefined) return;
+    if ((body.params as { arguments?: { hold?: boolean } })?.arguments?.hold) return;
     const method = body.method;
     const result = method === 'initialize'
       ? { protocolVersion: '2024-11-05' }
@@ -47,5 +48,11 @@ test('兼容 SSE 从 endpoint 事件完成握手与工具调用', async (t) => {
   await client.connect();
 
   assert.deepEqual(client.tools.map(tool => tool.name), ['lookup']);
+  assert.equal(await client.callTool('lookup', {}), 'sse result');
+  const controller = new AbortController();
+  const rejection = assert.rejects(client.callToolOutcome('lookup', { hold: true }, controller.signal),
+    { name: 'AbortError' });
+  controller.abort();
+  await rejection;
   assert.equal(await client.callTool('lookup', {}), 'sse result');
 });

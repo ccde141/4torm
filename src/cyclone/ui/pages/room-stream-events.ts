@@ -1,7 +1,10 @@
+import type { CompactionActivity } from '../../../components/common/compaction-activity';
+import { reduceCycloneCompaction } from './cyclone-compaction-activity';
 import { formatStreamStatus } from '../../../components/chat/stream-status';
 import type { Locale } from '../../../i18n/locale';
 import type { CycloneUsage } from './cyclone-token-usage';
 import { compactionFeedbackEvent } from '../../../components/common/compaction-feedback';
+import { projectContactResult } from './contact-result';
 import {
   appendRoomDispatch, appendRoomText, appendRoomTool, completeRoomTool,
   reconcileRoomAnswer, type FeedTool, type RoomReplySegment,
@@ -30,15 +33,21 @@ export interface RoomEventState {
   roundFeed: FeedMsg[];
   activeSpeaker: string;
   tokenUsage?: CycloneUsage | null;
+  lastKnownTokenUsage?: CycloneUsage;
   compactionNotice?: string | null;
+  compaction?: CompactionActivity | null;
 }
 
 export function applyRoomEvent(ev: any, state: RoomEventState, locale: Locale = 'zh-CN'): void {
+  state.compaction = reduceCycloneCompaction(state.compaction, ev);
   const feedback = compactionFeedbackEvent(ev);
   if (feedback !== undefined) state.compactionNotice = feedback;
   const feed = state.roundFeed;
   switch (ev.type) {
-    case 'usage': state.tokenUsage = ev.usage ?? null; break;
+    case 'usage':
+      state.tokenUsage = ev.usage ?? null;
+      if (ev.usage) state.lastKnownTokenUsage = ev.usage;
+      break;
     case 'seat-start':
       state.activeSpeaker = ev.speaker;
       feed.push({ key: ev.turnId || `intro-${ev.speaker}-${feed.length}`, turnId: ev.turnId,
@@ -70,7 +79,7 @@ export function applyRoomEvent(ev: any, state: RoomEventState, locale: Locale = 
         Math.round((ev.elapsed || 0) / 1000), tool, undefined, locale);
     }); break;
     case 'tool-result': updateSpeaker(feed, state.activeSpeaker, message => {
-      completeTool(message, ev); completeRoomTool(message.segments!, ev.result, ev.ok);
+      completeTool(message, ev); completeRoomTool(message.segments!, ev.result, ev.ok, ev.toolImages);
       message.phase = formatStreamStatus('llm-waiting', 0, undefined, undefined, locale);
     }); break;
     case 'dispatch-created': updateSpeaker(feed, state.activeSpeaker,
@@ -93,7 +102,10 @@ function updateSpeaker(feed: FeedMsg[], speaker: string, update: (message: FeedM
 function completeTool(message: FeedMsg, ev: any): void {
   for (let index = message.tools.length - 1; index >= 0; index--) {
     if (message.tools[index].status === 'running') {
-      message.tools[index] = { ...message.tools[index], result: ev.result, status: ev.ok ? 'success' : 'error' };
+      const tool = message.tools[index];
+      const status = tool.tool === 'contact' || tool.tool === 'contact_read'
+        ? projectContactResult(ev.result, ev.ok).status : ev.ok ? 'success' : 'error';
+      message.tools[index] = { ...tool, result: ev.result, toolImages: ev.toolImages, status };
       return;
     }
   }

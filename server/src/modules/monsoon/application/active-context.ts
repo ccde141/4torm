@@ -1,4 +1,5 @@
 import type { ContextMessage, NativeToolCall } from '../../../engine/shared/types.js';
+import { readToolImageRefs } from '../../../engine/shared/tool-media-store.js';
 import type { MonsoonMessage, MonsoonSession } from '../domain/session.js';
 import { persistMonsoonContext, readStoredMonsoonContext, textMonsoonContext,
   type StoredMonsoonContextMessage } from './context-images.js';
@@ -61,7 +62,9 @@ function projectTool(value: unknown, id: string): ContextMessage[] {
   const call: NativeToolCall = { id, name: value.tool, arguments: JSON.stringify(value.args ?? {}) };
   const result = typeof value.result === 'string' ? value.result : '工具没有返回结果，不得假定成功。';
   return [{ role: 'assistant', content: '', toolCalls: [call] },
-    { role: 'tool', content: result, toolCallId: id }];
+    { role: 'tool', content: result, toolCallId: id,
+      ...(typeof value.ok === 'boolean' ? { toolOk: value.ok } : {}),
+      ...(value.toolImages !== undefined ? { toolImages: readToolImageRefs(value.toolImages) } : {}) }];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

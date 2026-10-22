@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { CycloneRunRepository } from '../infrastructure/run-repository.js';
 import { createCycloneCommands } from './control-adapter.js';
 import { CycloneExecutionRegistry } from './execution-registry.js';
+import { shutdownCyclonePreparations } from '../application/execution-preparation.js';
 
 function registry(lock: { held: boolean }): CycloneExecutionRegistry {
   const acquire = () => {
@@ -42,4 +43,28 @@ test('气旋终态写入失败仍释放目标锁并真实抛错', async () => {
   }), /terminal write failed/);
   assert.equal(lock.held, false);
   assert.deepEqual(executions.list(), []);
+});
+
+test('关闭与运行事实启动写入并发时等待准备收口，不遗留 running 或锁', async () => {
+  const lock = { held: false };
+  const executions = registry(lock);
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const starting = new Promise<void>(resolve => { entered = resolve; });
+  let status = 'running';
+  const commands = createCycloneCommands(executions, {
+    start: async () => { entered(); await gate; },
+    finish: async (_operation, _run, next) => { status = next; },
+  } as unknown as CycloneRunRepository);
+  const begin = commands.begin(target);
+  const rejected = assert.rejects(begin, /正在关闭/);
+  await starting;
+  const shutdown = shutdownCyclonePreparations(commands);
+  release();
+  await Promise.all([shutdown, rejected]);
+  assert.equal(status, 'aborted');
+  assert.equal(lock.held, false);
+  assert.deepEqual(executions.list(), []);
+  await assert.rejects(commands.begin(target), /正在关闭/);
 });

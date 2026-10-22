@@ -9,6 +9,7 @@ import { runStreamLoop } from '../../engine/chat/streamLoop';
 import { useSessionList } from './useSessionList';
 import {
   createSessionListRefresher, ensureSessionListRefresher, shouldApplySessionRefresh,
+  projectSessionUsage,
 } from './session-list-state';
 
 function deferred<T>() {
@@ -16,6 +17,24 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
+
+test('display usage stays known through reply and compaction, without changing the session facts', () => {
+  const known = { promptTokens: 12000, completionTokens: 30, totalTokens: 12030 };
+  const updated = { promptTokens: 500, completionTokens: 20, totalTokens: 520 };
+  const base = { agentId: 'agent-a', id: 'session-a', tokenUsage: known };
+  const initial = projectSessionUsage({}, [base], () => false);
+  const active = projectSessionUsage(initial, [{ ...base, tokenUsage: updated }], () => true);
+  assert.deepEqual(active['agent-a/session-a'], known);
+  const compacted = { ...base, tokenUsage: undefined };
+  assert.deepEqual(projectSessionUsage(active, [compacted], () => false)['agent-a/session-a'], known);
+  assert.equal(compacted.tokenUsage, undefined);
+  const completed = projectSessionUsage(active, [{ ...base, tokenUsage: updated }], () => false);
+  assert.deepEqual(completed['agent-a/session-a'], updated);
+  const otherAgent = projectSessionUsage(active, [{ ...base, agentId: 'agent-b', tokenUsage: undefined }], () => false);
+  assert.equal(otherAgent['agent-b/session-a'], undefined);
+  assert.deepEqual(projectSessionUsage({}, [base], () => true)['agent-a/session-a'], known);
+  assert.equal(projectSessionUsage({}, [compacted], () => true)['agent-a/session-a'], undefined);
+});
 
 test('background agent refresh cannot replace the visible agent session list', () => {
   assert.equal(shouldApplySessionRefresh('agent-2', 'agent-1'), false);
@@ -90,6 +109,39 @@ test('the useSessionList refresh callback invokes the live list request path', a
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test('selecting both a historical and a live session marks metadata without saving recovered output', async t => {
+  for (const live of [false, true]) {
+    const id = `agent-a-read-${live}`;
+    const stored: ChatSession = { id, agentId: 'agent-a', agentName: 'A', title: 'History',
+      model: 'model-a', systemPrompt: '', revision: 1, messageRevision: 1,
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      messages: [{ id: 'run-a', inputRunId: 'run-a', role: 'assistant', content: '',
+        timestamp: '2026-01-01T00:00:00.000Z', runCommitted: false, reasoningContent: 'partial' }] };
+    const written = deferred<{ mode: string; session: ChatSession }>();
+    t.mock.method(globalThis, 'fetch', async (_input, init) => {
+      if (init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body));
+        written.resolve(body);
+        return Response.json({ ...stored, lastReadAt: body.session.lastReadAt });
+      }
+      return Response.json({ ...stored, pendingRuns: [{ runId: 'run-a', truncated: false,
+        events: [{ type: 'reasoning', content: 'complete reasoning' }] }] });
+    });
+    let select: ((id: string) => Promise<void>) | undefined;
+    function Probe() {
+      select = useSessionList({ id: 'agent-a' } as Agent, '', [], () => {}, () => {}, () => {}, () => {},
+        { background: () => {}, reconnect: () => live, kill: () => {} }).selectSession;
+      return null;
+    }
+    renderToString(createElement(LocaleProvider, null, createElement(Probe)));
+    await select?.(id);
+    const body = await written.promise;
+    assert.equal(body.mode, 'read', live ? 'live branch' : 'historical branch');
+    assert.deepEqual(body.session.messages, []);
+    assert.ok(body.session.lastReadAt);
+  }
+});
+
 test('a stream usage event refreshes the visible Hook list after HMR shifts its ref slots', async () => {
   const agent = { id: 'agent-a', name: 'A', model: 'model-a' } as Agent;
   const originalFetch = globalThis.fetch;
@@ -118,7 +170,7 @@ test('a stream usage event refreshes the visible Hook list after HMR shifts its 
       return null;
     }
     renderToString(createElement(LocaleProvider, null, createElement(Probe)));
-    assert.equal(refSlot, 4);
+    assert.equal(refSlot, 7);
     const session = { id: 'session-a', agentId: agent.id, agentName: agent.name,
       title: '测试', model: agent.model, systemPrompt: '', messages: [],
       createdAt: 'now', updatedAt: 'now', revision: 1 } satisfies ChatSession;

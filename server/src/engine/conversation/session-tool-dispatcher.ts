@@ -1,6 +1,7 @@
 import { SuspendSignal, type ToolCaller, type ToolCallOutcome } from '../shared/react/native-loop.js';
 import type { SandboxLevel } from '../shared/sandbox-prompt.js';
 import { execToolUnifiedOutcome } from '../shared/exec-tool.js';
+import { legacyToolArguments, type ToolArguments } from '../shared/tool-arguments.js';
 import { execMemoryTool, MEMORY_TOOL_NAMES } from '../shared/agent-memory.js';
 import { execTaskBoard, taskboardFile } from '../shared/taskboard.js';
 import {
@@ -19,7 +20,7 @@ import { ToolDispatchRegistry, type ToolDispatchHandler } from './tool-dispatch-
 type ToolArgs = Record<string, string>;
 type DispatchResult = string | ToolCallOutcome;
 type ToolEvent = DelegateToolEvent
-  | { type: 'tool-call'; tool: string; args: ToolArgs }
+  | { type: 'tool-call'; tool: string; args: ToolArguments }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown };
 
 export interface SessionToolExtension {
@@ -31,6 +32,7 @@ export interface SessionToolExtension {
 }
 
 export interface SessionToolDispatcherInput {
+  toolMediaScope?: import('../shared/tool-media-access.js').ToolMediaScope;
   dataDir: string;
   agentId: string;
   model: string;
@@ -53,7 +55,8 @@ export interface SessionToolDispatcherInput {
 export function createSessionToolCaller(input: SessionToolDispatcherInput): ToolCaller {
   const registry = new ToolDispatchRegistry<ToolArgs, DispatchResult>(buildHandlers(input));
   const extensionNames = new Set(input.extension?.definitions.map(tool => tool.name) ?? []);
-  return { call: async (tool, args) => {
+  return { call: async (tool, rawArgs) => {
+    const args = legacyToolArguments(rawArgs);
     if (input.memberTools && !input.memberTools.includes(tool)) throw new Error('TEAM_TOOL_NOT_ALLOWED');
     if (!extensionNames.has(tool)) {
       const intercepted = input.interceptTool?.(tool, args);
@@ -62,7 +65,7 @@ export function createSessionToolCaller(input: SessionToolDispatcherInput): Tool
         return intercepted;
       }
     }
-    return registry.dispatch(tool, args, (name, values) => executeDefault(input, name, values));
+    return registry.dispatch(tool, args, name => executeDefault(input, name, rawArgs));
   } };
 }
 
@@ -224,13 +227,16 @@ async function executeReview(input: SessionToolDispatcherInput, args: ToolArgs):
 }
 
 async function executeDefault(
-  input: SessionToolDispatcherInput, tool: string, args: ToolArgs,
+  input: SessionToolDispatcherInput, tool: string, args: ToolArguments,
 ): Promise<DispatchResult> {
   input.emit({ type: 'tool-call', tool, args });
   try {
     let meta: unknown;
     const outcome = await execToolUnifiedOutcome({
       tool, args, agentId: input.agentId, workspaceDir: input.workspace,
+      mediaAccess: input.toolMediaScope ? { dataDir: input.dataDir, ...input.toolMediaScope }
+        : input.sessionId ? { dataDir: input.dataDir, feature: 'monsoon',
+          target: { agentId: input.agentId, sessionId: input.sessionId } } : undefined,
       sandboxLevel: input.sandboxLevel, signal: input.signal,
       onMeta: value => { meta = value; },
       observation: input.sessionId

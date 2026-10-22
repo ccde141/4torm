@@ -1,3 +1,4 @@
+import type { CompactionActivity } from '../../../components/common/compaction-activity';
 /**
  * 气旋群聊流式注册表 —— 照搬 useSeatStreamRunners 的鲁棒性契约，适配群聊「一轮多工位串行」模型
  *
@@ -10,6 +11,7 @@
  * - 删群标 abandoned + abort 防僵尸。
  */
 
+import { backendFetch } from '../../../lib/backend-client';
 import { useRef, useCallback, useMemo } from 'react';
 import { streamUrl } from '../../../lib/apiBase';
 import { MAX_QUEUE } from '../../../components/chat/QueuedChips';
@@ -27,7 +29,9 @@ interface RoomRunner {
   /** 当前正在说话的工位标签；'' = 无（用于把 token/tool 定位到对应消息） */
   activeSpeaker: string;
   tokenUsage: CycloneUsage | null;
+  lastKnownTokenUsage?: CycloneUsage;
   compactionNotice?: string | null;
+  compaction?: CompactionActivity | null;
   streaming: boolean;
   done: boolean;
   ctrl: AbortController;
@@ -42,7 +46,7 @@ interface RoomRunner {
 
 
 async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal: AbortSignal, locale: Locale): Promise<void> {
-  const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+  const res = await backendFetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
   if (!res.ok) throw await errorFromResponse(res);
   await readCycloneSSE(res, onEvent, signal, locale === 'en-US' ? {
     missingBody: 'The SSE response does not contain a data stream.',

@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import BoundedText from '../../../engine/text-display/BoundedText';
+import { useMemo, useState } from 'react';
+import { toolOutputSummary } from '../../../engine/text-display/tool-output';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import { renderTextWithCode } from '../../../engine/markdown';
 import { formatTimestamp } from '../../../utils/time';
@@ -6,11 +8,16 @@ import AgentAvatar from '../../../components/agents/AgentAvatar';
 import type { Agent } from '../../../types';
 import './convection-turn-card.css';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { CompactionHistory } from '../../../components/common/CompactionHistory';
+import { isCompactionHistory } from '../../../components/common/compaction-history';
+import type { ToolImageRef, ToolMediaScope } from '../../../engine/tool-media';
+import ToolResultImages from '../../../components/common/ToolResultImages';
 
 export interface ConvectionToolStep {
   tool: string;
-  args: Record<string, string>;
+  args: Record<string, unknown>;
   result?: string;
+  toolImages?: ToolImageRef[];
   status: 'pending' | 'running' | 'done' | 'error';
 }
 
@@ -26,12 +33,13 @@ export interface ConvectionTurnMessage {
   reasoning?: string;
 }
 
-export default function ConvectionTurnCard({ message, agent, messageId, onEdit, onDelete }: {
+export default function ConvectionTurnCard({ message, agent, messageId, onEdit, onDelete, mediaScope }: {
   message: ConvectionTurnMessage;
   agent?: Agent;
   messageId: string;
   onEdit: () => void;
   onDelete: () => void;
+  mediaScope?: ToolMediaScope;
 }) {
   const { t } = useLocale();
   const tools = message.toolCalls || [];
@@ -40,6 +48,10 @@ export default function ConvectionTurnCard({ message, agent, messageId, onEdit, 
   const waiting = message.waitingInfo;
   const processState = failed ? t('chat.tool.failedCount', { count: failed }) : running ? t('convection.turn.preparing') : t('chat.tool.completed');
   const [processOpen, setProcessOpen] = useState(running || failed > 0);
+
+  if ((message.speaker === '系统' || message.speaker === 'system') && isCompactionHistory(message.content)) {
+    return <CompactionHistory content={message.content} />;
+  }
 
   return (
     <div className="chat__message chat__message--assistant convection-turn">
@@ -63,7 +75,7 @@ export default function ConvectionTurnCard({ message, agent, messageId, onEdit, 
               {running && <span className="thinking-card__tool-spinner" />}
             </button>
             {processOpen && <div className="convection-turn__process-body">
-              {tools.map((tool, index) => <ConvectionToolRow key={`${tool.tool}-${index}`} tool={tool} />)}
+              {tools.map((tool, index) => <ConvectionToolRow key={`${tool.tool}-${index}`} tool={tool} mediaScope={mediaScope} />)}
             </div>}
           </div>
         )}
@@ -83,12 +95,12 @@ export default function ConvectionTurnCard({ message, agent, messageId, onEdit, 
   );
 }
 
-function ConvectionToolRow({ tool }: { tool: ConvectionToolStep }) {
+function ConvectionToolRow({ tool, mediaScope }: { tool: ConvectionToolStep; mediaScope?: ToolMediaScope }) {
   const { t } = useLocale();
   const [expanded, setExpanded] = useState(tool.status === 'running' || tool.status === 'error');
   const running = tool.status === 'running' || tool.status === 'pending';
-  const lines = (tool.result || '').split('\n').filter(Boolean);
-  const resultSummary = lines.length > 1 ? t('convection.turn.outputLines', { count: lines.length }) : lines[0]?.slice(0, 60);
+  const output = useMemo(() => toolOutputSummary(tool.result ?? '', true), [tool.result]);
+  const resultSummary = output.lines > 1 ? t('convection.turn.outputLines', { count: output.lines }) : output.preview;
   const state = running ? t('chat.tool.runningShort') : tool.status === 'error' ? t('chat.delegate.failed') : resultSummary || t('chat.tool.completed');
   return (
     <div className={`convection-turn__tool convection-turn__tool--${tool.status}`}>
@@ -103,10 +115,11 @@ function ConvectionToolRow({ tool }: { tool: ConvectionToolStep }) {
         {Object.keys(tool.args).length > 0 && <ToolDetail label={t('chat.tool.params')} value={JSON.stringify(tool.args, null, 2)} />}
         {tool.result && <ToolDetail label={t('chat.tool.result')} value={tool.result} />}
       </div>}
+      {mediaScope && !!tool.toolImages?.length && <ToolResultImages images={tool.toolImages} scope={mediaScope} />}
     </div>
   );
 }
 
 function ToolDetail({ label, value }: { label: string; value: string }) {
-  return <section className="convection-turn__tool-detail"><div>{label}</div><pre>{value}</pre></section>;
+  return <section className="convection-turn__tool-detail"><div>{label}</div><pre><BoundedText text={(value) ?? ''} /></pre></section>;
 }

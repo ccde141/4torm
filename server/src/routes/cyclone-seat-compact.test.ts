@@ -25,7 +25,53 @@ async function fixture(t: test.TestContext) {
   t.after(() => app.close());
   const workshop = await createWorkshop(dataDir, { title: '测试' });
   const seat = await addSeat(dataDir, workshop.id, { agentId: 'agent-a', title: '开发' });
-  return { app, dataDir, workshop, seat };
+  return { app, dataDir, workshop, seat, feature };
+}
+
+for (const setupStage of ['headers', 'first-frame'] as const) {
+  test(`工位压缩 SSE ${setupStage} 失败释放准备身份且保留原文`, async t => {
+    const { app, dataDir, workshop, seat, feature } = await fixture(t);
+    seat.messages = [{ role: 'user', content: '必须保留的原始问题' },
+      { role: 'assistant', content: '必须保留的原始答复' }];
+    await saveSeat(dataDir, workshop.id, seat);
+    await fs.mkdir(path.join(dataDir, 'agents'), { recursive: true });
+    await fs.writeFile(path.join(dataDir, 'agents', 'registry.json'), JSON.stringify({
+      'agent-a': { name: '开发', model: 'p:model' },
+    }));
+    let modelCalls = 0;
+    t.mock.method(globalThis, 'fetch', async () => {
+      modelCalls++;
+      throw new Error('setup failure must never call a model');
+    });
+    app.addHook('onRequest', async (_request, reply) => {
+      if (setupStage === 'headers') {
+        const writeHead = reply.raw.writeHead.bind(reply.raw);
+        let first = true;
+        reply.raw.writeHead = (...args: Parameters<typeof writeHead>) => {
+          if (first) { first = false; throw new Error('injected headers IO'); }
+          return writeHead(...args);
+        };
+      } else {
+        const write = reply.raw.write.bind(reply.raw);
+        let first = true;
+        reply.raw.write = ((...args: Parameters<typeof write>) => {
+          if (first) { first = false; throw new Error('injected first-frame IO'); }
+          return write(...args);
+        }) as typeof reply.raw.write;
+      }
+    });
+    await app.inject({ method: 'POST',
+      url: `/api/cyclone/workshop/${workshop.id}/seat/${seat.id}/compact` });
+    const record = await feature.runs.latest(`seat:${workshop.id}:${seat.id}`);
+    assert.equal(record?.status, 'failed');
+    assert.match(record?.error ?? '', /injected/);
+    assert.deepEqual(record?.agentIds, []);
+    assert.equal(modelCalls, 0);
+    assert.deepEqual((await loadSeat(dataDir, workshop.id, seat.id))?.messages, seat.messages);
+    const release = tryAcquireSeatLock(workshop.id, seat.id);
+    assert.ok(release);
+    release();
+  });
 }
 
 test('主动压缩短会话不受旧四轮门槛限制，完整归档并以摘要接续', async (t) => {

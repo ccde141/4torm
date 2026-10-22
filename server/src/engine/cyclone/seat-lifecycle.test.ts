@@ -10,8 +10,24 @@ import {
 } from './organization/organization-store.js';
 import { createRoom, loadRoom, saveRoom } from './room-store.js';
 import { deleteSeatFromWorkshop } from './seat-lifecycle.js';
-import { addSeat, deleteSeat, loadSeat } from './seat-store.js';
+import { addSeat, deleteSeat, loadSeat, tryAcquireSeatLock } from './seat-store.js';
 import { createWorkshop } from './workshop-store.js';
+import { seatFile, seatTaskboardFile, seatsDir, workshopBakDir } from './paths.js';
+
+test('联络持有的工位锁也能阻止删除，释放后允许正常删除', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-seat-delete-contact-lock-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const workshop = await createWorkshop(dataDir);
+  const seat = await addSeat(dataDir, workshop.id, { agentId: 'agent', title: '接收工位' });
+  const release = tryAcquireSeatLock(workshop.id, seat.id);
+  assert.ok(release);
+  try {
+    await assert.rejects(deleteSeatFromWorkshop(dataDir, workshop.id, seat.id), /正在处理中/);
+    assert.ok(await loadSeat(dataDir, workshop.id, seat.id));
+  } finally { release(); }
+  await deleteSeatFromWorkshop(dataDir, workshop.id, seat.id);
+  assert.equal(await loadSeat(dataDir, workshop.id, seat.id), null);
+});
 
 test('删除工位会退出全部会议并保留既有会话记录', async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-seat-delete-rooms-'));
@@ -33,6 +49,13 @@ test('删除工位会退出全部会议并保留既有会话记录', async (t) =
   });
   await saveRoom(dataDir, workshop.id, first);
   await saveRoom(dataDir, workshop.id, second);
+  const primary = await fs.readFile(seatFile(dataDir, workshop.id, seat.id), 'utf8');
+  const memory = path.join(seatsDir(dataDir, workshop.id), `${seat.id}.memory.json`);
+  const attachment = path.join(seatsDir(dataDir, workshop.id), `${seat.id}.attachments`);
+  await fs.writeFile(seatTaskboardFile(dataDir, workshop.id, seat.id), '{"tasks":["未丢失"]}');
+  await fs.writeFile(memory, '{"entries":["岗位经验"]}');
+  await fs.mkdir(attachment);
+  await fs.writeFile(path.join(attachment, 'note.txt'), '资料附件');
   const firstHistory = structuredClone(first.publicMessages);
   const secondHistory = structuredClone(second.publicMessages);
 
@@ -51,6 +74,11 @@ test('删除工位会退出全部会议并保留既有会话记录', async (t) =
   assert.equal(savedSecond?.publicMessages.at(-1)?.content, '研究员离开会议');
   assert.deepEqual(await loadRoom(dataDir, workshop.id, untouched.id), untouched);
   assert.equal(await loadSeat(dataDir, workshop.id, seat.id), null);
+  const retired = path.join(workshopBakDir(dataDir, workshop.id), 'retired-seats', seat.id);
+  assert.equal(await fs.readFile(path.join(retired, `${seat.id}.json`), 'utf8'), primary);
+  assert.equal(await fs.readFile(path.join(retired, `${seat.id}.taskboard.json`), 'utf8'), '{"tasks":["未丢失"]}');
+  assert.equal(await fs.readFile(path.join(retired, `${seat.id}.memory.json`), 'utf8'), '{"entries":["岗位经验"]}');
+  assert.equal(await fs.readFile(path.join(retired, `${seat.id}.attachments`, 'note.txt'), 'utf8'), '资料附件');
 });
 
 test('相关会议仍有活跃派发时整笔拒绝删除工位', async (t) => {

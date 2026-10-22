@@ -1,12 +1,14 @@
 import type { ModuleMethodHandler, ModuleMethodManifest } from '../../../engine/collaboration/contracts.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
 import type { CycloneSeatService, SeatRolePatch } from '../application/seat-service.js';
+import type { SeatHistorySource } from '../../../engine/cyclone/seat-history.js';
 
 const audiences: ModuleMethodManifest['audiences'] = ['human', 'internal'];
 
 export function cycloneSeatManifests(): ModuleMethodManifest[] {
   return [
     method('updateSeatRole', 'design'),
+    method('updateSeatCollaboration', 'design'),
     method('editSeatMessage', 'design'),
     method('deleteSeatMessage', 'administer'),
     method('resetSeatContext', 'administer'),
@@ -17,8 +19,11 @@ export function cycloneSeatManifests(): ModuleMethodManifest[] {
 
 export function cycloneSeatHandlers(seats: CycloneSeatService): Record<string, ModuleMethodHandler> {
   return {
-    updateSeatRole: handler(parseRole, input => seats.updateRole(
-      input.workshopId, input.seatId, input.patch,
+    updateSeatCollaboration: handler(parseCollaboration, (input, _signal, source) => seats.updateCollaboration(
+      input.workshopId, input.seatId, input.policy, source,
+    )),
+    updateSeatRole: handler(parseRole, (input, _signal, source) => seats.updateRole(
+      input.workshopId, input.seatId, input.patch, source,
     )),
     editSeatMessage: handler(parseEdit, input => seats.editMessage(
       input.workshopId, input.seatId, input.index, input.content,
@@ -26,15 +31,21 @@ export function cycloneSeatHandlers(seats: CycloneSeatService): Record<string, M
     deleteSeatMessage: handler(parseDelete, input => seats.editMessage(
       input.workshopId, input.seatId, input.index,
     )),
-    resetSeatContext: handler(parseReset, input => seats.reset(
+    resetSeatContext: handler(parseReset, (input, signal) => seats.reset(
       input.workshopId, input.seatId,
-      { mode: input.mode, forcePending: input.forcePending },
+      { mode: input.mode, forcePending: input.forcePending }, signal,
     )),
-    compactSeatContext: handler(parseIdentityValue, input => seats.reset(
-      input.workshopId, input.seatId, { mode: 'summary' },
+    compactSeatContext: handler(parseIdentityValue, (input, signal) => seats.reset(
+      input.workshopId, input.seatId, { mode: 'summary' }, signal,
     )),
     deleteSeat: handler(parseIdentityValue, input => seats.remove(input.workshopId, input.seatId)),
   };
+}
+
+function parseCollaboration(value: unknown) {
+  const record = recordWith(value, ['workshopId', 'seatId', 'contact', 'dispatch', 'bulletin']);
+  return { ...parseIdentity(record), policy: { contact: boolean(record.contact),
+    dispatch: boolean(record.dispatch), bulletin: boolean(record.bulletin) } };
 }
 
 function method(id: string, permission: ModuleMethodManifest['permission']): ModuleMethodManifest {
@@ -42,8 +53,11 @@ function method(id: string, permission: ModuleMethodManifest['permission']): Mod
     inputSchema: { type: 'object', additionalProperties: false }, output: { mode: 'inline' } };
 }
 
-function handler<T>(parse: (value: unknown) => T, invoke: (value: T) => Promise<unknown>): ModuleMethodHandler {
-  return { parse, invoke: async (_context, input) => invoke(input as T) };
+function handler<T>(parse: (value: unknown) => T,
+  invoke: (value: T, signal: AbortSignal | undefined, source: SeatHistorySource) => Promise<unknown>): ModuleMethodHandler {
+  return { parse, invoke: async (context, input) => invoke(input as T, context.signal,
+    context.actor.type === 'agent' && context.audience === 'internal' && context.requestId.startsWith('supervisor:')
+      ? 'supervisor' : context.actor.type === 'human' ? 'human' : 'unknown') };
 }
 
 function parseRole(value: unknown): { workshopId: string; seatId: string; patch: SeatRolePatch } {

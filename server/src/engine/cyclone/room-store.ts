@@ -15,7 +15,7 @@ import {
 import { tryAcquireRoomLock } from './room-lock.js';
 import { clearCycloneChairContext, rememberChairContextBoundary } from './chair-context.js';
 
-export { tryAcquireRoomLock } from './room-lock.js';
+export { tryAcquireRoomLock, isRoomLocked } from './room-lock.js';
 
 export class RoomDeleteConflictError extends Error {}
 export class RoomSettingsConflictError extends Error {}
@@ -98,12 +98,14 @@ export async function loadRoom(
 
 /** 保存群聊（刷新 updatedAt） */
 export async function saveRoom(
-  dataDir: string, workshopId: string, room: RoomData,
+  dataDir: string, workshopId: string, room: RoomData, signal?: AbortSignal,
 ): Promise<void> {
   room.updatedAt = new Date().toISOString();
   const externalized = await externalizeRoomReasoning(dataDir, workshopId, room);
-  await atomicWrite(roomFile(dataDir, workshopId, room.id), JSON.stringify(externalized.persisted, null, 2));
-  await cleanupRoomReasoning(dataDir, workshopId, room.id, externalized.activeFiles);
+  await atomicWrite(roomFile(dataDir, workshopId, room.id), JSON.stringify(externalized.persisted, null, 2), signal);
+  // Sidecar cleanup follows the committed primary; its failure cannot imply rollback.
+  await cleanupRoomReasoning(dataDir, workshopId, room.id, externalized.activeFiles)
+    .catch(error => console.warn('[cyclone] committed room reasoning cleanup failed', error));
 }
 
 function archiveName(scope: string, id: string, seq: number): string {
@@ -116,7 +118,8 @@ export async function resetRoomContext(
   workshopId: string,
   roomId: string,
   opts: { scope: 'public' | 'chair' | 'both'; publicSummary?: string; chairSummary?: string;
-    preparedArchivePath?: string },
+    preparedArchivePath?: string; signal?: AbortSignal;
+    compaction?: import('../shared/compaction/index.js').CompactionProgress },
 ): Promise<{ room: RoomData | null; archivePath?: string; archivedPublicCount?: number; archivedChairCount?: number }> {
   const room = await loadRoom(dataDir, workshopId, roomId);
   if (!room) return { room: null };
@@ -168,7 +171,11 @@ export async function resetRoomContext(
     } else clearCycloneChairContext(room);
   }
   room.compactState = { ...state, archiveSeq: nextSeq, lastCompactAt: new Date().toISOString() };
-  await saveRoom(dataDir, workshopId, room);
+  if (opts.compaction) {
+    if (opts.scope === 'public' || opts.scope === 'both') room.compaction = opts.compaction;
+    if (opts.scope === 'chair' || opts.scope === 'both') room.chairCompaction = opts.compaction;
+  }
+  await saveRoom(dataDir, workshopId, room, opts.signal);
   return {
     room,
     archivePath,

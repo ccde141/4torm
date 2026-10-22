@@ -52,9 +52,6 @@ function renderTool(tool: ToolDef): string {
 
 export function buildTextToolProtocol(tools: ToolDef[]): string {
   const definitions = tools.map(renderTool).join('\n\n');
-  const examples = tools[0]
-    ? `例如调用 ${tools[0].name}：\n\`\`\`json\n{"type":"tool_call","name":"${tools[0].name}","arguments":{}}\n\`\`\``
-    : '';
   return `## 文本工具调用协议
 
 需要调用工具时，整条回复只能是一个 JSON 调用信封：
@@ -62,13 +59,12 @@ export function buildTextToolProtocol(tools: ToolDef[]): string {
 {"type":"tool_call","name":"工具名","arguments":{}}
 \`\`\`
 
-${examples}
-
 规则：
 - 调用信封外不能包含任何文字，也不要输出思考过程
 - 每轮只能调用一个工具；存在依赖的操作分轮执行
 - name 必须是下方列出的工具名，arguments 必须是 JSON 对象
 - 必填参数不得省略，不得猜测缺失参数
+- 上面的调用信封仅展示协议结构；实际参数按所选工具的定义填写
 - 工具结果会以 tool_result JSON 返回；收到后继续调用工具或直接回答
 - 不需要调用工具时，直接输出普通自然语言作为最终回答，不需要任何包装
 

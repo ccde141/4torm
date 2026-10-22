@@ -10,7 +10,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { runReActLoopNative, MAX_NUDGES, type LLMCaller, type ToolCaller } from './native-loop';
+import { runReActLoopNative, MAX_NUDGES, MAX_CONTINUATIONS, type LLMCaller, type ToolCaller } from './native-loop';
 import type { NativeToolCall, ContextMessage, ProviderReasoningEnvelope } from '../types';
 
 interface Step { content?: string; reasoningContent?: string; reasoningEnvelope?: ProviderReasoningEnvelope; toolCalls?: NativeToolCall[]; finishReason?: 'stop' | 'length' | 'tool_calls' | null }
@@ -137,6 +137,22 @@ async function main() {
     assert.ok(msgs.some(m => m.role === 'user' && m.content.includes('被截断')), '应注入重发提示')
   })
 
+  await run('截断额度耗尽也不执行合法的终结调用，不把半截内容封给下游', async () => {
+    let executions = 0;
+    const { llm, calls } = fakeLLM([{ content: '部分进展',
+      toolCalls: [tc('complete_task')], finishReason: 'length' }]);
+    const result = await runReActLoopNative({ messages: [{ role: 'system', content: 's' }], llm,
+      tools: { call: async () => { executions++; return '不得封口'; } }, toolDefs: [],
+      completion: { tool: 'complete_task' },
+    });
+    assert.equal(calls(), MAX_CONTINUATIONS + 1);
+    assert.equal(executions, 0);
+    assert.equal(result.autoOutcome, 'anomaly');
+    assert.equal(result.termination.status, 'failed');
+    if (result.termination.status === 'failed') assert.equal(result.termination.error.code, 'MODEL_OUTPUT_LIMIT');
+    assert.match(result.content, /部分进展/);
+  });
+
   await run('不传 completion → 行为不变（文本即交付、无 autoOutcome）', async () => {
     const { llm, calls } = fakeLLM([{ content: '最终答案', finishReason: 'stop' }]);
     const r = await runReActLoopNative({ messages: [{ role: 'system', content: 's' }], llm, tools, toolDefs: [] });
@@ -185,6 +201,29 @@ async function main() {
     assert.equal(result.content, 'SEALED');
     assert.equal((messages.find(message => message.role === 'tool') as ContextMessage &
       { toolOk?: boolean })?.toolOk, true);
+  });
+
+  await run('失败终结工具允许模型纠正参数，成功后才结束并补齐同批历史', async () => {
+    const messages: ContextMessage[] = [{ role: 'user', content: 'handoff' }];
+    const { llm, calls } = fakeLLM([
+      { toolCalls: [tc('complete_task', '{"target":"wrong"}')] },
+      { toolCalls: [tc('complete_task', '{"target":"valid"}'), tc('read_file')] },
+    ]);
+    let attempts = 0;
+    const result = await runReActLoopNative({ messages, llm, toolDefs: [],
+      completion: { tool: 'complete_task' }, tools: { call: async (_name, args) => {
+        attempts++;
+        return args.target === 'valid' ? { result: 'SEALED', ok: true }
+          : { result: 'target rejected', ok: false };
+      } },
+    });
+    assert.equal(calls(), 2);
+    assert.equal(attempts, 2);
+    assert.equal(result.termination.status, 'succeeded');
+    assert.equal(result.autoOutcome, 'completed');
+    assert.equal(result.content, 'SEALED');
+    assert.equal(messages.filter(message => message.role === 'tool').length, 3);
+    assert.match(messages.at(-1)?.content ?? '', /任务已完成，未执行/);
   });
 
   console.log('ok');

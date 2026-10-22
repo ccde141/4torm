@@ -20,6 +20,7 @@ export function projectAgentNodeConversation(snapshot: NodeSnapshot, identity: I
     workflowId: identity.workflowId, executionId: identity.executionId, nodeId: identity.nodeId,
     messages, totalMessages: visible.length, hasEarlierMessages: visible.length > selected.length,
     busy: snapshot.busy, paused: Boolean(snapshot.paused), lastSeq: snapshot.lastSeq,
+    ...(snapshot.pausedRunId ? { pausedRunId: snapshot.pausedRunId } : {}),
     currentReply: snapshot.busy && snapshot.runId ? {
       runId: snapshot.runId, source: snapshot.roundSource ?? null,
       content: draft.slice(-1_000), complete: false,

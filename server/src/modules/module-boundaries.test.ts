@@ -212,3 +212,19 @@ function importsOf(source: string): string[] {
   for (const match of source.matchAll(pattern)) imports.push(match[2]!);
   return imports;
 }
+
+test('relative imports cannot bypass feature public entries', async () => {
+  const roots = [TIDE_ROOT, MONSOON_ROOT, TRADEWIND_ROOT, CONVECTION_ROOT, CYCLONE_ROOT, AGENTS_ROOT];
+  const violations: string[] = [];
+  for (const file of (await typeScriptFiles(SRC)).filter(file => !file.endsWith('.test.ts'))) {
+    const source = await fs.readFile(file, 'utf8');
+    for (const specifier of importsOf(source).filter(value => value.startsWith('.'))) {
+      const target = path.resolve(path.dirname(file), specifier);
+      for (const root of roots) {
+        if (!target.startsWith(`${root}${path.sep}`) || file.startsWith(`${root}${path.sep}`)) continue;
+        if (target !== path.join(root, 'public.js')) violations.push(`${path.relative(SRC, file)} -> ${specifier}`);
+      }
+    }
+  }
+  assert.deepEqual(violations, []);
+});

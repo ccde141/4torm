@@ -7,6 +7,13 @@ export class PanelIdentityError extends Error {
   }
 }
 
+export function panelReadUrl(path: string, identity: ExecutionIdentity): string {
+  const query = new URLSearchParams();
+  if (identity.workflowId) query.set('workflowId', identity.workflowId);
+  if (identity.executionId) query.set('executionId', identity.executionId);
+  return query.size ? `${path}?${query}` : path;
+}
+
 export function acceptsPanelEvent(
   value: { scope?: unknown; type?: unknown; workflowId?: unknown; executionId?: unknown },
   scope: 'agent' | 'meeting', identity: ExecutionIdentity,

@@ -22,7 +22,7 @@
 The same agent can be reused across different workspaces. Configure its model, prompt, tools, and skills once, then choose the collaboration mode that fits each task.
 
 <p align="center">
-  <img src="./docs/public/images/guide/agent-console-overview.webp" alt="Agent Console" width="100%" />
+  <img src="./docs/public/images/guide/agent-console-current.png" alt="Agent Console" width="100%" />
 </p>
 
 ## Five Workspaces
@@ -31,8 +31,8 @@ The same agent can be reused across different workspaces. Configure its model, p
 |-----------|---------|-----------------|
 | Monsoon | Conversations | Ongoing conversations with one agent, tool use, and SubAgent delegation |
 | Convection | Meeting rooms | Temporary multi-agent discussions with independent advice from a meeting assistant |
-| Cyclone | Workshops | Organize fixed seats in a visual collaboration structure, with private chat, group chat, synchronous contact, and asynchronous dispatch |
-| Tradewind | Workflows | Visual node-based workflows that pass tasks along connected paths |
+| Cyclone | Workshops | Organize stable project seats, review their work, build seat memory, and collaborate |
+| Tradewind | Workflows | Follow strict dependencies or choose handoff and revision routes based on results |
 | Tide | Automated tasks | Waking agents on a schedule for recurring checks, organization, and reporting |
 
 All five workspaces use the same agents. What changes is the form of collaboration—not the creation of another set of temporary roles.
@@ -96,6 +96,8 @@ npm run start:prod
 Open `https://localhost:3001`.
 
 After building, you can also run `npm run electron:prod` to open the desktop window.
+
+For Linux desktops, see [Linux Desktop](./LINUX.md) (Chinese). To host the backend on Linux or Docker and connect from another device, see [Independent Backend and Remote Clients](./REMOTE.md) (Chinese).
 
 ### First Use
 

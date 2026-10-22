@@ -70,6 +70,7 @@ export async function chatChairWithinExecution(
     room.chairMessages.push({ role: 'user', content: humanMessage });
     room.chairTokenUsage = undefined;
     room.chairCompactionNotice = undefined;
+    room.chairCompaction = undefined;
     await saveRoom(dataDir, workshopId, room);
     onEvent({ type: 'input-accepted' });
     onEvent({ type: 'usage', usage: null });
@@ -79,13 +80,13 @@ export async function chatChairWithinExecution(
       options: { temperature: agent.temperature }, onChunk, signal: callSignal,
     }) };
     const llm = createChairCompactionCaller({ dataDir, workshopId, room, agent, messages, llm: raw,
-      initialPromptTokens: previousPromptTokens, onNotice: onEvent });
+      initialPromptTokens: previousPromptTokens, onNotice: onEvent, onProgress: onEvent });
 
     // 纯文本流式：累积 buffer，abort 时仍可保住已产出的内容
     let buf = '';
     const onChunk = (chunk: string) => { buf += chunk; onEvent({ type: 'token', content: chunk }); };
 
-    let content = '';
+    let content: string;
     try {
       const r = await withAgentActivity(agent.id, 'cyclone', () => llm.call(messages, undefined, onChunk, signal));
       content = r.content;

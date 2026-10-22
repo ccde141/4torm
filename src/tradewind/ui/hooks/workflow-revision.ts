@@ -17,7 +17,8 @@ export class WorkflowRevisionTracker {
   };
   private generation = 0;
   private epoch = 0;
-  private active: Promise<boolean> | null = null;
+  private active: Promise<unknown> | null = null;
+  private readonly acknowledgedRevisions = new Set<string>();
 
   constructor(onChange: (state: WorkflowRevisionState) => void = () => {}) {
     this.onChange = onChange;
@@ -31,6 +32,7 @@ export class WorkflowRevisionTracker {
   load(workflowId: string, revision: string | null): void {
     this.epoch += 1;
     this.generation += 1;
+    this.acknowledgedRevisions.clear();
     this.update({ workflowId, revision, dirty: false, saving: false, conflict: false });
   }
 
@@ -58,13 +60,17 @@ export class WorkflowRevisionTracker {
   }
 
   async waitForSave(): Promise<void> {
-    if (this.active) await this.active;
+    for (let pending = this.active; pending; pending = this.active) await pending;
   }
 
   async observeAfterSave(workflowId: string, revision: string | null): Promise<RemoteDecision> {
     const epoch = this.epoch;
     try { await this.waitForSave(); } catch { /* 保存调用方报告原错误，仍需对账远端事实 */ }
-    return this.epoch === epoch ? this.observe(workflowId, revision) : 'ignored';
+    if (this.epoch !== epoch) return 'ignored';
+    // 同一批保存的较早通知可能晚于后续回执；它仍是已经确认的自身写入。
+    if (workflowId === this.state.workflowId && revision !== null
+      && this.acknowledgedRevisions.has(revision)) return 'unchanged';
+    return this.observe(workflowId, revision);
   }
 
   async saveCopy<T extends { workflowId: string }>(
@@ -74,39 +80,43 @@ export class WorkflowRevisionTracker {
   ): Promise<{ saved: boolean; adopted: boolean }> {
     const epoch = this.epoch;
     const generation = this.generation;
-    await this.waitForSave();
-    if (this.epoch !== epoch || this.generation !== generation) return { saved: false, adopted: false };
-    this.update({ saving: true });
-    try {
-      const result = await write({ ...draft, expectedRevision: null });
-      const adopted = this.epoch === epoch && this.generation === generation;
-      if (adopted) adopt(result.revision);
-      return { saved: true, adopted };
-    } finally {
-      if (this.epoch === epoch) this.update({ saving: false });
-    }
+    return this.enqueue(async () => {
+      if (this.epoch !== epoch || this.generation !== generation) return { saved: false, adopted: false };
+      this.update({ saving: true });
+      try {
+        const result = await write({ ...draft, expectedRevision: null });
+        const adopted = this.epoch === epoch && this.generation === generation;
+        if (adopted) adopt(result.revision);
+        return { saved: true, adopted };
+      } finally {
+        if (this.epoch === epoch) this.update({ saving: false });
+      }
+    });
   }
 
   async save<T extends { workflowId: string }>(
     getDraft: () => T | null,
     write: (input: T & { expectedRevision: string | null }) => Promise<{ revision: string }>,
   ): Promise<boolean> {
-    if (this.active) await this.active;
-    if (this.state.conflict) throw new ClientFrameworkError({
-      code: 'TRADEWIND_WORKFLOW_CHANGED', kind: 'conflict', message: 'Workflow changed remotely',
-    });
-    const draft = getDraft();
-    if (!draft) return false;
-    const expectedRevision = this.state.revision;
     const epoch = this.epoch;
-    const generation = this.generation;
-    const operation = this.write(draft, expectedRevision, write, epoch, generation);
+    return this.enqueue(async () => {
+      if (this.epoch !== epoch) return false;
+      if (this.state.conflict) throw new ClientFrameworkError({
+        code: 'TRADEWIND_WORKFLOW_CHANGED', kind: 'conflict', message: 'Workflow changed remotely',
+      });
+      const draft = getDraft();
+      if (!draft) return false;
+      return this.write(draft, this.state.revision, write, epoch, this.generation);
+    });
+  }
+
+  /** 入队即登记队尾；旧写入失败时，不重放此前已排队的请求。 */
+  private enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const operation = this.active ? this.active.then(work) : work();
     this.active = operation;
-    try {
-      return await operation;
-    } finally {
-      if (this.active === operation) this.active = null;
-    }
+    const clear = () => { if (this.active === operation) this.active = null; };
+    void operation.then(clear, clear);
+    return operation;
   }
 
   private async write<T extends { workflowId: string }>(
@@ -118,6 +128,7 @@ export class WorkflowRevisionTracker {
     try {
       const result = await write({ ...draft, expectedRevision });
       if (this.epoch === epoch && this.state.workflowId === draft.workflowId) {
+        this.acknowledgedRevisions.add(result.revision);
         this.update({ revision: result.revision, dirty: this.generation !== generation });
       }
       return true;

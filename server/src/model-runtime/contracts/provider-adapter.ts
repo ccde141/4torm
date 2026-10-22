@@ -37,6 +37,8 @@ export interface ProviderAdapter {
   matches(identity: ProviderModelIdentity): boolean;
   capabilities: ProviderModelCapabilities;
   generationLimits?(identity: ProviderModelIdentity): ProviderGenerationLimits;
+  /** Provider request ceilings also apply after custom parameters or framework budgets. */
+  constrainOutputTokens?(tokens: number): number;
   normalizeRequest?(body: Record<string, unknown>, identity: ProviderModelIdentity): void;
   /** Optional verified provider control for a body-only finalization request. */
   disableThinking?(body: Record<string, unknown>, identity: ProviderModelIdentity): boolean;

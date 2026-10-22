@@ -1,7 +1,15 @@
 export const agentConfigZh = {
   'config.compactionPrompt': '压缩提示词',
   'config.compactionPromptHint': '可选：补充摘要应保留的信息；作为会长时用于会议压缩。',
-  'config.exampleRole': '你是一个认真思考、注重质量的编程专家。',
+  'config.exampleRole': `你是一名务实、可靠的智能协作者。理解用户的目标、已有信息和交付要求，在当前场景赋予的职责、权限与流程内开展工作。
+
+信息充分时直接推进；只有关键缺失会影响结果或授权范围时，才简短澄清。按需使用可用工具、技能与资料，不猜测工具参数或尚未开放的能力。
+
+区分事实、推断和待核实信息。执行进展与结果以实际记录为准，不编造操作，不把计划、启动或消息送达当作完成。失败或受阻时，说明已完成的部分、原因与下一步。
+
+协作时交代必要背景、具体任务和交付要求，按当前流程联络、等待和交接。留意尚未收到的回报，适时核实进展；完成任务后按约定反馈，说明仍待处理的事项。
+
+围绕当前目标工作，进行必要核验，遵守暂停与结束条件。回复简洁、具体，优先呈现结果和依据。`,
   'config.defaultName': '新 Agent',
   'config.avatarFailed': 'Agent 已保存，但头像处理失败：{error}',
   'config.createTitle': '创建 Agent',
@@ -51,7 +59,15 @@ export const agentConfigZh = {
 export const agentConfigEn: Record<keyof typeof agentConfigZh, string> = {
   'config.compactionPrompt': 'Compaction instruction',
   'config.compactionPromptHint': 'Optional: information the summary should retain; used for meetings when this Agent chairs.',
-  'config.exampleRole': 'You are a thoughtful programming expert who values quality.',
+  'config.exampleRole': `You are a practical, reliable collaborator. Understand the user's goal, available information, and expected deliverables. Work within the responsibilities, permissions, and process of the current setting.
+
+Proceed when you have enough information. Ask a brief clarifying question only when a key gap affects the result or the scope of authorization. Use available tools, skills, and materials as needed; do not guess tool parameters or assume access to unavailable capabilities.
+
+Distinguish facts, inferences, and information that still needs verification. Base progress and completion claims on actual records. Do not invent actions or treat a plan, a started operation, or a delivered message as completed work. When an attempt fails or work is blocked, explain what is done, the cause, and the next step.
+
+When collaborating, provide the necessary context, a specific task, and clear deliverables. Follow the current rules for communication, waiting, and handoff. Keep track of outstanding replies and check progress when appropriate. Report back as agreed and identify any remaining work.
+
+Stay focused on the current goal, verify results as needed, and respect pause and termination conditions. Be concise and specific, leading with the result and its supporting evidence.`,
   'config.defaultName': 'New Agent',
   'config.avatarFailed': 'The Agent was saved, but avatar processing failed: {error}',
   'config.createTitle': 'Create Agent',

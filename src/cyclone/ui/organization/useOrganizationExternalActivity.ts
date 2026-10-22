@@ -1,3 +1,4 @@
+import { backendFetch } from '../../../lib/backend-client';
 import { useEffect, useState } from 'react';
 import {
   projectExternalActivity,
@@ -36,7 +37,7 @@ export function useOrganizationExternalActivity(
       controller = new AbortController();
       let hasRunning = false;
       try {
-        const response = await fetch(
+        const response = await backendFetch(
           `/api/cyclone/workshop/${encodeURIComponent(workshopId)}/activities`,
           { signal: controller.signal },
         );

@@ -8,6 +8,8 @@ export interface MonsoonStreamResponse extends SseResponse {
 }
 
 export interface MonsoonStreamRuntime {
+  isStopping(): boolean;
+  trackExecution(work: () => Promise<void>): Promise<void>;
   markRunning(sessionId: string, runner: MonsoonTurn, runId: string): void | Promise<void>;
   complete(sessionId: string, runner: MonsoonTurn, runId: string,
     status: 'completed' | 'aborted' | 'waiting'): void | Promise<void>;
@@ -30,7 +32,11 @@ export interface MonsoonStreamOptions {
 }
 
 /** Owns the reserved turn from response setup through its final runtime release. */
-export async function runMonsoonTurnStream(options: MonsoonStreamOptions): Promise<void> {
+export function runMonsoonTurnStream(options: MonsoonStreamOptions): Promise<void> {
+  return options.runtime.trackExecution(() => executeTurnStream(options));
+}
+
+async function executeTurnStream(options: MonsoonStreamOptions): Promise<void> {
   const { response, runner, runtime, sessionId, runId, agentId, execute } = options;
   const onDisconnect = () => { if (!response.writableEnded) runner.abort(); };
   response.once('close', onDisconnect);
@@ -47,7 +53,8 @@ export async function runMonsoonTurnStream(options: MonsoonStreamOptions): Promi
       await options.record(options.replyAcceptance);
       writer.send(options.replyAcceptance);
     }
-    await withAgentActivity(agentId, 'conversation', () => execute(event => {
+    // A prepared runner has no model AbortController yet; never start it after shutdown.
+    if (!runtime.isStopping()) await withAgentActivity(agentId, 'conversation', () => execute(event => {
       if (event.type === 'answer') answered = true;
       deliveries = deliveries.then(async () => {
         await options.record?.(event);
@@ -83,7 +90,7 @@ async function finishFailedTurn(
   catch (persistenceError) {
     response.destroy();
     console.error('[monsoon] 无法记录失败终态', persistenceError);
-    return;
+    throw persistenceError;
   }
   if (!writer || !canReport) { response.destroy(); return; }
   try { writer.send(failure); writer.finish(); }

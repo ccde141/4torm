@@ -57,7 +57,7 @@ function writeBody(value: unknown): {
   session: unknown;
 } {
   if (!record(value) || !Number.isInteger(value.expectedRevision)
-    || !['content', 'rename'].includes(String(value.mode)) || !record(value.session)) {
+    || !['content', 'rename', 'read'].includes(String(value.mode)) || !record(value.session)) {
     throw new Error('会话写入参数无效');
   }
   return {

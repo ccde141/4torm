@@ -1,16 +1,13 @@
 import { createHash } from 'node:crypto';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
-import { SeasonSessionPort } from '../sessions/season-session-port.js';
+import { requireSeasonSessionPort, type SeasonSessionPort } from '../sessions/season-session-port.js';
 
 /** Explicit Tide → Monsoon session-read adapter for designated delivery. */
 export class TideTargetSessions {
-  private readonly sessions: SeasonSessionPort;
-  constructor(dataDir: string) {
-    this.sessions = new SeasonSessionPort(dataDir);
-  }
+  constructor(private readonly sessions?: SeasonSessionPort) {}
 
   async list(agentId: string, cursor?: string) {
-    const all = await this.sessions.list(agentId);
+    const all = await requireSeasonSessionPort(this.sessions).list(agentId);
     const revision = createHash('sha256').update(JSON.stringify(
       all.map(session => [session.id, session.revision]),
     )).digest('hex').slice(0, 16);

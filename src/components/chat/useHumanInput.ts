@@ -1,3 +1,4 @@
+import { backendFetch } from '../../lib/backend-client';
 import { useEffect, useRef, useState } from 'react';
 import { deliverHumanInput, type InputSubmission } from '../../engine/chat/input-submission';
 import { InputOutbox, type PendingInput } from '../../engine/chat/input-outbox';
@@ -84,6 +85,7 @@ export function useHumanInput(options: Options) {
     }, {
       hasRunner: id => options.runners.runners.current.has(id),
       register: options.runners.register,
+      onCompaction: options.runners.onCompaction,
       emit: options.runners.emit,
       present: id => {
         if (active.current === id) options.runners.reconnect(id);
@@ -112,7 +114,7 @@ export function useHumanInput(options: Options) {
       update({ input, state: 'sending' });
       options.clearText(input.content);
       if (runner) await runner.ready;
-      const state = await deliverHumanInput(input, { request: fetch,
+      const state = await deliverHumanInput(input, { request: backendFetch,
         notify: state => {
           update({ input, state });
           if (state !== 'sending') release(input);

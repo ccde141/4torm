@@ -23,3 +23,13 @@ test('指定会话追加通知只刷新当前 Agent 的会话列表和同身份�
     overview: true, sessions: true, task: false, session: true,
   });
 });
+
+test('bound task runtime updates refresh the current Agent session without waiting for a full turn', () => {
+  const identity = { agentId: 'worker', selection: {
+    kind: 'session' as const, agentId: 'worker', sessionId: 'session-1',
+  } };
+  assert.equal(tideRefreshTargets(identity, { type: 'change', scope: 'run', taskId: 'task-a',
+    runId: 'run-a', agentId: 'worker', revision: 7 }).session, true);
+  assert.equal(tideRefreshTargets(identity, { type: 'change', scope: 'run', taskId: 'task-b',
+    runId: 'run-b', agentId: 'other', revision: 8 }).session, false);
+});

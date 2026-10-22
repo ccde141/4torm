@@ -4,11 +4,10 @@ import { activeHumanGates } from '../../../engine/tradewind/nodes/human-gate.js'
 import { activeNodeRunners } from '../../../engine/tradewind/nodes/agent.js';
 import { activeMeetings } from '../../../engine/tradewind/nodes/meeting.js';
 import {
-  getActiveTradewindLoop,
   getActiveTradewindOrchestrator,
-  getStartingTradewindExecution,
-  isTradewindExecutionRunning,
+  getTradewindExecutions,
 } from '../../../services/tradewind-execution.js';
+import { slotIsRunning, type TradewindExecutionSlot } from '../../../services/tradewind-execution-registry.js';
 import { tradewindRunDir } from '../../../services/data-paths.js';
 import { FrameworkError } from '../../../engine/shared/framework-error.js';
 import type { TradewindWorkflowStore } from '../application/workflow-store.js';
@@ -21,9 +20,9 @@ export function createTradewindRuntimeSource(
   store: TradewindWorkflowStore = createTradewindWorkflowStore(dataDir),
 ): TradewindRuntimeSource {
   return {
-    snapshots: () => readSnapshots(store),
+    snapshots: () => readSnapshots(store, dataDir),
     inspect: identity => inspectExecution(dataDir, store, identity),
-    subscribe: (identity, listener) => subscribeToExecution(identity, listener),
+    subscribe: (identity, listener) => subscribeToExecution(identity, listener, dataDir),
   };
 }
 
@@ -32,7 +31,7 @@ async function inspectExecution(
   store: TradewindWorkflowStore,
   identity: { operationId: string; runId: string },
 ): Promise<TradewindExecutionSnapshot | null> {
-  const live = (await readSnapshots(store)).find(item =>
+  const live = (await readSnapshots(store, dataDir)).find(item =>
     item.operationId === identity.operationId && item.runId === identity.runId);
   const runDir = tradewindRunDir(dataDir, identity.operationId, identity.runId);
   if (live) return withResultSummary(live, runDir);
@@ -49,9 +48,9 @@ async function inspectExecution(
       title: await readTitle(store, identity.operationId), status,
       updatedAt: failure?.endTime ?? timestamp(value.endTime) ?? timestamp(value.startTime),
       ...(status === 'failed' || status === 'crashed' ? {
-        errorCode: failure?.errorCode ?? (status === 'crashed'
+        errorCode: failure?.errorCode ?? storedFailure(value)?.errorCode ?? (status === 'crashed'
           ? 'TRADEWIND_PROCESS_RESTARTED' : 'TRADEWIND_EXECUTION_FAILED'),
-        errorMessage: failure?.errorMessage ?? (status === 'crashed'
+        errorMessage: failure?.errorMessage ?? storedFailure(value)?.errorMessage ?? (status === 'crashed'
           ? '信风执行随进程结束，无法继续' : '信风工作流执行失败'),
       } : {}),
     }, runDir);
@@ -101,6 +100,16 @@ function timestamp(value: unknown): string | undefined {
   return typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
+function storedFailure(value: Record<string, unknown>) {
+  if (value.status !== 'error') return undefined;
+  return {
+    errorCode: typeof value.errorCode === 'string' && /^[A-Z][A-Z0-9_.:-]{0,127}$/.test(value.errorCode)
+      ? value.errorCode : undefined,
+    errorMessage: typeof value.errorMessage === 'string' && value.errorMessage.trim()
+      ? value.errorMessage.trim().slice(0, 2_000) : undefined,
+  };
+}
+
 function isIdentifier(value: string): boolean {
   return /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(value);
 }
@@ -112,8 +121,9 @@ function record(value: unknown): value is Record<string, unknown> {
 function subscribeToExecution(
   identity: { operationId: string; runId: string },
   listener: () => void,
+  dataDir: string,
 ): () => void {
-  const orchestrator = getActiveTradewindOrchestrator();
+  const orchestrator = getActiveTradewindOrchestrator({ workflowId: identity.operationId, executionId: identity.runId, dataDir });
   if (orchestrator?.getWorkflowId() !== identity.operationId
     || orchestrator.getExecutionId() !== identity.runId) return () => undefined;
   let active = true;
@@ -121,17 +131,21 @@ function subscribeToExecution(
   return () => { active = false; };
 }
 
-async function readSnapshots(store: TradewindWorkflowStore): Promise<TradewindExecutionSnapshot[]> {
-  const starting = getStartingTradewindExecution();
-  if (starting) return [{
-    operationId: starting.workflowId, title: await readTitle(store, starting.workflowId),
-    status: 'queued', phase: 'starting', updatedAt: starting.startedAt,
+async function readSnapshots(store: TradewindWorkflowStore, dataDir: string): Promise<TradewindExecutionSnapshot[]> {
+  const snapshots = await Promise.all(getTradewindExecutions(dataDir).map(slot => slotSnapshots(store, slot)));
+  return snapshots.flat();
+}
+
+async function slotSnapshots(store: TradewindWorkflowStore, slot: TradewindExecutionSlot): Promise<TradewindExecutionSnapshot[]> {
+  if (slot.starting && !slot.orchestrator) return [{
+    operationId: slot.workflowId, title: await readTitle(store, slot.workflowId),
+    status: 'queued', phase: 'starting', updatedAt: slot.startedAt,
   }];
-  const orchestrator = getActiveTradewindOrchestrator();
+  const orchestrator = slot.orchestrator;
   if (!orchestrator) return [];
   const workflowId = orchestrator.getWorkflowId();
   const executionId = orchestrator.getExecutionId();
-  const running = isTradewindExecutionRunning();
+  const running = slotIsRunning(slot);
   const outcome = orchestrator.getOutcome();
   const failure = orchestrator.getFailure();
   const gates = [...activeHumanGates.entries()]
@@ -141,7 +155,7 @@ async function readSnapshots(store: TradewindWorkflowStore): Promise<TradewindEx
     operationId: workflowId, title: await readTitle(store, workflowId), runId: executionId,
     status: waiting ? 'waiting' : running ? 'running'
       : outcome === 'done' ? 'completed' : outcome === 'stopped' ? 'aborted' : 'failed',
-    phase: waiting ? 'human-gate' : getActiveTradewindLoop()?.isRunning() ? 'loop' : undefined,
+    phase: waiting ? 'human-gate' : slot.loop?.isRunning() ? 'loop' : undefined,
     ...(waiting ? { waitingReason: `等待 ${gates.length} 个人类关口` } : {}),
     ...(!running && outcome === 'error'
       ? { errorCode: failure?.data.code ?? 'TRADEWIND_EXECUTION_FAILED',

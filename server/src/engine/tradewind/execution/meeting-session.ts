@@ -12,6 +12,7 @@
 
 import type { ContextMessage } from '../../shared/types';
 import { TokenUsageRecorder } from './token-usage.js';
+import type { CompactionProgress } from '../../shared/compaction/index.js';
 
 // ── 数据结构 ──────────────────────────────────────────────────
 
@@ -21,7 +22,8 @@ export interface MeetingMessage {
   timestamp: number;
   rawContent?: string;
   reasoning?: string;
-  toolCalls?: Array<{ tool: string; args: Record<string, string>; result: string; meta?: unknown }>;
+  toolCalls?: Array<{ tool: string; args: Record<string, unknown>; result: string; meta?: unknown;
+    toolImages?: import('../../shared/types.js').ToolImageRef[] }>;
   /** 入会摘要流式过程中为 true；定稿后为 false / undefined */
   streaming?: boolean;
   /** true=该轮无有效回复（模型空回复），前端以灰字显式呈现 */
@@ -36,6 +38,8 @@ export interface MeetingParticipant {
 }
 
 export interface MeetingSessionData {
+  executionId?: string;
+  workflowId?: string;
   /** 会议节点 ID */
   nodeId: string;
   /** 会议节点 label（显示名，用于 prompt） */
@@ -70,11 +74,14 @@ export interface MeetingSessionData {
   /** Provider-reported usage for every model call in this meeting activation. */
   usageRecorder: TokenUsageRecorder;
   compactionNotice?: string;
+  compactions?: { public?: CompactionProgress; chair?: CompactionProgress };
 }
 
 // ── 工厂 ──────────────────────────────────────────────────────
 
 export interface CreateMeetingOpts {
+  executionId?: string;
+  workflowId?: string;
   nodeId: string;
   meetingLabel: string;
   chairAgentId: string;
@@ -85,6 +92,8 @@ export interface CreateMeetingOpts {
 
 export function createMeetingSession(opts: CreateMeetingOpts): MeetingSessionData {
   return {
+    executionId: opts.executionId,
+    workflowId: opts.workflowId,
     nodeId: opts.nodeId,
     meetingLabel: opts.meetingLabel,
     chairAgentId: opts.chairAgentId,

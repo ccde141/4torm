@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createRuntimeFetch } from './runtime-fetch.js';
+import { createRuntimeFetch, providerRequestHeaders } from './runtime-fetch.js';
+
+test('Anthropic keeps an explicit case-insensitive x-api-key and its protocol version', () => {
+  const headers = providerRequestHeaders({ apiKey: 'fallback-key', customHeaders: {
+    'X-Api-Key': 'custom-key', 'Anthropic-Version': '2024-01-01',
+  } }, 'anthropic-messages');
+  assert.equal(headers.get('x-api-key'), 'custom-key');
+  assert.equal(headers.get('anthropic-version'), '2024-01-01');
+  assert.equal(headers.get('authorization'), null);
+});
 
 test('探测复用 Key 和自定义头，Key 优先且大小写不产生重复认证', async () => {
   const request = createRuntimeFetch({ baseUrl: 'http://localhost:1234/v1', apiKey: 'test-only',

@@ -49,6 +49,7 @@ async function list(dataDir: string): Promise<WorkflowSummary[]> {
     if (!entry.isDirectory()) continue;
     const item = await read(dataDir, entry.name);
     summaries.push({ workflowId: item.workflowId, name: item.name,
+      ...(item.graph.orchestration === undefined ? {} : { orchestration: item.graph.orchestration }),
       nodeCount: item.graph.nodes.length, updatedAt: item.updatedAt, revision: item.revision });
   }
   return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -118,7 +119,10 @@ function parseGraph(value: unknown): WorkflowGraph {
   if (!record(value) || !Array.isArray(value.nodes) || !Array.isArray(value.edges)) {
     throw invalidDefinition();
   }
-  return { nodes: value.nodes.map(parseNode), edges: value.edges.map(parseEdge) };
+  if (value.orchestration !== undefined && value.orchestration !== 'strict'
+    && value.orchestration !== 'handoff') throw invalidDefinition();
+  return { nodes: value.nodes.map(parseNode), edges: value.edges.map(parseEdge),
+    ...(value.orchestration === undefined ? {} : { orchestration: value.orchestration }) };
 }
 
 function parseNode(value: unknown): WorkflowNode {

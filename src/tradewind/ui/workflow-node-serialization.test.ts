@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { deserializeWorkflowNode, serializeWorkflowNode } from './workflow-node-serialization';
+import { deserializeWorkflowNode, serializeWorkflowNode, deserializeWorkflowEdge, serializeWorkflowEdge } from './workflow-node-serialization';
+
+test('workflow edge editing preserves the persisted route and both ports', () => {
+  const edge = { id: 'route-a', source: 'a', target: 'b', sourcePort: 2, targetPort: 3,
+    kind: 'handoff' as const, rework: true };
+  assert.deepEqual(serializeWorkflowEdge(deserializeWorkflowEdge(edge)), edge);
+});
 
 test('workflow node human memo survives save and reload', () => {
   const serialized = serializeWorkflowNode({

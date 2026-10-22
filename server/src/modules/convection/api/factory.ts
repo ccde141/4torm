@@ -13,6 +13,7 @@ import { ConvectionRunRepository } from '../infrastructure/run-repository.js';
 import { ConvectionRoundService } from '../application/round-service.js';
 import { loadAgent } from '../../../engine/shared/agent-loader.js';
 import { ConvectionConferenceFeed } from '../application/conference-feed.js';
+import { withConvectionToolImages } from './tool-images.js';
 
 export interface ConvectionFeatureOptions { dataDir: string }
 export interface ConvectionFeature {
@@ -30,7 +31,8 @@ export function createConvectionFeature(options: ConvectionFeatureOptions): Conv
   const feed = new ConvectionConferenceFeed();
   const sessions = new ConvectionSessionService(options.dataDir, undefined,
     async agentId => Boolean(await loadAgent(options.dataDir, agentId)),
-    sessionId => feed.publish({ type: 'session-changed', sessionId }));
+    sessionId => feed.publish({ type: 'session-changed', sessionId }),
+    (sessionId, scope, event) => feed.publish({ type: 'context-event', sessionId, scope, event }));
   const executor = new ConvectionRoundExecutor(options.dataDir);
   const workspace = new ConvectionWorkspaceOpener(options.dataDir);
   const runs = new ConvectionRunRepository(options.dataDir);
@@ -39,7 +41,7 @@ export function createConvectionFeature(options: ConvectionFeatureOptions): Conv
   const discussions = new ConvectionDiscussionService(options.dataDir, sessions,
     sessionId => discussionRounds.liveSnapshot(sessionId), runs);
   return {
-    module: createConvectionModule({
+    module: withConvectionToolImages(createConvectionModule({
       source: createConvectionRuntimeSource(options.dataDir, rounds, runs),
       commands,
       sessions,
@@ -96,7 +98,7 @@ export function createConvectionFeature(options: ConvectionFeatureOptions): Conv
           return fact ? { fact, detailAvailable: false } : null;
         },
       },
-    }),
+    }), options.dataDir, sessions),
     rounds,
     sessions,
     executor,

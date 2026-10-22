@@ -34,17 +34,18 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/storage/read?path=xxx
   app.get('/read', async (req, reply) => {
     const filePath = (req.query as any).path || '';
-    const ownership = ownershipError(filePath);
+    const target = await storageTarget(dataDir, filePath);
+    const ownership = target.error;
     if (ownership) return reply.status(403).send({ error: ownership });
     try {
-      const resolved = resolveSafePath(dataDir, filePath);
+      const resolved = target.resolved;
       const raw = await fs.readFile(resolved, 'utf-8');
       if (resolved.endsWith('.json')) {
         reply.header('Content-Type', 'application/json');
       } else {
         reply.header('Content-Type', 'text/plain; charset=utf-8');
       }
-      if (filePath === 'skin-config.json') {
+      if (target.relative === 'skin-config.json') {
         try { return reply.send(migrateSkinVideoConfig(JSON.parse(raw))); }
         catch { return reply.send(raw); }
       }
@@ -58,10 +59,11 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
   // 与 /read 区别：返回 Buffer 不做 utf-8 解码，按扩展名设 Content-Type
   app.get('/file', async (req, reply) => {
     const filePath = (req.query as any).path || '';
-    const ownership = ownershipError(filePath);
+    const target = await storageTarget(dataDir, filePath);
+    const ownership = target.error;
     if (ownership) return reply.status(403).send({ error: ownership });
     try {
-      const resolved = resolveSafePath(dataDir, filePath);
+      const resolved = target.resolved;
       const buf = await fs.readFile(resolved);
       reply.header('Content-Type', mimeFromExt(resolved));
       reply.header('Cache-Control', 'public, max-age=31536000, immutable');
@@ -74,14 +76,15 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
   // PUT /api/storage/write?path=xxx
   app.put('/write', async (req, reply) => {
     const filePath = (req.query as any).path || '';
-    const ownership = ownershipError(filePath);
+    const target = await storageTarget(dataDir, filePath);
+    const ownership = target.error;
     if (ownership) return reply.status(403).send({ error: ownership });
-    const resolved = resolveSafePath(dataDir, filePath);
+    const resolved = target.resolved;
     await fs.mkdir(path.dirname(resolved), { recursive: true });
     // Fastify 自动解析 JSON body 为对象，需要 stringify 回 string
     const raw = req.body;
     let body = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
-    if (filePath === 'skin-config.json') {
+    if (target.relative === 'skin-config.json') {
       try { body = JSON.stringify(migrateSkinVideoConfig(JSON.parse(body)), null, 2); }
       catch { return reply.status(400).send({ error: '皮肤配置不是有效 JSON' }); }
     }
@@ -92,9 +95,10 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
   // PUT /api/storage/upload?path=xxx (base64 binary)
   app.put('/upload', async (req, reply) => {
     const filePath = (req.query as any).path || '';
-    const ownership = ownershipError(filePath);
+    const target = await storageTarget(dataDir, filePath);
+    const ownership = target.error;
     if (ownership) return reply.status(403).send({ error: ownership });
-    const resolved = resolveSafePath(dataDir, filePath);
+    const resolved = target.resolved;
     await fs.mkdir(path.dirname(resolved), { recursive: true });
     const body = req.body as string || '';
     if (!body) {
@@ -107,10 +111,11 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
   // DELETE /api/storage/delete?path=xxx
   app.delete('/delete', async (req, reply) => {
     const filePath = (req.query as any).path || '';
-    const ownership = ownershipError(filePath);
+    const target = await storageTarget(dataDir, filePath, true);
+    const ownership = target.error;
     if (ownership) return reply.status(403).send({ error: ownership });
     try {
-      const resolved = resolveSafePath(dataDir, filePath);
+      const resolved = target.resolved;
       await fs.rm(resolved, { recursive: true, force: true });
       return reply.send({ ok: true });
     } catch (e) {
@@ -121,29 +126,54 @@ export async function storageRoutes(app: FastifyInstance): Promise<void> {
   // POST /api/storage/mkdir?path=xxx
   app.post('/mkdir', async (req, reply) => {
     const filePath = (req.query as any).path || '';
-    const ownership = ownershipError(filePath);
+    const target = await storageTarget(dataDir, filePath);
+    const ownership = target.error;
     if (ownership) return reply.status(403).send({ error: ownership });
-    const resolved = resolveSafePath(dataDir, filePath);
+    const resolved = target.resolved;
     await fs.mkdir(resolved, { recursive: true });
     return reply.send({ ok: true });
   });
 }
 
-function ownershipError(filePath: string): string | undefined {
-  if (isMonsoonOwnedPath(filePath)) return '季风数据只能通过会话接口访问';
-  if (isAgentOwnedPath(filePath)) return 'Agent 数据只能通过 Agent 实体接口访问';
+async function storageTarget(dataDir: string, filePath: string, deleting = false) {
+  const lexical = resolveSafePath(dataDir, filePath);
+  const [base, resolved] = await Promise.all([canonicalPath(dataDir), canonicalPath(lexical)]);
+  const actual = path.relative(base, resolved);
+  if (actual === '..' || actual.startsWith(`..${path.sep}`) || path.isAbsolute(actual)) {
+    return { resolved, relative: actual, error: '路径越界' };
+  }
+  const requested = path.relative(path.resolve(dataDir), lexical);
+  const names = [requested, actual].map(value => value.replaceAll('\\', '/').toLowerCase() || '.');
+  return { resolved, relative: names[1]!, error: names.map(value => ownershipError(value, deleting)).find(Boolean) };
+}
+
+async function canonicalPath(target: string): Promise<string> {
+  try { return await fs.realpath(target); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    const parent = path.dirname(target);
+    if (parent === target) throw error;
+    return path.join(await canonicalPath(parent), path.basename(target));
+  }
+}
+
+function ownershipError(normalized: string, deleting: boolean): string | undefined {
+  if (normalized === 'providers.json' || normalized === '.') return '模型配置只能通过模型设置接口访问';
+  if (isMonsoonOwnedPath(normalized)) return '季风数据只能通过会话接口访问';
+  if (isAgentOwnedPath(normalized)) return 'Agent 数据只能通过 Agent 实体接口访问';
+  if (deleting && (/^agents(?:\/[^/]+)?$/.test(normalized)
+    || /^agents\/[^/]+\/(?:sessions|\.workspace)$/.test(normalized))) {
+    return '该目录包含 Agent 或季风数据，请通过对应管理接口删除';
+  }
   return undefined;
 }
 
-function isMonsoonOwnedPath(filePath: string): boolean {
-  const normalized = filePath.replaceAll('\\', '/');
-  return /^agents\/[^/]+\/sessions\/(?:_index\.json|[^/]+\.json|[^/]+\.runs(?:\/.*)?)$/
-    .test(normalized)
-    && !normalized.endsWith('.taskboard.json');
+function isMonsoonOwnedPath(normalized: string): boolean {
+  return /^agents\/[^/]+\/sessions\/.+/.test(normalized)
+    && !/^agents\/[^/]+\/sessions\/[^/]+\.taskboard\.json$/.test(normalized);
 }
 
-function isAgentOwnedPath(filePath: string): boolean {
-  const normalized = filePath.replaceAll('\\', '/');
+function isAgentOwnedPath(normalized: string): boolean {
   return normalized === 'agents/registry.json'
-    || /^agents\/[^/]+\/\.workspace\/(?:config\.json|role-prompt\.md|MEMORY\.md)$/.test(normalized);
+    || /^agents\/[^/]+\/\.workspace\/(?:config\.json|role-prompt\.md|memory\.md)$/.test(normalized);
 }

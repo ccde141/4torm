@@ -170,8 +170,8 @@ export async function ensureDir(dir: string): Promise<void> {
 }
 
 /** 原子写：先写 .tmp 再 rename 覆盖，防止半截 JSON */
-export async function atomicWrite(filePath: string, data: string): Promise<void> {
-  await atomicWriteFile(filePath, data);
+export async function atomicWrite(filePath: string, data: string, signal?: AbortSignal): Promise<void> {
+  await atomicWriteFile(filePath, data, signal);
 }
 
 /** 生成带前缀的随机 id（Date.now + 8 位随机，降低碰撞） */

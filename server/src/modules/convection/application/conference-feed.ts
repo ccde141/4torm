@@ -3,6 +3,8 @@ import type { ConvectionStreamEvent } from '../execution/stream-events.js';
 
 export type ConvectionConferenceEvent =
   | { type: 'session-changed'; sessionId: string }
+  | { type: 'context-event'; sessionId: string; scope: 'public' | 'chair';
+      event: import('../../../engine/shared/compaction/contracts.js').CompactionProgress }
   | { type: 'round-start'; sessionId: string; runId: string;
       round: ConvectionRoundKind; message: string }
   | { type: 'round-event'; sessionId: string; runId: string;

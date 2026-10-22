@@ -1,5 +1,5 @@
 import { frameworkError } from '../../../engine/shared/framework-error.js';
-import { parseTideInterval } from './schedule.js';
+import { parseTideSchedule } from './schedule.js';
 
 export type TidePushMode = 'accumulate' | 'designated';
 
@@ -40,7 +40,7 @@ export function parseTideTask(value: unknown, index?: number): TideTask {
     enabled: optionalBoolean(value.enabled, false, 'enabled', index),
     createdAt: requiredString(value.createdAt, 'createdAt', index),
   };
-  parseTideInterval(task.schedule);
+  parseTideSchedule(task.schedule);
   copyOptionalStrings(task, value, index);
   copyOptionalIntegers(task, value, index);
   validateRanges(task, index);

@@ -1,3 +1,4 @@
+import { backendFetch, backendUrl } from '../../lib/backend-client';
 import type { FrameworkErrorKind } from '../../api/error-contract';
 
 export type VisualObservationScope = 'conversation' | 'cyclone';
@@ -30,7 +31,7 @@ export interface VisualObservationDetail {
 
 export type ObservationFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
-const defaultFetch: ObservationFetch = (url, init) => fetch(url, init);
+const defaultFetch: ObservationFetch = (url, init) => backendFetch(url, init);
 
 export function observationOwnerQuery(owner: VisualObservationOwner): string {
   return new URLSearchParams({ scope: owner.scope, ownerId: owner.ownerId }).toString();
@@ -41,7 +42,7 @@ export function visualObservationFrameUrl(
   owner: VisualObservationOwner,
   revision: number,
 ): string {
-  return `${observationUrl(id)}/frame?${observationOwnerQuery(owner)}&v=${revision}`;
+  return backendUrl(`${observationUrl(id)}/frame?${observationOwnerQuery(owner)}&v=${revision}`);
 }
 
 export function isActiveObservationStatus(status: VisualObservationStatus): boolean {

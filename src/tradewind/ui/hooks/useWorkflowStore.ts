@@ -8,9 +8,9 @@
 import { useState, useCallback, useRef } from 'react';
 import type { Node, Edge, OnNodesChange, OnEdgesChange, OnConnect, Connection } from '@xyflow/react';
 import { applyNodeChanges, applyEdgeChanges, addEdge } from '@xyflow/react';
-import type { WorkflowGraph, WorkflowNode, WorkflowEdge, EdgeKind } from '../../types';
+import type { WorkflowGraph, EdgeKind } from '../../types';
 import { loadWorkflow, saveWorkflow, type WorkflowChangeEvent, type SaveWorkflowInput } from '../workflow-client';
-import { deserializeWorkflowNode, serializeWorkflowNode } from '../workflow-node-serialization';
+import { deserializeWorkflowNode, serializeWorkflowNode, deserializeWorkflowEdge, serializeWorkflowEdge } from '../workflow-node-serialization';
 import { useLocale } from '../../../i18n/LocaleContext';
 import { WorkflowRevisionTracker, type WorkflowRevisionState } from './workflow-revision';
 import { WorkflowLoadGate } from './workflow-load-gate';
@@ -25,6 +25,7 @@ export interface WorkflowStoreState {
   selectedNodeId: string | null;
   workflowId: string;
   workflowName: string;
+  orchestration: 'strict' | 'handoff';
   revisionState: WorkflowRevisionState;
 }
 
@@ -42,9 +43,13 @@ export interface WorkflowStoreActions {
   syncReworkEdge: (gateNodeId: string, targetNodeId: string | null) => void;
   getGraph: () => WorkflowGraph;
   loadGraph: (graph: WorkflowGraph, workflowId: string, workflowName?: string, revision?: string | null) => void;
+  clearSelection: () => void;
   save: (name?: string) => Promise<boolean>;
   saveAsCopy: () => Promise<{ id: string; saved: boolean; adopted: boolean } | null>;
   load: (workflowId: string) => Promise<boolean>;
+  cancelLoad: () => void;
+  prepareSwitch: () => Promise<void>;
+  initializeGraph: (graph: WorkflowGraph, id: string, name: string, revision?: string) => void;
   reconcileRemote: (change?: WorkflowChangeEvent) => Promise<void>;
   setWorkflowName: (name: string) => void;
 }
@@ -58,6 +63,7 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [workflowId, setWorkflowId] = useState('untitled');
   const [workflowName, setWorkflowName] = useState(() => t('tradewind.untitled'));
+  const [orchestration, setOrchestration] = useState<'strict' | 'handoff'>('strict');
   const [revisionState, setRevisionState] = useState<WorkflowRevisionState>({
     workflowId: 'untitled', revision: null, dirty: false, saving: false, conflict: false,
   });
@@ -65,6 +71,7 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
   if (!revisionRef.current) revisionRef.current = new WorkflowRevisionTracker(setRevisionState);
   const draftRef = useRef<(name?: string) => Omit<SaveWorkflowInput, 'expectedRevision'> | null>(() => null);
   const loadGateRef = useRef(new WorkflowLoadGate());
+  const initializedRef = useRef(false);
   const markDirty = useCallback(() => revisionRef.current?.edit(), []);
 
   const onNodesChange: OnNodesChange = useCallback(
@@ -190,40 +197,24 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
   }, [markDirty]);
 
   const getGraph = useCallback((): WorkflowGraph => {
-    const wfNodes: WorkflowNode[] = nodes.map(serializeWorkflowNode);
-    const wfEdges: WorkflowEdge[] = edges.map((e) => {
-      const data = (e.data ?? {}) as { kind?: EdgeKind; rework?: boolean; sourcePort?: number };
-      return {
-        id: e.id,
-        source: e.source,
-        sourcePort: data.sourcePort ?? 0,
-        target: e.target,
-        targetPort: 0,
-        kind: (data.kind ?? 'handoff') as EdgeKind,
-        rework: data.rework,
-      };
-    });
-    return { nodes: wfNodes, edges: wfEdges };
-  }, [nodes, edges]);
+    return { orchestration, nodes: nodes.map(serializeWorkflowNode), edges: edges.map(serializeWorkflowEdge) };
+  }, [nodes, edges, orchestration]);
 
   draftRef.current = (name?: string) => {
     const graph = getGraph();
-    return graph.nodes.length ? { workflowId, graph, name: name?.trim() || workflowName } : null;
+    // Empty drafts are persistable; execution validity belongs to the run validator.
+    return workflowId === 'untitled' ? null : { workflowId, graph, name: name?.trim() || workflowName };
   };
 
   const loadGraph = useCallback((graph: WorkflowGraph, wfId: string, name?: string, revision: string | null = null) => {
+    initializedRef.current = true;
     loadGateRef.current.invalidate();
     revisionRef.current?.load(wfId, revision);
     setWorkflowId(wfId);
     setWorkflowName(name?.trim() || wfId);
+    setOrchestration(graph.orchestration ?? 'strict');
     setNodes(graph.nodes.map(deserializeWorkflowNode));
-    setEdges(graph.edges.map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      type: 'tradewind',
-      data: { kind: e.kind, rework: e.rework, sourcePort: e.sourcePort },
-    })));
+    setEdges(graph.edges.map(deserializeWorkflowEdge));
     setSelectedNodeId(null);
   }, []);
 
@@ -234,9 +225,26 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
     );
   }, [t]);
 
+  const clearSelection = useCallback(() => {
+    loadGraph({ orchestration, nodes: [], edges: [] }, 'untitled', t('tradewind.untitled'));
+  }, [loadGraph, orchestration, t]);
+
+  const prepareSwitch = useCallback(async () => {
+    const tracker = revisionRef.current!;
+    await tracker.waitForSave();
+    if (!tracker.state.dirty) return;
+    if (!await save()) throw new Error(t('tradewind.notReady'));
+    if (tracker.state.dirty) throw new Error('草稿仍有未保存修改，请先保存。 / Save the latest draft before switching.');
+  }, [save, t]);
+  const cancelLoad = useCallback(() => loadGateRef.current.invalidate(), []);
+  const initializeGraph = useCallback((graph: WorkflowGraph, id: string, name: string, revision?: string) => {
+    const state = revisionRef.current!.state;
+    if (!initializedRef.current && state.workflowId === 'untitled' && !state.dirty) loadGraph(graph, id, name, revision);
+  }, [loadGraph]);
+
   const saveAsCopy = useCallback(async (): Promise<{ id: string; saved: boolean; adopted: boolean } | null> => {
     const graph = getGraph();
-    if (graph.nodes.length === 0) return null;
+    if (workflowId === 'untitled') return null;
     const id = `wf-${crypto.randomUUID()}`;
     const name = workflowName;
     const result = await revisionRef.current!.saveCopy(
@@ -245,7 +253,7 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
       revision => loadGraph(graph, id, name, revision),
     );
     return { id, ...result };
-  }, [getGraph, workflowName, loadGraph, t]);
+  }, [getGraph, workflowId, workflowName, loadGraph, t]);
 
   const load = useCallback(async (id: string) => {
     return loadGateRef.current.run(
@@ -258,9 +266,9 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
     revisionRef.current!, loadGateRef.current, change,
     id => loadWorkflow(id, t('tradewind.workflowList.loadFailed')),
     data => loadGraph(data.graph, data.workflowId, data.name, data.revision),
-    () => loadGraph({ nodes: [], edges: [] }, `wf-${crypto.randomUUID()}`, t('tradewind.untitled')),
+    clearSelection,
     localStorage,
-  ), [loadGraph, t]);
+  ), [loadGraph, clearSelection, t]);
 
   const renameWorkflow = useCallback((name: string) => {
     if (name !== workflowName) markDirty();
@@ -268,10 +276,11 @@ export function useWorkflowStore(): WorkflowStoreState & WorkflowStoreActions {
   }, [workflowName, markDirty]);
 
   return {
-    nodes, edges, selectedNodeId, workflowId, workflowName, revisionState,
+    nodes, edges, selectedNodeId, workflowId, workflowName, orchestration, revisionState,
     onNodesChange, onEdgesChange, onConnect,
     selectNode, addNode, removeSelected, deleteNode, deleteEdge, cloneNode, updateNodeData,
     syncReworkEdge,
-    getGraph, loadGraph, save, saveAsCopy, load, reconcileRemote, setWorkflowName: renameWorkflow,
+    getGraph, loadGraph, clearSelection, save, saveAsCopy, load, cancelLoad, prepareSwitch, initializeGraph,
+    reconcileRemote, setWorkflowName: renameWorkflow,
   };
 }

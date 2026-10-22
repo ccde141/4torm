@@ -18,6 +18,11 @@ import { buildSandboxSection, type SandboxLevel } from '../../shared/sandbox-pro
 import { buildTextToolProtocol } from '../../shared/text-tool-prompt';
 import { buildFrameworkNavigationSection } from '../../shared/framework-navigation.js';
 import { buildTradewindNodeMeta } from './meta-profiles.js';
+import type { HandoffRoute } from '../foundation/handoff-target.js';
+import { buildConditionalHandoffPrompt } from './handoff-prompt.js';
+import { buildEnvelopeToolDefs } from './virtual-tools.js';
+import { SUB_AGENT_MAX_ROUNDS } from '../../shared/sub-agent-budget.js';
+import type { MessageSource } from './node-runner.js';
 
 /** 读取信风基础协作准则段（baseline.md，与本文件同级）。读不到则静默跳过。 */
 function loadBaseline(): string {
@@ -32,6 +37,9 @@ function loadBaseline(): string {
 // ── 类型 ──────────────────────────────────────────────────────────
 
 export interface TradewindPromptParams {
+  source?: MessageSource;
+  orchestration?: 'strict' | 'handoff';
+  handoffRoutes?: readonly HandoffRoute[];
   /** Agent 角色提示词 */
   rolePrompt: string;
   /** 长期记忆段（recallMemory 返回，可空——空则不渲染） */
@@ -90,6 +98,7 @@ export interface TradewindPromptParams {
 /** 构建信风 Agent 的完整 system prompt */
 export function buildTradewindSystemPrompt(params: TradewindPromptParams): string {
   const sections: string[] = [];
+  const envelopeRound = params.source === undefined || params.source === 'envelope';
 
   // §0 环境信息（引擎自动注入，agent 无需理解但工具调用时可参考）
   sections.push([
@@ -123,7 +132,8 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
 
   // §2 工作环境（信风协作程序背景 + 消息来源识别）
   // native agent 处理上游信封时必须 complete_task 封口投递；text agent 的自然语言回答直接交接。
-  const handoffDesc = params.native
+  const handoffDesc = !envelopeRound ? '本轮只回复当前提问或联络，不封口、不向下游派发信封。'
+    : params.native || params.orchestration === 'handoff'
     ? `处理上游信封的任务完成后，必须调用 complete_task 封口交接（详见下方「交接信封」段）——普通文本不代表完成、不会交给下游。`
     : `完成后直接输出自然语言，会自动打包成信封交给下游。`;
   sections.push([
@@ -169,14 +179,18 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
 
   // §5 输出协议 + 工具列表（native / text 分支）
   if (params.native) {
-    sections.push(buildNativeProtocol(params.toolDefs, params.allowDelegate, params.sandboxLevel, params.teamRoster));
+    sections.push(buildNativeProtocol(params.toolDefs, params.allowDelegate, params.sandboxLevel, params.teamRoster, envelopeRound));
   } else {
-    sections.push(buildTradewindTextProtocol(params.toolDefs, params.allowDelegate, params.teamRoster));
+    sections.push(buildTradewindTextProtocol([...params.toolDefs,
+      ...(envelopeRound && params.orchestration === 'handoff' ? buildEnvelopeToolDefs(params.handoffRoutes ?? []) : [])],
+    params.allowDelegate, params.teamRoster));
   }
 
   // §5.5 信封交接段（所有 native agent；教信封累积 + complete_task 显式交接）。
   // text agent 以普通自然语言作为可靠终结信号，不需要 complete_task。
-  if (params.native) sections.push(buildEnvelopeHandoffSection(params.autoMode ?? false, params.downstreamLabels ?? []));
+  if (envelopeRound && params.orchestration === 'handoff') sections.push(buildConditionalHandoffPrompt(params.handoffRoutes ?? [], !!params.native));
+  else if (envelopeRound && params.native) sections.push(buildEnvelopeHandoffSection(params.autoMode ?? false, params.downstreamLabels ?? []));
+  if (!envelopeRound) sections.push(`# 当前轮次\n\n${params.source === 'human' ? '人类对话' : '协作者联络'}：完成当前请求后直接回复。本轮没有信封工具，也不承担下游交接。`);
 
   // §5.6 长期记忆（工具说明 + 记忆自觉引导；文本/native 都注入）
   sections.push(buildMemorySection());
@@ -299,7 +313,7 @@ function buildDelegateSection(): string {
 
 ### 关于 SubAgent 的能力
 
-SubAgent 单次最多 90 轮工具调用，可独立完成相当复杂的任务（深度探索、多文件分析、整模块梳理都没问题）。不必把任务切得过碎——一个 SubAgent 完全可以读十几个文件做完整分析。
+SubAgent 单次最多 ${SUB_AGENT_MAX_ROUNDS} 轮工具调用，可独立完成相当复杂的任务（深度探索、多文件分析、整模块梳理都没问题）。不必把任务切得过碎——一个 SubAgent 完全可以读十几个文件做完整分析。
 
 仅当任务确实庞大（如同时审计多个互不相关的大模块）时，才按模块拆成几个并行 delegate，让每个聚焦一块、互不干扰。
 
@@ -396,6 +410,7 @@ function buildNativeProtocol(
   allowDelegate: boolean,
   sandboxLevel: SandboxLevel,
   teamRoster: Array<{ label: string; role: string; isSelf: boolean }>,
+  envelopeRound: boolean,
 ): string {
   const tools = toolDefs.filter(t => t.name !== 'delegate' && t.name !== 'contact');
   const toolList = tools.map(t => `- ${t.name}: ${t.description}`).join('\n');
@@ -415,7 +430,7 @@ ${toolList}`];
   if (allowDelegate) {
     sections.push(`## delegate 委托
 
-可调用 \`delegate\` 把子任务交给独立 SubAgent。SubAgent 在隔离上下文中工作，最多 90 轮，可独立完成相当复杂的任务（深度探索、多文件分析、整模块梳理都没问题）。
+可调用 \`delegate\` 把子任务交给独立 SubAgent。SubAgent 在隔离上下文中工作，最多 ${SUB_AGENT_MAX_ROUNDS} 轮，可独立完成相当复杂的任务（深度探索、多文件分析、整模块梳理都没问题）。
 
 **执行策略**：SubAgent 同样以工作区解析相对路径、接受绝对路径，并保留控制面写保护。涉及文件/目录时必须在 context 中写明绝对路径。
 
@@ -434,9 +449,9 @@ ${toolList}`];
 - 需要对方的专业能力协助**你手头**的工作
 - 缺少完成本职所必需的信息，需要向对方索取（如上游数据、接口规格、决策依据）
 
-**不适合**使用 contact 的场景：
-- **把有自动下游的整包工作推给别人**——那不是你该做的事，用 complete_task 交接给自动下游即可
-- 你只是想让下游"接着干"——下游会在收到你封口的信封后自动开始，无需你 contact 催办
+${envelopeRound ? `**不适合**使用 contact 的场景：
+- **把有自动下游的整包工作推给别人**——用 complete_task 交接给自动下游即可
+- 你只是想让下游接着干——下游会在收到信封后自动开始，无需 contact 催办` : '本轮联络只交换信息，不改变已有信封的流向。'}
 
 注意：收到联络后直接回复，不要反过来 contact 对方（会死锁）`);
   }

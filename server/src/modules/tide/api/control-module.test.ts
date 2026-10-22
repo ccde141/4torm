@@ -24,7 +24,7 @@ test('潮汐创建、修改、启停和删除统一经过中心路由', async (t
     readTaskList: 'inline', readTaskDetail: 'inline', readTaskRuns: 'inline',
     readSessions: 'inline', readSession: 'inline',
     listTasks: 'inline', createTask: 'inline', updateTask: 'inline', toggleTask: 'inline',
-    deleteTask: 'inline', deleteSession: 'inline', runTask: 'operation',
+    deleteTask: 'inline', deleteSession: 'inline', runTask: 'operation', abortTaskRun: 'inline',
     triggerScheduledTask: 'operation', createAutomation: 'inline',
     updateAutomation: 'inline', setAutomationEnabled: 'inline',
     listTargetSessions: 'inline', getAutomation: 'inline', compactSession: 'inline',

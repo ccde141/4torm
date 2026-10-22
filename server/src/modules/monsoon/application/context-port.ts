@@ -49,7 +49,8 @@ export class MonsoonContextPort {
   }
 
   async commit(agentId: string, sessionId: string, expectedRevision: number,
-    plan: CompactionCommit, protectedPrefixCount = 1): Promise<MonsoonSession> {
+    plan: CompactionCommit, protectedPrefixCount = 1, signal?: AbortSignal): Promise<MonsoonSession> {
+    signal?.throwIfAborted();
     const current = await this.read(agentId, sessionId);
     if (!current) throw new Error('会话不存在');
     const marker: MonsoonContextMarker = { id: `msg-${randomUUID()}`, role: 'system',
@@ -63,6 +64,7 @@ export class MonsoonContextPort {
     }
     const messages = [...current.messages];
     messages.splice(index < 0 ? messages.length : index, 0, marker);
-    return this.sessions.replace({ ...current, messages }, expectedRevision, 'content', { clearTokenUsage: true });
+    return this.sessions.replace({ ...current, messages }, expectedRevision, 'content',
+      { clearTokenUsage: true, signal });
   }
 }

@@ -1,3 +1,4 @@
+import { backendFetch } from '../../../lib/backend-client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocale } from '../../../i18n/LocaleContext';
 import type { FeedMsg } from './room-stream-events';
@@ -15,6 +16,7 @@ export function useRoomStatus(input: {
   const onChangedRef = useRef(input.onChanged); onChangedRef.current = input.onChanged;
   const streamingRef = useRef(input.streaming); streamingRef.current = input.streaming;
   const current = useRef<RoomData | null>(null);
+  const loadedScope = useRef('');
   const revision = useRef(0);
   const [room, setRoom] = useState<RoomData | null>(null);
   const [history, setHistory] = useState<FeedMsg[]>([]);
@@ -23,12 +25,13 @@ export function useRoomStatus(input: {
   const reload = useCallback(async (notify = false): Promise<boolean> => {
     const request = ++revision.current;
     try {
-      const response = await fetch(`/api/cyclone/workshop/${input.workshopId}/room/${input.roomId}/status`);
+      const response = await backendFetch(`/api/cyclone/workshop/${input.workshopId}/room/${input.roomId}/status`);
       if (!response.ok) throw new Error(await readRoomError(response, tRef.current('cyclone.roomPanel.loadFailed')));
       const data = await response.json() as RoomData;
       if (request !== revision.current) return false;
       if (streamingRef.current && current.current) return false;
       const next = reconcileRoomSnapshot(current.current, data);
+      loadedScope.current = `${input.workshopId}:${input.roomId}`;
       if (next !== current.current) {
         current.current = next;
         setRoom(next);
@@ -72,5 +75,5 @@ export function useRoomStatus(input: {
     });
   }, [input.active, input.roomId, input.streaming, input.workshopId, reload]);
 
-  return { room, history, error, reload };
+  return { room, history, error, reload, loadedScope: loadedScope.current };
 }

@@ -4,6 +4,7 @@
  * 与后端 /api/memory/* 端点对应。供控制台记忆面板查看/编辑 agent 记忆。
  */
 
+import { backendFetch } from '../lib/backend-client';
 const BASE = '/api/memory';
 
 export type MemoryCategory = 'feedback' | 'fact' | 'pitfall' | 'reference';
@@ -30,7 +31,7 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
 }
 
 export async function listMemory(agentId: string): Promise<MemoryEntry[]> {
-  return jsonOrThrow(await fetch(`${BASE}/list?agentId=${encodeURIComponent(agentId)}`));
+  return jsonOrThrow(await backendFetch(`${BASE}/list?agentId=${encodeURIComponent(agentId)}`));
 }
 
 // 人只对 detail 负责；summary 由系统生成/AI 精炼，不进人类草稿。
@@ -42,7 +43,7 @@ export interface MemoryDraft {
 }
 
 export async function createMemory(agentId: string, draft: MemoryDraft): Promise<{ slug: string }> {
-  return jsonOrThrow(await fetch(`${BASE}/create`, {
+  return jsonOrThrow(await backendFetch(`${BASE}/create`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ agentId, ...draft }),
@@ -50,7 +51,7 @@ export async function createMemory(agentId: string, draft: MemoryDraft): Promise
 }
 
 export async function updateMemory(agentId: string, slug: string, patch: Partial<MemoryDraft>): Promise<MemoryEntry> {
-  return jsonOrThrow(await fetch(`${BASE}/update`, {
+  return jsonOrThrow(await backendFetch(`${BASE}/update`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ agentId, slug, ...patch }),
@@ -58,7 +59,7 @@ export async function updateMemory(agentId: string, slug: string, patch: Partial
 }
 
 export async function deleteMemory(agentId: string, slug: string): Promise<void> {
-  await jsonOrThrow(await fetch(`${BASE}/delete`, {
+  await jsonOrThrow(await backendFetch(`${BASE}/delete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ agentId, slug }),

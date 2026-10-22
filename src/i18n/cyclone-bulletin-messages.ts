@@ -1,7 +1,7 @@
 export const cycloneBulletinZh = {
   'cyclone.bulletin.title': '工作室公告板',
   'cyclone.bulletin.renameTitle': '双击重命名工作室',
-  'cyclone.bulletin.subtitle': '全体工位可见 · 人与工位皆可写；每次改动进「更改记录」，可随时撤回 · 双击标题改名',
+  'cyclone.bulletin.subtitle': '全体工位可见 · 任何改动均会在「更改记录」中可见并且可撤回 · 双击标题改名',
   'cyclone.bulletin.refreshTitle': '从磁盘拉取最新（回到本窗口也会自动刷新）',
   'cyclone.bulletin.refresh': '↻ 刷新',
   'cyclone.bulletin.historyTitle': '查看/撤回改动记录',

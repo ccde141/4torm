@@ -1,0 +1,15 @@
+.cyclone-supervisor { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.cyclone-supervisor__header { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--border-color); background: var(--glass-bg); }
+.cyclone-supervisor__symbol { color: var(--color-accent); font-size: 26px; line-height: 1; }
+.cyclone-supervisor__identity { flex: 1; min-width: 0; }
+.cyclone-supervisor__identity h2 { margin: 0; font-size: var(--text-md); font-weight: 600; text-shadow: var(--text-halo); }
+.cyclone-supervisor__identity span { display: block; margin-top: 3px; color: var(--color-text-secondary); font-size: var(--text-xs); }
+.cyclone-supervisor__config { display: grid; gap: var(--space-3); margin: var(--space-4) var(--space-5); padding: var(--space-4); border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--glass-bg); animation: cyclone-supervisor-enter var(--duration-normal) var(--ease-out-expo); }
+.cyclone-supervisor__config label { display: grid; gap: var(--space-2); color: var(--color-text-secondary); font-size: var(--text-sm); }
+.cyclone-supervisor__config select, .cyclone-supervisor__config textarea { width: 100%; box-sizing: border-box; padding: var(--space-2) var(--space-3); color: var(--color-text-primary); background: var(--glass-bg-strong); border: 1px solid var(--border-color); border-radius: var(--radius-md); font: inherit; }
+.cyclone-supervisor__config textarea { resize: vertical; min-height: 88px; max-height: 230px; }
+.cyclone-supervisor__config :is(select, textarea):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.cyclone-supervisor__actions { display: flex; gap: var(--space-2); justify-content: flex-end; }
+.cyclone-supervisor__empty { margin: auto; color: var(--color-text-secondary); }
+@keyframes cyclone-supervisor-enter { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .cyclone-supervisor__config { animation: none; } }

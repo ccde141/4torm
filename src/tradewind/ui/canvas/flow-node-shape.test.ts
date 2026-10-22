@@ -37,9 +37,11 @@ test('信风近期持续态接入集中 motion 节拍', () => {
   assert.match(panelStyles, /\.tw-meeting-panel__status--active[^}]*var\(--motion-loop-duration\)[^}]*var\(--motion-loop-ease\)/s);
 });
 
-test('其他工作流运行时工具栏保持真实运行态但当前 output 不串状态', () => {
-  assert.match(page, /currentWorkflowPhase/);
-  assert.match(page, /toolbarPhase/);
-  assert.match(page, /execution\.running \? execution\.phase : currentWorkflowPhase/);
-  assert.match(page, /executionPhase=\{currentWorkflowPhase\}/);
+test('工具栏和画布只使用当前工作流状态，运行查看独立于编辑草稿', () => {
+  const editor = fs.readFileSync('src/tradewind/ui/workspace/WorkflowEditor.tsx', 'utf8');
+  const controller = fs.readFileSync('src/tradewind/ui/workspace/useTradeWindWorkspace.ts', 'utf8');
+  assert.match(controller, /useExecution\(store\.workflowId\)/);
+  assert.match(page, /running=\{execution\.running\}/);
+  assert.match(editor, /executionPhase=\{execution\.phase\}/);
+  assert.match(page, /WorkflowRuntimeView/);
 });

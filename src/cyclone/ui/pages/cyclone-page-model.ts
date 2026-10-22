@@ -23,8 +23,10 @@ export interface RoomSummary {
 }
 
 export type CycloneView =
+  | { kind: 'supervisor' }
   | { kind: 'seat'; id: string }
   | { kind: 'room'; id: string }
+  | { kind: 'graph' }
   | { kind: 'bulletin' }
   | { kind: 'create-room'; seatIds?: string[] }
   | { kind: 'create-workshop' }

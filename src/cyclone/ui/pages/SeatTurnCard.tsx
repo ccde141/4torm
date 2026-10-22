@@ -6,7 +6,9 @@ import { BlockRows } from './CycloneBlockRows';
 import type { CycloneDispatch } from './dispatch-timeline';
 import type { DisplayMessage } from './messageDisplay';
 import type { SeatTurn } from './seat-turn-projection';
+import { useContactActivity } from './ContactActivityScope';
 import './cyclone-seat-turn.css';
+import type { ToolMediaScope } from '../../../engine/tool-media';
 
 interface Props {
   turn: SeatTurn;
@@ -21,6 +23,7 @@ interface Props {
   onCancelEdit?: () => void;
   onDelete?: (message: DisplayMessage) => void;
   onAskReply: (answer: string) => void;
+  mediaScope?: ToolMediaScope;
 }
 
 export default function SeatTurnCard(props: Props) {
@@ -40,7 +43,7 @@ export default function SeatTurnCard(props: Props) {
       <div className="chat__avatar">AI</div>
       <div className="chat__bubble cyclone-seat-turn__bubble">
         {turn.reasoning && <ReasoningBlock reasoning={turn.reasoning} isStreaming={streaming} defaultOpen={false} />}
-        <SeatTurnWorklog turn={turn} dispatches={dispatches} onAskReply={onAskReply} streaming={streaming} />
+        <SeatTurnWorklog turn={turn} dispatches={dispatches} onAskReply={onAskReply} streaming={streaming} mediaScope={props.mediaScope} />
         {phase && <div className="chat__streaming-phase">{phase}</div>}
         {turn.finalContent && <div className="md-bubble cyclone-seat-turn__answer">
           {renderTextWithCode(turn.finalContent, `${turn.id}-answer`)}{streaming ? '▌' : ''}
@@ -51,15 +54,20 @@ export default function SeatTurnCard(props: Props) {
   );
 }
 
-function SeatTurnWorklog({ turn, dispatches, onAskReply, streaming }: {
+function SeatTurnWorklog({ turn, dispatches, onAskReply, streaming, mediaScope }: {
   turn: SeatTurn;
   dispatches: CycloneDispatch[];
   onAskReply: (answer: string) => void;
   streaming: boolean;
+  mediaScope?: ToolMediaScope;
 }) {
   const { t } = useLocale();
+  const contacts = useContactActivity(turn.workSegments.flatMap(segment => segment.blocks)
+    .flatMap(block => block.kind === 'contact' ? [block] : []));
+  const segments = turn.workSegments.map(segment => ({ ...segment,
+    blocks: segment.blocks.map(block => block.kind === 'contact' ? { ...block, ...contacts.resolve(block) } : block) }));
   if (!turn.workSegments.length) return null;
-  const blocks = turn.workSegments.flatMap(segment => segment.blocks);
+  const blocks = segments.flatMap(segment => segment.blocks);
   const failed = blocks.filter(block => 'status' in block && block.status === 'error').length;
   const running = streaming || blocks.some(block => 'status' in block && block.status === 'running');
   const state = failed ? t('cyclone.activity.failed', { count: failed })
@@ -73,26 +81,28 @@ function SeatTurnWorklog({ turn, dispatches, onAskReply, streaming }: {
         {running && <span className="thinking-card__tool-spinner" />}
       </summary>
       <div className="cyclone-seat-turn__worklog-body">
-        {turn.workSegments.map((segment, index) => (
+        {contacts.error && <p role="status" className="agent-detail__error">{contacts.error}</p>}
+        {segments.map((segment, index) => (
           <SeatTurnSegment key={index} id={`${turn.id}-work-${index}`}
             content={segment.content} blocks={segment.blocks} dispatches={dispatches}
-            onAskReply={onAskReply} />
+            onAskReply={onAskReply} mediaScope={mediaScope} />
         ))}
       </div>
     </details>
   );
 }
 
-function SeatTurnSegment({ id, content, blocks, dispatches, onAskReply }: {
+function SeatTurnSegment({ id, content, blocks, dispatches, onAskReply, mediaScope }: {
   id: string;
   content: string;
   blocks: SeatTurn['workSegments'][number]['blocks'];
   dispatches: CycloneDispatch[];
   onAskReply: (answer: string) => void;
+  mediaScope?: ToolMediaScope;
 }) {
   return <>
     {content && <div className="cyclone-seat-turn__work-note">{renderTextWithCode(content, id)}</div>}
-    {!!blocks.length && <BlockRows blocks={blocks} prefix={id} dispatches={dispatches} onAskReply={onAskReply} />}
+    {!!blocks.length && <BlockRows blocks={blocks} prefix={id} dispatches={dispatches} onAskReply={onAskReply} mediaScope={mediaScope} />}
   </>;
 }
 

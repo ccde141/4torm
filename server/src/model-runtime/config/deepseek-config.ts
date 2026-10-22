@@ -21,7 +21,7 @@ export const DEFAULT_DEEPSEEK_CONFIG: Readonly<DeepSeekConfig> = {
 };
 
 export const DEEPSEEK_CONFIG_LIMITS = {
-  maxOutputTokens: { min: 1, max: 1_000_000 },
+  maxOutputTokens: { min: 1, max: 393_216 },
   temperature: { min: 0, max: 2 },
   topP: { min: 0, max: 1 },
 } as const;
@@ -36,6 +36,22 @@ export function normalizeDeepSeekConfig(input: unknown): DeepSeekConfig {
   const generation = record(root.generationDefaults, 'generationDefaults');
   rejectUnknown(generation, GENERATION_FIELDS, 'generationDefaults.');
   return { generationDefaults: normalizeGeneration(generation) };
+}
+
+/** Older configurations accepted a larger cap; constrain it for execution without rewriting storage. */
+export function normalizeDeepSeekRuntimeConfig(input: unknown): DeepSeekConfig {
+  const root = record(input, 'DeepSeek');
+  const generation = record(root.generationDefaults, 'generationDefaults');
+  const output = generation.maxOutputTokens;
+  return normalizeDeepSeekConfig({
+    ...root,
+    generationDefaults: {
+      ...generation,
+      ...(typeof output === 'number' && Number.isSafeInteger(output)
+        && output > DEEPSEEK_CONFIG_LIMITS.maxOutputTokens.max
+        ? { maxOutputTokens: DEEPSEEK_CONFIG_LIMITS.maxOutputTokens.max } : {}),
+    },
+  });
 }
 
 function normalizeGeneration(value: Record<string, unknown>): DeepSeekGenerationDefaults {

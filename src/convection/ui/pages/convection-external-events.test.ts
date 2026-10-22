@@ -1,6 +1,39 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyExternalChairEvent, applyExternalPublicEvent } from './convection-external-events.js';
+import { applyExternalChairEvent, applyExternalPublicEvent, restoreConvectionCompaction } from './convection-external-events.js';
+import { restoreConvectionMessage } from './convection-message-map.js';
+
+test('MCP图片在实时工具结果、终答和历史恢复时保留在同一次调用内', () => {
+  const toolImages = [{ id: 'shot-a', name: 'desktop.png', mimeType: 'image/png', size: 128 }];
+  const identity = { agentId: 'agent-a', label: '研究员' };
+  const started = applyExternalPublicEvent([], { type: 'tool-call', ...identity, tool: 'mcp:observe', args: {} });
+  const completed = applyExternalPublicEvent(started, { type: 'tool-result', ...identity,
+    tool: 'mcp:observe', result: 'metadata', toolImages });
+  assert.deepEqual(completed[0].toolCalls?.[0].toolImages, toolImages);
+  const done = applyExternalPublicEvent(completed, { type: 'agent-done', ...identity, content: 'seen',
+    toolCalls: [{ tool: 'mcp:observe', args: {}, result: 'metadata', toolImages }] });
+  assert.deepEqual(done[0].toolCalls?.[0].toolImages, toolImages);
+  assert.deepEqual(restoreConvectionMessage({ speaker: '研究员', content: 'seen',
+    toolCalls: [{ tool: 'mcp:observe', args: {}, result: 'metadata', toolImages }] }).toolCalls?.[0].toolImages, toolImages);
+});
+
+test('请求中断只核对保存状态，提交已完成时不把压缩误报为已取消', () => {
+  const pending = { id: 'manual-a', phase: 'running' as const, operation: 'compact' as const,
+    startedAt: 1, updatedAt: 2, message: '正在核对已保存状态' };
+  const start = { type: 'compact-start', id: 'server-a', startedAt: 1, updatedAt: 1 };
+  assert.equal(restoreConvectionCompaction(pending, start)?.message, pending.message);
+  assert.equal(restoreConvectionCompaction(pending, { ...start, type: 'compact-done', updatedAt: 3 })?.phase, 'completed');
+  assert.equal(restoreConvectionCompaction(pending, { ...start, type: 'compact-failed', aborted: true, updatedAt: 3 })?.phase, 'cancelled');
+});
+
+test('压缩进度不伪装成公共发言或助理回复', () => {
+  const messages = [{ speaker: '人类', content: '正在讨论' }];
+  const chair = [{ role: 'user', content: '私人问题' }];
+  for (const type of ['compact-start', 'compact-done', 'compact-failed'] as const) {
+    assert.equal(applyExternalPublicEvent(messages, { type, id: 'compact-a' }), messages);
+    assert.equal(applyExternalChairEvent(chair, { type, id: 'compact-a' }), chair);
+  }
+});
 
 test('后台会议的逐字发言在前端形成流式卡片并由终答收口', () => {
   const start = applyExternalPublicEvent([], {

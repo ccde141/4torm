@@ -1,3 +1,4 @@
+import { prepareCycloneExecution } from '../application/execution-preparation.js';
 import { chatChairWithinExecution } from '../../../engine/cyclone/chair-runner.js';
 import type { CycloneChairService } from '../application/chair-service.js';
 import type { CycloneCommands } from '../application/execution-commands.js';
@@ -27,9 +28,9 @@ export function createCycloneChairChatPort(
       agentId: status.chairAgentId,
     });
     changes?.publish(input.workshopId, 'activity', input.roomId);
-    return { execution, run: onEvent => runChairChat(
+    return prepareCycloneExecution(execution, commands, onEvent => runChairChat(
       dataDir, input, execution, commands, executions, execute, onEvent, changes,
-    ) };
+    ), () => changes?.publish(input.workshopId, 'activity', input.roomId));
   } };
 }
 

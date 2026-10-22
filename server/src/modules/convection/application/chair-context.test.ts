@@ -6,6 +6,8 @@ import test from 'node:test';
 import { ConvectionSessionService } from './session-service.js';
 import { buildConvectionChairContext, convectionChairBoundaries, rememberChairContextBoundary } from '../execution/chair-context.js';
 import { sessionWorkspace } from '../infrastructure/session-store.js';
+import type { ConvectionCompactionSink } from './compaction-progress.js';
+import type { CompactionProgress } from '../../../engine/shared/compaction/contracts.js';
 
 test('助理公共观察仅按完整会议轮次分割，私聊只在下一次人类输入前分割', () => {
   const messages = [{ role: 'system' as const, content: '身份' },
@@ -15,7 +17,7 @@ test('助理公共观察仅按完整会议轮次分割，私聊只在下一次�
   assert.deepEqual(convectionChairBoundaries(messages), [4, 6, 8, 9]);
 });
 
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, onCompaction?: ConvectionCompactionSink) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-chair-context-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
   await fs.mkdir(path.join(dataDir, 'agents'), { recursive: true });
@@ -25,7 +27,7 @@ async function fixture(t: test.TestContext) {
   await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [
     { id: 'p', baseUrl: 'https://compact.test/v1', models: ['chair'] },
   ] }));
-  const service = new ConvectionSessionService(dataDir);
+  const service = new ConvectionSessionService(dataDir, undefined, undefined, undefined, onCompaction);
   const session = await service.create({ chairAgentId: 'chair', participantAgentIds: ['member'] });
   session.publicMessages = [{ speaker: '人类', content: '公共目标'.repeat(500), timestamp: 1 }];
   session.chairMessages = [{ role: 'user', content: '私人疑问'.repeat(500) }];
@@ -52,7 +54,11 @@ test('助理 /reset 清除实际上下文，公共会议 /reset 不再残留助�
 });
 
 test('助理 /compact 全量压缩公共观察与私聊，原文归档且公共会议不被改写', async t => {
-  const { dataDir, service, session } = await fixture(t);
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const progress: CompactionProgress[] = [];
+  const { dataDir, service, session } = await fixture(t,
+    (_id, _scope, event) => progress.push(structuredClone(event)));
   session.chairActiveContext = undefined;
   await service.save(session);
   const previous = globalThis.fetch;
@@ -64,6 +70,8 @@ test('助理 /compact 全量压缩公共观察与私聊，原文归档且公共�
     assert.match(JSON.stringify(body.messages), /公共目标/);
     assert.match(JSON.stringify(body.messages), /私人疑问/);
     assert.equal((await fs.readdir(path.join(sessionWorkspace(dataDir, session.id), 'bak'))).length, 1);
+    await Promise.resolve();
+    now += 12_000;
     const chunk = { choices: [{ delta: { content: '公共目标与私人疑问已区分。' }, finish_reason: 'stop' }] };
     return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
       headers: { 'content-type': 'text/event-stream' },
@@ -79,4 +87,7 @@ test('助理 /compact 全量压缩公共观察与私聊，原文归档且公共�
   const request = buildConvectionChairContext(saved, { role: 'system', content: '静态身份' });
   assert.equal(request.length, 2);
   assert.match(request[1].content, /公共目标与私人疑问已区分/);
+  assert.equal(saved.chairCompactionProgress?.startedAt, now - 12_000);
+  assert.equal(saved.chairCompactionProgress?.updatedAt, now);
+  assert.deepEqual(progress.at(-1), saved.chairCompactionProgress);
 });

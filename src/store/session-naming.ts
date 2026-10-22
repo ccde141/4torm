@@ -1,3 +1,4 @@
+import { backendFetch } from '../lib/backend-client';
 export interface NamingInput { model: string; user: string; assistant: string }
 export class TitleCompletion {
   private answered = false;
@@ -26,7 +27,7 @@ export async function nameSessionOnce(id: string, ports: NamingPorts): Promise<v
 }
 
 export async function requestSessionTitle(input: NamingInput): Promise<string> {
-  const response = await fetch('/api/conversation/title', {
+  const response = await backendFetch('/api/conversation/title', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input), signal: AbortSignal.timeout(65000),
   });

@@ -48,17 +48,30 @@ export function diffStat(lines: DiffLine[]): { add: number; del: number } {
  * 超过此单元格上限（约 1200×1200）就放弃逐行对齐，退回「整体替换」的廉价展示。
  */
 const MAX_DIFF_CELLS = 1_500_000;
+// Pure additions have no large LCS product; bound their rows and text as well.
+const MAX_DIFF_LINES = 10_000;
+const MAX_DIFF_CHARS = 256_000;
 
 export type DiffView =
   | { tooLarge: false; lines: DiffLine[]; add: number; del: number }
   | { tooLarge: true; add: number; del: number };
 
+/** Count without splitting: an oversized input must not allocate all its rows. */
+function countLines(text: string): number {
+  if (!text.length) return 0;
+  let count = 1;
+  for (let offset = text.indexOf('\n'); offset !== -1; offset = text.indexOf('\n', offset + 1)) {
+    count++;
+  }
+  return count;
+}
+
 /** 计算可安全渲染的 diff 视图：小改动做真实行级 diff，大文件退回替换摘要。 */
 export function computeDiffView(before: string, after: string): DiffView {
-  const aLen = before.length ? before.split('\n').length : 0;
-  const bLen = after.length ? after.split('\n').length : 0;
-  // 双侧都大才会触发 O(m×n) 爆炸；新建/纯增（一侧为 0）仍走真实 diff（退化为 O(n)）
-  if (aLen * bLen > MAX_DIFF_CELLS) {
+  const aLen = countLines(before);
+  const bLen = countLines(after);
+  if (before.length + after.length > MAX_DIFF_CHARS
+    || aLen + bLen > MAX_DIFF_LINES || aLen * bLen > MAX_DIFF_CELLS) {
     return { tooLarge: true, add: bLen, del: aLen };
   }
   const lines = lineDiff(before, after);

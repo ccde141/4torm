@@ -41,3 +41,11 @@ test('delegate card survives an ask-reply stream through the final answer', () =
   assert.equal(message.toolSteps?.[0].status, 'done');
 });
 
+test('delegate screenshots remain associated with the matching returned tool', () => {
+  const images = [{ id: 'image-a', name: 'screen.png', mimeType: 'image/png', size: 10 }];
+  let messages: ChatMessage[] = [{ id: 'reply', role: 'assistant', content: '', timestamp: 'now' }];
+  messages = applyDelegateStreamEvent(messages, 'reply', { type: 'delegate-start', delegateId: 'sub', task: 'Look' });
+  messages = applyDelegateStreamEvent(messages, 'reply', { type: 'delegate-tool-call', delegateId: 'sub', tool: 'mcp:observe' });
+  messages = applyDelegateStreamEvent(messages, 'reply', { type: 'delegate-tool-result', delegateId: 'sub', tool: 'mcp:observe', result: 'metadata', ok: true, toolImages: images });
+  assert.deepEqual(messages[0].toolSteps?.[0].delegate?.steps[0].toolImages, images);
+});

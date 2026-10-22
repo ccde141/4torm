@@ -4,6 +4,7 @@ import type { WorkflowDefinition } from '../workflow-client';
 import { WorkflowLoadGate } from './workflow-load-gate';
 import { reconcileWorkflowRemote } from './workflow-remote-sync';
 import { WorkflowRevisionTracker } from './workflow-revision';
+import { ClientFrameworkError } from '../../../api/error-contract';
 
 function definition(workflowId: string, revision: string): WorkflowDefinition {
   return { schemaVersion: 1, workflowId, name: workflowId, revision,
@@ -55,4 +56,40 @@ test('a failed explicit selection still allows the pending remote update for A',
   await remote;
   assert.equal(tracker.state.workflowId, 'A');
   assert.equal(tracker.state.revision, 'r2');
+});
+
+test('a failed old A reconciliation cannot report an error or delete the explicitly selected B', async () => {
+  for (const failure of [new Error('old A unavailable'), new ClientFrameworkError({
+    code: 'TRADEWIND_WORKFLOW_NOT_FOUND', kind: 'not_found', message: 'old A missing',
+  })]) {
+    const tracker = new WorkflowRevisionTracker();
+    const gate = new WorkflowLoadGate();
+    tracker.load('A', 'r1');
+    let failA!: (error: Error) => void;
+    let markReading!: () => void;
+    const reading = new Promise<void>(resolve => { markReading = resolve; });
+    const remote = reconcileWorkflowRemote(tracker, gate, undefined,
+      () => { markReading(); return new Promise<WorkflowDefinition>((_resolve, reject) => { failA = reject; }); },
+      () => { throw new Error('stale A cannot replace B'); },
+      () => { throw new Error('stale A cannot open a blank workflow'); }, storage);
+    await reading;
+    assert.equal(await gate.run(async () => definition('B', 'b1'),
+      value => tracker.load(value.workflowId, value.revision)), true);
+    failA(failure);
+    await remote;
+    assert.equal(tracker.state.workflowId, 'B');
+    assert.equal(tracker.state.revision, 'b1');
+  }
+});
+
+test('a current reconciliation read failure is reported unchanged instead of silently succeeding', async () => {
+  const tracker = new WorkflowRevisionTracker();
+  const gate = new WorkflowLoadGate();
+  tracker.load('A', 'r1');
+  const failure = new Error('current A read failed');
+  await assert.rejects(reconcileWorkflowRemote(tracker, gate, undefined,
+    async () => { throw failure; }, () => { throw new Error('failed read cannot apply'); },
+    () => { throw new Error('an IO failure cannot delete the workflow'); }, storage), error => error === failure);
+  assert.equal(tracker.state.workflowId, 'A');
+  assert.equal(tracker.state.revision, 'r1');
 });

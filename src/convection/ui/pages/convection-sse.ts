@@ -1,3 +1,4 @@
+import { backendFetch } from '../../../lib/backend-client';
 import {
   ClientFrameworkError,
   errorFromPayload,
@@ -27,7 +28,7 @@ export async function streamConvectionSSE(
   body: Record<string, unknown>,
   onEvent: (event: ConvectionEvent) => void,
   signal?: AbortSignal,
-  fetcher: Fetcher = fetch,
+  fetcher: Fetcher = backendFetch,
   errors: ConvectionSseErrors = DEFAULT_ERRORS,
 ): Promise<void> {
   const response = await fetcher(url, {

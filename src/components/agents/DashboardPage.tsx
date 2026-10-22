@@ -16,6 +16,7 @@ import AgentDetailDialog from './AgentDetailDialog';
 import { CompactionSettingsDialog } from './CompactionSettingsDialog';
 import { PresenceItems } from '../common/PresenceItems';
 import { useLocale } from '../../i18n/LocaleContext';
+import { DashboardStatusFilters, DashboardStatusSummary } from './DashboardStatusControls';
 import '../../styles/components/dashboard.css';
 
 export default function DashboardPage({ active = true, onNavigate }: {
@@ -138,52 +139,13 @@ export default function DashboardPage({ active = true, onNavigate }: {
 
   return (
     <div className="dashboard">
-      {stats && (
-        <div className="dashboard__info-bar">
-          <div className="dashboard__info-item">
-            <span className="dashboard__info-dot dashboard__info-dot--agent" />
-            <span className="dashboard__info-value">{stats.totalAgents}</span>
-            <span>Agent</span>
-          </div>
-          <div className="dashboard__info-item">
-            <span className="dashboard__info-dot dashboard__info-dot--online" />
-            <span className="dashboard__info-value">{agents.filter(agent =>
-              projectAgentActivity(agent, activityAvailable, probeSnapshot,
-                offlineIds.has(agent.id)).kind === 'idle').length}</span>
-            <span>已确认空闲</span>
-          </div>
-          <div className="dashboard__info-item">
-            <span className="dashboard__info-dot dashboard__info-dot--session" />
-            <span className="dashboard__info-value">{stats.totalSessions}</span>
-            <span>{t('dashboard.sessions')}</span>
-          </div>
-        </div>
-      )}
+      {stats && <DashboardStatusSummary totalAgents={stats.totalAgents}
+        idleAgents={agents.filter(agent => projectAgentActivity(agent, activityAvailable,
+          probeSnapshot, offlineIds.has(agent.id)).kind === 'idle').length}
+        totalSessions={stats.totalSessions} />}
 
       <div className="dashboard__toolbar">
-        <div className="dashboard__filter-group">
-          <button
-            className={`dashboard__filter-btn${filter === 'all' ? ' dashboard__filter-btn--active' : ''}`}
-            onClick={() => setFilter('all')}
-          >
-            {t('dashboard.all')}
-          </button>
-          {SYSTEM_STATUSES.map(opt => (
-            <button
-              key={opt.id}
-              className={`dashboard__filter-btn${filter === opt.id ? ' dashboard__filter-btn--active' : ''}`}
-              onClick={() => setFilter(opt.id)}
-              style={filter === opt.id ? { borderColor: opt.color, color: opt.color, background: `${opt.color}18` } : undefined}
-            >
-              <span className="dashboard__filter-dot" style={{ background: opt.color }} />
-              {opt.label}
-            </button>
-          ))}
-          {[{ id: 'waiting', label: '等待中' }, { id: 'unknown', label: '状态未知' }].map(opt => (
-            <button key={opt.id} className={`dashboard__filter-btn${filter === opt.id ? ' dashboard__filter-btn--active' : ''}`}
-              onClick={() => setFilter(opt.id)}>{opt.label}</button>
-          ))}
-        </div>
+        <DashboardStatusFilters statuses={SYSTEM_STATUSES} filter={filter} onSelect={setFilter} />
         <button className="dashboard__filter-btn" onClick={() => setSettingsOpen(true)}>{t('compaction.settings')}</button>
         <button className="dashboard__create-btn primary-cta-btn" onClick={() => setCreating(true)}>
           {t('dashboard.createAgent')}
@@ -191,7 +153,8 @@ export default function DashboardPage({ active = true, onNavigate }: {
       </div>
 
       {deleteError && <p className="dashboard__delete-error" role="alert">{t('agent.deleteFailed', { detail: deleteError })}</p>}
-      {probeError && <p className="dashboard__probe-warning" role="status">状态探针暂不可用：{probeError}</p>}
+      {probeError && <p className="dashboard__probe-warning" role="status">
+        {t('dashboard.probeUnavailable', { error: probeError })}</p>}
       {recent.failureCount > 0 && <p className="dashboard__probe-warning" role="status">
         {t('dashboard.card.historyUnavailable')}</p>}
 

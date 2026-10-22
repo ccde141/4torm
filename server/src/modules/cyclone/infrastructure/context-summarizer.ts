@@ -17,7 +17,7 @@ export class LlmCycloneContextSummarizer implements CycloneContextSummarizer {
       prompt: [agent.compactionPrompt, `当前场所：${input.subject}`].filter(Boolean).join('\n'),
       messages: input.messages.map(message => ({ role: 'user',
         content: `[${message.role}] ${message.content}` })),
-      protectedPrefixCount: 0, mode: 'full', reason: 'manual', onNotice: input.onNotice,
+      protectedPrefixCount: 0, mode: 'full', reason: 'manual', onNotice: input.onNotice, signal: input.signal,
     });
     if (!plan?.summary) throw new Error('没有可压缩的完整会话内容');
     return plan.summary;

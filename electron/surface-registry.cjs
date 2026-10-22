@@ -99,6 +99,9 @@ function createSurfaceRegistry({ WebContentsView, getWindow }) {
       surface.attached = false;
       surface.leaseId = undefined;
     },
+    detachAll() {
+      for (const id of surfaces.keys()) this.hide(id);
+    },
     close(id) {
       const surface = surfaces.get(id);
       if (!surface) return;
@@ -111,7 +114,6 @@ function createSurfaceRegistry({ WebContentsView, getWindow }) {
     },
   };
 }
-
 function configureRemoteContent(contents, surface) {
   contents.setWindowOpenHandler(({ url }) => {
     const source = surface.agentAction ? 'agent' : 'human';
@@ -141,12 +143,10 @@ function configureRemoteContent(contents, surface) {
     surface.events.push({ source: surface.agentAction ? 'agent' : 'human', type: 'navigation', detail: url });
   });
 }
-
 function clearPendingNavigation(surface) {
   surface.pendingNavigation = undefined;
   surface.pendingNavigationUrl = undefined;
 }
-
 async function withAgentAction(contents, surface, action) {
   await markAgentAction(contents, surface);
   try {
@@ -159,27 +159,22 @@ async function withAgentAction(contents, surface, action) {
     await clearAgentAction(contents, surface);
   }
 }
-
 function markAgentAction(contents, surface) {
   surface.agentAction = true;
   return contents.executeJavaScript("window.__4tormActionSource = 'agent'", true);
 }
-
 function clearAgentAction(contents, surface) {
   surface.agentAction = false;
   return contents.executeJavaScript('window.__4tormActionSource = undefined', true);
 }
-
 function requireSurface(surfaces, id) {
   const surface = surfaces.get(id);
   if (!surface) throw new Error('surface not found');
   return surface;
 }
-
 function assertUrl(url) {
   if (!isAllowedUrl(url)) throw new Error('surface URL is not allowed');
 }
-
 function isAllowedUrl(value) {
   try {
     const url = new URL(value);
@@ -188,13 +183,11 @@ function isAllowedUrl(value) {
     return false;
   }
 }
-
 function normalizeBounds(value) {
   const { x, y, width, height } = value || {};
   if (![x, y, width, height].every(Number.isFinite) || width < 1 || height < 1) throw new Error('surface bounds are invalid');
   return { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) };
 }
-
 async function captureSurface(contents) {
   const [image, snapshot] = await Promise.all([
     contents.capturePage(),
@@ -208,7 +201,6 @@ async function captureSurface(contents) {
     targets: snapshot.targets,
   };
 }
-
 const SNAPSHOT_SCRIPT = `(() => {
   const stableDigest = value => { let hash = 0; for (let index = 0; index < value.length; index++) hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0; return Math.abs(hash).toString(16).padStart(10, '0').slice(-10); };
   const targetIdFor = (index, element) => {

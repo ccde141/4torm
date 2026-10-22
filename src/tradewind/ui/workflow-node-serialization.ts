@@ -1,5 +1,5 @@
-import type { Node } from '@xyflow/react';
-import type { WorkflowNode } from '../types';
+import type { Edge, Node } from '@xyflow/react';
+import type { EdgeKind, WorkflowEdge, WorkflowNode } from '../types';
 
 export function serializeWorkflowNode(node: Node): WorkflowNode {
   const data = (node.data ?? {}) as Record<string, unknown>;
@@ -24,4 +24,18 @@ export function deserializeWorkflowNode(node: WorkflowNode): Node {
     height: node.height,
     data: { label: node.label, config: node.config, memo: node.memo ?? '' },
   };
+}
+
+export function serializeWorkflowEdge(edge: Edge): WorkflowEdge {
+  const data = (edge.data ?? {}) as { kind?: EdgeKind; rework?: boolean; sourcePort?: number; targetPort?: number };
+  return {
+    id: edge.id, source: edge.source, target: edge.target,
+    sourcePort: data.sourcePort ?? 0, targetPort: data.targetPort ?? 0,
+    kind: data.kind ?? 'handoff', ...(data.rework === undefined ? {} : { rework: data.rework }),
+  };
+}
+
+export function deserializeWorkflowEdge(edge: WorkflowEdge): Edge {
+  return { id: edge.id, source: edge.source, target: edge.target, type: 'tradewind',
+    data: { kind: edge.kind, rework: edge.rework, sourcePort: edge.sourcePort, targetPort: edge.targetPort } };
 }

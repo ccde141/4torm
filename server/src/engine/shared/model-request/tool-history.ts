@@ -14,7 +14,7 @@ export function restoreTextToolHistory(messages: ContextMessage[]): ContextMessa
       const parsed = parseTextToolResponse(message.content);
       if (parsed.kind === 'tool-call') {
         const next = messages[index + 1];
-        const result = next?.role === 'user' && !next.images?.length
+        const result = next?.role === 'user' && (!next.images?.length || next.toolImages?.length)
           ? parseTextToolResult(next.content) : undefined;
         if (!result || result.name !== parsed.name) return message;
         const id = `text-history-${index}`;
@@ -30,7 +30,7 @@ export function restoreTextToolHistory(messages: ContextMessage[]): ContextMessa
       const result = pairedResults.get(index);
       if (result) {
         return {
-          role: 'tool', toolCallId: result.id, content: result.content, toolOk: result.ok,
+          ...message, role: 'tool', toolCallId: result.id, content: result.content, toolOk: result.ok,
         };
       }
     }
@@ -86,7 +86,7 @@ export function encodeNativeToolHistoryForText(
       const name = names.shift() ?? 'unknown';
       if (!names.length) pending.delete(message.toolCallId ?? '');
       return {
-        role: 'user',
+        ...message, role: 'user',
         content: formatTextToolResult(name, message.content,
           message.toolOk ?? !message.content.startsWith('Error: ')),
       };

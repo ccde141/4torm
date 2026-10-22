@@ -22,6 +22,7 @@ export function registerCycloneChairRoutes(app: FastifyInstance, options: Cyclon
         humanContext(req)) as PreparedCycloneChairChat;
       let stopHB: (() => void) | undefined;
       let sseStarted = false;
+      let failure: unknown;
       try {
         reply.hijack();
         initSSE(reply);
@@ -30,11 +31,15 @@ export function registerCycloneChairRoutes(app: FastifyInstance, options: Cyclon
         pushSSE(reply, { type: 'execution-start', ...prepared.execution });
         await prepared.run(event => pushSSE(reply, event));
       } catch (e) {
+        failure = e;
         if (sseStarted) pushSSE(reply, { type: 'error', message: (e as Error).message });
         else throw e;
       } finally {
-        stopHB?.();
-        if (sseStarted) endSSE(reply);
+        try { await prepared.dispose(failure); }
+        finally {
+          stopHB?.();
+          if (sseStarted && !reply.raw.destroyed && !reply.raw.writableEnded) endSSE(reply);
+        }
       }
       return;
     }

@@ -7,6 +7,7 @@ import {
   workshopBakDir,
 } from './paths.js';
 import { saveSeat } from './seat-store.js';
+import type { CompactionProgress } from '../shared/compaction/index.js';
 
 type ReadyPlan = Extract<SeatCompactionPlan, { ok: true }>;
 
@@ -33,7 +34,10 @@ export async function applySeatCompaction(
   plan: ReadyPlan,
   summary: string,
   preparedArchivePath?: string,
+  signal?: AbortSignal,
+  compaction?: CompactionProgress,
 ): Promise<{ archivePath: string; archivedCount: number; seat: SeatData }> {
+  signal?.throwIfAborted();
   const normalizedSummary = summary.trim();
   if (!normalizedSummary) throw new Error('压缩摘要为空，已保留原上下文');
 
@@ -67,7 +71,8 @@ export async function applySeatCompaction(
       archiveSeq: nextSequence,
       lastCompactAt: new Date().toISOString(),
     },
+    ...(compaction ? { compaction } : {}),
   };
-  await saveSeat(dataDir, workshopId, nextSeat);
+  await saveSeat(dataDir, workshopId, nextSeat, signal);
   return { archivePath, archivedCount: plan.archivedMessages.length, seat: nextSeat };
 }

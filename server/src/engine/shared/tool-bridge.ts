@@ -18,6 +18,7 @@
 import type { ToolDef } from './tool-defs-loader';
 import type { NativeToolCall } from './types';
 import { mapToolParameterSchema } from './tool-parameter-schema.js';
+import type { ToolArguments } from './tool-arguments.js';
 
 export type ProviderFamily = 'openai' | 'anthropic' | 'gemini';
 
@@ -186,21 +187,17 @@ export function makeToolCallAccumulator() {
 // 这里按代价递增四步尝试救回，任一步成功即返回；全败才让上层回填错误。
 
 export type SalvageResult =
-  | { ok: true; args: Record<string, string>; repaired: boolean }
+  | { ok: true; args: ToolArguments; repaired: boolean }
   | { ok: false; reason: string };
 
 const SALVAGE_MAX_LEADING = 96;   // 配平括号前允许的垃圾前缀上限（防把正文当参数）
 const SALVAGE_MAX_TRAILING = 3;   // 配平括号后允许的垃圾后缀上限
 const SALVAGE_LEADING_RE = /^[a-z0-9\s"'`.:/_-]+$/i; // 前缀只允许工具名样式字符
 
-/** 把任意 parse 出的对象值统一成 Record<string,string>（与 react-loop 现有约定一致）。 */
-function coerceArgsRecord(parsed: unknown): Record<string, string> | null {
+/** Only the root must be an object; nested JSON values retain their original types. */
+function coerceArgsRecord(parsed: unknown): ToolArguments | null {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-    out[k] = typeof v === 'string' ? v : JSON.stringify(v);
-  }
-  return out;
+  return parsed as ToolArguments;
 }
 
 /**
@@ -237,7 +234,24 @@ function extractBalancedJson(raw: string): { json: string; start: number; end: n
 
 /** 轻量语法修：去尾逗号（}]前的逗号）。只做保守、无歧义的修复。 */
 function lightSyntaxRepair(s: string): string {
-  return s.replace(/,(\s*[}\]])/g, '$1');
+  let inString = false;
+  let escaped = false;
+  let repaired = '';
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === ',') {
+      let next = i + 1;
+      while (next < s.length && /\s/.test(s[next])) next++;
+      if (s[next] === '}' || s[next] === ']') continue;
+    }
+    repaired += ch;
+  }
+  return repaired;
 }
 
 /** 剥 markdown 代码围栏：```json\n...\n``` 或 ```\n...\n```。 */

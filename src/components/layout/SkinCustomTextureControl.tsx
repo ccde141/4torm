@@ -6,6 +6,7 @@
  */
 
 import React, { useRef, useState } from 'react';
+import { backendUrl } from '../../lib/backend-client';
 import {
   uploadCustomTexture,
   clearCustomTexture,
@@ -84,7 +85,7 @@ const SkinCustomTextureControl: React.FC<Props> = ({ config, onApply, onError })
         <div className="skin-panel__preview-row">
           <div
             className="skin-panel__preview"
-            style={{ backgroundImage: `url(${texture.customImage})` }}
+            style={{ backgroundImage: `url(${backendUrl(texture.customImage!)})` }}
             title="当前自定义底纹"
           />
           <div className="skin-panel__preview-actions">

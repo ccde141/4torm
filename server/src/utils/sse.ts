@@ -3,17 +3,20 @@
  */
 
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { readPublicBrowserOrigin } from '../config/browser-origin.js';
 import { frameworkSseErrorFromUnknown } from '../engine/shared/framework-error-transport.js';
 
 /** Shared browser-origin boundary for ordinary HTTP and hijacked SSE responses. */
-export function isAllowedLocalOrigin(origin: string | undefined): boolean {
+export function isAllowedBrowserOrigin(origin: string | undefined): boolean {
+  const publicOrigin = readPublicBrowserOrigin();
   if (!origin) return false;
   const port = Number.parseInt(process.env.PORT || '3001', 10);
   return origin === 'http://localhost:5173'
     || origin === 'http://127.0.0.1:5173'
     || origin === `https://localhost:${port}`
     || origin === `https://127.0.0.1:${port}`
-    || origin === configuredRendererOrigin();
+    || origin === configuredRendererOrigin()
+    || origin === publicOrigin;
 }
 
 function configuredRendererOrigin(): string | undefined {
@@ -29,19 +32,19 @@ function configuredRendererOrigin(): string | undefined {
   }
 }
 
-export function localCorsOrigin(
+export function browserCorsOrigin(
   origin: string | undefined,
   callback: (error: Error | null, allow: boolean) => void,
 ): void {
-  callback(null, isAllowedLocalOrigin(origin));
+  callback(null, isAllowedBrowserOrigin(origin));
 }
 
 /** CORS headers alone do not stop simple cross-site writes; reject explicit foreign origins. */
-export async function enforceLocalBrowserOrigin(
+export async function enforceBrowserOrigin(
   request: FastifyRequest, reply: FastifyReply,
 ): Promise<void> {
   const origin = request.headers.origin;
-  if (origin && !isAllowedLocalOrigin(origin)) {
+  if (origin && !isAllowedBrowserOrigin(origin)) {
     reply.code(403).send({ error: '来源不受信任', errorCode: 'ORIGIN_NOT_ALLOWED' });
   }
 }
@@ -53,7 +56,7 @@ export function sseResponseHeaders(httpVersionMajor: number, origin?: string): R
     'X-Accel-Buffering': 'no',
   };
   if (httpVersionMajor < 2) headers.Connection = 'keep-alive';
-  if (origin && isAllowedLocalOrigin(origin)) {
+  if (origin && isAllowedBrowserOrigin(origin)) {
     headers['Access-Control-Allow-Origin'] = origin;
     headers['Access-Control-Allow-Credentials'] = 'true';
     headers.Vary = 'Origin';
@@ -65,7 +68,7 @@ export function sseResponseHeaders(httpVersionMajor: number, origin?: string): R
 export function initSSE(reply: FastifyReply): void {
   // reply.hijack() / writeHead 绕过了 @fastify/cors 的 hook，跨 origin 直连
   // （dev 下前端直连 HTTPS/2 后端）会因缺 CORS 头被浏览器拦截 → fetch 抛
-  // Failed to fetch。这里复用普通 HTTP 的本机来源边界，绝不直接回显 Origin。
+  // Failed to fetch。这里复用普通 HTTP 的显式浏览器来源边界，绝不直接回显 Origin。
   const origin = reply.request.headers.origin;
   reply.raw.writeHead(200, sseResponseHeaders(reply.request.raw.httpVersionMajor, origin));
 }

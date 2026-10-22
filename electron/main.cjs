@@ -3,29 +3,31 @@
  *
  * - dev：窗口加载 Vite dev server（http://localhost:5173），/api 由 Vite 代理转发到 Fastify(:3001)。
  * - prod：窗口加载 Fastify 自托管的 dist。
- * - 两种模式都由 Electron 托管 Fastify，并向它传入专用桌面浏览器桥接配置。
+ * - 本机模式由 Electron 托管 Fastify；FOURTORM_BACKEND_URL 指定远程后端时只加载远程页面。
  *   触发条件：打包后（app.isPackaged）或显式 ELECTRON_PROD=1（未打包的生产预览）。
  *
  * 前端业务代码 / fetch / 流式接口均无需改动。
  */
 
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, nativeImage, dialog } = require('electron');
 const { createSurfaceRegistry } = require('./surface-registry.cjs');
 const { createDesktopBrowserBridge, createDesktopBrowserBridgeServer } = require('./desktop-browser-bridge.cjs');
+const { createDesktopBrowserEndpoint } = require('./desktop-browser-endpoint.cjs');
 const { spawn } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
 const path = require('node:path');
 const fs = require('node:fs');
 const { certificatePath, isPinnedLocalCertificate, isServerReady, waitForServer } = require('./transport.cjs');
 const { createServerRecovery } = require('./server-recovery.cjs');
+const { createRendererLifecycle } = require('./renderer-lifecycle.cjs');
+const { resolveBackendMode, prepareBackend } = require('./backend-runtime.cjs');
 
 // 生产模式：打包后必走；未打包时由 ELECTRON_PROD=1 触发生产预览（自托管 dist/）
 const isProd = app.isPackaged || process.env.ELECTRON_PROD === '1';
 const isDev = !isProd;
 const shouldOpenDevTools = isDev && process.env.ELECTRON_OPEN_DEVTOOLS === '1';
-const DEV_URL = process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173';
 const PROD_PORT = parseInt(process.env.PORT || '3001', 10);
-const PROD_URL = process.env.ELECTRON_PROD_URL || `https://localhost:${PROD_PORT}`;
+const backendMode = resolveBackendMode({ isProd });
 const SERVER_URL = `https://localhost:${PROD_PORT}`;
 const CERT_PATH = certificatePath(path.join(__dirname, '..'));
 const SERVER_NAME = process.env.FOURTORM_TLS_SERVERNAME || 'localhost';
@@ -60,7 +62,7 @@ const serverRecovery = createServerRecovery({
 });
 
 app.on('certificate-error', (event, webContents, url, _error, certificate, callback) => {
-  const trusted = webContents === mainWindow?.webContents && isPinnedLocalCertificate({
+  const trusted = !backendMode.remote && webContents === mainWindow?.webContents && isPinnedLocalCertificate({
     url, fingerprint: certificate.fingerprint, certPath: CERT_PATH, port: PROD_PORT,
   });
   if (!trusted) return callback(false);
@@ -70,6 +72,7 @@ app.on('certificate-error', (event, webContents, url, _error, certificate, callb
 
 /** 拉起 Fastify，并把桌面浏览器桥接能力限定为此子进程可见。 */
 function startServer(bridge) {
+  if (backendMode.remote) throw new Error('远程客户端不能启动本机后端');
   if (serverProc) return;
   const serverDir = path.join(__dirname, '..', 'server');
   const tsxCli = path.join(__dirname, '..', 'node_modules', 'tsx', 'dist', 'cli.mjs');
@@ -99,6 +102,7 @@ function startServer(bridge) {
 }
 
 async function ensureServerReady() {
+  if (backendMode.remote) return;
   if (await isServerReady(SERVER_URL, CERT_PATH, SERVER_NAME)) return;
   if (!desktopBridgeConfig) throw new Error('桌面浏览器桥接尚未初始化');
   startServer(desktopBridgeConfig);
@@ -107,12 +111,12 @@ async function ensureServerReady() {
 
 async function startDesktopBrowserBridge() {
   const token = randomBytes(32).toString('hex');
-  const endpoint = `\\\\.\\pipe\\4torm-browser-${process.pid}-${randomBytes(12).toString('hex')}`;
+  const address = createDesktopBrowserEndpoint();
   const bridge = createDesktopBrowserBridge({ token, registry: executionSurfaceRegistry });
-  const server = createDesktopBrowserBridgeServer({ bridge, endpoint });
+  const server = createDesktopBrowserBridgeServer({ bridge, ...address });
   await server.listen();
   desktopBridgeServer = server;
-  return { endpoint, token };
+  return { endpoint: address.endpoint, token };
 }
 
 function createWindow() {
@@ -130,6 +134,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false, // 允许 preload 使用 webUtils.getPathForFile
+      additionalArguments: backendMode.remote ? ['--4torm-remote-client'] : [],
     },
   });
 
@@ -144,10 +149,15 @@ function createWindow() {
     return { action: 'deny' };
   });
 
-  mainWindow.loadURL(isDev ? DEV_URL : PROD_URL);
+  const rendererLifecycle = createRendererLifecycle({
+    app, window: mainWindow, dialog, url: backendMode.url,
+    beforeRecover: () => executionSurfaceRegistry.detachAll(),
+  });
+  void rendererLifecycle.load();
   if (shouldOpenDevTools) mainWindow.webContents.openDevTools({ mode: 'detach' });
 
   mainWindow.on('closed', () => {
+    rendererLifecycle.stop();
     mainWindow = null;
     executionSurfaceRegistry.dispose();
   });
@@ -172,6 +182,7 @@ ipcMain.handle('execution-surface:set-input-enabled', (event, input) => {
 });
 
 function assertMainWindowSender(event) {
+  if (backendMode.remote) throw new Error('远程客户端不提供本机执行窗口');
   if (event.sender !== mainWindow?.webContents) throw new Error('execution surface request came from an unknown renderer');
 }
 
@@ -199,7 +210,7 @@ function parseSurfaceLease(value) {
 if (ownsSingleInstance) {
   app.on('second-instance', () => {
     void (async () => {
-      const recovered = !(await isServerReady(SERVER_URL, CERT_PATH, SERVER_NAME));
+      const recovered = !backendMode.remote && !(await isServerReady(SERVER_URL, CERT_PATH, SERVER_NAME));
       try {
         await ensureServerReady();
         if (!mainWindow) createWindow();
@@ -211,11 +222,14 @@ if (ownsSingleInstance) {
     })();
   });
   app.whenReady().then(async () => {
-    const bridge = await startDesktopBrowserBridge();
-    desktopBridgeConfig = bridge;
-    startServer(bridge);
     try {
-      await waitForServer(SERVER_URL, CERT_PATH, SERVER_NAME);
+      await prepareBackend(backendMode, {
+        startLocal: async () => {
+          desktopBridgeConfig = await startDesktopBrowserBridge();
+          startServer(desktopBridgeConfig);
+        },
+        waitLocal: () => waitForServer(SERVER_URL, CERT_PATH, SERVER_NAME),
+      });
     } catch (e) {
       console.error('[electron]', e.message, '—— 仍尝试加载窗口');
     }

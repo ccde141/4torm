@@ -1,7 +1,7 @@
 import type { ChatMessage, ToolStep } from '../../types';
 import { markObservation } from './stream-retention';
 
-export function appendToolStep(messages: ChatMessage[], messageId: string, tool: string, args: Record<string, string>): ChatMessage[] {
+export function appendToolStep(messages: ChatMessage[], messageId: string, tool: string, args: Record<string, unknown>): ChatMessage[] {
   return messages.map(message => message.id === messageId
     ? { ...message, toolSteps: [...(message.toolSteps || []), { tool, args, status: 'running' }] }
     : message);
@@ -12,7 +12,7 @@ export function finishLatestToolStep(
   messageId: string,
   result: string,
   ok: boolean,
-  meta?: { before?: string; pendingAutomation?: ToolStep['pendingAutomation']; workflowExecution?: ToolStep['workflowExecution'] },
+  meta?: { before?: string; pendingAutomation?: ToolStep['pendingAutomation']; workflowExecution?: ToolStep['workflowExecution']; toolImages?: ToolStep['toolImages'] },
 ): ChatMessage[] {
   return messages.map(message => {
     if (message.id !== messageId || !message.toolSteps) return message;
@@ -24,6 +24,7 @@ export function finishLatestToolStep(
       ...(typeof meta?.before === 'string' ? { diff: { before: meta.before } } : {}),
       ...(meta?.pendingAutomation ? { pendingAutomation: meta.pendingAutomation } : {}),
       ...(meta?.workflowExecution ? { workflowExecution: meta.workflowExecution } : {}),
+      ...(meta?.toolImages?.length ? { toolImages: meta.toolImages } : {}),
     };
     return markObservation({ ...message, toolSteps: steps });
   });

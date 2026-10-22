@@ -33,6 +33,9 @@ export type EdgeKind = 'handoff' | 'note';
  */
 export type WorkflowMode = 'manual' | 'auto';
 
+/** 图的编排语义，与运行时 manual / auto 独立；旧图缺省为 strict。 */
+export type WorkflowOrchestration = 'strict' | 'handoff';
+
 /** 单个节点的画布序列化 */
 export interface WorkflowNode {
   /** 节点实例 ID（画布唯一） */
@@ -84,6 +87,7 @@ export interface WorkflowEdge {
 
 /** 完整工作流图 */
 export interface WorkflowGraph {
+  orchestration?: WorkflowOrchestration;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
 }

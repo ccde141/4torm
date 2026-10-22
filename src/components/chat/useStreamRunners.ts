@@ -1,5 +1,7 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useState } from 'react';
 import type { ChatMessage } from '../../types';
+import type { MonsoonBrowserEvent } from '../../engine/chat/sse-events';
+import { reduceCompactionActivity, type CompactionActivity } from '../common/compaction-activity';
 
 /** 单条流的运行态。归属 sessionId，不归属当前界面。 */
 interface Runner {
@@ -35,6 +37,16 @@ export function useStreamRunners(
   setStreaming: (v: boolean) => void,
 ) {
   const runners = useRef(new Map<string, Runner>());
+  const [compactions, setCompactions] = useState<Record<string, CompactionActivity | undefined>>({});
+  const isRunning = useCallback((sessionId: string) => runners.current.has(sessionId), []);
+  const onCompaction = useCallback((sessionId: string, event: MonsoonBrowserEvent) => {
+    if (!['compact-start', 'compact-done', 'compact-failed', 'input-ready', 'input-accepted', 'error', 'aborted'].includes(event.type)) return;
+    setCompactions(current => {
+      const next = reduceCompactionActivity(current[sessionId], event.type === 'input-ready'
+        ? { type: 'input-accepted' } : event);
+      return next === current[sessionId] ? current : { ...current, [sessionId]: next };
+    });
+  }, []);
 
   /** 流的每次更新：写进 runner 缓冲；仅当它正是当前激活会话时才刷新界面。 */
   const emit = useCallback((sessionId: string, msgs: ChatMessage[]) => {
@@ -75,9 +87,10 @@ export function useStreamRunners(
     runners.current.delete(sessionId);
     r?.markReady();
     r?.settle(completed && !r.abandoned && !r.userStopped);
+    onCompaction(sessionId, { type: 'aborted' });
     if (sessionId === getActiveId()) setStreaming(false);
     return r?.abandoned ?? false;
-  }, [getActiveId, setStreaming]);
+  }, [getActiveId, setStreaming, onCompaction]);
 
   /** 把某会话的流转入后台（切走时调），并触发超额淘汰。 */
   const background = useCallback((sessionId: string) => {
@@ -104,5 +117,5 @@ export function useStreamRunners(
     r.abort();
   }, []);
 
-  return { runners, emit, register, finalize, background, reconnect, kill };
+  return { runners, emit, register, finalize, background, reconnect, kill, isRunning, compactions, onCompaction };
 }

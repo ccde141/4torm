@@ -7,6 +7,8 @@
  * id 用自增计数器（e1/e2/…）而非时间戳随机串：单写者下足够唯一，且可确定性测试。
  */
 
+import { selectHandoffRoute, handoffError, type HandoffRoute, type HandoffSelection } from '../foundation/handoff-target.js';
+
 /** 一条交接条目：纯文本，不带键 */
 export interface DraftEntry {
   id: string;
@@ -21,6 +23,19 @@ const MAX_TEXT = 4000;
 export class EnvelopeDraft {
   private readonly entries: DraftEntry[] = [];
   private seq = 0;
+  private selected?: HandoffSelection;
+  constructor(private readonly routes?: readonly HandoffRoute[]) {}
+
+  getSelectedTarget(): HandoffSelection | undefined { return this.selected; }
+
+  complete(note?: string, selection?: HandoffSelection): string {
+    if (this.routes) {
+      if (this.selected) throw handoffError('TRADEWIND_HANDOFF_ALREADY_SEALED', '本次激活已经封口，不能再次派发');
+      const selected = selectHandoffRoute(this.routes, selection);
+      this.selected = { edgeId: selected.edgeId, targetNodeId: selected.targetNodeId };
+    }
+    return this.seal(note);
+  }
 
   /** 增：加一条条目。返回新条目；文本空白或超额返回 null（由调用方转成工具反馈）。 */
   add(text: string): DraftEntry | null {
@@ -98,8 +113,8 @@ export const ENVELOPE_TOOL_NAMES = ['envelope_add', 'envelope_remove', 'envelope
  * 且仅 native 成立：text 循环无可靠终结信号，保持"一轮→最后文本下发"现状。
  * 自动模式 vs 手动模式在此层无差异——差异退到编排层（native-only、有无会议室/暂停点）。
  */
-export function isEnvelopeRound(source: string, native: boolean | undefined): boolean {
-  return native === true && source === 'envelope';
+export function isEnvelopeRound(source: string, native: boolean | undefined, handoff = false): boolean {
+  return (native === true || handoff) && source === 'envelope';
 }
 
 /** 一轮被中断时的处置。 */
@@ -169,7 +184,9 @@ export function execEnvelopeToolOutcome(
     case 'envelope_list':
       return { result: `当前信封：\n${draft.summarize()}`, ok: true };
     case COMPLETE_TASK_TOOL:
-      return { result: draft.seal(args.note), ok: true };
+      try {
+        return { result: draft.complete(args.note, { edgeId: args.edgeId, targetNodeId: args.targetNodeId }), ok: true };
+      } catch (error) { return { result: (error as Error).message, ok: false }; }
     default:
       return { result: `未知信封工具：${tool}`, ok: false };
   }

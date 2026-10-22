@@ -1,0 +1,33 @@
+.cy-seat-presence {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-width: 0;
+  transition: grid-template-rows 180ms var(--ease-collapse),
+    opacity 180ms var(--ease-collapse), transform 180ms var(--ease-collapse);
+}
+
+.cy-seat-presence__body { min-width: 0; min-height: 0; }
+.cy-seat-presence__body > .cy-seat-card { height: 100%; box-sizing: border-box; }
+
+.cy-seat-presence--entering {
+  animation: cy-seat-presence-enter 280ms var(--ease-out-expo) both;
+}
+.cy-seat-presence--entering .cy-seat-card { animation: none; }
+
+.cy-seat-presence--leaving {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-8px) scale(.98);
+  pointer-events: none;
+}
+.cy-seat-presence--leaving .cy-seat-presence__body { overflow: hidden; }
+
+@keyframes cy-seat-presence-enter {
+  from { opacity: 0; transform: translateY(12px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cy-seat-presence { transition: none; }
+  .cy-seat-presence--entering { animation: none; }
+}

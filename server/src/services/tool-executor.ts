@@ -12,22 +12,12 @@ import { skillDir, toolExecutorDir } from './data-paths.js';
 import { FRAMEWORK_TOOLS, findFrameworkTool } from '../tools/framework/catalog.js';
 import type { ToolDefinition } from '../tools/tool-definition.js';
 import type { ToolExecutionMode } from '../tools/tool-definition.js';
-import { loadAgent } from '../engine/shared/agent-loader.js';
-import { loadAgentToolBindings, type AgentToolBinding } from '../engine/shared/tool-defs-loader.js';
-import { FrameworkError } from '../engine/shared/framework-error.js';
+import { assertAgentToolAccess } from '../engine/shared/tool-authorization.js';
 import { inspectToolNames } from '../tools/tool-name-policy.js';
 import type { McpToolOutcome } from '../engine/shared/mcp-types.js';
+import { legacyToolArguments, type ToolArguments } from '../engine/shared/tool-arguments.js';
 
-export class ToolPermissionError extends FrameworkError {
-  constructor(tool: string, agentId: string) {
-    super({
-      code: 'TOOL_PERMISSION_DENIED', kind: 'permission',
-      message: `Agent ${agentId} 未获准使用工具：${tool}`,
-      source: 'tool.executor', retryable: false,
-    });
-    this.name = 'ToolPermissionError';
-  }
-}
+export { ToolPermissionError } from '../engine/shared/tool-authorization.js';
 
 // 热重载缓存：文件路径 → { mtime, module }
 const modCache = new Map<string, { mtime: number; mod: any }>();
@@ -96,7 +86,7 @@ export function resolveToolName(raw: string, known: string[]): string | null {
 export async function executeTool(
   dataDir: string,
   tool: string,
-  args: Record<string, string>,
+  args: ToolArguments,
   agentId: string,
   workspaceDirOverride?: string,
   sandboxLevelOverride?: SandboxLevelInput,
@@ -116,10 +106,11 @@ export async function executeTool(
 export async function executeToolOutcome(
   ...params: Parameters<typeof executeTool>
 ): Promise<McpToolOutcome> {
-  const [dataDir, tool, args, agentId, workspaceDirOverride, sandboxLevelOverride,
+  const [dataDir, tool, rawArgs, agentId, workspaceDirOverride, sandboxLevelOverride,
     onMeta, signal, onOutput] = params;
   if (signal?.aborted) throw createAbortError();
-  if (tool.startsWith('mcp:')) return executeMcpToolOutcome(dataDir, tool, args, agentId);
+  if (tool.startsWith('mcp:')) return executeMcpToolOutcome(dataDir, tool, rawArgs, agentId, signal);
+  const args = legacyToolArguments(rawArgs);
   const resolved = await resolveToolDefinition(dataDir, tool);
   if (!resolved) {
     // 未知工具不是系统故障，而是模型用错了工具名（或复读了协议示例占位符）。
@@ -154,12 +145,13 @@ export async function executeToolOutcome(
 }
 
 async function executeMcpToolOutcome(
-  dataDir: string, tool: string, args: Record<string, string>, agentId: string,
+  dataDir: string, tool: string, args: ToolArguments, agentId: string, signal?: AbortSignal,
 ): Promise<McpToolOutcome> {
   await assertAgentToolAccess(dataDir, agentId, tool);
   const { callMcpToolOutcome } = await import('../engine/shared/mcp-manager');
-  try { return await callMcpToolOutcome(tool, args); }
+  try { return await callMcpToolOutcome(tool, args, { agentId, signal }); }
   catch (error) {
+    if (signal?.aborted || (error as Error).name === 'AbortError') throw error;
     return { result: `（MCP 工具调用失败：${tool}）${(error as Error).message}`, ok: false };
   }
 }
@@ -169,29 +161,6 @@ export async function getToolExecutionMode(dataDir: string, tool: string): Promi
   if (tool.startsWith('mcp:')) return 'sync';
   const resolved = await resolveToolDefinition(dataDir, tool);
   return resolved?.toolDef.executionMode === 'detachable' ? 'detachable' : 'sync';
-}
-
-async function assertAgentToolAccess(
-  dataDir: string, agentId: string, tool: string, args?: Record<string, string>,
-): Promise<AgentToolBinding | undefined> {
-  if (!agentId) {
-    if (tool === 'use_skill') throw new ToolPermissionError(tool, '未指定');
-    return undefined;
-  }
-  const agent = await loadAgent(dataDir, agentId);
-  if (!agent) throw new ToolPermissionError(tool, agentId);
-  if (tool === 'use_skill') {
-    if (!args?.skill) throw new Error('缺少 skill 参数');
-    if (!agent.skills.includes(args.skill)) {
-      throw new ToolPermissionError(`${tool}:${args.skill}`, agentId);
-    }
-  }
-  const allowed = await loadAgentToolBindings(dataDir, agent.tools, agent.skills, agent.toolMode);
-  const binding = allowed.find(item => item.definition.name === tool);
-  if (!binding || (tool.startsWith('mcp:') && binding.source !== 'mcp')) {
-    throw new ToolPermissionError(tool, agentId);
-  }
-  return binding;
 }
 
 async function resolveToolDefinition(dataDir: string, tool: string) {

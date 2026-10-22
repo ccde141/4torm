@@ -18,6 +18,8 @@ export interface TideTaskRepository {
   read(): Promise<TideTaskSnapshot>;
   get(taskId: string): Promise<TideTask | undefined>;
   upsert(task: TideTask): Promise<void>;
+  mutate(taskId: string, change: (current: TideTask) => TideTask): Promise<TideTask | undefined>;
+  reschedule(taskId: string, expected: { schedule: string; nextRun?: string }, nextRun: string): Promise<boolean>;
   remove(taskId: string): Promise<boolean>;
 }
 
@@ -71,6 +73,45 @@ export class FileTideTaskRepository implements TideTaskRepository {
       if (tasks.length === current.tasks.length) return false;
       await this.write(tasks);
       if (removed) this.changes?.publish({ scope: 'task', taskId, agentId: removed.agentId });
+      return true;
+    });
+  }
+
+  /** Read, change and persist under the same file lock; never resurrect a removed task. */
+  async mutate(taskId: string, change: (current: TideTask) => TideTask): Promise<TideTask | undefined> {
+    return serializeFile(this.file, async () => {
+      const current = await this.read();
+      const index = current.tasks.findIndex(task => task.id === taskId);
+      if (index < 0) return undefined;
+      const before = current.tasks[index];
+      const changed = parseTideTask(change(structuredClone(before)));
+      if (changed.id !== taskId) throw frameworkError({
+        code: 'TIDE_TASK_ID_CHANGED', kind: 'validation', message: '潮汐任务更新不能更改任务 ID',
+        source: 'tide.repository', retryable: false,
+      });
+      if (JSON.stringify(before) !== JSON.stringify(changed)) {
+        current.tasks[index] = changed;
+        await this.write(current.tasks);
+        this.changes?.publish({ scope: 'task', taskId, agentId: changed.agentId });
+      }
+      return structuredClone(changed);
+    });
+  }
+
+  /** Advance only the observed schedule; never overwrite a concurrent task edit with a stale snapshot. */
+  async reschedule(taskId: string, expected: { schedule: string; nextRun?: string }, nextRun: string): Promise<boolean> {
+    if (!Number.isFinite(Date.parse(nextRun))) throw frameworkError({
+      code: 'TIDE_NEXT_RUN_INVALID', kind: 'validation', message: '潮汐下次触发时间无效',
+      source: 'tide.repository', retryable: false,
+    });
+    return serializeFile(this.file, async () => {
+      const current = await this.read();
+      const task = current.tasks.find(item => item.id === taskId);
+      if (!task?.enabled || task.repeatCount === 0 || task.schedule !== expected.schedule
+        || task.nextRun !== expected.nextRun) return false;
+      task.nextRun = nextRun;
+      await this.write(current.tasks);
+      this.changes?.publish({ scope: 'task', taskId, agentId: task.agentId });
       return true;
     });
   }

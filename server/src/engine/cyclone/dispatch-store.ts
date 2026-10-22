@@ -12,7 +12,7 @@ import {
 export type DispatchStatus = 'queued' | 'running' | 'awaiting_human' | 'completed' | 'failed';
 export type DispatchReadState = 'unread' | 'read';
 export type DispatchDecisionState = 'pending' | 'included' | 'dismissed' | 'expired' | 'not_applicable';
-export type DispatchSourceKind = 'room' | 'seat';
+export type DispatchSourceKind = 'room' | 'seat' | 'supervisor';
 export type DispatchReceiptState = 'pending' | 'delivered';
 export type DispatchActivityPhase = 'waiting-agent' | 'llm-waiting' | 'model-output' | 'tool-preparing' | 'tool-exec';
 
@@ -41,6 +41,12 @@ export interface CycloneDispatch {
   targetSeatTitle: string;
   task: string;
   status: DispatchStatus;
+  /** Admission is distinct from execution: a claimed task may run beyond this deadline. */
+  deliveryDeferred?: boolean;
+  deliveryReadyAt?: string;
+  admissionDeadlineAt?: string;
+  acceptedAt?: string;
+  delivered?: boolean;
   activity?: DispatchActivity;
   readState: DispatchReadState;
   decisionState: DispatchDecisionState;
@@ -170,7 +176,10 @@ export async function createDispatch(dataDir: string, input: NewDispatch): Promi
       id: genId('dispatch'),
       status: 'queued',
       readState: 'unread',
-      decisionState: input.sourceKind === 'seat' ? 'not_applicable' : 'pending',
+      decisionState: (input.sourceKind ?? 'room') !== 'room' ? 'not_applicable' : 'pending',
+      ...(input.deliveryDeferred ? {} : { deliveryReadyAt: now,
+        admissionDeadlineAt: new Date(Date.parse(now) + 30_000).toISOString() }),
+      delivered: false,
       createdAt: now,
       updatedAt: now,
     };
@@ -194,10 +203,27 @@ export async function updateDispatch(
   dispatchId: string,
   patch: Partial<CycloneDispatch>,
 ): Promise<CycloneDispatch | null> {
+  return mutateDispatch(dataDir, workshopId, dispatchId, current => {
+    // A stale queue/executor snapshot can never resurrect a terminal delivery.
+    if (['failed', 'completed'].includes(current.status) && patch.status
+      && patch.status !== current.status) return null;
+    if (current.errorCode === 'CYCLONE_TARGET_BUSY' && current.delivered === false
+      && Object.keys(patch).some(key => !['readState', 'decisionState', 'receiptState'].includes(key))) return null;
+    return { ...current, ...patch };
+  });
+}
+
+/** Admission expiry and claim share this per-record atomic mutation queue. */
+export async function mutateDispatch(
+  dataDir: string, workshopId: string, dispatchId: string,
+  mutate: (current: CycloneDispatch) => CycloneDispatch | null,
+): Promise<CycloneDispatch | null> {
   return serializeMutation(mutationKey(dataDir, workshopId, dispatchId), async () => {
     const current = await loadDispatch(dataDir, workshopId, dispatchId);
     if (!current) return null;
-    const updated = { ...current, ...patch, id: current.id, workshopId, updatedAt: new Date().toISOString() };
+    const next = mutate(current);
+    if (!next) return current;
+    const updated = { ...next, id: current.id, workshopId, updatedAt: new Date().toISOString() };
     await writeDispatch(dataDir, updated);
     if (current.status !== updated.status || current.readState !== updated.readState
       || current.decisionState !== updated.decisionState
@@ -226,7 +252,7 @@ export async function listRoomDispatches(
   roomId: string,
 ): Promise<CycloneDispatch[]> {
   return (await listWorkshopDispatches(dataDir, workshopId))
-    .filter(item => item.sourceKind !== 'seat' && item.sourceRoomId === roomId);
+    .filter(item => (item.sourceKind ?? 'room') === 'room' && item.sourceRoomId === roomId);
 }
 
 export async function expireDispatchDecisions(

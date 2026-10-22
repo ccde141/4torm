@@ -1,10 +1,11 @@
+import { backendFetch } from '../lib/backend-client';
 import { readJson, readText } from '../api/storage';
 import type { SkillMeta } from '../types';
 
 let cache: SkillMeta[] | null = null;
 
 export async function listSkills(): Promise<SkillMeta[]> {
-  const res = await fetch('/api/skills/list');
+  const res = await backendFetch('/api/skills/list');
   if (!res.ok) throw new Error('获取技能列表失败');
   cache = await res.json();
   return cache!;
@@ -24,7 +25,7 @@ export async function readSkillToolDefs(skillId: string): Promise<Array<{ name: 
 }
 
 export async function createSkill(skillId: string, meta: SkillMeta, skillMd: string): Promise<void> {
-  const res = await fetch('/api/skills/create', {
+  const res = await backendFetch('/api/skills/create', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: skillId, meta, content: skillMd }),
@@ -37,7 +38,7 @@ export async function createSkill(skillId: string, meta: SkillMeta, skillMd: str
 }
 
 export async function deleteSkill(skillId: string): Promise<void> {
-  const res = await fetch(`/api/skills/${encodeURIComponent(skillId)}`, { method: 'DELETE' });
+  const res = await backendFetch(`/api/skills/${encodeURIComponent(skillId)}`, { method: 'DELETE' });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `删除技能失败: ${res.status}`);

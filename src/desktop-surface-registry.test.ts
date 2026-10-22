@@ -13,6 +13,7 @@ const { createSurfaceRegistry } = require('../electron/surface-registry.cjs') as
     show(id: string, bounds: unknown, leaseId?: string): void;
     setInputEnabled(id: string, enabled: boolean): void;
     hide(id: string, leaseId?: string): void;
+    detachAll(): void;
     close(id: string): void;
   };
 };
@@ -23,13 +24,14 @@ function createRegistry() {
   const views: Array<{ options: unknown; webContents: { loadURL(url: string): Promise<void>; close(): void; setWindowOpenHandler(handler: (details: { url: string }) => { action: string }): void; setIgnoreMouseEvents(enabled: boolean): void; on(event: string, listener: (input: { preventDefault(): void }) => void): void; capturePage(): Promise<{ toPNG(): Buffer }>; executeJavaScript(script?: string): Promise<unknown>; getTitle(): string; getURL(): string }; setBounds(bounds: unknown): void }> = [];
   const attached: unknown[] = [];
   const removed: unknown[] = [];
+  const closed: unknown[] = [];
   const ignoredMouseEvents: boolean[] = [];
   const inputHandlers: Array<(input: { preventDefault(): void }) => void> = [];
   const registry = createSurfaceRegistry({
     WebContentsView: class {
       webContents = {
         loadURL: async (url: string) => { currentUrl = url; },
-        close: () => undefined,
+        close: () => { closed.push(this); },
         setWindowOpenHandler: (handler: (details: { url: string }) => { action: string }) => { windowOpenHandler = handler; },
         setIgnoreMouseEvents: (enabled: boolean) => ignoredMouseEvents.push(enabled),
         on: (_event: string, listener: (input: { preventDefault(): void }) => void) => inputHandlers.push(listener),
@@ -48,8 +50,31 @@ function createRegistry() {
     },
     getWindow: () => ({ contentView: { addChildView: (view: unknown) => attached.push(view), removeChildView: (view: unknown) => removed.push(view) } }),
   });
-  return { registry, views, attached, removed, ignoredMouseEvents, inputHandlers };
+  return { registry, views, attached, removed, closed, ignoredMouseEvents, inputHandlers };
 }
+
+test('desktop recovery detaches native views without closing their browser executions', async () => {
+  const { registry, attached, removed, closed } = createRegistry();
+  await registry.create('exec-a', 'https://example.test');
+  await registry.create('exec-b', 'https://example.test');
+  registry.show('exec-a', { x: 0, y: 0, width: 10, height: 10 }, 'old-view');
+  registry.show('exec-b', { x: 0, y: 0, width: 10, height: 10 }, 'other-view');
+
+  registry.detachAll();
+  registry.detachAll();
+
+  assert.equal(removed.length, 2, 'detaching is idempotent');
+  assert.equal(closed.length, 0, 'backend-owned browsers must remain usable');
+  assert.equal((await registry.inspect('exec-a')).title, 'Surface title');
+  registry.show('exec-a', { x: 0, y: 0, width: 10, height: 10 }, 'new-view');
+  assert.equal(attached.length, 3, 'the recovered UI can attach the existing browser again');
+  registry.hide('exec-a', 'old-view');
+  assert.equal(removed.length, 2, 'cleanup from the old renderer cannot hide the new view');
+  registry.hide('exec-a', 'new-view');
+  assert.equal(removed.length, 3);
+  registry.close('exec-a');
+  assert.equal(closed.length, 1, 'explicit execution close still owns browser destruction');
+});
 
 test('desktop registry creates an isolated and unprivileged web surface', async () => {
   const { registry, views } = createRegistry();
@@ -169,12 +194,15 @@ test('desktop bridge exposes bounded surface controls while the main process val
 
 test('native observation mounts the real surface for both control modes', () => {
   const view = fs.readFileSync('src/components/chat/NativeObservationView.tsx', 'utf8');
+  const viewport = fs.readFileSync('src/components/chat/ExecutionSurfaceViewport.tsx', 'utf8');
   const observationHook = fs.readFileSync('src/components/chat/useVisualObservation.ts', 'utf8');
 
   assert.match(view, /presentation !== 'hidden'/);
   assert.match(view, /presentation !== 'external-visible'/);
   assert.match(view, /setInputEnabled\(observationId, humanControlled\)/);
-  assert.match(view, /window\.desktop \? null/);
+  assert.match(view, /const desktopSurface = getDesktopExecutionSurface\(\)/);
+  assert.match(view, /desktopSurface \? null : <img/);
+  assert.match(viewport, /shouldUseNativeExecutionSurface\(item, Boolean\(getDesktopExecutionSurface\(\)\)\)/);
   assert.match(view, /useVisualObservation/);
   assert.match(view, /refreshActiveObservation: true/);
   assert.match(view, /isActiveObservationStatus\(currentItem\.status\)/);

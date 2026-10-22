@@ -1,3 +1,4 @@
+import { prepareCycloneExecution } from '../application/execution-preparation.js';
 import { loadSeat, tryAcquireSeatLock } from '../../../engine/cyclone/seat-store.js';
 import { generateJoinSpeech } from '../../../engine/cyclone/seat-summary.js';
 import { beginExternalSeatActivity } from '../../../engine/cyclone/seat-activity.js';
@@ -48,9 +49,9 @@ export function createCycloneRoomIntroductionPort(
       phase: 'room-intro',
     });
     changes?.publish(input.workshopId, 'activity', input.roomId);
-    return { execution, run: onEvent => runIntroduction(
+    return prepareCycloneExecution(execution, commands, onEvent => runIntroduction(
       dataDir, input, room, execution, commands, executions, runtime, onEvent, changes,
-    ) };
+    ), () => changes?.publish(input.workshopId, 'activity', input.roomId));
   } };
 }
 

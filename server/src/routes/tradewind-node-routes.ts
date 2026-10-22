@@ -3,6 +3,7 @@ import { queryTradewind, type TradewindRouteOptions } from './tradewind-route-su
 import { humanContext } from './collaboration-context.js';
 import { openTradewindStream } from './tradewind-stream-response.js';
 import type { PreparedTradewindEventStream } from '../modules/tradewind/public.js';
+import { tradewindReadIdentity } from './tradewind-read-identity.js';
 
 export async function registerTradewindNodeRoutes(
   app: FastifyInstance,
@@ -20,7 +21,7 @@ export async function registerTradewindNodeRoutes(
   /** GET /chat/:nodeId/status — 节点对话状态 */
   app.get('/chat/:nodeId/status', async (req, reply) => {
     const { nodeId } = req.params as { nodeId: string };
-    return reply.send(await queryTradewind(options, 'readNodeStatus', { nodeId }, req));
+    return reply.send(await queryTradewind(options, 'readNodeStatus', { nodeId, ...tradewindReadIdentity(req.query) }, req));
   });
 
   /**
@@ -31,7 +32,7 @@ export async function registerTradewindNodeRoutes(
    */
   app.get('/chat/:nodeId/snapshot', async (req, reply) => {
     const { nodeId } = req.params as { nodeId: string };
-    return reply.send(await queryTradewind(options, 'readNodeSnapshot', { nodeId }, req));
+    return reply.send(await queryTradewind(options, 'readNodeSnapshot', { nodeId, ...tradewindReadIdentity(req.query) }, req));
   });
 
 }

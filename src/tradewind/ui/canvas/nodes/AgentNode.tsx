@@ -13,6 +13,8 @@ export function AgentNode({ id, data, selected }: NodeProps) {
   const label = (data as any)?.label ?? 'Agent';
   const memo = (data as any)?.memo ?? '';
   const running = !!(window as any).__tw_running;
+  const workflowId = typeof data.workflowId === 'string' ? data.workflowId : null;
+  const executionId = typeof data.executionId === 'string' ? data.executionId : null;
 
   // 订阅节点状态：busy（蓝色闪）/ envelopePending（琥珀光环）
   const [status, setStatus] = useState<{ busy: boolean; envelopePending: boolean }>({ busy: false, envelopePending: false });
@@ -38,7 +40,7 @@ export function AgentNode({ id, data, selected }: NodeProps) {
 
   useEffect(() => {
     const handleEvent = (event: { nodeId?: string; type?: string; outcome?: NodeTerminalOutcome }) => {
-      const feedback = feedbackFromNodeEvent(event, id);
+      const feedback = feedbackFromNodeEvent(event, id, { workflowId, executionId });
       if (feedback === 'completed') setJustDone(true);
       if (feedback === 'stopped' || feedback === 'error') {
         setJustDone(false);
@@ -47,7 +49,7 @@ export function AgentNode({ id, data, selected }: NodeProps) {
     };
     subscribe(id, handleEvent);
     return () => unsubscribe(id, handleEvent);
-  }, [id]);
+  }, [id, workflowId, executionId]);
 
   const openChat = (e: React.MouseEvent) => {
     e.stopPropagation();

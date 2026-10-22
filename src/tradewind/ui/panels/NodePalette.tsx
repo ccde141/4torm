@@ -2,10 +2,10 @@
  * 节点拖拽面板 — 从这里拖出节点到画布
  */
 
-import { CANVAS_NODE_ITEMS } from '../canvas/context-menu-model';
+import { nodeItemsForMode } from '../canvas/context-menu-model';
 import { useLocale } from '../../../i18n/LocaleContext';
 
-export function NodePalette() {
+export function NodePalette({ orchestration = 'strict' }: { orchestration?: 'strict' | 'handoff' }) {
   const { t } = useLocale();
   const onDragStart = (event: React.DragEvent, type: string) => {
     event.dataTransfer.setData('application/tradewind-node', type);
@@ -16,7 +16,7 @@ export function NodePalette() {
     <div className="tw-palette">
       <div className="tw-palette__title">{t('tradewind.canvas.palette.nodes')}</div>
       <div className="tw-palette__items">
-        {CANVAS_NODE_ITEMS.map((item) => (
+        {nodeItemsForMode(orchestration).map((item) => (
           <div
             key={item.type}
             className="tw-palette__item"

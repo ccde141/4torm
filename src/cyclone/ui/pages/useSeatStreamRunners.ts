@@ -9,7 +9,8 @@
  *
  * 与季风差异：季风累积 ChatMessage[]；气旋累积 Live（blocks/text/phase/ask）+ 乐观用户消息。
  */
-import { useRef, useCallback, useMemo } from 'react';
+import { backendFetch } from '../../../lib/backend-client';
+import { useRef, useCallback, useLayoutEffect, useMemo } from 'react';
 import { streamUrl } from '../../../lib/apiBase';
 import type { DisplayMessage } from './messageDisplay';
 import { readCycloneSSE } from './cyclone-sse';
@@ -44,7 +45,7 @@ interface SeatRunner {
 const MAX_BG = 3;
 
 async function streamSSE(path: string, body: Record<string, unknown>, onEvent: (ev: any) => void, signal: AbortSignal, locale: Locale): Promise<void> {
-  const res = await fetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+  const res = await backendFetch(streamUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
   if (!res.ok) throw await errorFromResponse(res);
   await readCycloneSSE(res, onEvent, signal, locale === 'en-US' ? {
     missingBody: 'The SSE response does not contain a data stream.',
@@ -68,7 +69,7 @@ export interface StartStreamOpts {
 /** 排队消息上限（与 QueuedChips MAX_QUEUE 一致）。 */
 const MAX_QUEUE = 3;
 
-export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, locale: Locale = 'zh-CN') {
+export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, locale: Locale = 'zh-CN', scope?: string) {
   const localeRef = useRef(locale);
   localeRef.current = locale;
   const runners = useRef(new Map<string, SeatRunner>());
@@ -77,6 +78,14 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
   const queues = useRef(new Map<string, string[]>());
   /** seatId → 输入框草稿。同样独立存活，切走/重挂不丢未发文本（仅内存，硬退出不留）。 */
   const drafts = useRef(new Map<string, string>());
+  const currentScope = useRef(scope);
+  useLayoutEffect(() => {
+    if (currentScope.current === scope) return;
+    // 只清本地作用域；旧请求仍由自己的运行身份收尾，不中止其他工作室的工作。
+    runners.current.clear(); queues.current.clear(); drafts.current.clear();
+    currentScope.current = scope;
+    listeners.current.forEach(set => set.forEach(listener => listener()));
+  }, [scope]);
 
   const notify = useCallback((seatId: string) => {
     listeners.current.get(seatId)?.forEach(cb => cb());
@@ -90,11 +99,13 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
     return () => { set!.delete(cb); if (set!.size === 0) listeners.current.delete(seatId); };
   }, []);
 
-  const getRunner = useCallback((seatId: string): SeatRunner | undefined => runners.current.get(seatId), []);
+  const getRunner = useCallback((seatId: string): SeatRunner | undefined =>
+    currentScope.current === scope ? runners.current.get(seatId) : undefined, [scope]);
 
   // ── 消息队列：运行期发送先入队，本轮结束后由 SeatChat done-effect 逐条出队 ──
   /** 当前队列（只读快照引用；chips 渲染用）。 */
-  const getQueue = useCallback((seatId: string): string[] => queues.current.get(seatId) ?? [], []);
+  const getQueue = useCallback((seatId: string): string[] =>
+    currentScope.current === scope ? queues.current.get(seatId) ?? [] : [], [scope]);
   /** 入队一条；满（≥MAX_QUEUE）返回 false。 */
   const enqueue = useCallback((seatId: string, text: string): boolean => {
     let q = queues.current.get(seatId);
@@ -130,7 +141,8 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
   }, [notify]);
 
   // ── 输入框草稿：切走/重挂保留未发文本（内存级） ──
-  const getDraft = useCallback((seatId: string): string => drafts.current.get(seatId) ?? '', []);
+  const getDraft = useCallback((seatId: string): string =>
+    currentScope.current === scope ? drafts.current.get(seatId) ?? '' : '', [scope]);
   const setDraft = useCallback((seatId: string, text: string) => {
     if (text) drafts.current.set(seatId, text); else drafts.current.delete(seatId);
   }, []);
@@ -250,6 +262,7 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
               runner.runId = ev.runId;
               if (runner.abortRequested) requestAbort(seatId, runner);
             }
+            if (ev.type === 'error') runner.outcome = 'failed';
             applySeatEvent(ev, runner.live, localeRef.current);
             if (HIGH_FREQ.has(ev.type)) scheduleNotify(); else flushNotify();
           },

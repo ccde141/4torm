@@ -1,3 +1,4 @@
+import { backendFetch } from '../../lib/backend-client';
 const statuses = new Set([
   'queued', 'running', 'waiting', 'completed', 'aborted', 'failed', 'crashed',
 ]);
@@ -13,7 +14,7 @@ export async function reconcileMonsoonInterruption(
   sessionId: string,
   runId: string,
   fallback: string,
-  request: typeof fetch = fetch,
+  request: typeof fetch = backendFetch,
 ): Promise<string> {
   try {
     const probe = await inspectMonsoonRun(sessionId, runId, request);
@@ -23,7 +24,7 @@ export async function reconcileMonsoonInterruption(
 }
 
 export async function inspectMonsoonRun(
-  sessionId: string, runId: string, request: typeof fetch = fetch,
+  sessionId: string, runId: string, request: typeof fetch = backendFetch,
 ): Promise<RunProbe | null> {
   const response = await request('/api/collaboration/invoke', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -35,7 +36,7 @@ export async function inspectMonsoonRun(
 }
 
 export async function inspectCurrentMonsoonRun(
-  sessionId: string, request: typeof fetch = fetch,
+  sessionId: string, request: typeof fetch = backendFetch,
 ): Promise<RunProbe | null> {
   const response = await request('/api/collaboration/invoke', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },

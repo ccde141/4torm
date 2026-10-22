@@ -1,6 +1,12 @@
 # Architecture Overview
 
-The 4torm interface receives human actions, the server runs agents, tools, and collaborative work, and model providers generate responses. Configuration, conversations, and task records are stored locally. The browser and Electron desktop app provide the same feature areas; desktop also provides native file paths and execution windows.
+The 4torm interface receives human actions, the server runs agents, tools, and collaborative work, and model providers generate responses. Configuration, conversations, and task records are stored on the backend. The browser and Electron desktop app provide the same feature areas; local desktop mode also provides native file paths and execution windows.
+
+## Frontend and Backend Connection
+
+The interface uses one backend connection entry for API calls, live events, uploads, and file access. It does not call model services directly from the browser. The backend owns provider configuration, credentials, model discovery, capability tests, inference, and tool execution. Local paths and loopback URLs refer to that backend environment.
+
+In the current production deployment, the backend serves both the built webpage and the API. Remote Electron loads that webpage, allowing a Linux backend to serve a Windows desktop or phone browser. Build and update the frontend and backend from the same version; this connection model does not guarantee compatibility between arbitrary versions. See [Independent Backend and Remote Clients](https://github.com/ccde141/4torm/blob/master/REMOTE.md) (Chinese) for setup.
 
 ## How Work Flows
 
@@ -10,7 +16,7 @@ Live transport presents work as it happens; it is not the history store. Reopeni
 
 ## Features and the Central Router
 
-An agent created in the Console can work in several features, but each feature owns its conversations, workspaces, and execution rules. A full conversation in one place does not automatically become context in another.
+An agent created in the Console can work in several features, each managing its own conversations and execution rules. File workspaces belong to the configured Agent, workshop, or workflow and may be shared. A full conversation in one place does not automatically become context in another.
 
 The human interface, agent tools, and scheduled triggers have different entry points. Operations that coordinate feature work pass through the central router for admission and dispatch, then the relevant feature decides how to run them. Features collaborate through public interfaces rather than each other's internals. The center does not keep a second copy of business state.
 

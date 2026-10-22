@@ -3,6 +3,7 @@
  * 统一维护 /api/tradewind/stream，按 nodeId 分发事件。
  */
 
+import { backendFetch } from '../../../lib/backend-client';
 import {
   DEFAULT_LOCALE, readStoredLocale, resolveMessage,
   type Locale, type MessageKey, type MessageValues,
@@ -72,7 +73,7 @@ async function connect(): Promise<void> {
   abortController = controller;
   let failed = false;
   try {
-    const response = await fetch(streamUrl('/api/tradewind/stream'), { signal: controller.signal });
+    const response = await backendFetch(streamUrl('/api/tradewind/stream'), { signal: controller.signal });
     connecting = false;
     const onActivity = () => {
       if (transportDisconnected) {

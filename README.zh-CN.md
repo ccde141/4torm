@@ -22,7 +22,7 @@
 同一个 Agent 可以在不同功能区中复用。模型、提示词、工具和技能只需配置一次，之后根据任务选择合适的协作方式
 
 <p align="center">
-  <img src="./docs/public/images/guide/agent-console-overview.webp" alt="Agent 控制台" width="100%" />
+  <img src="./docs/public/images/guide/agent-console-current.png" alt="Agent 控制台" width="100%" />
 </p>
 
 ## 五个功能区
@@ -31,8 +31,8 @@
 |--------|----------|----------|
 | 季风 | 对话 | 与单个 Agent 持续交流、调用工具或委托 SubAgent |
 | 对流 | 会议室 | 让多个 Agent 临时讨论，由会议助理提供独立私聊建议 |
-| 气旋 | 工作室 | 在可视化协作结构中组织固定工位，支持私聊、群聊、同步联络和异步派发 |
-| 信风 | 工作流 | 在可视化画布上组织节点，让任务按照连线流转 |
+| 气旋 | 工作室 | 为长期项目组织固定工位，查看工作概况，积累工位记忆并协作 |
+| 信风 | 工作流 | 按严格依赖推进，或根据结果选择交接与返工路线 |
 | 潮汐 | 自动化任务 | 按照设定时间唤醒 Agent，持续执行巡检、整理和汇报 |
 
 五种功能区使用的是同一套 Agent。变化的是协作方式，不是重新创建一批临时角色
@@ -96,6 +96,8 @@ npm run start:prod
 打开 `https://localhost:3001`
 
 构建完成后，也可以运行 `npm run electron:prod` 打开桌面窗口。
+
+Linux 桌面使用见 [Linux 桌面版](./LINUX.md)。需要把后端部署在 Linux 或 Docker，再从其他设备连接时，见[独立后端与远程客户端](./REMOTE.md)。
 
 ### 首次使用
 

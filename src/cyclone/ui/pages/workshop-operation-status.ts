@@ -38,7 +38,8 @@ export function selectWorkshopOperations(
 }
 
 function seatPhase(phase: string | undefined): boolean {
-  return phase === 'seat-chat' || phase === 'seat-resume' || phase === 'seat-compact';
+  return phase === 'seat-chat' || phase === 'seat-resume' || phase === 'seat-compact'
+    || phase === 'seat-contact';
 }
 
 function roomPhase(phase: string | undefined): boolean {

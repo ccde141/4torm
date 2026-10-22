@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { WorkflowGraph, WorkflowNode } from '../../../engine/tradewind/foundation/types/index.js';
+import type { WorkflowGraph, WorkflowNode, WorkflowOrchestration } from '../../../engine/tradewind/foundation/types/index.js';
 import type { WorkflowDefinition } from '../application/workflow-store.js';
 import { autoLayout } from './workflow-layout.js';
+import { autoLayoutHandoff } from './workflow-layout-handoff.js';
 
 export type WorkflowSpecNodeType =
   | 'entry' | 'agent' | 'meeting' | 'note' | 'human-gate' | 'output';
@@ -18,10 +19,12 @@ export interface WorkflowSpecNode {
   participantNodeIds?: string[];
   content?: string;
   targets?: string[];
+  archiveName?: string;
 }
 
 export interface WorkflowSpecEdge { source: string; target: string }
 export interface WorkflowSpec {
+  orchestration?: WorkflowOrchestration;
   name: string;
   nodes: WorkflowSpecNode[];
   edges: WorkflowSpecEdge[];
@@ -33,14 +36,18 @@ export function parseWorkflowSpec(value: unknown): WorkflowSpec {
     || value.nodes.length > 1_000 || value.edges.length > 5_000) {
     throw new Error('工作流必须包含有效的 name、nodes 和 edges');
   }
-  return { name: value.name.trim(), nodes: value.nodes.map(parseNode), edges: value.edges.map(parseEdge) };
+  if (value.orchestration !== undefined && value.orchestration !== 'strict'
+    && value.orchestration !== 'handoff') throw new Error('工作流 orchestration 必须是 strict 或 handoff');
+  return { name: value.name.trim(), nodes: value.nodes.map(parseNode), edges: value.edges.map(parseEdge),
+    ...(value.orchestration === undefined ? {} : { orchestration: value.orchestration }) };
 }
 
 export function buildWorkflowGraph(
   spec: WorkflowSpec,
   existingPositions?: Map<string, { x: number; y: number }>,
 ): WorkflowGraph {
-  const layout = autoLayout(spec.nodes, spec.edges);
+  const layout = spec.orchestration === 'handoff'
+    ? autoLayoutHandoff(spec.nodes, spec.edges) : autoLayout(spec.nodes, spec.edges);
   const nodes = spec.nodes.map(node => ({
     id: node.id, type: node.type, label: node.label,
     position: existingPositions?.get(node.id) ?? layout.get(node.id) ?? { x: 1_500, y: 1_200 },
@@ -54,7 +61,8 @@ export function buildWorkflowGraph(
     id: `e-${randomUUID()}`, source: node.id, sourcePort: 0,
     target, targetPort: 0, kind: 'note' as const,
   })));
-  return { nodes, edges: [...handoffs, ...notes] };
+  return { nodes, edges: [...handoffs, ...notes],
+    ...(spec.orchestration === undefined ? {} : { orchestration: spec.orchestration }) };
 }
 
 export function workflowAgentView(definition: WorkflowDefinition) {
@@ -65,6 +73,7 @@ export function workflowAgentView(definition: WorkflowDefinition) {
   }
   return {
     workflowId: definition.workflowId, name: definition.name, revision: definition.revision,
+    orchestration: definition.graph.orchestration ?? 'strict',
     nodes: definition.graph.nodes.map(node => ({
       id: node.id, type: node.type, label: node.label, ...node.config,
       ...(noteTargets.has(node.id) ? { targets: noteTargets.get(node.id) } : {}),
@@ -84,7 +93,11 @@ function parseNode(value: unknown): WorkflowSpecNode {
     throw new Error('节点必须包含有效的 id、type 和 label');
   }
   const result: WorkflowSpecNode = { id: value.id, type: value.type, label: value.label.trim() };
-  assignText(result, value, ['agentId', 'role', 'initialEnvelope', 'chairAgentId', 'content']);
+  assignText(result, value, ['agentId', 'role', 'initialEnvelope', 'chairAgentId', 'content', 'archiveName']);
+  if (result.archiveName !== undefined && result.archiveName !== ''
+    && !/^(?!\.{1,2}$)[^\\/:*?"<>|\u0000-\u001f]{1,200}$/.test(result.archiveName)) {
+    throw new Error(`节点 ${value.id} 的 archiveName 必须是归档文件名，不能包含路径`);
+  }
   assignList(result, value, ['participantNodeIds', 'targets']);
   if (value.deliveryDelaySec !== undefined) {
     if (typeof value.deliveryDelaySec !== 'number' || !Number.isFinite(value.deliveryDelaySec)
@@ -109,12 +122,13 @@ function nodeConfig(node: WorkflowSpecNode): Record<string, unknown> {
   if (node.type === 'meeting') return { chairAgentId: node.chairAgentId,
     participantNodeIds: node.participantNodeIds ?? [] };
   if (node.type === 'note') return { content: node.content ?? '' };
+  if (node.type === 'output') return node.archiveName === undefined ? {} : { archiveName: node.archiveName };
   return {};
 }
 
 function assignText(
   target: WorkflowSpecNode, source: Record<string, unknown>,
-  keys: Array<'agentId' | 'role' | 'initialEnvelope' | 'chairAgentId' | 'content'>,
+  keys: Array<'agentId' | 'role' | 'initialEnvelope' | 'chairAgentId' | 'content' | 'archiveName'>,
 ) {
   for (const key of keys) {
     if (source[key] === undefined) continue;

@@ -3,8 +3,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createDispatch, loadDispatch } from './dispatch-store.js';
+import { createDispatch, loadDispatch, updateDispatch } from './dispatch-store.js';
 import { executeDispatchRecord } from './dispatch-runtime.js';
+import { withdrawExpiredDispatch } from './dispatch-admission.js';
 
 test('后台派发完成后写入回执与三轮决策期限', async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-dispatch-run-'));
@@ -19,6 +20,7 @@ test('后台派发完成后写入回执与三轮决策期限', async (t) => {
     executeSeat: async () => ({
       content: '接口已经完成', awaitingHuman: false, termination: { status: 'succeeded' },
     }),
+    targetPending: async () => false,
     getCompletedRoundSeq: async () => 6,
   });
 
@@ -28,7 +30,7 @@ test('后台派发完成后写入回执与三轮决策期限', async (t) => {
   assert.equal(stored?.decisionDeadlineRoundSeq, 9);
 });
 
-test('工位占用或挂起时派发保持排队而非伪装失败', async (t) => {
+test('工位占用或挂起时派发不接入也不伪装运行', async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-dispatch-run-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
   const item = await createDispatch(dataDir, {
@@ -38,10 +40,13 @@ test('工位占用或挂起时派发保持排队而非伪装失败', async (t) =
   });
 
   await executeDispatchRecord(dataDir, item, {
-    executeSeat: async () => { throw new Error('工位正在执行中'); },
+    acquireTarget: () => null,
+    executeSeat: async () => { throw new Error('未拿到工位锁时不应执行'); },
+    targetPending: async () => false,
     getCompletedRoundSeq: async () => 1,
   });
   assert.equal((await loadDispatch(dataDir, 'work-a', item.id))?.status, 'queued');
+  assert.equal((await loadDispatch(dataDir, 'work-a', item.id))?.delivered, false);
 });
 
 test('工位来源派发完成后不生成会议三轮决策期限', async (t) => {
@@ -58,6 +63,7 @@ test('工位来源派发完成后不生成会议三轮决策期限', async (t) =
     executeSeat: async () => ({
       content: '接口已经完成', awaitingHuman: false, termination: { status: 'succeeded' },
     }),
+    targetPending: async () => false,
     getCompletedRoundSeq: async () => { throw new Error('工位派发不应读取会议轮次'); },
   });
 
@@ -88,6 +94,7 @@ test('模型失败正文不能把后台派发伪装成完成', async (t) => {
         },
       },
     }),
+    targetPending: async () => false,
     getCompletedRoundSeq: async () => 1,
   });
 
@@ -113,6 +120,7 @@ test('后台执行失败会反向把父派发标记为失败', async (t) => {
       content: '训练已经在后台启动', awaitingHuman: false,
       termination: { status: 'succeeded' }, executionIds: ['exec-a'],
     }),
+    targetPending: async () => false,
     getCompletedRoundSeq: async () => 1,
     waitExecutions: async () => [{
       executionId: 'exec-a', status: 'failed', error: 'process exited 1',
@@ -150,6 +158,7 @@ test('后台执行未结束时父派发保持运行，全部完成后才完成',
       content: '训练完成', awaitingHuman: false,
       termination: { status: 'succeeded' }, executionIds: ['exec-a'],
     }),
+    targetPending: async () => false,
     getCompletedRoundSeq: async () => 1,
     waitExecutions: async () => {
       notifyWaiting();
@@ -163,4 +172,36 @@ test('后台执行未结束时父派发保持运行，全部完成后才完成',
   settle([{ executionId: 'exec-a', status: 'completed' }]);
   assert.equal(await running, 'completed');
   assert.equal((await loadDispatch(dataDir, 'work-a', item.id))?.status, 'completed');
+});
+
+test('已接入后允许执行超过30秒，过期快照绝不再次调用目标', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dispatch-accepted-long-run-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const input = { workshopId: 'work-a', sourceKind: 'seat' as const, sourceRoomId: '',
+    sourceSeatId: 'seat-a', sourceSeatTitle: '调度', sourceRoundSeq: 0,
+    dispatchOrder: 0, targetSeatId: 'seat-b', targetSeatTitle: '核验', task: '核验' };
+  const item = await createDispatch(dataDir, { ...input, sourceTurnId: 'long' });
+  let finish!: () => void;
+  let started!: () => void;
+  const pending = new Promise<void>(resolve => { finish = resolve; });
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const run = executeDispatchRecord(dataDir, item, { targetPending: async () => false,
+    getCompletedRoundSeq: async () => 0, executeSeat: async current => {
+      assert.equal(current.status, 'running'); assert.equal(current.delivered, true);
+      started(); await pending;
+      return { content: '完成', awaitingHuman: false, termination: { status: 'succeeded' } };
+    } });
+  await entered;
+  assert.equal((await withdrawExpiredDispatch(dataDir, 'work-a', item.id,
+    Date.parse(item.admissionDeadlineAt!) + 60_000))?.status, 'running');
+  finish(); assert.equal(await run, 'completed');
+  const expired = await createDispatch(dataDir, { ...input, sourceTurnId: 'expired' });
+  await updateDispatch(dataDir, 'work-a', expired.id, { admissionDeadlineAt: '2020-01-01T00:00:00.000Z' });
+  let executions = 0;
+  assert.equal(await executeDispatchRecord(dataDir, expired, { targetPending: async () => false,
+    getCompletedRoundSeq: async () => 0, executeSeat: async () => {
+      executions++; return { content: '不应执行', awaitingHuman: false, termination: { status: 'succeeded' } };
+    } }), 'failed');
+  assert.equal(executions, 0);
+  assert.equal((await loadDispatch(dataDir, 'work-a', expired.id))?.errorCode, 'CYCLONE_TARGET_BUSY');
 });

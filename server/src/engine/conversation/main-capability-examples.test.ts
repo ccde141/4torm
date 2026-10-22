@@ -67,6 +67,9 @@ test('气旋重任务指南先派到固定工位，群聊只承载共同背景�
     assert.match(guide, /群聊.*共同背景/);
     assert.match(guide, /start_collaboration_seat_chat/);
     assert.match(guide, /read_collaboration_thread/);
+    assert.match(guide, /read_collaboration_console/);
+    assert.match(guide, /read_collaboration_seat_memory/);
+    assert.match(guide, /记忆不代替真实运行状态/);
     assert.match(guide, /公告板/);
   });
 });

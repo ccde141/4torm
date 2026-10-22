@@ -3,8 +3,8 @@
  *
  * 行为：
  * - waitForInputs() 等待所有 handoff 入线到齐
- * - 尝试写入 output.json 和 workspace/transcripts/{archiveName}.md
- * - 归档失败不阻止 emit WORK_DONE（orchestrator 随后触发 workflow-end）
+ * - 原子提交 output.json 和 workspace/transcripts/{archiveName}.md
+ * - 归档失败报告给编排器，不发布成功事件、不重新执行模型
  *
  * 配置项：
  * - archiveName: string（可选，归档文件名，默认时间戳）
@@ -22,6 +22,10 @@ import type {
 } from '../foundation/types';
 import { BUILTIN_EVENT_IDS } from '../foundation/types';
 import type { ContextMessage } from '../../shared/types';
+import { atomicWriteFile } from '../../shared/atomic-io.js';
+import { frameworkError } from '../../shared/framework-error.js';
+import { readOutputMeetings, readOutputNodeHistories,
+  type OutputMeetingHistory, type OutputNodeHistory } from './output-archive-reader.js';
 
 function formatAssistantMessage(msg: ContextMessage): string {
   if (!msg.reasoningContent && !msg.toolCalls?.length) {
@@ -78,73 +82,51 @@ export class OutputExecutor implements NodeExecutor {
     const outputPath = path.join(ctx.runDir, 'output.json');
     try {
       await fs.mkdir(path.dirname(outputPath), { recursive: true });
-      await fs.writeFile(outputPath, JSON.stringify(outputData, null, 2));
-    } catch { /* output.json 写入失败不阻止完成事件 */ }
+      await atomicWriteFile(outputPath, JSON.stringify(outputData, null, 2));
+      await this.writeCheckpoint(ctx, envelopes);
+    } catch (cause) {
+      throw frameworkError({ code: 'TRADEWIND_OUTPUT_ARCHIVE_FAILED', kind: 'io',
+        message: '信风交付归档未能完整保存，请检查执行记录；不会自动重新执行工作流',
+        source: 'tradewind.output', retryable: false,
+        details: { workflowId: ctx.workflowId, executionId: ctx.executionId, nodeId: ctx.nodeId },
+      }, { cause });
+    }
 
-    // Checkpoint 归档：收集所有节点历史 → Markdown
-    await this.writeCheckpoint(ctx, envelopes);
-
-    ctx.emit(BUILTIN_EVENT_IDS.WORK_DONE);
+    await ctx.emit(BUILTIN_EVENT_IDS.WORK_DONE);
     ctx.setState('idle');
   }
 
-  private async writeCheckpoint(ctx: ExecutionContext, envelopes: any[]): Promise<void> {
-    try {
-      const config = ctx.nodeConfig as { archiveName?: string };
-      const now = new Date();
-      const localStamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`;
-      const name = config.archiveName?.trim() || localStamp;
+  private async writeCheckpoint(
+    ctx: ExecutionContext, envelopes: import('../foundation/types').Envelope[],
+  ): Promise<void> {
+    const config = ctx.nodeConfig as { archiveName?: string };
+    const now = new Date();
+    const localStamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`;
+    const name = config.archiveName?.trim() || localStamp;
 
-      // 确定归档目录（workspace/transcripts/）
-      const projectDir = path.resolve(ctx.dataDir, '..');
-      const workspaceRel = `data/tradewind/workflows/${ctx.workflowId}/workspace`;
-      const transcriptsDir = path.join(projectDir, workspaceRel, 'transcripts');
-      await fs.mkdir(transcriptsDir, { recursive: true });
+    // 确定归档目录（workspace/transcripts/）
+    const transcriptsDir = path.join(ctx.dataDir, 'tradewind', 'workflows',
+      ctx.workflowId, 'workspace', 'transcripts');
+    await fs.mkdir(transcriptsDir, { recursive: true });
 
-      // 收集所有节点的 messages
-      const nodesDir = path.join(ctx.runDir, 'nodes');
-      const nodeEntries = await fs.readdir(nodesDir).catch(() => [] as string[]);
-      const nodeHistories: Array<{ nodeId: string; label: string; messages: ContextMessage[] }> = [];
-      for (const nodeId of nodeEntries) {
-        const msgPath = path.join(nodesDir, nodeId, 'messages.json');
-        try {
-          const raw = await fs.readFile(msgPath, 'utf-8');
-          const messages: ContextMessage[] = JSON.parse(raw);
-          const label = ctx.nodeLabelMap[nodeId] || nodeId;
-          nodeHistories.push({ nodeId, label, messages });
-        } catch { /* 节点无历史或文件损坏 */ }
-      }
+    const nodeHistories = await readOutputNodeHistories(ctx.runDir, ctx.nodeLabelMap);
+    const meetings = await readOutputMeetings(ctx.runDir);
 
-      // 收集会议记录
-      const meetingsDir = path.join(ctx.runDir, 'meetings');
-      const meetingFiles = await fs.readdir(meetingsDir).catch(() => [] as string[]);
-      const meetings: Array<{ fileName: string; messages: any[] }> = [];
-      for (const f of meetingFiles) {
-        if (!f.endsWith('.json')) continue;
-        try {
-          const raw = await fs.readFile(path.join(meetingsDir, f), 'utf-8');
-          meetings.push({ fileName: f.replace('.json', ''), messages: JSON.parse(raw) });
-        } catch { /* 跳过 */ }
-      }
+    // 收集 output 信封内容
+    const outputContent = envelopes.map(e => e.content).join('\n\n---\n\n');
 
-      // 收集 output 信封内容
-      const outputContent = envelopes.map(e => e.content).join('\n\n---\n\n');
+    // 生成 Markdown
+    const md = this.formatMarkdown(ctx, nodeHistories, meetings, outputContent);
 
-      // 生成 Markdown
-      const md = this.formatMarkdown(ctx, nodeHistories, meetings, outputContent);
-
-      // 写入归档
-      const filePath = path.join(transcriptsDir, `${name}.md`);
-      await fs.writeFile(filePath, md);
-    } catch (err) {
-      console.warn('[output] transcripts archive failed:', (err as Error).message);
-    }
+    // 写入归档
+    const filePath = path.join(transcriptsDir, `${name}.md`);
+    await atomicWriteFile(filePath, md);
   }
 
   private formatMarkdown(
     ctx: ExecutionContext,
-    nodes: Array<{ nodeId: string; label: string; messages: ContextMessage[] }>,
-    meetings: Array<{ fileName: string; messages: any[] }>,
+    nodes: OutputNodeHistory[],
+    meetings: OutputMeetingHistory[],
     outputContent: string,
   ): string {
     const now = new Date();

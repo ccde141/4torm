@@ -74,6 +74,8 @@ export const formatRelative = (iso?: string, locale: Locale = 'zh-CN'): string =
 
 /** "every 1h30m" → "1 小时 30 分钟"; "every 5m" → "5 分钟" */
 export function formatSchedule(schedule: string, locale: Locale = 'zh-CN'): string {
+  const daily = /^daily\s+((?:[01]\d|2[0-3]):[0-5]\d)$/i.exec(schedule);
+  if (daily) return locale === 'en-US' ? `Daily at ${daily[1]}` : `每天 ${daily[1]}`;
   const m = schedule.match(/^every\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?$/i);
   if (!m) return schedule;
   const parts: string[] = [];

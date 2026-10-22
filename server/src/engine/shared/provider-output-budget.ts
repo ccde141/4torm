@@ -1,4 +1,6 @@
-import { resolveProviderModelCapabilities, type ProviderModelIdentity } from './provider-normalization.js';
+import {
+  resolveMaxOutputTokens, resolveProviderModelCapabilities, type ProviderModelIdentity,
+} from './provider-normalization.js';
 
 /** Explicit framework budgets survive custom defaults; ordinary calls retain their existing precedence. */
 export function enforceProviderOutputBudget(
@@ -10,5 +12,5 @@ export function enforceProviderOutputBudget(
   const field = identity ? resolveProviderModelCapabilities(identity).maxTokensField : 'max_tokens';
   delete body.max_tokens;
   delete body.max_completion_tokens;
-  if (field !== 'omit') body[field] = maxTokens;
+  if (field !== 'omit') body[field] = identity ? resolveMaxOutputTokens(identity, maxTokens) : maxTokens;
 }

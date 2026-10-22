@@ -103,3 +103,57 @@ test('skin config storage migrates legacy video background into an independent t
   assert.deepEqual(disk.texture.layers, ['grid', 'video']);
   assert.equal(disk.background.video, undefined);
 });
+
+test('provider credentials cannot bypass the model API through generic storage spelling or root deletion', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-provider-storage-'));
+  const app = Fastify();
+  app.decorate('dataDir', dataDir);
+  app.decorate('projectRoot', path.dirname(dataDir));
+  await app.register(storageRoutes, { prefix: '/api/storage' });
+  t.after(async () => { await app.close(); await fs.rm(dataDir, { recursive: true, force: true }); });
+  await fs.writeFile(path.join(dataDir, 'providers.json'), '{"apiKey":"fixture-only"}');
+  for (const target of ['providers.json', './providers.json', 'folder/../providers.json', 'PROVIDERS.JSON', '.']) {
+    for (const route of ['read', 'file']) assert.equal((await app.inject(
+      `/api/storage/${route}?path=${encodeURIComponent(target)}`)).statusCode, 403);
+    assert.equal((await app.inject({ method: 'PUT', url: `/api/storage/write?path=${encodeURIComponent(target)}`,
+      payload: {} })).statusCode, 403);
+    assert.equal((await app.inject({ method: 'DELETE', url: `/api/storage/delete?path=${encodeURIComponent(target)}` }))
+      .statusCode, 403);
+  }
+  assert.match(await fs.readFile(path.join(dataDir, 'providers.json'), 'utf8'), /fixture-only/);
+});
+
+test('canonical aliases, junctions and recursive parent deletion retain feature ownership', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'storage-feature-ownership-'));
+  const dataDir = path.join(root, 'data');
+  const app = Fastify();
+  app.decorate('dataDir', dataDir);
+  app.decorate('projectRoot', root);
+  await app.register(storageRoutes, { prefix: '/api/storage' });
+  t.after(async () => { await app.close(); await fs.rm(root, { recursive: true, force: true }); });
+  const contents = { 'agents/registry.json': '{"agent-a":{}}',
+    'agents/agent-a/sessions/session.json': '{"messages":["preserve"]}',
+    'agents/agent-a/.workspace/config.json': '{"name":"preserve"}' };
+  for (const [file, content] of Object.entries(contents)) {
+    await fs.mkdir(path.dirname(path.join(dataDir, file)), { recursive: true });
+    await fs.writeFile(path.join(dataDir, file), content);
+  }
+  await fs.symlink(path.join(dataDir, 'agents'), path.join(dataDir, 'agent-alias'), 'junction');
+  for (const file of Object.keys(contents)) {
+    for (const alias of [`./${file}`, `unused/../${file}`, file.replaceAll('/', '\\'),
+      file.replace('agents/', 'agent-alias/')]) {
+      for (const [method, route] of [['GET', 'read'], ['PUT', 'write'], ['PUT', 'upload'], ['DELETE', 'delete']] as const) {
+        const response = await app.inject({ method, url: `/api/storage/${route}?path=${encodeURIComponent(alias)}`,
+          ...(method === 'PUT' ? { payload: {} } : {}) });
+        assert.equal(response.statusCode, 403, `${method} ${alias}`);
+      }
+    }
+  }
+  for (const target of ['agents', 'agents/agent-a', 'agents/agent-a/sessions', 'agents/agent-a/.workspace', 'agent-alias']) {
+    assert.equal((await app.inject({ method: 'DELETE', url: `/api/storage/delete?path=${encodeURIComponent(target)}` })).statusCode, 403);
+  }
+  for (const [file, content] of Object.entries(contents)) assert.equal(await fs.readFile(path.join(dataDir, file), 'utf8'), content);
+  const ordinary = 'agents/agent-a/.workspace/generated/file.txt';
+  assert.equal((await app.inject({ method: 'PUT', url: `/api/storage/write?path=${encodeURIComponent(ordinary)}`, payload: {} })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'DELETE', url: `/api/storage/delete?path=${encodeURIComponent(path.posix.dirname(ordinary))}` })).statusCode, 200);
+});

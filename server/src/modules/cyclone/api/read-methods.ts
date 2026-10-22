@@ -108,7 +108,7 @@ function parsePrivateActivity(value: unknown): {
 } {
   const item = asRecord(value);
   if (Object.keys(item).some(key => !['workshopId', 'targetKind', 'targetId', 'since'].includes(key))) throw invalid();
-  if (item.targetKind !== 'seat' && item.targetKind !== 'chair') throw invalid();
+  if (item.targetKind !== 'seat' && item.targetKind !== 'chair' && item.targetKind !== 'supervisor') throw invalid();
   const since = item.since === undefined ? 0 : item.since;
   if (!Number.isSafeInteger(since) || (since as number) < 0) throw invalid();
   return { workshopId: id(item.workshopId), targetKind: item.targetKind,

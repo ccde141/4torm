@@ -57,3 +57,30 @@ test('real SessionRunner and HTTP model bridge consume steering before executing
   await assert.rejects(runner.chat('test', [], () => {}, 'run-test'), /INPUT_RUN_REUSED/);
   assert.equal(calls, 2);
 });
+
+test('text SessionRunner publishes generated context for exact session persistence', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-text-context-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const server = http.createServer((_request, response) => {
+    response.setHeader('content-type', 'text/event-stream');
+    response.end(`data: ${JSON.stringify({ choices: [{ index: 0,
+      delta: { content: 'A completed answer.' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [{ id: 'test',
+    baseUrl: `http://127.0.0.1:${address.port}/v1`, models: ['model'], providerType: 'openai-compatible',
+    transport: 'openai-chat-completions', apiKey: 'fixture-only' }] }));
+  const events: ConversationEvent[] = [];
+  const runner = new SessionRunner({ dataDir, agentId: 'agent-a', model: 'test:model',
+    temperature: 0, toolNames: [], toolMode: 'selected', skillIds: [], workspace: '.',
+    sandboxLevel: 'project', native: false });
+  await runner.chat('system', [{ role: 'system', content: 'system' }, { role: 'user', content: 'Question.' }],
+    event => events.push(event));
+  const answer = events.find(event => event.type === 'answer');
+  assert.ok(answer?.type === 'answer');
+  assert.equal(answer.native, false);
+  assert.deepEqual(answer.nativeContext, [{ role: 'assistant', content: 'A completed answer.' }]);
+});

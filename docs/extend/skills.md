@@ -68,6 +68,8 @@ Agent 自己也可以根据任务需要创建技能。它会在 `data/skills/` �
 
 创建成功后，技能会出现在 Agent 配置页面中。已有 Agent 不会自动启用新技能，需要在控制台中手动选择；之后新建的 Agent 会默认选中当前已经安装的技能。
 
+外部的纯指南技能包也可以通过 `npm run skill:install -- --source <技能目录或SKILL.md> --data-dir <data目录>` 安装。安装器生成元数据并保留指南原文及支持的相对资料引用，同名技能不会覆盖。它不会安装依赖、执行脚本或授予外部工具权限；需要 MCP 的技能仍须先连接服务，再为 Agent 选择工具。参考[视觉桌面工具示例](./mcp#视觉桌面工具示例)。
+
 移除技能需要再次确认。若技能仍被某个 Agent 使用，系统会拒绝移除并列出相关 Agent；先取消关联，再回到 Skills 页面移除。
 
 ## 技能工具(Skill Tools)
@@ -109,14 +111,14 @@ Skill 可通过 `tools.json` 和 `executors/` 目录携带专属工具。
    └── 命中后标记 _skillId,执行器查找优先查 skill 自身 executors
 ```
 
-执行器加载优先级:
+执行器位置由工具定义的来源决定:
 
 ```
-1. data/skills/{_skillId}/executors/{fileName}.js   ← skill 自身执行器(优先)
-2. data/tools/executors/{fileName}.js                 ← 全局执行器(回退)
+Skill 工具 → data/skills/{_skillId}/executors/{fileName}.js
+全局工具 → data/tools/executors/{fileName}.js
 ```
 
-框架工具和全局自定义工具优先，Skill 工具不能覆盖同名定义。仅当工具定义来自 Skill 时，才优先加载该 Skill 自己的执行器。
+框架工具和全局自定义工具优先，Skill 工具不能覆盖同名定义。Skill 工具缺失自身执行器时会明确报错，不会退回执行同名全局脚本。
 
 ### 与全局工具的区别
 
@@ -126,7 +128,7 @@ Skill 可通过 `tools.json` 和 `executors/` 目录携带专属工具。
 | 独立存在 | ✅ 是 | ❌ 否(必须属于 skill) |
 | 面板可见 | Tools 页面 | Skills 页面(含 🔧 标记) |
 | 注册表共享 | 直接注册 | 通过 skill 间接合并 |
-| 执行器 shadowing | N/A | 优先查找自身 executors/ |
+| 执行器位置 | 全局 executors/ | 自身 executors/ |
 
 ## Agent → Skill 分配
 
@@ -207,6 +209,6 @@ export default async function (args, ctx) {
 3. 总结变更内容
 ```
 
-分配给 Agent 后,运行时该 Agent 的工具列表 = 配置的全局工具 + `git_status` + `git_diff`(自动合并去重);执行时服务端先查全局 executors,不存在则回退到 skill 自身 executors。
+分配给 Agent 后,运行时该 Agent 的工具列表 = 配置的全局工具 + `git_status` + `git_diff`(自动合并去重);来自该 Skill 的工具使用它自己的 executors，不回退到全局脚本。
 
 > 工具定义的完整字段见[工具制作](./tools)。

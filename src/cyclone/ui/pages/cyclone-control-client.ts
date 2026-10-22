@@ -1,5 +1,6 @@
 import { invokeFeature } from '../../../api/collaboration';
 import type { ExpectedRoomMessage } from './room-message-identity';
+import { compactSupervisor, mutateSupervisorMessage, resetSupervisor } from './supervisor-client';
 
 export interface CycloneEntityReceipt {
   id: string;
@@ -29,7 +30,8 @@ export type CycloneBulletinOperation =
 
 export type CyclonePrivateTarget =
   | { kind: 'seat'; seatId: string }
-  | { kind: 'chair'; roomId: string };
+  | { kind: 'chair'; roomId: string }
+  | { kind: 'supervisor' };
 
 export function createCycloneWorkshop(input: {
   title?: string;
@@ -152,6 +154,7 @@ export function setCycloneRoomMode(
 export function editCyclonePrivateMessage(
   workshopId: string, target: CyclonePrivateTarget, index: number, content: string,
 ): Promise<unknown> {
+  if (target.kind === 'supervisor') return mutateSupervisorMessage(workshopId, index, content);
   const method = target.kind === 'seat' ? 'editSeatMessage' : 'editChairMessage';
   return invokeFeature('cyclone', method, { workshopId, ...targetIdentity(target), index, content });
 }
@@ -159,6 +162,7 @@ export function editCyclonePrivateMessage(
 export function deleteCyclonePrivateMessage(
   workshopId: string, target: CyclonePrivateTarget, index: number,
 ): Promise<unknown> {
+  if (target.kind === 'supervisor') return mutateSupervisorMessage(workshopId, index);
   const method = target.kind === 'seat' ? 'deleteSeatMessage' : 'deleteChairMessage';
   return invokeFeature('cyclone', method, { workshopId, ...targetIdentity(target), index });
 }
@@ -167,21 +171,23 @@ export function resetCyclonePrivateContext(
   workshopId: string,
   target: CyclonePrivateTarget,
   mode: 'clear' | 'summary',
-  forcePending = false,
+  forcePending = false, signal?: AbortSignal,
 ): Promise<unknown> {
+  if (target.kind === 'supervisor') return resetSupervisor(workshopId, mode, signal);
   if (target.kind === 'chair') return invokeFeature('cyclone', 'resetChairContext', {
     workshopId, roomId: target.roomId, mode,
-  });
+  }, undefined, { signal });
   return invokeFeature('cyclone', 'resetSeatContext', {
     workshopId, seatId: target.seatId, mode, forcePending,
-  });
+  }, undefined, { signal });
 }
 
 export function compactCyclonePrivateContext(
-  workshopId: string, target: CyclonePrivateTarget,
+  workshopId: string, target: CyclonePrivateTarget, signal?: AbortSignal,
 ): Promise<unknown> {
+  if (target.kind === 'supervisor') return compactSupervisor(workshopId, signal);
   const method = target.kind === 'chair' ? 'compactChairContext' : 'compactSeatContext';
-  return invokeFeature('cyclone', method, { workshopId, ...targetIdentity(target) });
+  return invokeFeature('cyclone', method, { workshopId, ...targetIdentity(target) }, undefined, { signal });
 }
 
 export function editCycloneRoomMessage(
@@ -206,17 +212,17 @@ export function resetCycloneRoomContext(
   workshopId: string,
   roomId: string,
   mode: 'clear' | 'summary',
-  scope: 'public' | 'chair' | 'both',
+  scope: 'public' | 'chair' | 'both', signal?: AbortSignal,
 ): Promise<unknown> {
-  return invokeFeature('cyclone', 'resetRoomContext', { workshopId, roomId, mode, scope });
+  return invokeFeature('cyclone', 'resetRoomContext', { workshopId, roomId, mode, scope }, undefined, { signal });
 }
 
 export function compactCycloneRoomContext(
-  workshopId: string, roomId: string, scope: 'public' | 'chair' | 'both' = 'public',
+  workshopId: string, roomId: string, scope: 'public' | 'chair' | 'both' = 'public', signal?: AbortSignal,
 ): Promise<unknown> {
-  return invokeFeature('cyclone', 'compactRoomContext', { workshopId, roomId, scope });
+  return invokeFeature('cyclone', 'compactRoomContext', { workshopId, roomId, scope }, undefined, { signal });
 }
 
-function targetIdentity(target: CyclonePrivateTarget): { seatId: string } | { roomId: string } {
+function targetIdentity(target: Exclude<CyclonePrivateTarget, { kind: 'supervisor' }>): { seatId: string } | { roomId: string } {
   return target.kind === 'seat' ? { seatId: target.seatId } : { roomId: target.roomId };
 }

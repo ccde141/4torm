@@ -10,6 +10,7 @@
  * 前端页面组件（ChatPage.tsx）的 UI 结构不变。
  */
 
+import { backendFetch } from '../../lib/backend-client';
 import { streamUrl } from '../../lib/apiBase';
 import type { ChatMessage, Agent } from '../../types';
 import type { ChatSession } from '../../store/chat';
@@ -47,6 +48,7 @@ export type StreamCtx = {
   onFinish?: (completed: boolean) => void;
   /** task_board 工具通过 meta 侧通道回传的最新任务板（null = 已清空），用于即时刷新置顶面板 */
   onTaskboard?: (board: TaskBoard | null) => void;
+  onCompaction?: (event: MonsoonBrowserEvent) => void;
 };
 
 export async function runStreamLoop(ctx: StreamCtx) {
@@ -59,7 +61,7 @@ export async function runStreamLoop(ctx: StreamCtx) {
   const getTitle = (_msgs: ChatMessage[]) => session.title;
   const titleCompletion = new TitleCompletion();
   const streamTerminal = new StreamTerminal();
-  const request = ctx.request ?? fetch;
+  const request = ctx.request ?? backendFetch;
   let requestStarted = false;
   let initialSaved = false;
   let completeStream = false;
@@ -133,6 +135,7 @@ export async function runStreamLoop(ctx: StreamCtx) {
     allMessages = projection.messages;
     doFlush();
     const processEvent = async (ev: MonsoonBrowserEvent) => {
+      ctx.onCompaction?.(ev);
       titleCompletion.observe(ev.type);
       streamTerminal.observe(ev.type);
       if (ev.type === 'error') throw new Error(String(ev.message || '执行失败'));
@@ -145,7 +148,6 @@ export async function runStreamLoop(ctx: StreamCtx) {
       if (Object.hasOwn(effect, 'usage')) {
         if (effect.usage) session.tokenUsage = effect.usage;
         else delete session.tokenUsage;
-        refreshSessions(agent);
       }
       if (effect.flush === 'immediate') doFlush();
       else if (effect.flush === 'throttled') scheduleFlush();

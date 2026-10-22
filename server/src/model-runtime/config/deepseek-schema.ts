@@ -37,7 +37,8 @@ const generationFields: ProviderConfigurationField[] = [
   numberField(
     'generationDefaults.maxOutputTokens',
     text('最大输出 Tokens', 'Maximum output tokens'),
-    text('限制思考与正文的总输出预算。', 'Limits the combined reasoning and final-answer budget.'),
+    text('思考与正文合计最多 393216；上下文容量与输出上限分别计算。',
+      'Reasoning and final answer share a maximum of 393216 tokens; context capacity is a separate limit.'),
     'integer', false, DEEPSEEK_CONFIG_LIMITS.maxOutputTokens,
   ),
   numberField(

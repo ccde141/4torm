@@ -9,11 +9,14 @@ import type { TideTaskService } from '../application/task-service.js';
 
 const commonProperties = {
   name: { type: 'string', minLength: 1, maxLength: 200 },
-  schedule: { type: 'string', minLength: 1, maxLength: 100 },
+  schedule: { type: 'string', minLength: 1, maxLength: 100,
+    description: '间隔格式 every 5m（Agent 最短60秒）；每天定时格式 daily 08:00，24小时制，按后端电脑当前时区。后端关闭期间错过的每天定时不补跑。' },
   prompt: { type: 'string', minLength: 1, maxLength: 20_000 },
-  agentId: { type: 'string', minLength: 1 },
+  agentId: { type: 'string', minLength: 1,
+    description: '执行任务的池内 Agent；更新时可更换，任务或目标会话忙碌时拒绝。累积模式换绑会建立独立会话，旧会话与记录保留。' },
   pushMode: { type: 'string', enum: ['accumulate', 'designated'] },
-  targetSessionId: { type: 'string', minLength: 1 },
+  targetSessionId: { type: 'string', minLength: 1,
+    description: 'designated 模式的已有季风会话；更换 Agent 时必须明确提供新 Agent 所属会话。累积模式换绑不填写此项。' },
   repeatCount: { type: 'string' },
   windowN: { type: 'string' },
   selfLoop: { type: 'string' },
@@ -29,7 +32,7 @@ export function tideAgentManifests(): ModuleMethodManifest[] {
     ),
     method(
       'updateAutomation', 'update_automation',
-      '修改已有潮汐任务的内容与计划，不改变其启用状态。',
+      '修改已有潮汐任务的内容、计划或执行 Agent，不改变其启用状态。执行中或压缩中的任务不能修改；换绑后保留旧 Agent 的历史。',
       ['taskId'], { taskId: { type: 'string', minLength: 1 }, ...commonProperties },
     ),
     method('setAutomationEnabled', 'set_automation_enabled',

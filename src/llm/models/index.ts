@@ -1,5 +1,5 @@
-import { request } from '../client';
-import type { RequestOptions } from '../client';
+import { modelRuntimeRequest } from '../runtime-client';
+import { flushProviderChanges } from '../config';
 import type { ListModelsResponse } from '../types';
 import {
   resolveProviderProtocol,
@@ -7,7 +7,12 @@ import {
 } from '../provider-protocol';
 import { providerBaseUrl } from '../provider-endpoint';
 
-export interface ListModelsOptions extends RequestOptions {
+export interface ListModelsOptions {
+  providerId?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
   protocol?: ProviderProtocol;
 }
 
@@ -23,17 +28,19 @@ function anthropicHeaders(
 }
 
 export async function listModels(opts: ListModelsOptions): Promise<ListModelsResponse> {
-  const baseUrl = providerBaseUrl(opts.baseUrl, '/models');
-  const protocol = resolveProviderProtocol(baseUrl, opts.protocol);
-  if (protocol === 'anthropic-messages') {
-    return request<ListModelsResponse>('/models', {
-      ...opts,
-      baseUrl,
-      apiKey: undefined,
-      headers: anthropicHeaders(opts.apiKey, opts.headers),
-    });
+  if (opts.providerId) {
+    await flushProviderChanges();
+    return modelRuntimeRequest('/models', 'POST', { providerId: opts.providerId }, opts.signal);
   }
-  return request<ListModelsResponse>('/models', { ...opts, baseUrl });
+  const baseUrl = providerBaseUrl(opts.baseUrl ?? '', '/models');
+  const protocol = resolveProviderProtocol(baseUrl, opts.protocol);
+  // 模型发现与会话一样由后端访问提供商，避免本地服务依赖浏览器跨域授权。
+  return modelRuntimeRequest<ListModelsResponse>('/models', 'POST', {
+    baseUrl,
+    apiKey: protocol === 'anthropic-messages' ? undefined : opts.apiKey,
+    headers: protocol === 'anthropic-messages'
+      ? anthropicHeaders(opts.apiKey, opts.headers) : opts.headers,
+  }, opts.signal);
 }
 
 export type { ListModelsResponse };

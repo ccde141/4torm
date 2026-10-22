@@ -16,9 +16,9 @@ export function tideCompactionHandler(port: TideSessionCompaction): ModuleMethod
     if (Object.keys(input).some(key => key !== 'agentId' && key !== 'sessionId')
       || !identifier(input.agentId) || !identifier(input.sessionId)) throw invalid();
     return { agentId: input.agentId, sessionId: input.sessionId };
-  }, invoke: (_context, value) => {
+  }, invoke: (context, value) => {
     const input = value as { agentId: string; sessionId: string };
-    return port.compact(input.agentId, input.sessionId);
+    return port.compact(input.agentId, input.sessionId, context.signal);
   } };
 }
 

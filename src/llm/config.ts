@@ -1,9 +1,8 @@
-import { readJson, writeJson } from '../api/storage';
+import { modelRuntimeRequest } from './runtime-client';
 import type { ProviderProfileId } from './provider-profiles';
 import type { ProviderProtocol } from './provider-protocol';
 import {
   readModelCapability,
-  writeModelCapability,
   type ModelCapabilityMap,
   type ToolTransportMap,
 } from './model-capabilities';
@@ -13,6 +12,9 @@ export interface ProviderEntry {
   label: string;
   baseUrl: string;
   apiKey: string;
+  /** Credentials are write-only; the backend returns an empty value plus this flag. */
+  hasApiKey?: boolean;
+  configuredHeaderNames?: string[];
   models: string[];
   customHeaders?: Record<string, string>;
   /** Stable provider identity. Missing values retain the legacy configuration path. */
@@ -56,28 +58,34 @@ export interface ModelOption {
   modelId: string;
 }
 
-const FILE = 'providers.json';
+interface ProviderConfiguration { providers: ProviderEntry[]; activeModel: string }
+let cache: ProviderConfiguration | null = null;
+let loading: Promise<ProviderConfiguration> | null = null;
+let writeQueue: Promise<unknown> = Promise.resolve();
+let generation = 0;
 
-let cache: { providers: ProviderEntry[]; activeModel: string } | null = null;
-let writeQueue: Promise<void> = Promise.resolve();
-
-async function load(): Promise<{ providers: ProviderEntry[]; activeModel: string }> {
+async function load(): Promise<ProviderConfiguration> {
   if (cache) return cache;
-  const data = await readJson<{ providers: ProviderEntry[]; activeModel: string }>(FILE);
-  cache = data || { providers: [], activeModel: '' };
-  return cache;
+  if (!loading) {
+    const started = generation;
+    const pending = modelRuntimeRequest<ProviderConfiguration>('/configuration').then(value => {
+      if (started === generation) cache = value;
+      return value;
+    }).finally(() => { if (loading === pending) loading = null; });
+    loading = pending;
+  }
+  return loading;
 }
 
-async function save(providers: ProviderEntry[], activeModel: string) {
-  cache = { providers, activeModel };
-  const snapshot = structuredClone(cache);
-  const write = writeQueue.catch(() => undefined).then(() => writeJson(FILE, snapshot));
-  writeQueue = write;
-  await write;
-}
-
-function nextId(): string {
-  return `pvd_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+/** Preserve edit order without resending a stale copy of other providers or secrets. */
+function mutate<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const operation = writeQueue.catch(() => undefined).then(async () => {
+    const result = await modelRuntimeRequest<T>(path, method, body);
+    invalidateCache();
+    return result;
+  });
+  writeQueue = operation;
+  return operation;
 }
 
 export async function getProviders(): Promise<ProviderEntry[]> {
@@ -85,34 +93,20 @@ export async function getProviders(): Promise<ProviderEntry[]> {
 }
 
 export async function addProvider(
-  label: string,
-  baseUrl: string,
-  apiKey: string,
-  protocol?: ProviderProtocol,
+  label: string, baseUrl: string, apiKey: string, protocol?: ProviderProtocol,
   selection?: Pick<ProviderEntry, 'providerType' | 'transport' | 'runtimePolicy' | 'generationDefaults'>,
 ): Promise<ProviderEntry> {
-  const data = await load();
-  const entry: ProviderEntry = {
-    id: nextId(), label, baseUrl, apiKey, models: [],
-    ...(protocol ? { protocol } : {}),
-    ...selection,
-  };
-  data.providers.push(entry);
-  await save(data.providers, data.activeModel);
-  return entry;
+  return mutate('/configuration/providers', 'POST', { label, baseUrl, apiKey, models: [], protocol, ...selection });
 }
 
 export async function updateProvider(id: string, patch: Partial<Omit<ProviderEntry, 'id'>>) {
-  const data = await load();
-  const idx = data.providers.findIndex(p => p.id === id);
-  if (idx < 0) return;
-  data.providers[idx] = { ...data.providers[idx], ...patch };
-  await save(data.providers, data.activeModel);
+  // JSON omits undefined; explicit null resets optional provider defaults on the server.
+  const payload = Object.fromEntries(Object.entries(patch).map(([key, value]) => [key, value === undefined ? null : value]));
+  await mutate(`/configuration/providers/${encodeURIComponent(id)}`, 'PATCH', payload);
 }
 
 export async function removeProvider(id: string) {
-  const data = await load();
-  await save(data.providers.filter(p => p.id !== id), data.activeModel);
+  await mutate(`/configuration/providers/${encodeURIComponent(id)}`, 'DELETE');
 }
 
 export async function getProvider(id: string): Promise<ProviderEntry | undefined> {
@@ -140,102 +134,36 @@ export async function getActiveModel(): Promise<string> {
 }
 
 export async function setActiveModel(key: string) {
-  const data = await load();
-  await save(data.providers, key);
+  await mutate('/configuration/active-model', 'PUT', { model: key });
 }
 
-export function invalidateCache() {
-  cache = null;
-}
+export function invalidateCache() { generation++; cache = null; loading = null; }
 
-async function readToolTransportDescriptor(
-  providerId: string, model: string,
-): Promise<{ protocol: 'openai-chat-completions' | 'anthropic-messages'; fingerprint: string }> {
-  const query = new URLSearchParams({ providerId, model });
-  const response = await fetch(`/api/model-runtime/tool-transport?${query}`);
-  if (!response.ok) throw new Error(`工具传输配置读取失败：HTTP ${response.status}`);
-  const value: unknown = await response.json();
-  if (!value || typeof value !== 'object') throw new Error('工具传输配置响应无效');
-  const descriptor = value as { protocol?: unknown; fingerprint?: unknown };
-  if ((descriptor.protocol !== 'openai-chat-completions'
-    && descriptor.protocol !== 'anthropic-messages')
-    || typeof descriptor.fingerprint !== 'string' || !descriptor.fingerprint) {
-    throw new Error('工具传输配置响应无效');
-  }
-  return { protocol: descriptor.protocol, fingerprint: descriptor.fingerprint };
-}
+/** A click immediately after a field blur must test the value just submitted. */
+export async function flushProviderChanges(): Promise<void> { await writeQueue; }
 
-/**
- * 探测某 model 的原生能力并落盘到 provider.nativeProbe。
- * 连通失败（reachable=false）不落盘，返回结果供 UI 提示。
- */
+/** Probes run beside inference on the backend, using server-owned credentials. */
 export async function probeAndStore(providerId: string, model: string): Promise<{
-  reachable: boolean;
-  native: boolean;
-  status: 'unknown' | 'native-confirmed' | 'text-required';
-  error?: string;
+  reachable: boolean; native: boolean;
+  status: 'unknown' | 'native-confirmed' | 'text-required'; error?: string;
 }> {
-  const { probeNativeCapability } = await import('./native-probe');
-  const provider = await getProvider(providerId);
-  if (!provider) return { reachable: false, native: false, status: 'unknown' };
-
-  const transport = await readToolTransportDescriptor(providerId, model);
-
-  const result = await probeNativeCapability({
-    baseUrl: provider.baseUrl,
-    apiKey: provider.apiKey,
-    headers: provider.customHeaders,
-    model,
-    protocol: transport.protocol,
-    profile: provider.modelProfiles?.[model] ?? 'auto',
-  });
-
-  if (result.status !== 'unknown') {
-    const checkedAt = new Date().toISOString();
-    const probe = { ...(provider.nativeProbe ?? {}) };
-    probe[model] = { native: result.native, probedAt: checkedAt };
-    const toolTransports = { ...(provider.toolTransports ?? {}) };
-    toolTransports[model] = {
-      status: result.status,
-      checkedAt,
-      fingerprint: transport.fingerprint,
-    };
-    await updateProvider(providerId, {
-      nativeProbe: probe,
-      toolTransports,
-      modelCapabilities: writeModelCapability(
-        provider.modelCapabilities, model, 'tools',
-        {
-          status: result.native ? 'supported' : 'unsupported',
-          checkedAt,
-          method: 'auto-tool-v2',
-        },
-      ),
-    });
-  }
+  await flushProviderChanges();
+  const result = await modelRuntimeRequest<{
+    reachable: boolean; native: boolean;
+    status: 'unknown' | 'native-confirmed' | 'text-required'; error?: string;
+  }>('/probes', 'POST', { providerId, model, capability: 'tools' });
+  invalidateCache();
   return result;
 }
 
-export async function probeVisionAndStore(providerId: string, model: string) {
-  const { probeVisionCapability } = await import('./vision-probe');
-  const provider = await getProvider(providerId);
-  if (!provider) return { status: 'inconclusive' as const, error: 'Provider not found' };
-  const transport = await readToolTransportDescriptor(providerId, model);
-  const result = await probeVisionCapability({
-    baseUrl: provider.baseUrl,
-    apiKey: provider.apiKey,
-    headers: provider.customHeaders,
-    model,
-    protocol: transport.protocol,
-  });
-  if (result.status !== 'inconclusive') {
-    await updateProvider(providerId, {
-      modelCapabilities: writeModelCapability(
-        provider.modelCapabilities, model, 'vision',
-        { status: result.status, checkedAt: new Date().toISOString() },
-      ),
-    });
-  }
+export async function probeVisionAndStore(providerId: string, model: string): Promise<{
+  status: 'supported' | 'unsupported' | 'inconclusive'; error?: string;
+}> {
+  await flushProviderChanges();
+  const result = await modelRuntimeRequest<{
+    status: 'supported' | 'unsupported' | 'inconclusive'; error?: string;
+  }>('/probes', 'POST', { providerId, model, capability: 'vision' });
+  invalidateCache();
   return result;
 }
 
