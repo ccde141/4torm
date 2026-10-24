@@ -67,12 +67,8 @@ A Monsoon agent can write a custom tool and request its registration. Once you c
 
 ## Manage Long Conversations
 
-When a conversation grows long, send `/compact` after the current reply finishes to summarize it and continue. Configure automatic compaction, its thresholds, and its model in the Console under **Global settings → Conversation compaction**.
+When a conversation grows long, send `/compact` after the current reply finishes to summarize its history and continue. Find the automatic compaction switch, thresholds, history retention fraction, and compaction model under **Configuration → Settings → Conversation compaction** in the sidebar.
 
-Very long histories are summarized in fragments and then merged. The interface shows the current level and completed fragments. Compaction prefers direct summary output, disables thinking where the provider supports it, and applies separate reasoning and answer budgets otherwise.
-
-The active context changes only after a complete summary is saved. Cancellation, model errors, and unexpected shutdowns preserve the original conversation. Retrying unchanged content reuses completed fragments; an interrupted request is not automatically replayed. Changes to the model, instructions, or source invalidate that work.
-
-Automatic compaction retains recent original messages and archives older history. The summary supports continuation rather than replacing the original record. The Token count shows the current effective input; its tooltip identifies estimates and their basis. Input includes available system instructions and tool definitions without predicting your next message. It refreshes when you open, edit, delete, or compact context; archived text before the summary is not counted again. A new empty conversation may show `--`. Active request measurements and historical costs remain separate, and previews make no model calls or charges.
+During compaction, you can view progress or stop the operation. When it finishes, select **History summary** to view the summary. The conversation list shows the current context's token usage; hover over the count for measurement details.
 
 The taskboard on the right belongs to the current conversation and records goals and progress for multi-step work. You can inspect items the agent added or add, edit, and delete them yourself. Different conversations with the same agent do not share a taskboard.

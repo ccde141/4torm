@@ -7,6 +7,8 @@ import { estimateCompactionTokens } from './estimate.js';
 import { loadCompactionPolicy } from './policy.js';
 import { splitCompactionMessages } from './split.js';
 import { summarizeCompactionPrefix } from './summary.js';
+import { automaticCompactionDeadline } from './automatic-deadline.js';
+import { CompactionRequestTimeout } from './request-deadline.js';
 
 const gates = new Map<string, Promise<unknown>>();
 const arrayGates = new WeakMap<ContextMessage[], Promise<unknown>>();
@@ -27,31 +29,35 @@ export async function compactMessages(options: CompactMessagesOptions): Promise<
       startedAt: Date.now(), reason: options.reason };
     const emit = (event: Pick<CompactionProgress, 'type'> & Partial<CompactionProgress>) =>
       observe(() => options.onProgress?.({ ...progress, ...event, updatedAt: Date.now() }));
-    await emit({ type: 'compact-start' });
+    const deadline = options.reason === 'manual' ? undefined : automaticCompactionDeadline(options.signal);
+    const signal = deadline?.signal ?? options.signal;
     let plan: CompactionCommit;
     try {
-      options.signal?.throwIfAborted();
+      await emit({ type: 'compact-start' });
+      signal?.throwIfAborted();
       await options.archive?.(structuredClone(split.before), options.reason);
-      options.signal?.throwIfAborted();
+      signal?.throwIfAborted();
       const summary = await summarizeCompactionPrefix({ ...options, onStageProgress: async stage => {
         await emit({ type: 'compact-start', message: `${stage.resumed ? '接续压缩' : '正在压缩历史'}`
           + ` · 第 ${stage.level + 1} 层 · ${stage.completed}/${stage.total} 段` });
         await observe(() => options.onStageProgress?.(stage));
-      } }, split.prefix, options.signal, options.reason, policy);
-      options.signal?.throwIfAborted();
+      } }, split.prefix, signal, options.reason, policy);
+      signal?.throwIfAborted();
       if (revision !== fingerprint(options.messages)) throw new Error('压缩期间会话已发生变化，原文未更改');
       // Retained messages stay identical objects: temporary continuation frames and live
       // references must survive. Only the material sent to the summarizer is detached.
       const messages: ContextMessage[] = [...source.slice(0, split.protected.length),
         { role: 'system', content: `[历史压缩记录]\n${summary}` }, ...source.slice(source.length - split.tail.length)];
       plan = { ...split, summary, messages, mode: options.mode, reason: options.reason };
-      await options.commit?.(plan, options.signal);
+      await options.commit?.(plan, signal);
     } catch (error) {
+      const failure = deadline?.signal.reason instanceof CompactionRequestTimeout
+        && error instanceof Error && error.name === 'AbortError' ? deadline.signal.reason : error;
       await emit({ type: 'compact-failed', aborted: options.signal?.aborted
-        || (error instanceof Error && error.name === 'AbortError'),
-      message: error instanceof Error ? error.message : String(error) });
-      throw error;
-    }
+        || (failure instanceof Error && failure.name === 'AbortError'),
+      message: failure instanceof Error ? failure.message : String(failure) });
+      throw failure;
+    } finally { deadline?.dispose(); }
     // Commit is the point of no return: late cancellation or observer failure cannot roll it back.
     options.messages.splice(0, options.messages.length, ...plan.messages);
     await observe(() => options.onCompacted?.(plan));

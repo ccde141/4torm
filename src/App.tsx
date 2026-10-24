@@ -27,6 +27,7 @@ import { ConfirmProvider } from './components/common/ConfirmDialog';
 import DashboardPage from './components/agents/DashboardPage';
 import ChatPage from './components/chat/ChatPage';
 import SettingsPage from './components/layout/SettingsPage';
+import RuntimeSettingsPage from './runtime-settings/SettingsPage';
 import ToolsPage from './components/tools/ToolsPage';
 import SkillsPage from './components/skills/SkillsPage';
 import TradeWindPage from './tradewind/ui/pages/TradeWindPage';
@@ -53,6 +54,7 @@ const PAGE_TITLES: Record<string, { title: MessageKey; subtitle: MessageKey }> =
   tradewind: { title: 'page.tradewind.title', subtitle: 'page.tradewind.subtitle' },
   tide:      { title: 'page.tide.title', subtitle: 'page.tide.subtitle' },
   model:     { title: 'page.model.title', subtitle: 'page.model.subtitle' },
+  settings:  { title: 'page.settings.title', subtitle: 'page.settings.subtitle' },
   mcp:       { title: 'page.mcp.title', subtitle: 'page.mcp.subtitle' },
 };
 
@@ -94,6 +96,7 @@ function PageContent({ page, preselectSession, onClearPreselect, onNavigate }: {
       <div className="page-panel" data-page="tradewind" style={show('tradewind')}><div style={scrollArea}><TradeWindPage /></div></div>
       <div className="page-panel" data-page="tide" style={show('tide')}><div style={scrollArea}><TidePage active={page === 'tide'} preselectTask={page === 'tide' ? preselectSession : null} onClearPreselect={onClearPreselect} /></div></div>
       <div className="page-panel" data-page="model" style={show('model')}><div style={scrollArea}><SettingsPage /></div></div>
+      <div className="page-panel" data-page="settings" style={show('settings')}><div style={scrollArea}>{page === 'settings' && <RuntimeSettingsPage />}</div></div>
       <div className="page-panel" data-page="mcp" style={show('mcp')}><div style={scrollArea}><McpPage /></div></div>
     </div>
   );

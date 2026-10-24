@@ -14,7 +14,9 @@ Connecting a server does not give its tools to every agent automatically. Open e
 
 ## Add an MCP Server
 
-Open MCP from the sidebar, select **Add**, choose a transport, and enter its configuration. The service name identifies it on the page and groups its tools for agents; it cannot be renamed after creation.
+Open **MCP** under **Capabilities** in the sidebar, select **Add**, choose a transport, and enter its configuration.
+
+The service name identifies it on the page and groups its tools for agents; it cannot be renamed after creation.
 
 For local **stdio**, enter the launch command and add arguments in order. Each item is one complete argument and retains its spaces. Environment variables and a working directory are optional.
 

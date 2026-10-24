@@ -12,9 +12,9 @@ import { finishConvectionChairContext } from './chair-context.js';
 import { buildConvectionChairMessages } from './request-context.js';
 import { estimateCompactionTokens } from '../../../engine/shared/compaction/index.js';
 import { withConvectionModelUsage } from './model-usage.js';
-import { callPreparedModel } from '../../../engine/shared/react/model-call.js';
+import { callPreparedModel, ModelCallTimeout } from '../../../engine/shared/react/model-call.js';
+import { LLM_TIMEOUT_MS } from '../../../engine/shared/react/limits.js';
 
-const LLM_TIMEOUT_MS = 3_600_000;
 const HEARTBEAT_INTERVAL_MS = 5_000;
 
 export async function handleChair(
@@ -83,20 +83,15 @@ interface ChairRequest {
 async function requestChairReply(
   request: ChairRequest,
 ): Promise<{ content: string; usage?: TokenUsage } | null> {
-  const abort = new AbortController();
-  let timedOut = false;
   let tokenReceived = false;
   const startedAt = Date.now();
-  const timer = setTimeout(() => { timedOut = true; abort.abort(); }, LLM_TIMEOUT_MS);
-  const onAbort = () => abort.abort();
-  request.signal?.addEventListener('abort', onAbort, { once: true });
   const heartbeat = startChairHeartbeat(request, startedAt, () => tokenReceived);
   try {
     const llm = request.llm ?? { call: (messages, _options, onChunk, signal, _tools, onReasoning) => callLLM({
       dataDir: request.dataDir, fullModelKey: request.model, messages, onChunk, onReasoning, signal,
     }) } satisfies LLMCaller;
     const response = await withAgentActivity(request.agentId, 'convection', () => callPreparedModel(llm,
-      request.messages, abort.signal, {
+      request.messages, request.signal, {
         onChunk: chunk => { tokenReceived = true; request.emit?.({ type: 'chair-token', chunk }); },
         onReasoning: chunk => { tokenReceived = true; request.emit?.({ type: 'chair-reasoning', chunk }); },
         onEvent: event => { if (event.type === 'model-request') request.emit?.(event); },
@@ -105,11 +100,9 @@ async function requestChairReply(
     return { content, usage: response.usage };
   } catch (error) {
     if (request.signal?.aborted) return null;
-    throw normalizeChairError(error, timedOut);
+    throw normalizeChairError(error);
   } finally {
     if (heartbeat) clearInterval(heartbeat);
-    clearTimeout(timer);
-    request.signal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -125,8 +118,8 @@ function startChairHeartbeat(
   }, HEARTBEAT_INTERVAL_MS);
 }
 
-function normalizeChairError(error: unknown, timedOut: boolean): unknown {
-  if (timedOut) return chairError('MODEL_TIMEOUT', 'timeout',
+function normalizeChairError(error: unknown): unknown {
+  if (error instanceof ModelCallTimeout) return chairError('MODEL_TIMEOUT', 'timeout',
     `会议助理响应超时（${LLM_TIMEOUT_MS / 1000}s）`, error);
   if (error instanceof FrameworkError) return error;
   return chairError('MODEL_REQUEST_FAILED', 'provider', '模型请求失败', error);

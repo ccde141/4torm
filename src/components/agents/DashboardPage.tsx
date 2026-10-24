@@ -13,7 +13,6 @@ import { projectAgentActivity } from './dashboard-activity';
 import { mergeAgentRecords } from './agent-record-view';
 import { useDashboardRecentRecords } from './useDashboardRecentRecords';
 import AgentDetailDialog from './AgentDetailDialog';
-import { CompactionSettingsDialog } from './CompactionSettingsDialog';
 import { PresenceItems } from '../common/PresenceItems';
 import { useLocale } from '../../i18n/LocaleContext';
 import { DashboardStatusFilters, DashboardStatusSummary } from './DashboardStatusControls';
@@ -27,7 +26,6 @@ export default function DashboardPage({ active = true, onNavigate }: {
   const recent = useDashboardRecentRecords(active, agents.map(agent => agent.id));
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [creating, setCreating] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
   const [offlineIds, setOfflineIds] = useState<Set<string>>(new Set());
@@ -146,7 +144,6 @@ export default function DashboardPage({ active = true, onNavigate }: {
 
       <div className="dashboard__toolbar">
         <DashboardStatusFilters statuses={SYSTEM_STATUSES} filter={filter} onSelect={setFilter} />
-        <button className="dashboard__filter-btn" onClick={() => setSettingsOpen(true)}>{t('compaction.settings')}</button>
         <button className="dashboard__create-btn primary-cta-btn" onClick={() => setCreating(true)}>
           {t('dashboard.createAgent')}
         </button>
@@ -181,7 +178,6 @@ export default function DashboardPage({ active = true, onNavigate }: {
       {creating && (
         <AgentConfigModal mode="create" onClose={() => setCreating(false)} onSave={handleSaveConfig} />
       )}
-      {settingsOpen && <CompactionSettingsDialog onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

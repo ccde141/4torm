@@ -10,6 +10,7 @@ import { openSummaryCheckpoint, summaryHash } from './checkpoint.js';
 import { clipSummaryBody } from './body-limit.js';
 import { generateCompactionSummary } from './generation.js';
 import { CompactionRequestTimeout } from './request-deadline.js';
+import { AUTOMATIC_COMPACTION_TIMEOUT_MS } from './automatic-deadline.js';
 export { summaryOutputBudget } from './budget.js';
 
 export async function summarizeCompactionPrefix(
@@ -22,7 +23,7 @@ export async function summarizeCompactionPrefix(
   for (let index = 0; index < models.length; index++) {
     const model = models[index];
     try {
-      const summary = await summarizeWithModel(options, model, text, signal, prefix);
+      const summary = await summarizeWithModel(options, model, text, signal, prefix, reason);
       validateCompactionSummary(summary, text, prefix);
       return summary;
     } catch (error) {
@@ -56,7 +57,7 @@ function summaryModels(options: CompactionOptions, policy: CompactionPolicy): st
 
 async function summarizeWithModel(
   options: CompactionOptions, model: string, text: string, signal?: AbortSignal,
-  prefix?: readonly ContextMessage[],
+  prefix?: readonly ContextMessage[], reason: CompactionReason = 'manual',
 ): Promise<string> {
   const prompt = compactionPrompt(options);
   const { inputTokens, maxContentTokens, maxOutputTokens } = await resolveSummaryBudget(options, model);
@@ -71,6 +72,7 @@ async function summarizeWithModel(
     const stageBudget = summaryStageBudget(estimateTextTokens(fragment), final, { maxContentTokens, maxOutputTokens });
     const summary = await run({ model, prompt: compactionSummaryPrompt(prompt, fragment, stageBudget.maxContentTokens),
       text: fragment, ...stageBudget, signal,
+      requestTimeoutMs: reason === 'manual' ? undefined : AUTOMATIC_COMPACTION_TIMEOUT_MS,
       onChunk: final ? options.onSummaryChunk : undefined });
     return clipSummaryBody(summary, stageBudget.maxContentTokens);
   }, signal, { checkpoint, onProgress: options.onStageProgress, onCachedFinal: options.onSummaryChunk,

@@ -15,6 +15,7 @@ import type { SeasonSessionPort } from '../sessions/season-session-port.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import { tideGeneratedMediaContext } from './turn-context.js';
 import type { ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
+import { TideConversationDeadline } from './conversation-deadline.js';
 
 const TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -115,15 +116,14 @@ async function chatWithTimeout(
     ? usage => onUsage(usage, prepared.resolved) : undefined,
   () => prepared.runner.abort(), onModelRequest ? request => onModelRequest(request, prepared.resolved) : undefined);
   prepared.compaction.flushUsage = () => state.flush();
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    prepared.runner.abort();
-  }, TIMEOUT_MS);
+  const deadline = new TideConversationDeadline(TIMEOUT_MS, () => prepared.runner.abort());
+  prepared.compaction.onActivityChanged = active => deadline.setCompacting(active);
+  const disposeDeadline = () => deadline.dispose();
+  signal?.addEventListener('abort', disposeDeadline, { once: true });
   try {
     const result = await prepared.runner.chat(prepared.systemPrompt, prepared.messages, state.onEvent);
     await state.flush();
-    assertTideRunNotTimedOut(timedOut, TIMEOUT_MS);
+    assertTideRunNotTimedOut(deadline.timedOut, TIMEOUT_MS);
     signal?.throwIfAborted();
     prepared.resolved.turnContext = tideGeneratedMediaContext(prepared.messages, prepared.turnInput, state.snapshot().toolContext);
     if (prepared.resolved.compactedContext?.at(-1)?.role !== 'assistant') {
@@ -143,10 +143,12 @@ async function chatWithTimeout(
       snapshot.usage,
       { cause: failure },
       prepared.compaction.notices,
-      !!signal?.aborted && !persistFailed && !timedOut,
+      !!signal?.aborted && !persistFailed && !deadline.timedOut,
     );
   } finally {
-    clearTimeout(timer);
+    prepared.compaction.onActivityChanged = undefined;
+    signal?.removeEventListener('abort', disposeDeadline);
+    deadline.dispose();
   }
 }
 

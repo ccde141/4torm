@@ -41,11 +41,11 @@ import { meetingCompactionTransform, meetingOpeningCaller } from './meeting-cont
 import { buildChairContext, captureChairContextBoundary, chairCompactionCaller, finishChairContext } from './chair-context-compaction.js';
 import { buildVirtualToolDefs } from './virtual-tools';
 import { appendMeetingReasoning, createChairAssistantMessage } from './meeting-reasoning';
-import { createMeetingIdleGuard, MEETING_IDLE_TIMEOUT_MS } from './meeting-idle-guard';
+import { createMeetingIdleGuard, MEETING_IDLE_TIMEOUT_MS, withMeetingIdleGuard } from './meeting-idle-guard';
 import { resolveTradewindTermination } from './tradewind-outcome.js';
 import { FrameworkError } from '../../shared/framework-error.js';
 import type { ReActTermination } from '../../shared/react/outcome.js';
-import type { ToolCallOutcome } from '../../shared/react/native-loop.js';
+import type { LLMCaller as SharedLLMCaller, ToolCallOutcome } from '../../shared/react/native-loop.js';
 import type { FrameworkErrorKind } from '../../shared/framework-error.js';
 import type { NodeRunner } from './node-runner.js';
 import {
@@ -56,7 +56,6 @@ import {
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
-const LLM_TIMEOUT_MS = 3_600_000;
 const HEARTBEAT_INTERVAL_MS = 5_000;
 
 // ── 事件类型 ──────────────────────────────────────────────────────
@@ -245,7 +244,8 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         { role: 'system', content: systemText },
         ...meetingContextMessages(session.publicMessages),
       ];
-      const llmTransform = await meetingCompactionTransform(dataDir, session, agent.model);
+      const compact = await meetingCompactionTransform(dataDir, session, agent.model);
+      const llmTransform = (llm: SharedLLMCaller) => withMeetingIdleGuard(compact(llm), idleGuard);
 
       // toolCaller：双路径共用，contact 路由不变
       //
@@ -491,9 +491,9 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
     ? (chunk: string) => { onEvent({ type: 'chair-reasoning', chunk }); }
     : undefined;
   const idleGuard = createMeetingIdleGuard(signal);
-  const caller = chairCompactionCaller({ call: (messages, _options, chunk, callSignal, _tools, reasoning) => callLLM({
+  const caller = withMeetingIdleGuard(chairCompactionCaller({ call: (messages, _options, chunk, callSignal, _tools, reasoning) => callLLM({
     dataDir, fullModelKey: agent.model, messages, onChunk: chunk, signal: callSignal, onReasoning: reasoning,
-  }) }, dataDir, session, agent);
+  }) }, dataDir, session, agent), idleGuard);
 
   try {
     const r = await captureTokenUsage(() => callPreparedModel(caller, msgs, idleGuard.signal, {
@@ -597,10 +597,10 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
 
     try {
       let streamRaw = '';
-      const caller = await meetingOpeningCaller({ call: (context, _options, chunk, callSignal, _tools, reasoning) => callLLM({
+      const caller = withMeetingIdleGuard(await meetingOpeningCaller({ call: (context, _options, chunk, callSignal, _tools, reasoning) => callLLM({
         dataDir, fullModelKey: agent.model, messages: context, onChunk: chunk,
         signal: callSignal, onReasoning: reasoning,
-      }) }, dataDir, session, agent.model, participant);
+      }) }, dataDir, session, agent.model, participant), idleGuard);
       const r = await captureTokenUsage(() => callPreparedModel(caller, messages, idleGuard.signal, {
         onChunk: (chunk) => {
           idleGuard.touch(); streamRaw += chunk;

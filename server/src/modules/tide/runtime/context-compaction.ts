@@ -14,6 +14,7 @@ import { tideTaskSessionDir } from '../sessions/session-paths.js';
 
 export class TideContextCompaction {
   flushUsage: () => Promise<unknown> = async () => undefined;
+  onActivityChanged?: (active: boolean) => void;
   private changed = false;
   private progress?: CompactionProgress;
   readonly notices: string[] = [];
@@ -38,6 +39,7 @@ export class TideContextCompaction {
       archive: (before, reason) => this.archive(before, reason),
       commit: (plan, signal) => this.commit(plan, signal),
       onProgress: async event => { this.progress = event;
+        this.onActivityChanged?.(event.type === 'compact-start');
         await this.onProgress?.(event, this.resolved.sessionId, this.resolved.existing?.revision); },
       onNotice: async notice => { this.notices.push(notice.message);
         await this.onNotice?.(notice.message); },

@@ -1,0 +1,19 @@
+.runtime-settings-page { padding: var(--space-6); }
+.runtime-settings-section { max-width: 1200px; margin: 0 auto; padding: clamp(20px, 3vw, 32px);
+  background: var(--glass-bg-soft); border: 1px solid var(--glass-border); border-radius: 20px;
+  backdrop-filter: blur(var(--glass-blur)); -webkit-backdrop-filter: blur(var(--glass-blur)); }
+.runtime-settings-section__header { display: flex; align-items: center; justify-content: space-between;
+  gap: 20px; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--glass-border); }
+.runtime-settings-section__identity { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.runtime-settings-section__icon { width: 48px; height: 48px; display: grid; place-items: center;
+  flex-shrink: 0; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: 14px; }
+.runtime-settings-section__icon svg { width: 26px; height: 26px; }
+.runtime-settings-section h2 { font-size: var(--text-xl); font-weight: var(--font-semibold); margin-bottom: 6px; }
+.runtime-settings-section__header p { color: var(--color-text-secondary); font-size: var(--text-sm); line-height: 1.6; }
+.runtime-settings-section__scope { flex-shrink: 0; color: var(--color-text-secondary); font-size: var(--text-xs);
+  border: 1px solid var(--glass-border); border-radius: var(--border-radius-full); padding: 6px 10px; }
+@media(max-width: 600px) {
+  .runtime-settings-page { padding: 12px; }
+  .runtime-settings-section { padding: 16px; border-radius: 14px; }
+  .runtime-settings-section__header { align-items: flex-start; flex-direction: column; gap: 12px; }
+}

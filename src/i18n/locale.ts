@@ -43,6 +43,7 @@ const coreZh = {
   'nav.tools': '工具',
   'nav.skills': '技能',
   'nav.models': '模型',
+  'nav.settings': '设置',
   'nav.expand': '展开功能区',
   'nav.collapse': '收起功能区',
   'nav.bugReport': 'Bug 反馈',
@@ -128,6 +129,8 @@ const coreZh = {
   'page.tide.subtitle': '定时唤醒 Agent',
   'page.model.title': '模型',
   'page.model.subtitle': '模型提供商与 API 配置',
+  'page.settings.title': '设置',
+  'page.settings.subtitle': '会话压缩与上下文管理',
   'page.mcp.title': 'MCP',
   'page.mcp.subtitle': '外部工具服务管理',
 } as const;
@@ -146,6 +149,7 @@ const coreEn: Record<keyof typeof coreZh, string> = {
   'nav.tools': 'Tools',
   'nav.skills': 'Skills',
   'nav.models': 'Models',
+  'nav.settings': 'Settings',
   'nav.expand': 'Expand navigation',
   'nav.collapse': 'Collapse navigation',
   'nav.bugReport': 'Report a bug',
@@ -231,6 +235,8 @@ const coreEn: Record<keyof typeof coreZh, string> = {
   'page.tide.subtitle': 'Wake agents on a schedule',
   'page.model.title': 'Models',
   'page.model.subtitle': 'Model providers and API settings',
+  'page.settings.title': 'Settings',
+  'page.settings.subtitle': 'Conversation compaction and context management',
   'page.mcp.title': 'MCP',
   'page.mcp.subtitle': 'Manage external tool services',
 };

@@ -48,7 +48,7 @@ async function generatePhase(input: CompactionGenerationInput, preferBody: boole
     : input.maxReasoningTokens ?? Math.min(2_048, Math.max(0, input.maxOutputTokens - input.maxContentTokens));
   const prompt = preferBody ? input.prompt + '\n思考预算已经用尽。现在直接输出简短压缩正文，'
     + '先保留任务目标、已核实事实、必要 ID 与未完成事项；不要继续推导，不要输出思考过程。' : input.prompt;
-  const deadline = compactionRequestDeadline(input.signal);
+  const deadline = compactionRequestDeadline(input.signal, { totalMs: input.requestTimeoutMs });
   try {
     const result = await callLLM({ dataDir: input.dataDir, fullModelKey: input.model, purpose: 'compaction',
       signal: deadline.signal, outputTokenBudget: input.maxOutputTokens,
@@ -65,7 +65,7 @@ async function generatePhase(input: CompactionGenerationInput, preferBody: boole
     });
     return { body: body.read(), finishReason: result.finishReason };
   } catch (error) {
-    if (deadline.signal.aborted && !input.signal?.aborted) throw deadline.signal.reason;
+    if (deadline.signal.aborted) throw deadline.signal.reason;
     throw error;
   } finally { deadline.dispose(); }
 }

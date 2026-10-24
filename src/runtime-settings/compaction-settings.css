@@ -1,0 +1,52 @@
+.compaction-settings { color: var(--color-text-primary); }
+.compaction-settings__grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  align-items: start; gap: 20px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.compaction-settings__secondary { display: grid; gap: 20px; min-width: 0; }
+.compaction-settings__group { background: color-mix(in srgb, var(--glass-bg) 70%, transparent);
+  border: 1px solid var(--glass-border); border-radius: 14px; padding: 22px; min-width: 0; }
+.compaction-settings h3 { font-size: var(--text-base); font-weight: var(--font-semibold); margin: 0 0 18px; }
+.compaction-settings h4 { font-size: var(--text-xs); font-weight: var(--font-medium);
+  color: var(--color-text-secondary); padding-top: 20px; margin: 20px 0 12px; border-top: 1px solid var(--glass-border); }
+.compaction-settings p { font-size: var(--text-xs); line-height: 1.7; color: var(--color-text-secondary); margin-top: 12px; }
+.compaction-settings input:not([type=checkbox]), .compaction-settings select, .compaction-settings__button {
+  color: var(--color-text-primary); background: var(--glass-bg); border: 1px solid var(--glass-border-hover);
+  border-radius: 9px; padding: 10px 12px; font: inherit; font-size: var(--text-sm); min-height: 42px; }
+.compaction-settings select { width: 100%; min-width: 0; }
+.compaction-settings select option { background: var(--color-bg-secondary); color: var(--color-text-primary); }
+.compaction-settings :is(input, select, button):focus-visible, .compaction-settings__button:focus-visible {
+  outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.compaction-settings__toggle { display: flex; align-items: center; justify-content: space-between; gap: 20px; cursor: pointer; }
+.compaction-settings__toggle strong { display: block; font-size: var(--text-sm); font-weight: var(--font-medium); }
+.compaction-settings__toggle small { display: block; color: var(--color-text-secondary); font-size: var(--text-xs); line-height: 1.7; margin-top: 6px; }
+.compaction-settings__toggle input { appearance: none; position: relative; width: 40px; height: 24px; flex-shrink: 0;
+  border: 1px solid var(--glass-border-hover); border-radius: 20px; background: var(--glass-bg); cursor: pointer;
+  transition: background .2s, border-color .2s; }
+.compaction-settings__toggle input::before { content: ''; position: absolute; width: 16px; height: 16px;
+  left: 3px; top: 3px; border-radius: 50%; background: var(--color-text-secondary); transition: transform .2s, background .2s; }
+.compaction-settings__toggle input:checked { background: var(--color-accent); border-color: var(--color-accent); }
+.compaction-settings__toggle input:checked::before { transform: translateX(16px); background: var(--color-on-accent); }
+.compaction-settings__thresholds { display: grid; gap: 10px; }
+.compaction-settings__thresholds label, .compaction-settings__field { display: flex; justify-content: space-between;
+  align-items: center; gap: 12px; font-size: var(--text-sm); }
+.compaction-settings__thresholds input { width: 108px; flex-shrink: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.compaction-settings__field select { width: 112px; }
+.compaction-settings__models { display: flex; align-items: stretch; gap: 10px; margin-top: 12px; }
+.compaction-settings__models select { flex: 1; }
+.compaction-settings__button { cursor: pointer; white-space: nowrap; transition: background .2s, border-color .2s; }
+.compaction-settings__button:hover:not(:disabled) { background: var(--glass-bg-hover); border-color: var(--glass-border-hover); }
+.compaction-settings__footer { display: flex; justify-content: space-between; align-items: center; gap: 20px;
+  padding-top: 22px; margin-top: 24px; border-top: 1px solid var(--glass-border); }
+.compaction-settings .compaction-settings__error { color: var(--color-error); margin: 0; }
+.compaction-settings .compaction-settings__feedback { color: var(--color-success); margin: 0; }
+.compaction-settings__loading { padding: 24px 0; color: var(--color-text-secondary); }
+.compaction-settings__loading button { margin-top: 16px; }
+.compaction-settings button:disabled, .compaction-settings fieldset:disabled { cursor: wait; opacity: .65; }
+@media(max-width: 960px) { .compaction-settings__grid { grid-template-columns: minmax(0, 1fr); } }
+@media(max-width: 600px) {
+  .compaction-settings__group { padding: 16px; }
+  .compaction-settings__models { flex-direction: column; }
+  .compaction-settings__footer { gap: 12px; }
+}
+@media(prefers-reduced-motion: reduce) {
+  .compaction-settings__toggle input, .compaction-settings__toggle input::before { transition: none; }
+}

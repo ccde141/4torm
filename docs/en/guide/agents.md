@@ -53,21 +53,38 @@ Installed skills are enabled for a new agent by default and can be deselected in
 
 A warning beside a tool name indicates that it can write or delete files, run commands, or perform similar actions. It does not mean every call displays another confirmation prompt.
 
-## Global Conversation Compaction
+## Conversation Compaction
 
-In the Console, select **Global settings**, then open **Conversation compaction**. Automatic compaction is off by default. When enabled, you can set separate thresholds for each kind of conversation or meeting and choose the fraction of older content to compact. Tide tasks that append to a Monsoon conversation use the Monsoon threshold.
+Open **Settings** under **Configuration** in the sidebar, then select **Conversation compaction**.
 
-After a threshold is reached, the system summarizes older content before the next message or model call and retains recent text. For example, a threshold of **240K tokens** with a **2/3** fraction compacts roughly the older two-thirds and keeps the most recent third unchanged. Original records are archived.
+### Set Up Automatic Compaction
 
-Saved changes require no restart; subsequent checks use the latest settings.
+Enable **Automatic compaction** and configure the following:
 
-Ordinary conversations can use their current model or a fixed compaction model. After choosing a fixed model, select **Test model** to check whether it is available. Meetings use the meeting assistant's model and compaction prompt, with the fixed model available as a fallback.
+| Setting | How to use it |
+|---|---|
+| **Thresholds** | Set a threshold for each kind of conversation. Values use K tokens: enter `240` for 240,000 tokens. |
+| **Prefix to compact** | Choose how much older content to summarize. **2/3** summarizes roughly the older two-thirds and retains the most recent third unchanged. |
+| **Compaction model** | Use the current conversation model or choose a fixed model. |
+| **Test model** | Check whether the selected model can generate a summary. |
 
-If the preferred model cannot complete compaction, the system reports the reason and tries a different configured fallback model. If that also fails, it preserves the original content and displays the error. The automatic compaction switch controls threshold-triggered compaction. If the model API explicitly reports that the input exceeds its limit, the system still attempts compaction before continuing the current request, even with automatic compaction disabled.
+Select **Save** to apply your changes without restarting. Once a threshold is reached, compaction summarizes older history before the next model call.
 
-To compact manually, send `/compact` to summarize the current conversation's entire history while archiving the original records. Independent Tide conversations use the **Compact session** button in the task details.
+Meetings use the meeting assistant's model and compaction prompt. Tide tasks that append to a Monsoon conversation use the Monsoon threshold.
 
-During compaction, the interface shows progress and provides **Stop compaction**. Stopping or failing preserves the original content, and you can start compaction again when needed. The conversation's summary changes only after it has been saved successfully. Select the **History summary** divider to expand the summary. During replies and compaction, the last known usage remains visible until the count is refreshed when the operation ends.
+### Compact Manually
+
+In Monsoon, send `/compact` after the current reply finishes to summarize the conversation's history. For an independent Tide conversation, open its task details and select **Compact conversation**.
+
+The original records are archived, and you can continue the conversation with the saved summary.
+
+### View Compaction Progress
+
+The interface shows compaction progress, including the current stage and completed fragments for long histories. Each automatic compaction job has a two-hour limit.
+
+Select **Stop compaction** to stop the current operation. After stopping or a failure, you can start compaction again. When summarizing the same content again, completed fragments can be reused.
+
+When compaction finishes, select the **History summary** divider in the conversation to expand the summary.
 
 ## Modify or Delete an Agent
 
