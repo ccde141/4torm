@@ -1,5 +1,6 @@
 import { loadAgent } from '../shared/agent-loader.js';
-import { compactionPrompt, summarizeCompactionPrefix, type CompactionNotice } from '../shared/compaction/index.js';
+import { compactionPrompt, summarizeCompactionPrefix, type CompactionNotice,
+  type CompactionStageProgress } from '../shared/compaction/index.js';
 
 export function buildSeatCompactionPrompt(subject: string, summaryInput: string): string {
   return compactionPrompt({ kind: 'conversation', area: 'cycloneConversation', prompt: subject })
@@ -18,13 +19,16 @@ export async function generateSeatCompactionSummary(params: {
   subject: string;
   compactionPrompt?: string;
   summaryInput: string;
+  scopeKey?: string;
   signal?: AbortSignal;
   onChunk?: (chunk: string) => void;
   onNotice?: (notice: CompactionNotice) => void | Promise<void>;
+  onStageProgress?: (stage: CompactionStageProgress) => void | Promise<void>;
 }): Promise<string> {
   const summary = await summarizeCompactionPrefix({ dataDir: params.dataDir,
     area: 'cycloneConversation', kind: 'conversation', model: params.fullModelKey,
-    prompt: [params.compactionPrompt, params.subject].filter(Boolean).join('\n'), onNotice: params.onNotice },
+    prompt: [params.compactionPrompt, params.subject].filter(Boolean).join('\n'), onNotice: params.onNotice,
+    scopeKey: params.scopeKey, onStageProgress: params.onStageProgress },
   [{ role: 'user', content: params.summaryInput }], params.signal);
   params.onChunk?.(summary);
   return summary;

@@ -1,8 +1,8 @@
 export const convectionZh = {
-  'convection.turn.preparing': '正在准备',
+  'convection.turn.preparing': '进行中',
   'convection.turn.waitingModel': '等待模型响应',
   'convection.turn.executingTools': '执行工具中',
-  'convection.turn.operationCount': '发言准备 · {count} 项操作',
+  'convection.turn.operationCount': '执行过程 · {count} 项操作',
   'convection.turn.outputLines': '{count} 行输出',
   'convection.page.loadListFailed': '加载对流列表失败',
   'convection.page.loadSessionFailed': '加载对流会话失败',
@@ -65,10 +65,10 @@ export const convectionZh = {
 } as const;
 
 export const convectionEn: Record<keyof typeof convectionZh, string> = {
-  'convection.turn.preparing': 'Preparing',
+  'convection.turn.preparing': 'In progress',
   'convection.turn.waitingModel': 'Waiting for model response',
   'convection.turn.executingTools': 'Running tools',
-  'convection.turn.operationCount': 'Preparing turn · {count} operations',
+  'convection.turn.operationCount': 'Execution process · {count} operations',
   'convection.turn.outputLines': '{count} lines of output',
   'convection.page.loadListFailed': 'Unable to load Convection meetings',
   'convection.page.loadSessionFailed': 'Unable to load Convection meeting',

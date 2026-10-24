@@ -200,7 +200,11 @@ async function fixture(t: test.TestContext,
       model: 'test:model', systemPrompt: '', messages: [], createdAt: now, updatedAt: now,
       revision: 1, messageRevision: 1 });
   }
-  const port = wrapPort(createMonsoonExternalSessionPort(dataDir));
+  const source = createMonsoonExternalSessionPort(dataDir);
+  const port = wrapPort({ acquire: source.acquire.bind(source), read: source.read.bind(source),
+    activeContext: source.activeContext.bind(source), list: source.list.bind(source),
+    append: source.append.bind(source), recordUsage: source.recordUsage.bind(source),
+    archive: source.archive.bind(source), commitCompaction: source.commitCompaction.bind(source) });
   const feature: TideFeature = createTideFeature({ dataDir, seasonSessions: port, execute });
   t.after(() => feature.scheduler.drain());
   const gateway = new AgentCollaborationGateway(new CollaborationRouter([feature.module]),

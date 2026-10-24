@@ -39,6 +39,7 @@ test('hard process exit during summary recovers original Tide context and settle
   await fs.writeFile(script, `
     import { TideContextCompaction } from ${JSON.stringify(new URL('../runtime/context-compaction.ts', import.meta.url).href)};
     import { FileTideRunStateRepository } from ${JSON.stringify(new URL('./run-state-repository.ts', import.meta.url).href)};
+    import { callPreparedModel } from ${JSON.stringify(new URL('../../../engine/shared/react/model-call.ts', import.meta.url).href)};
     const directory = ${JSON.stringify(directory)};
     const task = ${JSON.stringify(task)};
     const session = ${JSON.stringify(session)};
@@ -49,9 +50,9 @@ test('hard process exit during summary recovers original Tide context and settle
         setInterval(() => {}, 1000); process.stdout.write('SUMMARIZING\\n');
         return new Promise(() => {});
       } }, (event, sessionId) => states.recordCompactionProgress(task.id, ${JSON.stringify(run.runId)}, event, sessionId));
-    await compactor.transform({ call: async () => { throw new Error('must not reach model'); } }).call([
+    await callPreparedModel(compactor.transform({ call: async () => { throw new Error('must not reach model'); } }), [
       { role: 'system', content: 'rules' }, ...session.messages, { role: 'user', content: 'continue' }
-    ], {}, () => {}, new AbortController().signal);
+    ], new AbortController().signal, {});
   `);
   const child = spawn(process.execPath, ['--import', 'tsx', script], { cwd: process.cwd(),
     windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });

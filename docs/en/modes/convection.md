@@ -12,6 +12,8 @@ Each room keeps its own public discussion, assistant chat, and workspace. Switch
 
 Enter a topic or request in the bottom composer. Participants reply in the order shown in the header. A later speaker can see the previous public record and the final replies of members who spoke earlier in the current round. Reasoning and tool execution appear in the interface for you to inspect; they are not passed to later members as public statements.
 
+Reasoning and execution details start in height-limited previews. The left arrow collapses or opens a section; the separate Full height / Limit height button changes its height. Thin lines separate reasoning, execution, and the final reply, which stays outside the process area. Reasoning in the private assistant chat uses the same preview and collapse controls.
+
 ![Public discussion with two participants in a meeting room](/images/convection/meeting-room-current.png)
 
 Participants can use their configured tools and collaborate in the room's shared workspace. Files written by an earlier speaker can be read and continued by later members. Each Agent's long-term memory remains its own and is not shared automatically just because they attend the same meeting.

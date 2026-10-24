@@ -37,6 +37,7 @@ interface PreparedLoop {
   llm: LLMCaller;
   beforeFinish?: () => Promise<string[]>;
   enableTools: boolean;
+  close?: () => void;
 }
 
 export async function executeSessionLoop(
@@ -47,10 +48,12 @@ export async function executeSessionLoop(
     generatedContextStart = next.length;
     input.inputRuntime?.rebase(next.length);
   });
-  const result = input.options.native
-    ? await executeNative(input, prepared)
-    : await executeText(input, prepared);
-  return finishLoop(input, result, generatedContextStart);
+  try {
+    const result = input.options.native
+      ? await executeNative(input, prepared)
+      : await executeText(input, prepared);
+    return finishLoop(input, result, generatedContextStart);
+  } finally { prepared.close?.(); }
 }
 
 async function prepareLoop(input: SessionLoopInput,
@@ -58,7 +61,7 @@ async function prepareLoop(input: SessionLoopInput,
   const opts = input.options;
   const toolSets = await loadSessionToolSets(opts);
   const toolDefs = toolSets.runtime;
-  const handoff = opts.extension?.createHandoff?.();
+  const handoff = opts.extension?.createHandoff?.(input.emit);
   const beforeFinish = handoff ? () => handoff.beforeFinish(
     input.signal,
     () => input.inputRuntime?.steering.hasPending() ?? false,
@@ -76,7 +79,7 @@ async function prepareLoop(input: SessionLoopInput,
     setPendingRegistration: input.setPendingRegistration,
   });
   return {
-    toolDefs, toolCaller, beforeFinish,
+    toolDefs, toolCaller, beforeFinish, close: () => handoff?.close(),
     llm: createLlmCaller(input, handoff, rebase),
     enableTools: shouldAttachToolCaller(toolDefs, !!opts.interceptTool),
   };
@@ -92,7 +95,7 @@ function createLlmCaller(
     callLLM({ dataDir: opts.dataDir, fullModelKey: opts.model, messages,
       options: { temperature: opts.temperature }, onChunk, signal, tools, onReasoning, onToolProgress }) };
   const caller = opts.llmTransform?.(base, input.emit, rebase) ?? base;
-  return { async call(msgs, _options, onChunk, signal, tools, onReasoning, onToolProgress) {
+  return { async prepare(msgs, options, signal, tools) {
     if (!signal?.aborted && handoff) {
       const notices = await handoff.notifications();
       msgs.push(...notices.map(content => ({ role: 'user' as const, content })));
@@ -100,8 +103,9 @@ function createLlmCaller(
     await opts.checkpoint?.(msgs);
     await input.inputRuntime?.beforeModel();
     if (input.inputRuntime && signal?.aborted) throw new Error('Conversation aborted');
-    return caller.call(msgs, _options, onChunk, signal, tools, onReasoning, onToolProgress);
-  } };
+    if (!signal?.aborted) handoff?.inContext();
+    await caller.prepare?.(msgs, options, signal, tools);
+  }, recover: caller.recover?.bind(caller), call: (...args) => caller.call(...args) };
 }
 
 function executeNative(input: SessionLoopInput, prepared: PreparedLoop): Promise<ReActLoopResult> {
@@ -164,11 +168,11 @@ function finishLoop(
 function emitNativeEvent(emit: SessionLoopInput['emit'], event: ReActStreamEvent): void {
   if (event.type === 'token') emit({ type: 'token', content: event.chunk });
   else if (event.type === 'reasoning') emit({ type: 'reasoning', content: event.chunk });
-  else if (event.type === 'tool-progress' || event.type === 'heartbeat' || event.type === 'usage') emit(event);
+  else if (event.type === 'tool-progress' || event.type === 'heartbeat' || event.type === 'usage' || event.type === 'model-request') emit(event);
 }
 
 function emitTextEvent(emit: SessionLoopInput['emit'], event: ReActStreamEvent): void {
   if (event.type === 'token') emit({ type: 'token', content: event.chunk });
   else if (event.type === 'reasoning') emit({ type: 'reasoning', content: event.chunk });
-  else if (event.type === 'heartbeat' || event.type === 'usage') emit(event);
+  else if (event.type === 'heartbeat' || event.type === 'usage' || event.type === 'model-request') emit(event);
 }

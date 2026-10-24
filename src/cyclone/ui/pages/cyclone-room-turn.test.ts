@@ -44,12 +44,9 @@ test('末尾是派发时不把更早正文跨过派发重新排序', () => {
   assert.deepEqual(parts.workSegments.map(segment => segment.kind), ['text', 'dispatch']);
 });
 
-test('群聊失败工作面板允许用户关闭并在重渲染后保持关闭', () => {
-  const roomFeed = fs.readFileSync('src/cyclone/ui/pages/RoomFeedRow.tsx', 'utf8');
+test('普通工具分组仍允许用户收起失败条目', () => {
   const toolActivity = fs.readFileSync('src/cyclone/ui/pages/CycloneToolActivityList.tsx', 'utf8');
 
-  assert.doesNotMatch(roomFeed, /open=\{failed > 0 \|\| running\}/);
   assert.doesNotMatch(toolActivity, /open=\{failed > 0\}/);
-  assert.match(roomFeed, /onToggle=/);
   assert.match(toolActivity, /onToggle=/);
 });

@@ -4,7 +4,7 @@ export * from './estimate.js';
 export * from './split.js';
 export * from './prompt.js';
 export { summarizeCompactionPrefix } from './summary.js';
-export { summaryOutputBudget, resolveSummaryModelBudget } from './budget.js';
+export { summaryOutputBudget, resolveSummaryModelBudget, summaryStageBudget } from './budget.js';
 export { clipSummaryBody } from './body-limit.js';
 export { generateCompactionSummary, generateCompactionResult } from './generation.js';
 export { compactMessages, createCompactionCaller } from './controller.js';

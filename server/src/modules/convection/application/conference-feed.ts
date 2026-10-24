@@ -5,6 +5,8 @@ export type ConvectionConferenceEvent =
   | { type: 'session-changed'; sessionId: string }
   | { type: 'context-event'; sessionId: string; scope: 'public' | 'chair';
       event: import('../../../engine/shared/compaction/contracts.js').CompactionProgress }
+  | { type: 'model-request'; sessionId: string; scope: 'public' | 'chair';
+      request: import('../../../engine/shared/model-request-usage.js').ModelRequestUsage }
   | { type: 'round-start'; sessionId: string; runId: string;
       round: ConvectionRoundKind; message: string }
   | { type: 'round-event'; sessionId: string; runId: string;

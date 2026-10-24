@@ -1,6 +1,7 @@
 import { frameworkError } from '../../../engine/shared/framework-error.js';
 import type { MonsoonEvent, MonsoonTurn } from '../runtime/turn-contract.js';
 import type { TokenUsage } from '../../../engine/shared/llm-bridge.js';
+import type { ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
 import type {
   MonsoonChatInput, MonsoonChatPreparation, PreparedMonsoonChat,
 } from './chat-preparation.js';
@@ -17,6 +18,7 @@ interface TurnRuntimePort {
 interface TurnSessionPort {
   get(agentId: string, sessionId: string): Promise<{ messageRevision: number } | null>;
   updateTokenUsage(agentId: string, sessionId: string, usage: TokenUsage | null): Promise<unknown>;
+  updateModelUsage?(agentId: string, sessionId: string, request: ModelRequestUsage): Promise<unknown>;
 }
 
 interface TurnJournalPort {
@@ -106,7 +108,9 @@ export class MonsoonTurnService {
         agentId, sessionId, runId, session.messageRevision,
       );
       return { agentId, sessionId, runId, runner, record: async event => {
-        if (event.type === 'usage') {
+        if (event.type === 'model-request') {
+          await this.ports.sessions.updateModelUsage?.(agentId, sessionId, event.request);
+        } else if (event.type === 'usage') {
           await this.ports.sessions.updateTokenUsage(agentId, sessionId, event.usage);
         }
         await writer.append(event);

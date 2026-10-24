@@ -233,7 +233,7 @@ function forwardSummary(meeting: ActiveMeeting, event: MeetingStreamEvent) {
     broadcastMeeting(meeting, { type: 'summary-chunk', chunk: event.chunk });
   } else if (event.type === 'minutes-done' && event.content) {
     broadcastMeeting(meeting, { type: 'summary-done', minutes: event.content });
-  } else if (event.type === 'usage') {
+  } else if (event.type === 'usage' || event.type === 'model-request') {
     broadcastMeeting(meeting, event);
   }
 }

@@ -95,7 +95,9 @@ data/
 ├── mcp/
 │   ├── servers.json
 │   └── media/                   # tool images; conversations store references
-├── runtime/execution-observations.json
+├── runtime/
+│   ├── compaction/               # completed summary fragments, bound to scope, model, and source
+│   └── execution-observations.json
 ├── providers.json
 ├── providers.template.json
 ├── transport/                   # local backend HTTPS certificate and key
@@ -104,6 +106,10 @@ data/
 ├── skin-config.json
 └── skin-textures/
 ```
+
+## Current Input Preview
+
+The `currentInput` field in conversation reads is a read-only estimate of the effective model context. It does not enter request ledgers or accumulated costs. Each feature owns its context assembly, compaction boundaries, and scope. Previews reuse provider request compilation; unavailable configuration produces an explicitly marked canonical approximation. Edits, deletions, compaction, and model changes invalidate the previous preview and trigger a new calculation.
 
 ## Backup and Migration
 

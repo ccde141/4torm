@@ -9,12 +9,12 @@ test('潮汐上下文 token 只显示最近有来源的请求，空用量显示�
   assert.equal(formatTideContextTokens(undefined, 'en-US'), 'Unknown');
 });
 
-test('任务执行及压缩期间不刷新已知用量，缺失终态保留，下一次实测正常下降', () => {
+test('执行中有效用量立即刷新，缺失回报保留上次值', () => {
   const old = { promptTokens: 12000, completionTokens: 20, totalTokens: 12020 };
   const compacted = { promptTokens: 1200, completionTokens: 20, totalTokens: 1220 };
   const current = { scope: 'agent:session', usage: old };
   assert.equal(projectTideUsage(current, current.scope, undefined, true), current);
-  assert.equal(projectTideUsage(current, current.scope, compacted, true), current);
+  assert.equal(projectTideUsage(current, current.scope, compacted, true).usage, compacted);
   assert.equal(projectTideUsage(current, current.scope, undefined, false), current);
   const completed = projectTideUsage(current, current.scope, compacted, false);
   assert.equal(completed.usage, compacted);

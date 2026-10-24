@@ -1,6 +1,7 @@
 /** Text-compatible ReAct loop using framework-owned JSON envelopes. */
 
 import type { TokenUsage } from '../llm-bridge';
+import { callPreparedModel } from './model-call.js';
 import type { ToolImageRef } from '../types.js';
 import {
   formatTextToolResult,
@@ -11,7 +12,6 @@ import { TextToolStreamGate } from '../text-tool-stream-gate.js';
 import { applyPendingInput, skipTextTool } from './steering.js';
 import {
   HEARTBEAT_INTERVAL_MS,
-  LLM_TIMEOUT_MS,
   MAX_CONTINUATIONS,
   MAX_TURNS,
   SuspendSignal,
@@ -72,32 +72,12 @@ async function callModel(
   onPartial?: (chunk: string) => void,
 ) {
   const { llm, messages, onEvent, signal } = params;
-  const startedAt = Date.now();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
-  const abort = () => controller.abort();
-  signal?.addEventListener('abort', abort, { once: true });
-  let received = false;
-  const heartbeat = onEvent ? setInterval(() => {
-    if (!received) onEvent({ type: 'heartbeat', phase: 'llm-waiting', elapsed: Date.now() - startedAt });
-  }, HEARTBEAT_INTERVAL_MS) : undefined;
-
-  try {
-    const result = await llm.call(
-      messages,
-      undefined,
-      chunk => { received = true; onPartial?.(chunk); tokenGate.push(chunk); },
-      controller.signal,
-      undefined,
-      chunk => { received = true; onEvent?.({ type: 'reasoning', chunk }); },
-    );
-    onUsage(result.usage);
-    return result;
-  } finally {
-    if (heartbeat) clearInterval(heartbeat);
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', abort);
-  }
+  const result = await callPreparedModel(llm, messages, signal, {
+    onChunk: chunk => { onPartial?.(chunk); tokenGate.push(chunk); },
+    onReasoning: chunk => onEvent?.({ type: 'reasoning', chunk }), onEvent,
+  });
+  onUsage(result.usage);
+  return result;
 }
 
 async function completeTruncatedResponse(

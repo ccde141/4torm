@@ -47,6 +47,16 @@ async function compileContext(
   request: MonsoonContextRequest,
   ports: ContextDependencies,
 ): Promise<MonsoonPreparedContext> {
+  const { systemPrompt } = await buildMonsoonInputPrompt(request, ports);
+  const history = await Promise.all(request.input.messages.map(message =>
+    resolveMessage(request, message, ports)));
+  return { systemPrompt, chatMessages: ports.prependPrompt(systemPrompt, history) };
+}
+
+/** Shared by execution and read-only input previews; does not claim a runner. */
+export async function buildMonsoonInputPrompt(
+  request: MonsoonContextRequest, ports: ContextDependencies = dependencies,
+) {
   const { dataDir, input, agent, spec, native } = request;
   const projectDir = path.resolve(dataDir, '..');
   const workspaceAbs = path.resolve(projectDir, agent.workspace);
@@ -55,17 +65,16 @@ async function compileContext(
     agentId: agent.id, sessionId: input.sessionId,
   });
   const lastUser = input.messages.filter(message => message.role === 'user').pop();
+  const allTools = [...toolDefs, ...collaborationTools, ...ports.teamTools()];
   const systemPrompt = await ports.buildPrompt({
     mainAgent: true, rolePrompt: agent.rolePrompt || '',
-    toolDefs: [...toolDefs, ...collaborationTools, ...ports.teamTools()],
+    toolDefs: allTools,
     workspace: spec.workspace, workspaceAbs, projectDir,
     sandboxLevel: agent.sandboxLevel, skillIds: spec.skillIds,
     dataDir, agentId: agent.id, sessionId: input.sessionId,
     userMessage: lastUser?.content, native, allowDelegate: false,
   });
-  const history = await Promise.all(input.messages.map(message =>
-    resolveMessage(request, message, ports)));
-  return { systemPrompt, chatMessages: ports.prependPrompt(systemPrompt, history) };
+  return { systemPrompt, toolDefs: allTools };
 }
 
 async function resolveMessage(

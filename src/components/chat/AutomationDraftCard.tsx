@@ -1,5 +1,6 @@
 import type { ToolCall } from '../../types';
 import { useLocale } from '../../i18n/LocaleContext';
+import ToolRecordDetails from './ToolRecordDetails';
 
 type Pending = NonNullable<ToolCall['pendingAutomation']>;
 
@@ -8,7 +9,9 @@ type Pending = NonNullable<ToolCall['pendingAutomation']>;
  * 创建或修改后的任务事实快照；后续启停以潮汐实时状态为准。
  * 摘要字段全部来自服务端真实任务（非 AI 转述）；永续 / 自循环 / 可写文件强标提醒。
  */
-export default function AutomationDraftCard({ pending, timestamp }: { pending: Pending; timestamp?: string }) {
+export default function AutomationDraftCard({ pending, timestamp, toolRecord }: {
+  pending: Pending; timestamp?: string; toolRecord?: Pick<ToolCall, 'params' | 'result'>;
+}) {
   const { t } = useLocale();
   const verb = pending.mode === 'created' ? t('chat.automation.created') : t('chat.automation.updated');
   const repeatText = pending.perpetual ? t('chat.automation.perpetual') : t('chat.automation.repeatCount', { count: pending.repeatCount });
@@ -30,6 +33,7 @@ export default function AutomationDraftCard({ pending, timestamp }: { pending: P
         <Row k={t('chat.automation.execution')} v={t('chat.automation.permission', { agent: pending.agentName })} />
         <Row k={t('chat.automation.files')} v={pending.canWriteFiles ? t('chat.automation.canWrite') : t('chat.automation.readOnly')} warn={pending.canWriteFiles} />
         <div style={promptBox}>{pending.promptPreview}</div>
+        {toolRecord && <ToolRecordDetails {...toolRecord} />}
       </div>
 
       <div style={footer}>

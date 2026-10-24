@@ -16,6 +16,7 @@ import type { CompactionActivity } from '../../../components/common/compaction-a
 import { CompactedHistory } from '../CompactedHistory';
 import { isCompactedHistory } from '../compaction-events';
 import type { ToolMediaScope } from '../../../engine/tool-media';
+import { formatCurrentInput, formatModelUsage, type CurrentInputEstimate, type ModelUsageProgress } from '../../../lib/model-usage';
 
 export type AgentChatActivity = 'idle' | 'waiting' | 'reasoning' | 'responding'
   | 'tool' | 'delegate' | 'contact' | 'failed';
@@ -30,6 +31,8 @@ interface Props {
   activity: AgentChatActivity;
   nodeLabel: string;
   latestUsage?: ProviderUsage | null;
+  modelUsage?: ModelUsageProgress;
+  currentInput?: CurrentInputEstimate;
   compactionNotice?: string | null;
   compaction?: CompactionActivity;
   messages: ChatMessage[];
@@ -61,7 +64,9 @@ const activityBadgeKeys: Record<AgentChatActivity, MessageKey> = {
 };
 
 export default function AgentChatView(props: Props) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
+  const measured = formatCurrentInput(props.currentInput, locale, props.modelUsage)
+    ?? formatModelUsage(props.modelUsage, locale, props.latestUsage ?? undefined);
   const { visible, sealed, paused, streaming, isEnvelopeRound, activity, nodeLabel,
     latestUsage, compactionNotice, compaction, messages, error, input, messagesContainerRef, messagesEndRef, onClose, onInput,
     onKeyDown, onSend, onStop, onPauseRound, onResumeRound, onStopWorkflow } = props;
@@ -75,7 +80,8 @@ export default function AgentChatView(props: Props) {
           <div className="tw-chat-window__identity">
             <span className="tw-chat-window__eyebrow">AGENT NODE</span>
             <span className="tw-chat-window__title">{nodeLabel}</span>
-            {latestUsage !== undefined && <small className="tw-chat-window__eyebrow"
+            {measured ? <small className="tw-chat-window__eyebrow" title={measured.title}>{measured.label} tokens</small>
+              : latestUsage !== undefined && <small className="tw-chat-window__eyebrow"
               title={t('tradewind.chat.recentInputTooltip')}>{latestUsage
               ? t('tradewind.chat.recentInputTokens', { count: latestUsage.promptTokens.toLocaleString() })
               : t('tradewind.chat.recentInputUnknown')}</small>}

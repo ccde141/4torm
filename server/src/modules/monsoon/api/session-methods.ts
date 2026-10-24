@@ -3,16 +3,20 @@ import { frameworkError } from '../../../engine/shared/framework-error.js';
 import type { FileMonsoonSessionRepository } from '../infrastructure/session-repository.js';
 import type { FileMonsoonTurnJournal } from '../infrastructure/turn-journal.js';
 import type { SessionWriteMode } from '../domain/session.js';
+import type { MonsoonSession } from '../domain/session.js';
+import type { CurrentInputEstimate } from '../../../engine/shared/model-request-usage.js';
 
 export interface MonsoonSessionPorts {
   sessions: FileMonsoonSessionRepository;
   journal: FileMonsoonTurnJournal;
+  preview?: (session: MonsoonSession, model?: string) => Promise<MonsoonSession & { currentInput?: CurrentInputEstimate }>;
 }
 
 export function monsoonSessionManifests(): ModuleMethodManifest[] {
   const names = [
     ['createSession', 'design'], ['listSessions', 'observe'], ['readSession', 'observe'],
     ['replaceSession', 'design'], ['deleteSession', 'administer'],
+    ['previewInput', 'observe'],
   ] as const;
   return names.map(([id, permission]) => ({ id,
     kind: permission === 'observe' ? 'query' : 'command', permission,
@@ -23,25 +27,39 @@ export function monsoonSessionManifests(): ModuleMethodManifest[] {
 
 export function monsoonSessionHandlers(ports: MonsoonSessionPorts): Record<string, ModuleMethodHandler> {
   const { sessions, journal } = ports;
+  const preview = ports.preview ?? (async (session: MonsoonSession) => session);
   return {
     createSession: { parse: value => record(value),
-      invoke: (_context, input) => sessions.create(input) },
+      invoke: async (_context, input) => preview(await sessions.create(input)) },
     listSessions: { parse: value => lookup(value, false),
-      invoke: (_context, input) => sessions.list((input as { agentId: string }).agentId) },
+      invoke: async (_context, input) => {
+        const agentId = (input as { agentId: string }).agentId;
+        const list = await sessions.list(agentId, Boolean(ports.preview));
+        if (!ports.preview) return list;
+        return Promise.all(list.map(async item => {
+          return { ...item, messages: [], currentInput: (await ports.preview!(item)).currentInput };
+        }));
+      } },
+    previewInput: { parse: parsePreview,
+      invoke: async (_context, input) => {
+        const { agentId, sessionId, model } = input as { agentId: string; sessionId: string; model?: string };
+        const session = await sessions.get(agentId, sessionId);
+        return session ? (await preview(session, model) as MonsoonSession & { currentInput?: CurrentInputEstimate }).currentInput ?? null : null;
+      } },
     readSession: { parse: value => lookup(value, true),
       invoke: async (_context, input) => {
         const { agentId, sessionId } = input as { agentId: string; sessionId: string };
         const session = await sessions.get(agentId, sessionId);
         if (!session) return null;
-        return { ...session,
+        return { ...await preview(session),
           pendingRuns: await journal.pending(agentId, sessionId, session.messages) };
       } },
     replaceSession: { parse: parseReplace,
-      invoke: (_context, input) => {
+      invoke: async (_context, input) => {
         const item = input as { agentId: string; sessionId: string; session: Record<string, unknown>;
           expectedRevision: number; mode: SessionWriteMode };
-        return sessions.replace({ ...item.session, agentId: item.agentId, id: item.sessionId },
-          item.expectedRevision, item.mode);
+        return preview(await sessions.replace({ ...item.session, agentId: item.agentId, id: item.sessionId },
+          item.expectedRevision, item.mode));
       } },
     deleteSession: { parse: value => lookup(value, true),
       invoke: async (_context, input) => {
@@ -50,6 +68,13 @@ export function monsoonSessionHandlers(ports: MonsoonSessionPorts): Record<strin
         return { ok: true };
       } },
   };
+}
+
+function parsePreview(value: unknown) {
+  const item = record(value);
+  if (Object.keys(item).some(key => !['agentId', 'sessionId', 'model'].includes(key))
+    || (item.model !== undefined && (typeof item.model !== 'string' || item.model.length > 500))) throw invalid();
+  return { agentId: id(item.agentId), sessionId: id(item.sessionId), model: item.model };
 }
 
 function parseReplace(value: unknown) {

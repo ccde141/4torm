@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { partitionToolActivity, type ToolActivityLike } from './tool-activity-group';
 import { useLocale } from '../../i18n/LocaleContext';
+import { toolActivitySummary } from './tool-activity-summary';
 
 export interface ToolActivityItem extends ToolActivityLike {
   status?: string;
@@ -10,12 +11,7 @@ export interface ToolActivityItem extends ToolActivityLike {
 const MAX_AUTO_OPEN_FAILED_ITEMS = 20;
 
 function targetOf(item: ToolActivityItem): string {
-  const args = item.args || {};
-  for (const key of ['filePath', 'path', 'command', 'query', 'url']) {
-    const value = args[key];
-    if (typeof value === 'string' && value.trim()) return value.trim();
-  }
-  return '';
+  return toolActivitySummary(item.tool, item.args);
 }
 
 function Group<T extends ToolActivityItem>({ items, renderItem, stopped }: {

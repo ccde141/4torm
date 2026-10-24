@@ -63,7 +63,9 @@ export function buildSeatDisplayHistory(
 ): DisplayMessage[] {
   if (!optimistic) return history;
   const answer = answeredAsk(optimistic);
-  if (!answer) return history.some(message => message.id === optimistic.id)
+  if (!answer) return history.some(message => message.id === optimistic.id
+    || !!optimistic.inputMessageId && message.role === optimistic.role
+      && message.inputMessageId === optimistic.inputMessageId)
     ? history
     : [...history, optimistic];
   const withoutOptimistic = history.filter(message => message.id !== optimistic.id);

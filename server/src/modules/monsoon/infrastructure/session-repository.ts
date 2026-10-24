@@ -7,6 +7,7 @@ import {
   type SessionWriteMode,
 } from '../domain/session.js';
 import { readSessionProjection, sessionMeta, type SessionIndexEntry } from './session-index.js';
+import { recordModelRequest, type ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
 
 export class SessionRevisionConflictError extends Error {
   constructor(readonly current: MonsoonSession) {
@@ -24,8 +25,8 @@ export class FileMonsoonSessionRepository {
     return this.read(agentId, sessionId);
   }
 
-  list(agentId: string): Promise<MonsoonSession[]> {
-    return this.lock(agentId, () => this.readList(agentId));
+  list(agentId: string, includeMessages = false): Promise<MonsoonSession[]> {
+    return this.lock(agentId, () => this.readList(agentId, includeMessages));
   }
 
   titles(agentId: string): Promise<ReadonlyMap<string, string>> {
@@ -97,6 +98,18 @@ export class FileMonsoonSessionRepository {
     });
   }
 
+  updateModelUsage(agentId: string, sessionId: string, request: ModelRequestUsage): Promise<MonsoonSession> {
+    return this.lock(agentId, async () => {
+      const current = await this.read(agentId, sessionId);
+      if (!current) throw new Error('会话不存在');
+      const updated = { ...current, modelUsage: recordModelRequest(current.modelUsage, request),
+        ...(request.purpose === 'conversation' && request.usage ? { tokenUsage: request.usage } : {}) };
+      await this.write(updated);
+      await this.upsertIndex(updated);
+      return updated;
+    });
+  }
+
   delete(agentId: string, sessionId: string): Promise<boolean> {
     return this.lock(agentId, async () => {
       const current = await this.read(agentId, sessionId);
@@ -126,7 +139,7 @@ export class FileMonsoonSessionRepository {
     }
   }
 
-  private async readList(agentId: string): Promise<MonsoonSession[]> {
+  private async readList(agentId: string, includeMessages = false): Promise<MonsoonSession[]> {
     const index = await this.readIndex(agentId);
     const sessions: MonsoonSession[] = [];
     for (const entry of index) {
@@ -135,7 +148,7 @@ export class FileMonsoonSessionRepository {
       if (session) sessions.push(session);
     }
     const ordered = sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-    return ordered.map(summary);
+    return includeMessages ? ordered : ordered.map(summary);
   }
 
   private async write(session: MonsoonSession, signal?: AbortSignal): Promise<void> {
@@ -197,6 +210,7 @@ function content(
   const merged = { ...incoming, title: current.title, titleManual: current.titleManual,
     titleState: current.titleState, createdAt: current.createdAt,
     lastReadAt: latestReadAt(current.lastReadAt, incoming.lastReadAt) };
+  merged.modelUsage = current.modelUsage;
   if (clearTokenUsage || current.tokenUsage === undefined) delete merged.tokenUsage;
   else merged.tokenUsage = current.tokenUsage;
   return merged;

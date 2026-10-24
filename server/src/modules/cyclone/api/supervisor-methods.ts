@@ -3,6 +3,7 @@ import type { ModuleMethodHandler, ModuleMethodManifest, ModuleTransportHandler,
 import { frameworkError } from '../../../engine/shared/framework-error.js';
 import type { TaskBoard } from '../../../engine/shared/taskboard.js';
 import type { CycloneSupervisorService } from '../application/supervisor-service.js';
+import { estimateSupervisorCurrentInput } from '../../../engine/cyclone/current-input.js';
 
 export function cycloneSupervisorManifests(): ModuleMethodManifest[] {
   return ['readSupervisor', 'readSupervisorRevision', 'configureSupervisor', 'editSupervisorMessage',
@@ -12,9 +13,12 @@ export function cycloneSupervisorManifests(): ModuleMethodManifest[] {
     inputSchema: { type: 'object', additionalProperties: false }, output: { mode: 'inline' },
   }));
 }
-export function cycloneSupervisorHandlers(service: CycloneSupervisorService): Record<string, ModuleMethodHandler> {
+export function cycloneSupervisorHandlers(service: CycloneSupervisorService, dataDir?: string): Record<string, ModuleMethodHandler> {
   return {
-    readSupervisor: handle(identity, item => service.status(item.workshopId)),
+    readSupervisor: handle(identity, async item => {
+      const status = await service.status(item.workshopId);
+      return dataDir ? { ...status, currentInput: await estimateSupervisorCurrentInput(dataDir, item.workshopId, status) } : status;
+    }),
     readSupervisorRevision: handle(identity, async item => ({ updatedAt: (await service.status(item.workshopId)).updatedAt })),
     configureSupervisor: handle(value => {
       const item = exact(value, ['workshopId', 'agentId', 'rolePrompt']);

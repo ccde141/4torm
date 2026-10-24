@@ -13,7 +13,7 @@ export async function requestMonsoonCompaction(session: ChatSession, model: stri
   let done = false;
   const notices: string[] = [];
   for await (const event of readMonsoonEvents(response.body)) {
-    if (event.type.startsWith('compact-')) ports.onProgress(event);
+    if (event.type.startsWith('compact-') || event.type === 'model-request') ports.onProgress(event);
     if (event.type === 'compaction-notice' && typeof event.message === 'string') notices.push(event.message);
     if (event.type === 'error') throw new Error(errorMessage(event, '压缩失败'));
     if (event.type === 'done') done = true;

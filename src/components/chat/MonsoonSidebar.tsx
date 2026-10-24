@@ -5,6 +5,7 @@ import type { ChatSession } from '../../store/chat';
 import { useLocale } from '../../i18n/LocaleContext';
 import { PresenceItems } from '../common/PresenceItems';
 import { sessionUsageKey, type SessionUsageDisplay } from './session-list-state';
+import { formatCurrentInput, formatModelUsage } from '../../lib/model-usage';
 
 const statusColors = Object.fromEntries(SYSTEM_STATUSES.map(status => [status.id, status.color]));
 
@@ -49,7 +50,8 @@ export function MonsoonSidebar(props: MonsoonSidebarProps) {
         <PresenceItems key={props.selectedAgent.id} items={props.sessions}
           getKey={session => session.id} scope="sessions" render={session => {
           const unread = props.activeSessionId === session.id ? 0 : session.unreadCount ?? 0;
-          const tokens = formatTokenUsage(props.displayUsage
+          const tokens = formatCurrentInput(session.currentInput, locale, session.modelUsage)
+            ?? formatModelUsage(session.modelUsage, locale, props.displayUsage?.[sessionUsageKey(session)] ?? session.tokenUsage) ?? formatTokenUsage(props.displayUsage
             ? props.displayUsage[sessionUsageKey(session)] : session.tokenUsage, locale);
           return <div style={{ position: 'relative' }}>
             <div className={`session-item${props.activeSessionId === session.id ? ' session-item--active' : ''}`}

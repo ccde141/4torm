@@ -30,6 +30,14 @@ export function registerMonsoonSessions(
     } catch (error) { return sendError(reply, error); }
   });
 
+  app.post('/sessions/:agentId/:sessionId/input-preview', async (request, reply) => {
+    try {
+      const identity = identifiers(request.params, ['agentId', 'sessionId']);
+      const body = record(request.body) ? request.body : {};
+      return reply.send(await invoke(router, 'previewInput', { ...identity, model: body.model }, request));
+    } catch (error) { return sendError(reply, error); }
+  });
+
   app.put('/sessions/:agentId/:sessionId', async (request, reply) => {
     try {
       const { agentId, sessionId } = identifiers(request.params, ['agentId', 'sessionId']);

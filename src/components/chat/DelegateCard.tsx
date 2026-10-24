@@ -6,6 +6,7 @@ import { visibleDelegateProgress } from '../../engine/chat/delegate-progress';
 import { useLocale } from '../../i18n/LocaleContext';
 import type { ToolImageRef, ToolMediaScope } from '../../engine/tool-media';
 import ToolResultImages from '../common/ToolResultImages';
+import ToolRecordDetails from './ToolRecordDetails';
 
 type Step = { type: 'tool' | 'thought'; tool?: string; args?: Record<string, unknown>; result?: string; ok?: boolean; text?: string; toolImages?: ToolImageRef[] };
 
@@ -127,6 +128,7 @@ export default function DelegateCard({ toolCall, content, actions, timestamp, me
                       {s.result.slice(0, 60)}
                     </span>}
                   </div>
+                  <ToolRecordDetails params={s.args} result={s.result} />
                   {mediaScope && s.toolImages?.length ? <ToolResultImages images={s.toolImages} scope={mediaScope} /> : null}
                   </div>
                 ))}

@@ -2,6 +2,7 @@ import type { ConvectionToolStep, ConvectionTurnMessage } from './ConvectionTurn
 import type { ConvectionUsage } from './convection-token-usage';
 import { compactionActivity, type CompactionActivity } from '../../../components/common/compaction-activity';
 import type { ToolImageRef } from '../../../engine/tool-media';
+import type { ModelRequestUsage } from '../../../lib/model-usage';
 
 /** A broken request is not evidence of rollback; keep its checking message until a saved terminal arrives. */
 export function restoreConvectionCompaction(current: CompactionActivity | undefined,
@@ -22,6 +23,7 @@ export interface ExternalChairMessage {
 }
 
 export type ExternalRoundEvent =
+  | { type: 'model-request'; request: ModelRequestUsage }
   | { type: 'agent-start' | 'token' | 'reasoning' | 'agent-done' | 'agent-failed'
       | 'heartbeat' | 'tool-call' | 'tool-result'; agentId: string; label: string;
       chunk?: string; content?: string; rawContent?: string; message?: string;

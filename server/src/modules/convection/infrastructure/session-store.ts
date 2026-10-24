@@ -16,6 +16,7 @@ import { atomicWriteFile } from '../../../engine/shared/atomic-io.js';
 import { readConvectionJson } from './quarantined-json.js';
 import { recoverConvectionCompaction } from './compaction-progress.js';
 import { readIndex, mutateIndex } from './session-index.js';
+import { readConvectionModelUsage } from './model-usage-store.js';
 import {
   convectionSessionFile,
   convectionSessionDir,
@@ -26,6 +27,8 @@ import {
 // ── 数据结构 ──────────────────────────────────────────────────
 
 export interface ConvectionSessionData {
+  publicModelUsage?: import('../../../engine/shared/model-request-usage.js').ModelUsageProgress;
+  chairModelUsage?: import('../../../engine/shared/model-request-usage.js').ModelUsageProgress;
   id: string;
   title: string;
   /** 会长 Agent 实体 ID */
@@ -82,6 +85,10 @@ export interface ConvectionMessage {
 
 /** 会话列表摘要（前端列表用，不含完整消息） */
 export interface ConvectionSessionSummary {
+  publicCurrentInput?: import('../../../engine/shared/model-request-usage.js').CurrentInputEstimate;
+  chairCurrentInput?: import('../../../engine/shared/model-request-usage.js').CurrentInputEstimate;
+  publicModelUsage?: import('../../../engine/shared/model-request-usage.js').ModelUsageProgress;
+  chairModelUsage?: import('../../../engine/shared/model-request-usage.js').ModelUsageProgress;
   id: string;
   title: string;
   chairAgentId: string;
@@ -159,6 +166,8 @@ export async function saveSession(dataDir: string, session: ConvectionSessionDat
 export async function loadSession(dataDir: string, id: string): Promise<ConvectionSessionData | null> {
   const session = await readConvectionJson<ConvectionSessionData>(convectionSessionFile(dataDir, id));
   if (session) {
+    const modelUsage = await readConvectionModelUsage(dataDir, id);
+    Object.assign(session, modelUsage);
     session.compactionProgress = recoverConvectionCompaction(session.compactionProgress);
     session.chairCompactionProgress = recoverConvectionCompaction(session.chairCompactionProgress);
   }
@@ -182,6 +191,8 @@ export async function listSessions(dataDir: string): Promise<ConvectionSessionSu
       tokenUsage: s.tokenUsage || undefined,
       publicLatestTokenUsage: s.publicLatestTokenUsage || undefined,
       chairTokenUsage: s.chairTokenUsage || undefined,
+      publicModelUsage: s.publicModelUsage,
+      chairModelUsage: s.chairModelUsage,
       createdAt: s.createdAt, updatedAt: s.updatedAt,
     });
   }

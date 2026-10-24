@@ -2,12 +2,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { atomicWriteFile } from '../../shared/atomic-io.js';
 import type { TokenUsage } from '../../shared/llm-bridge.js';
+import { observeModelRequests, recordModelRequest, parseModelUsageProgress, type ModelRequestUsage, type ModelRequestUsageEvent,
+  type ModelUsageProgress } from '../../shared/model-request-usage.js';
 
 export interface TokenUsageProgress {
   calls: number;
   reportedCalls: number;
   latest: TokenUsage | null;
   total: TokenUsage;
+  modelUsage?: ModelUsageProgress;
 }
 
 const zero: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
@@ -20,6 +23,21 @@ export class TokenUsageRecorder {
   constructor(private readonly file?: string) {}
 
   get state(): TokenUsageProgress { return this.current; }
+
+  recordRequest(request: ModelRequestUsage): Promise<void> {
+    const next = this.pending.then(async () => {
+      const progress = { ...this.current, modelUsage: recordModelRequest(this.current.modelUsage, request) };
+      if (this.file) {
+        await fs.mkdir(path.dirname(this.file), { recursive: true });
+        await atomicWriteFile(this.file, JSON.stringify(progress));
+      }
+      this.current = progress;
+    });
+    this.pending = next;
+    return next;
+  }
+
+  flush(): Promise<unknown> { return this.pending; }
 
   /** Context reset invalidates the last input measurement without inventing a model call. */
   clearPromptMeasurement(): Promise<void> {
@@ -50,20 +68,24 @@ export class TokenUsageRecorder {
 /** Record an unknown attempt before shared ReAct emits usage:null for a rejected call. */
 export async function captureTokenUsage<T extends { usage?: TokenUsage }>(
   call: () => Promise<T>, record: (usage: TokenUsage | null) => Promise<unknown>,
+  onRequest?: (event: ModelRequestUsageEvent) => void,
 ): Promise<T> {
-  let result: T;
-  try { result = await call(); }
-  catch (error) {
-    await record(null);
-    throw error;
-  }
-  await record(result.usage ?? null);
-  return result;
+  return observeModelRequests(onRequest, async () => {
+    let result: T;
+    try { result = await call(); }
+    catch (error) {
+      await record(null);
+      throw error;
+    }
+    await record(result.usage ?? null);
+    return result;
+  }, onRequest === undefined);
 }
 
 function advance(previous: TokenUsageProgress, usage: TokenUsage | null): TokenUsageProgress {
   if (usage !== null) validateUsage(usage);
   return {
+    ...previous,
     calls: previous.calls + 1,
     reportedCalls: previous.reportedCalls + (usage ? 1 : 0),
     latest: usage,
@@ -105,5 +127,6 @@ export async function readTokenUsageFile(file: string): Promise<TokenUsageProgre
   }
   if (progress.latest !== null) validateUsage(progress.latest);
   validateUsage(progress.total);
+  if (progress.modelUsage !== undefined) progress.modelUsage = parseModelUsageProgress(progress.modelUsage);
   return progress as unknown as TokenUsageProgress;
 }

@@ -3,6 +3,7 @@ import type { ToolCallRecord } from './convection-react-adapter.js';
 import type { TokenUsage } from '../../../engine/shared/llm-bridge.js';
 
 export type ConvectionStreamEvent =
+  | import('../../../engine/shared/model-request-usage.js').ModelRequestUsageEvent
   | import('../../../engine/shared/compaction/contracts.js').CompactionNotice
   | import('../../../engine/shared/compaction/contracts.js').CompactionProgress
   | { type: 'input-accepted' }

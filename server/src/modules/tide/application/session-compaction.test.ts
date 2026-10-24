@@ -11,6 +11,7 @@ import { TideSessionCompaction } from './session-compaction.js';
 import { FrameworkError } from '../../../engine/shared/framework-error.js';
 import { tideCompactionHandler } from '../api/compaction-method.js';
 import type { ModuleInvocationContext } from '../../../engine/collaboration/contracts.js';
+import { createModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
 
 test('human Tide full compaction archives originals and leaves only the summary in active model context', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tide-full-compact-'));
@@ -25,14 +26,25 @@ test('human Tide full compaction archives originals and leaves only the summary 
     model: 'test:model', systemPrompt: '', createdAt: timestamp, updatedAt: timestamp,
     messages: [{ id: 'u', role: 'user', content: '旧任务'.repeat(100) },
       { id: 'a', role: 'assistant', content: '旧结果'.repeat(100) }] }, 'task', '日报');
+  let summaryRequests = 0;
   const port = new TideSessionCompaction(directory, tasks, feature.scheduler, feature.changes, undefined,
-    { resolveSummaryBudget: async () => 2_000, summarize: async () => '完整日报摘要' });
+    { resolveSummaryBudget: async () => 2_000, summarize: async () => {
+      summaryRequests++;
+      const request = createModelRequestUsage({ messages: [{ role: 'user', content: '历史资料' }] }, 'compaction');
+      request.update({ state: 'sent', wasSent: true });
+      request.report({ promptTokens: 100, completionTokens: 10, totalTokens: 110 });
+      request.finish('completed', { promptTokens: 100, completionTokens: 10, totalTokens: 110 }, true);
+      return '完整日报摘要';
+    } });
   const result = await port.compact('agent-a', 'session');
   assert.equal(result.compacted, true);
   assert.deepEqual(result.notices, []);
   assert.ok(Number.isFinite(result.updatedAt));
   const saved = await readTideSession(directory, 'agent-a', 'session');
   assert.ok(saved);
+  assert.equal(saved.usage?.modelUsage?.calls, summaryRequests);
+  assert.equal(saved.usage?.modelUsage?.total.totalTokens, summaryRequests * 110);
+  assert.equal(saved.usage?.modelUsage?.latest, undefined);
   assert.equal(saved.compaction?.type, 'compact-done');
   assert.equal((await feature.tasks.readSession('agent-a', 'session')).compaction?.type, 'compact-done');
   assert.deepEqual(saved.messages.slice(0, 2).map(message => message.content),

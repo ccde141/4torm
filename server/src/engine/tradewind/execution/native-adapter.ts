@@ -99,9 +99,11 @@ interface NativeLoopEvent {
   chunk?: string;
   message?: string;
   usage?: TokenUsage | null;
+  request?: import('../../shared/model-request-usage.js').ModelRequestUsage;
 }
 
 export function translateNativeLoopEvent(event: NativeLoopEvent): NodeRunnerEvent | undefined {
+  if (event.type === 'model-request' && event.request) return { type: 'model-request', request: event.request };
   if (event.type === 'token') return { type: 'token', content: event.chunk ?? '' };
   if (event.type === 'reasoning') return { type: 'reasoning', content: event.chunk ?? '' };
   if (event.type === 'usage') return { type: 'usage', usage: event.usage ?? null };

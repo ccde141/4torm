@@ -43,6 +43,7 @@ import type { HandoffSelection, HandoffRoute } from '../foundation/handoff-targe
 import { resolveHandoffCompletion } from './handoff-completion.js';
 import type { CompactionProgress } from '../../shared/compaction/index.js';
 import { projectNodeHistory, type NodeHistoryMessage } from './node-history-view.js';
+import { estimateNodeCurrentInput } from './current-input.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -82,6 +83,7 @@ export interface QueuedMessage {
 
 /** SSE 事件（推送给前端） */
 export type NodeRunnerEvent = (
+  | import('../../shared/model-request-usage.js').ModelRequestUsageEvent
   | { type: 'round-start'; runId: string; source: MessageSource; startedAt: string }
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
@@ -112,6 +114,7 @@ export type NodeRunnerEvent = (
 
 /** Agent 节点快照（REST /snapshot 返回，订阅时对账用） */
 export interface NodeSnapshot {
+  currentInput?: import('../../shared/model-request-usage.js').CurrentInputEstimate;
   /** 已提交的对话历史（不含首条 system prompt） */
   messages: NodeHistoryMessage[];
   /** 当前轮进行中的有序事件日志（前端用同一 reducer 回放） */
@@ -226,6 +229,7 @@ export class NodeRunner {
     return { workflowId: this.opts.workflowId, executionId: this.opts.executionId };
   }
   getMessages(): readonly ContextMessage[] { return this.messages; }
+  getCurrentInput() { return estimateNodeCurrentInput(this.opts, this.messages, this.currentRoundSource); }
   getRoundIdentity(): NodeRoundIdentity | null {
     return this.roundIdentity ? { ...this.roundIdentity } : null;
   }
@@ -384,6 +388,7 @@ export class NodeRunner {
     let reasoningContent = '';
     const readCompaction = (): CompactionProgress | undefined => this.compaction;
     const emit = (ev: NodeRunnerEvent) => {
+      if (ev.type === 'model-request') void this.usage.recordRequest(ev.request).catch(() => {});
       if (ev.type === 'compaction-notice') this.compactionNotice = ev.message;
       if (ev.type === 'compact-start' || ev.type === 'compact-done' || ev.type === 'compact-failed') {
         this.compaction = ev;
@@ -408,7 +413,8 @@ export class NodeRunner {
         envelopeId: msg.envelopeId, source: msg.source, actor: msg.actor, messageId: msg.messageId,
         sourceNodeId: msg.contactFrom, target: this.opts.nodeId });
       if (msg.source === 'human' && msg.content.trim() === '/compact') {
-        await compactNodeManually(this.compactionOptions(emit));
+        try { await compactNodeManually(this.compactionOptions(emit)); }
+        finally { await this.usage.flush(); }
         emit({ type: 'done', outcome: 'completed' });
         return;
       }
@@ -482,6 +488,7 @@ export class NodeRunner {
 
   /** 持久化 messages 到磁盘 */
   private async persist(): Promise<void> {
+    await this.usage.flush();
     const directory = this.opts.persistDir;
     if (!directory) return;
     try {
@@ -662,6 +669,7 @@ export class NodeRunner {
           if (ev.type === 'token') emit({ type: 'token', content: ev.chunk });
           if (ev.type === 'reasoning') emit({ type: 'reasoning', content: ev.chunk });
           if (ev.type === 'usage') emit({ type: 'usage', usage: ev.usage });
+          if (ev.type === 'model-request') emit(ev);
         },
         signal: effectiveSignal,
         completion: handoff && envelopeRound ? { tool: COMPLETE_TASK_TOOL } : undefined,

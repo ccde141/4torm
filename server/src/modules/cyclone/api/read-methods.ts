@@ -9,6 +9,7 @@ import { readExternalSeatActivity } from '../../../engine/cyclone/seat-activity.
 import type { WorkshopActivityPort } from '../domain/workshop-activity.js';
 import type { CycloneRoomActivity } from '../application/room-activity.js';
 import type { CyclonePrivateChatActivity, PrivateChatKind } from '../application/private-chat-activity.js';
+import { estimateSeatCurrentInput, estimateRoomCurrentInput, estimateChairCurrentInput } from '../../../engine/cyclone/current-input.js';
 
 const names = [
   'listWorkshops', 'readWorkshop', 'summarizeWorkshop',
@@ -31,6 +32,7 @@ export function cycloneReadManifests(
 }
 
 export function cycloneReadHandlers(deps: {
+  dataDir?: string;
   workshops: CycloneWorkshopService; seats: CycloneSeatService; rooms: CycloneRoomService;
   chair: CycloneChairService; dispatches: CycloneDispatchService;
   activity?: WorkshopActivityPort;
@@ -58,15 +60,28 @@ export function cycloneReadHandlers(deps: {
         return privateActivity.read(item.workshopId, item.targetKind, item.targetId, item.since);
       } } } : {}),
     readWorkshopOrganization: read(input => workshops.organization(input.workshopId)),
-    readSeat: target('seatId', input => seats.require(input.workshopId, input.targetId)),
+    readSeat: target('seatId', async input => {
+      const seat = await seats.require(input.workshopId, input.targetId);
+      return deps.dataDir ? { ...seat,
+        currentInput: await estimateSeatCurrentInput(deps.dataDir, input.workshopId, seat) } : seat;
+    }),
     readSeatRevision: target('seatId', input => seats.revision(input.workshopId, input.targetId)),
     readSeatActivity: { parse: parseSeatActivity,
       invoke: async (_context, input) => {
         const item = input as { workshopId: string; seatId: string; since: number };
         return readExternalSeatActivity(item.workshopId, item.seatId, item.since);
       } },
-    readRoom: target('roomId', input => rooms.require(input.workshopId, input.targetId)),
-    readChair: target('roomId', input => chair.status(input.workshopId, input.targetId)),
+    readRoom: target('roomId', async input => {
+      const room = await rooms.require(input.workshopId, input.targetId);
+      return deps.dataDir ? { ...room,
+        publicCurrentInput: await estimateRoomCurrentInput(deps.dataDir, input.workshopId, room) } : room;
+    }),
+    readChair: target('roomId', async input => {
+      const status = await chair.status(input.workshopId, input.targetId);
+      if (!deps.dataDir) return status;
+      const room = await rooms.require(input.workshopId, input.targetId);
+      return { ...status, currentInput: await estimateChairCurrentInput(deps.dataDir, input.workshopId, room) };
+    }),
     listWorkshopDispatches: read(input => dispatches.listWorkshop(input.workshopId)),
     listRoomDispatches: target('roomId', input => dispatches.listRoom(
       input.workshopId, input.targetId)),

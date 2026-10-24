@@ -32,7 +32,8 @@ export function createConvectionFeature(options: ConvectionFeatureOptions): Conv
   const sessions = new ConvectionSessionService(options.dataDir, undefined,
     async agentId => Boolean(await loadAgent(options.dataDir, agentId)),
     sessionId => feed.publish({ type: 'session-changed', sessionId }),
-    (sessionId, scope, event) => feed.publish({ type: 'context-event', sessionId, scope, event }));
+    (sessionId, scope, event) => feed.publish({ type: 'context-event', sessionId, scope, event }),
+    (sessionId, scope, request) => feed.publish({ type: 'model-request', sessionId, scope, request }));
   const executor = new ConvectionRoundExecutor(options.dataDir);
   const workspace = new ConvectionWorkspaceOpener(options.dataDir);
   const runs = new ConvectionRunRepository(options.dataDir);

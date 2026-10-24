@@ -1,14 +1,9 @@
-import path from 'node:path';
-import { buildConversationSystemPrompt } from '../../../engine/conversation/prompt-builder.js';
-import { loadSessionToolSets } from '../../../engine/conversation/session-tool-assembly.js';
-import { SessionRunner, type SessionRunnerOpts } from '../../../engine/conversation/session-runner.js';
+import { SessionRunner } from '../../../engine/conversation/session-runner.js';
 import { loadAgent } from '../../../engine/shared/agent-loader.js';
-import { resolveNativeMode } from '../../../engine/shared/llm-bridge.js';
 import { estimateCompactionTokens, type CompactionProgress } from '../../../engine/shared/compaction/index.js';
-import { SELF_LOOP_INSTRUCTION } from '../domain/self-loop.js';
 import type { TideRunRecord } from '../domain/run.js';
 import type { TideTask } from '../domain/task.js';
-import { TIDE_META } from '../domain/meta.js';
+import { buildTideInputContext } from './input-context.js';
 import { resolveTarget, type ResolvedTarget } from '../sessions/session-resolver.js';
 import type { TideMessage } from '../sessions/session-types.js';
 import type { TideUsageProgress } from '../domain/token-usage.js';
@@ -19,6 +14,7 @@ import { TideContextCompaction } from './context-compaction.js';
 import type { SeasonSessionPort } from '../sessions/season-session-port.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import { tideGeneratedMediaContext } from './turn-context.js';
+import type { ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
 
 const TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -69,11 +65,12 @@ export async function executeTideConversation(
   onProgress?: (event: CompactionProgress, sessionId: string, revision?: number) => Promise<void>,
   seasonSessions?: SeasonSessionPort,
   signal?: AbortSignal,
+  onModelRequest?: (request: ModelRequestUsage, resolved: ResolvedTarget) => Promise<void>,
 ): Promise<TideConversationResult> {
   signal?.throwIfAborted();
   const prepared = await prepareConversation(dataDir, task, onNotice, onProgress, seasonSessions, signal);
   signal?.throwIfAborted();
-  const result = await chatWithTimeout(prepared, onUsage, signal);
+  const result = await chatWithTimeout(prepared, onUsage, signal, onModelRequest);
   return { ...prepared, ...result };
 }
 
@@ -84,25 +81,8 @@ export async function prepareConversation(dataDir: string, task: TideTask,
   const agent = await loadAgent(dataDir, task.agentId);
   if (!agent) throw new Error(`Agent 不存在: ${task.agentId}`);
   const resolved = await resolveTarget(dataDir, task, seasonSessions);
-  const nativeDecision = await resolveNativeMode(dataDir, agent.model);
-  const opts: SessionRunnerOpts = {
-    dataDir, agentId: agent.id, model: agent.model, temperature: agent.temperature,
-    toolMediaScope: { feature: 'tide', target: { agentId: agent.id, sessionId: resolved.sessionId } },
-    toolNames: agent.tools, toolMode: agent.toolMode, skillIds: agent.skills,
-    workspace: agent.workspace, sandboxLevel: agent.sandboxLevel,
-    native: nativeDecision.native, allowAsk: false, allowDelegate: false,
-    signal,
-  };
-  const projectDir = path.resolve(dataDir, '..');
-  const workspaceAbs = path.resolve(projectDir, agent.workspace);
-  const toolDefs = (await loadSessionToolSets(opts)).guide;
-  const rolePrompt = task.selfLoop ? agent.rolePrompt + SELF_LOOP_INSTRUCTION : agent.rolePrompt;
-  const systemPrompt = await buildConversationSystemPrompt({
-    rolePrompt, toolDefs, workspace: opts.workspace, workspaceAbs, projectDir,
-    sandboxLevel: agent.sandboxLevel, skillIds: opts.skillIds, dataDir, agentId: agent.id,
-    userMessage: task.prompt, native: nativeDecision.native, allowAsk: false,
-    allowDelegate: false, surfaceMeta: TIDE_META,
-  });
+  const { opts, systemPrompt, rolePrompt } = await buildTideInputContext(dataDir, agent, resolved.sessionId,
+    { userMessage: task.prompt, selfLoop: task.selfLoop, signal });
   const userMessage = tideUserMessage(task);
   const turnInput: ContextMessage = { role: 'user', content: userMessage };
   const messages = [
@@ -129,10 +109,11 @@ async function chatWithTimeout(
   prepared: PreparedConversation,
   onUsage?: (usage: TokenUsage | null, resolved: ResolvedTarget) => Promise<void>,
   signal?: AbortSignal,
+  onModelRequest?: (request: ModelRequestUsage, resolved: ResolvedTarget) => Promise<void>,
 ) {
   const state = createTideEventState(onUsage
     ? usage => onUsage(usage, prepared.resolved) : undefined,
-  () => prepared.runner.abort());
+  () => prepared.runner.abort(), onModelRequest ? request => onModelRequest(request, prepared.resolved) : undefined);
   prepared.compaction.flushUsage = () => state.flush();
   let timedOut = false;
   const timer = setTimeout(() => {

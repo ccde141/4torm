@@ -24,7 +24,7 @@ function target(input: CompactionSummaryInput): number {
   return Number(match[1]);
 }
 
-test('summary guidance scales with source size without changing owner prompt or thinking allowance', async () => {
+test('summary guidance and hard budgets scale with source size without changing owner prompt', async () => {
   await fixture(async options => {
     const inputs: CompactionSummaryInput[] = [];
     const originalPrompt = options.prompt;
@@ -39,8 +39,9 @@ test('summary guidance scales with source size without changing owner prompt or 
       assert.match(input.prompt, /任务 XZ-6 与未完成事项/);
       assert.match(input.prompt, /未完成不等于未开始，未记录不等于未发生/);
       assert.match(input.prompt, /不增加栏目|不扩写|短句/);
-      assert.equal(input.maxContentTokens, 20_000);
-      assert.equal(input.maxOutputTokens, 52_000);
+      assert.ok(input.maxContentTokens <= 20_000);
+      assert.ok(input.maxOutputTokens <= 22_048);
+      assert.ok(input.maxReasoningTokens! <= 2_048);
       assert.ok(input.maxOutputTokens > target(input));
     }
     assert.equal(options.prompt, originalPrompt);
@@ -59,35 +60,26 @@ test('every stage derives its target from its own fragment, including the final 
     assert.ok(inputs.length >= 3);
     assert.ok(inputs.slice(0, -1).some(input => /历史连续片段/.test(input.text)));
     assert.ok(target(inputs.at(-1)!) < target(inputs[0]));
-    assert.ok(inputs.every(input => input.maxOutputTokens === 52_000 && input.maxContentTokens === 20_000));
+    assert.ok(inputs.every(input => input.maxOutputTokens <= 22_048 && input.maxContentTokens <= 20_000));
   });
 });
 
-test('an intermediate capped fragment closes normally with one bounded visible partial summary', async () => {
+test('capped fragments still cover the entire archive before the final merge', async () => {
   await fixture(async options => {
-    const provider = await captureSummaryProvider(options.dataDir, 'length', '资'.repeat(20_010));
-    try {
-      const configFile = path.join(options.dataDir, 'providers.json');
-      const config = JSON.parse(await fs.readFile(configFile, 'utf8'));
-      delete config.providers[0].providerType;
-      config.providers[0].models = ['unknown'];
-      await fs.writeFile(configFile, JSON.stringify(config));
-      const messages = [{ role: 'user' as const, content: '原始事实'.repeat(6_000) }];
+      const messages = [{ role: 'user' as const, content: '原始事实'.repeat(6_000) + '末尾任务TAIL-77待完成。' }];
       const before = structuredClone(messages);
-      const displayed: string[] = [];
       let archived: unknown;
-      let failures = 0;
-      const plan = await compactMessages({ ...options, chairModel: 'p:unknown', resolveSummaryBudget: undefined,
+      let calls = 0;
+      let sawTail = false;
+      const plan = await compactMessages({ ...options,
         messages, mode: 'full', reason: 'manual', archive: async value => { archived = value; },
-        onSummaryChunk: text => displayed.push(text), onNotice: () => { failures++; } });
+        summarize: async input => { calls++; sawTail ||= input.text.includes('TAIL-77');
+          input.onOutputLimited?.(); return 'TAIL-77待完成。'; } });
       assert.ok(plan);
-      assert.match(plan.summary, /部分摘要/);
-      assert.equal(plan.summary, displayed.join(''));
-      assert.ok(estimateTextTokens(plan.summary) <= 20_000);
+      assert.equal(sawTail, true);
+      assert.ok(calls >= 3);
+      assert.doesNotMatch(plan.summary, /部分摘要/);
       assert.deepEqual(archived, before);
-      assert.equal(failures, 0);
-      assert.equal(provider.received.length, 1);
-    } finally { await provider.close(); }
   });
 });
 
@@ -126,7 +118,7 @@ async function captureSummaryProvider(dataDir: string, finishReason = 'stop', co
     received.push(JSON.parse(body));
     response.setHeader('content-type', 'text/event-stream');
     response.end(`data: ${JSON.stringify({ choices: [{ delta: {
-      content, reasoning_content: '思考'.repeat(15_000),
+      content,
     }, finish_reason: finishReason }] })}\n\ndata: [DONE]\n\n`);
   });
   await new Promise<void>(resolve => provider.listen(0, '127.0.0.1', resolve));
@@ -161,7 +153,7 @@ test('shared default summarizer transports archived instructions as data to the 
       assert.match(source.slice(end), /现在的任务.*压缩/);
       assert.ok(source.endsWith('仅输出可接续的事实记录。'));
       assert.equal(payload.stream, true);
-      assert.equal(payload.max_completion_tokens, 52_000);
+      assert.ok(payload.max_completion_tokens <= 22_048);
     } finally { await provider.close(); }
   });
 });
@@ -176,7 +168,7 @@ test('a summary over the body allowance is clipped and committed while its full 
     await compactMessages({ ...options, messages, mode: 'full', reason: 'manual',
       resolveSummaryBudget: async () => 200_000,
       archive: async value => { archived = value; }, commit: async () => { commits++; },
-      summarize: async () => { calls++; return '资'.repeat(20_001); },
+      summarize: async input => { calls++; return '资'.repeat(input.maxContentTokens + 1); },
     });
     assert.equal(calls, 1);
     assert.equal(commits, 1);
@@ -202,7 +194,7 @@ test('provider length completion still commits its body and archives the complet
   });
 });
 
-test('a capped tiny archive retains its displayed excerpt instead of failing the framing check', async () => {
+test('empty compaction never commits a prefix excerpt as a complete summary', async () => {
   await fixture(async options => {
     const provider = await captureSummaryProvider(options.dataDir, 'length', '');
     try {
@@ -212,17 +204,15 @@ test('a capped tiny archive retains its displayed excerpt instead of failing the
       let archived: unknown;
       let failures = 0;
       const { generateCompactionSummary } = await import('./generation.js');
-      const plan = await compactMessages({ ...options, chairModel: 'p:kimi-k2.7-code',
+      await assert.rejects(compactMessages({ ...options, chairModel: 'p:kimi-k2.7-code',
         messages, mode: 'full', reason: 'manual', archive: async value => { archived = value; },
         onNotice: () => { failures++; }, summarize: input => generateCompactionSummary({
           ...input, dataDir: options.dataDir, onChunk: text => displayed.push(text),
-        }) });
-      assert.ok(plan);
-      assert.match(plan.summary, /原文节选/);
-      assert.equal(plan.summary, displayed.join(''));
-      assert.equal(messages[0].content, '[历史压缩记录]\n' + displayed.join(''));
+        }) }), /仍未给出正文/);
+      assert.deepEqual(messages, before);
+      assert.equal(displayed.join(''), '');
       assert.deepEqual(archived, before);
-      assert.equal(failures, 0);
+      assert.equal(failures, 1);
       assert.equal(provider.received.length, 2);
     } finally { await provider.close(); }
   });

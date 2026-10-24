@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import { renderTextWithCode } from '../../../engine/markdown';
 import { useLocale } from '../../../i18n/LocaleContext';
@@ -9,6 +9,7 @@ import type { SeatTurn } from './seat-turn-projection';
 import { useContactActivity } from './ContactActivityScope';
 import './cyclone-seat-turn.css';
 import type { ToolMediaScope } from '../../../engine/tool-media';
+import { useProcessFade } from '../../../components/chat/useProcessFade';
 
 interface Props {
   turn: SeatTurn;
@@ -42,10 +43,10 @@ export default function SeatTurnCard(props: Props) {
     <div className="chat__message chat__message--assistant cyclone-seat-turn">
       <div className="chat__avatar">AI</div>
       <div className="chat__bubble cyclone-seat-turn__bubble">
-        {turn.reasoning && <ReasoningBlock reasoning={turn.reasoning} isStreaming={streaming} defaultOpen={false} />}
+        {turn.reasoning && <ReasoningBlock reasoning={turn.reasoning} isStreaming={streaming} preview />}
         <SeatTurnWorklog turn={turn} dispatches={dispatches} onAskReply={onAskReply} streaming={streaming} mediaScope={props.mediaScope} />
         {phase && <div className="chat__streaming-phase">{phase}</div>}
-        {turn.finalContent && <div className="md-bubble cyclone-seat-turn__answer">
+        {turn.finalContent && <div className={`md-bubble cyclone-seat-turn__answer${turn.reasoning || turn.workSegments.length ? ' cyclone-seat-turn__answer--separated' : ''}`}>
           {renderTextWithCode(turn.finalContent, `${turn.id}-answer`)}{streaming ? '▌' : ''}
         </div>}
         {actions}
@@ -61,7 +62,11 @@ function SeatTurnWorklog({ turn, dispatches, onAskReply, streaming, mediaScope }
   streaming: boolean;
   mediaScope?: ToolMediaScope;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
+  const id = useId();
+  const [open, setOpen] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const { viewport, content } = useProcessFade(!!turn.workSegments.length && open, expanded, streaming);
   const contacts = useContactActivity(turn.workSegments.flatMap(segment => segment.blocks)
     .flatMap(block => block.kind === 'contact' ? [block] : []));
   const segments = turn.workSegments.map(segment => ({ ...segment,
@@ -73,22 +78,37 @@ function SeatTurnWorklog({ turn, dispatches, onAskReply, streaming, mediaScope }
   const state = failed ? t('cyclone.activity.failed', { count: failed })
     : running ? t('cyclone.activity.running') : t('cyclone.activity.completed');
   return (
-    <details className="cyclone-seat-turn__worklog" open={failed > 0 || running}>
-      <summary className="cyclone-seat-turn__worklog-summary">
-        <span className="cyclone-seat-turn__worklog-arrow">▶</span>
-        <span>{t('cyclone.activity.worklog')}{blocks.length ? ` · ${t('cyclone.activity.operations', { count: blocks.length })}` : ''}</span>
+    <section className="cyclone-seat-turn__worklog">
+      <div className="cyclone-seat-turn__worklog-toolbar">
+      <button type="button" className="cyclone-seat-turn__worklog-summary" aria-expanded={open}
+        aria-controls={id} onClick={() => setOpen(value => !value)}>
+        <span className="cyclone-seat-turn__worklog-arrow" aria-hidden="true">▶</span>
+        <svg className="cyclone-seat-turn__worklog-icon" width="14" height="14" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="2" y="2" width="7" height="6" rx="1" /><rect x="15" y="2" width="7" height="6" rx="1" />
+          <rect x="8.5" y="16" width="7" height="6" rx="1" /><path d="M5.5 8v4h13V8M12 12v4" />
+        </svg>
+        <span className="cyclone-seat-turn__worklog-title">{t('cyclone.activity.worklog')}{blocks.length ? ` · ${t('cyclone.activity.operations', { count: blocks.length })}` : ''}</span>
         <span className="cyclone-seat-turn__worklog-state">{state}</span>
         {running && <span className="thinking-card__tool-spinner" />}
-      </summary>
-      <div className="cyclone-seat-turn__worklog-body">
+      </button>
+      {open && <button type="button" className="cyclone-seat-turn__worklog-height" aria-controls={id}
+        aria-pressed={expanded} onClick={() => setExpanded(value => !value)}>{expanded
+          ? (locale === 'en-US' ? 'Limit height' : '限高预览')
+          : (locale === 'en-US' ? 'Full height' : '完整高度')}</button>}
+      </div>
+      <div id={id} ref={viewport} hidden={!open} className={`cyclone-seat-turn__worklog-body${expanded ? ' is-expanded' : ''}`}
+        tabIndex={0} role="region" aria-label={t('cyclone.activity.worklog')}>
+        <div ref={content}>
         {contacts.error && <p role="status" className="agent-detail__error">{contacts.error}</p>}
         {segments.map((segment, index) => (
           <SeatTurnSegment key={index} id={`${turn.id}-work-${index}`}
             content={segment.content} blocks={segment.blocks} dispatches={dispatches}
             onAskReply={onAskReply} mediaScope={mediaScope} />
         ))}
+        </div>
       </div>
-    </details>
+    </section>
   );
 }
 

@@ -4,6 +4,7 @@ import {
 } from './anthropic.js';
 import { providerResponseError } from '../provider-request-error.js';
 import type { ProviderOutputControl } from '../provider-output-control.js';
+import type { TokenUsage } from '../llm-bridge.js';
 
 export async function parseAnthropicSSEStream(
   response: Response,
@@ -11,6 +12,7 @@ export async function parseAnthropicSSEStream(
   onChunk: (chunk: string) => void,
   onReasoning?: (chunk: string) => void,
   outputControl?: ProviderOutputControl,
+  onUsage?: (usage: TokenUsage) => void,
 ): Promise<AnthropicResult> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error('Anthropic 流式响应没有 body');
@@ -20,6 +22,10 @@ export async function parseAnthropicSSEStream(
   let buffer = '';
   const push = (event: Record<string, any>): boolean => {
     accumulator.push(event);
+    if (event.type === 'message_start' || event.type === 'message_delta') {
+      const usage = accumulator.finish().usage;
+      if (usage) onUsage?.(usage);
+    }
     return outputControl?.shouldStop?.() ?? false;
   };
 

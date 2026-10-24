@@ -1,7 +1,8 @@
+import type { ModelRequestUsageEvent } from '../shared/model-request-usage.js';
 import type { ToolPreparationProgress } from '../shared/tool-progress';
 import type { TokenUsage } from '../shared/llm-bridge.js';
 
-export type LoopProgressEvent =
+export type LoopProgressEvent = ModelRequestUsageEvent
   | { type: 'token'; chunk: string }
   | { type: 'reasoning'; chunk: string }
   | ({ type: 'tool-progress' } & ToolPreparationProgress)
@@ -12,7 +13,7 @@ export type LoopProgressEvent =
   | { type: 'error'; message: string }
   | { type: 'usage'; usage: TokenUsage | null };
 
-export type SeatProgressEvent =
+export type SeatProgressEvent = ModelRequestUsageEvent
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
   | ({ type: 'tool-progress' } & ToolPreparationProgress)
@@ -28,7 +29,7 @@ export function toSeatProgressEvent(ev: LoopProgressEvent): SeatProgressEvent | 
   if (ev.type === 'tool-progress') return ev;
   if (ev.type === 'heartbeat') return { type: 'heartbeat', phase: ev.phase, elapsed: ev.elapsed };
   if (ev.type === 'error') return ev;
-  if (ev.type === 'usage') return ev;
+  if (ev.type === 'usage' || ev.type === 'model-request') return ev;
   return null;
 }
 

@@ -26,6 +26,10 @@ test('会长保持会议内私聊上下文且不接入长期记忆或工具循�
   assert.doesNotMatch(chair, /runConvectionReAct/);
   assert.match(chair, /callLLM/);
   assert.match(chair, /session\.chairMessages/);
-  assert.match(chair, /buildConvectionChairContext\(session, system\)/);
+  assert.match(chair, /buildConvectionChairMessages\(session, agent\.name\)/);
+  const requestContext = read('request-context.ts');
+  assert.match(requestContext, /buildConvectionChairContext\(session,/);
+  assert.match(requestContext, /buildConvectionChairPrompt/);
+  assert.doesNotMatch(requestContext, /Memory|memory|tools:/);
   assert.doesNotMatch(chair, /publicContext: formatPublicContext/);
 });

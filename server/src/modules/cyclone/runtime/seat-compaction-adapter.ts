@@ -17,7 +17,7 @@ import type { CycloneExecutionPort } from '../domain/operation-snapshot.js';
 import type { CycloneChangeFeed } from '../application/change-feed.js';
 import { archiveCycloneCompaction } from '../../../engine/cyclone/compaction-archive.js';
 import { saveSeat } from '../../../engine/cyclone/seat-store.js';
-import type { CompactionNotice, CompactionProgress } from '../../../engine/shared/compaction/index.js';
+import type { CompactionNotice, CompactionProgress, CompactionStageProgress } from '../../../engine/shared/compaction/index.js';
 import { startCycloneCompaction, finishCycloneCompaction } from '../../../engine/cyclone/compaction-progress.js';
 import { loadAgent } from '../../../engine/shared/agent-loader.js';
 import { trackCyclonePreparation, trackCyclonePreparationStart } from '../application/execution-preparation.js';
@@ -28,6 +28,7 @@ export interface CycloneSeatCompactionRuntime {
   plan(messages: SeatData['messages'], promptTokens?: number): SeatCompactionPlan;
   resolveModel(dataDir: string, agentId: string): Promise<string>;
   summarize(input: { dataDir: string; model: string; agentId: string; subject: string; summaryInput: string;
+    scopeKey?: string; onStageProgress?(stage: CompactionStageProgress): void | Promise<void>;
     signal: AbortSignal; onChunk(chunk: string): void;
     onNotice?(notice: CompactionNotice): void | Promise<void> }): Promise<string>;
   apply(dataDir: string, workshopId: string, seat: SeatData, plan: ReadyPlan,
@@ -43,6 +44,7 @@ const defaultRuntime: CycloneSeatCompactionRuntime = {
     dataDir: input.dataDir, fullModelKey: input.model, subject: input.subject,
     summaryInput: input.summaryInput, signal: input.signal, onChunk: input.onChunk,
     onNotice: input.onNotice,
+    scopeKey: input.scopeKey, onStageProgress: input.onStageProgress,
     compactionPrompt: (await loadAgent(input.dataDir, input.agentId))?.compactionPrompt,
   }),
   apply: applySeatCompaction,
@@ -130,6 +132,14 @@ async function runCompaction(
     notify({ type: 'start', compressedCount: plan.archivedMessages.length, keptTurnCount: plan.keptTurnCount });
     const archivePath = await runtime.archive?.(dataDir, input.workshopId, seat, plan);
     const summary = await runtime.summarize({ dataDir, model, agentId: seat.agentId,
+      scopeKey: `cyclone:${input.workshopId}:seat:${seat.id}:manual`,
+      onStageProgress: async stage => {
+        const progress = { ...started, updatedAt: Date.now(),
+          message: `${stage.resumed ? '接续压缩' : '正在压缩历史'} · 第 ${stage.level + 1} 层 · ${stage.completed}/${stage.total} 段` };
+        seat.compaction = progress;
+        await saveSeat(dataDir, input.workshopId, seat);
+        notify(progress);
+      },
       subject: `工位「${seat.title}」私聊`, summaryInput: plan.summaryInput, signal,
       onChunk: content => notify({ type: 'token', content }),
       onNotice: async notice => {

@@ -12,6 +12,8 @@ import type { CompactionActivity } from '../../../components/common/compaction-a
 import { CompactedHistory } from '../CompactedHistory';
 import { isCompactedHistory } from '../compaction-events';
 import type { ToolMediaScope } from '../../../engine/tool-media';
+import { type CurrentInputEstimate, type ModelUsageProgress } from '../../../lib/model-usage';
+import { formatMeetingCurrentInput } from './meeting-input-usage';
 
 export type MeetingView = 'public' | 'chair';
 
@@ -23,6 +25,9 @@ interface MeetingPanelViewProps {
   setActiveView: (view: MeetingView) => void;
   status: MeetingStatus | null;
   latestUsage?: ProviderUsage | null;
+  modelUsage?: ModelUsageProgress;
+  inputModelUsage?: ModelUsageProgress;
+  currentInput?: { public?: CurrentInputEstimate; chair?: CurrentInputEstimate };
   publicMsgs: MeetingMessage[];
   chairMsgs: MeetingChairMessage[];
   publicInput: string;
@@ -58,7 +63,9 @@ interface MeetingPanelViewProps {
 }
 
 export default function MeetingPanelView(props: MeetingPanelViewProps) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
+  const measured = formatMeetingCurrentInput(props.currentInput?.[props.activeView], locale, props.activeView,
+    props.inputModelUsage, props.modelUsage);
   const {
     nodeLabel, visible, activeView, setActiveView, status, latestUsage, publicMsgs, chairMsgs,
     publicInput, chairInput, setPublicInput, setChairInput, busy, chairBusy, error,
@@ -75,7 +82,8 @@ export default function MeetingPanelView(props: MeetingPanelViewProps) {
           <div className="tw-meeting-panel__identity">
             <span className="tw-meeting-panel__eyebrow">MEETING NODE</span>
             <span className="tw-meeting-panel__title">{nodeLabel}{isEnded && t('tradewind.meeting.endedSuffix')}</span>
-            {latestUsage !== undefined && <small className="tw-meeting-panel__eyebrow"
+            {measured ? <small className="tw-meeting-panel__eyebrow" title={measured.title}>{measured.label} tokens</small>
+              : latestUsage !== undefined && <small className="tw-meeting-panel__eyebrow"
               title={t('tradewind.meeting.recentInputTooltip')}>{latestUsage
               ? t('tradewind.meeting.recentInputTokens', { count: latestUsage.promptTokens.toLocaleString() })
               : t('tradewind.meeting.recentInputUnknown')}</small>}

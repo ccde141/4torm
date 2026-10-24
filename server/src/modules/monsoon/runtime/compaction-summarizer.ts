@@ -10,6 +10,7 @@ export const summarizeMonsoonCompaction: MonsoonCompactionSummarizer = async inp
   return generateCompactionSummary({
     dataDir: input.dataDir, model: input.model, signal: input.signal,
     text: input.dialogText, ...budget,
+    maxReasoningTokens: input.maxReasoningTokens,
     prompt: input.prompt ?? compactionSummaryPrompt(
       compactionPrompt({ kind: 'conversation', area: 'monsoon' }), input.dialogText, budget.maxContentTokens),
     onChunk: input.onChunk,

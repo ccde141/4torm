@@ -10,6 +10,7 @@ import { FileMonsoonSessionRepository } from '../infrastructure/session-reposito
 import { MonsoonContextPort } from '../application/context-port.js';
 import { monsoonCompactionTransform } from './automatic-compaction.js';
 import type { MonsoonTurnSpec } from './turn-contract.js';
+import { callPreparedModel } from '../../../engine/shared/react/model-call.js';
 
 test('Monsoon hot boundary archives raw content and publishes the committed checkpoint', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-monsoon-auto-'));
@@ -29,7 +30,7 @@ test('Monsoon hot boundary archives raw content and publishes the committed chec
   const spec: MonsoonTurnSpec = { dataDir, sessionId: 'session-a', agentId: 'agent-a', model: 'p:m',
     temperature: 0.7, toolNames: [], toolMode: 'selected', skillIds: [], workspace: dataDir,
     sandboxLevel: 'project', native: true };
-  const events: Array<{ type: string; revision?: number; id?: string }> = [];
+  const events: Array<{ type: string; revision?: number; id?: string; message?: string }> = [];
   let persistedOnDone: { revision: number; messages: Array<{ content: string }> } | undefined;
   let rebased = false;
   const llm = monsoonCompactionTransform(spec, {
@@ -46,10 +47,10 @@ test('Monsoon hot boundary archives raw content and publishes the committed chec
     if (event.type === 'context-compacted') throw new Error('observer disconnected');
   },
   () => { rebased = true; });
-  await llm.call(history);
+  await callPreparedModel(llm, history, undefined, {});
   assert.equal(rebased, true);
-  assert.deepEqual(events.map(event => event.type), ['compact-start', 'context-compacted', 'compact-done']);
-  assert.equal(events[0].id, events[2].id);
+  assert.deepEqual(events.filter(event => !event.message).map(event => event.type), ['compact-start', 'context-compacted', 'compact-done']);
+  assert.equal(events[0].id, events.at(-1)!.id);
   assert.equal(persistedOnDone?.revision, original.revision + 1);
   assert.ok(persistedOnDone?.messages.some(message => message.content === 'verified facts'));
   assert.equal(events.find(event => event.type === 'context-compacted')?.revision, original.revision + 1);
@@ -83,10 +84,10 @@ test('Monsoon automatic compaction reports failure before retrying any model or 
     resolveSummaryBudget: async () => 16_000 })(
     { call: async () => { calls++; return { content: 'unexpected', finishReason: 'stop' }; } },
     event => events.push(event), () => { rebased = true; });
-  await assert.rejects(llm.call(history), /summary offline/);
-  assert.deepEqual(events.map(event => event.type), ['compact-start', 'compaction-notice', 'compact-failed']);
-  assert.equal(events[0].id, events[2].id);
-  assert.match(events[2].message!, /summary offline/);
+  await assert.rejects(callPreparedModel(llm, history, undefined, {}), /summary offline/);
+  assert.deepEqual(events.filter(event => event.type !== 'compact-start' || !event.message).map(event => event.type), ['compact-start', 'compaction-notice', 'compact-failed']);
+  assert.equal(events[0].id, events.at(-1)!.id);
+  assert.match(events.at(-1)!.message!, /summary offline/);
   assert.equal(calls, 0);
   assert.equal(rebased, false);
   assert.deepEqual(await repository.get(original.agentId, original.id), original);

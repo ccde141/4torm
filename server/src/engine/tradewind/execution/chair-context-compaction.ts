@@ -14,6 +14,7 @@ import { broadcastToMeeting } from '../streaming/meeting-broadcast.js';
 import { reportMeetingCompactionNotice } from './meeting-compaction-notice.js';
 import { tradewindCompactionGuidance } from './compaction-guidance.js';
 import { publishMeetingCompaction } from './meeting-compaction-progress.js';
+import { withMeetingModelUsage } from './meeting-usage.js';
 
 export interface ChairContextBoundary {
   publicAnchor?: { timestamp: number; content: string };
@@ -80,8 +81,10 @@ export async function compactChairManually(
   dataDir: string, session: MeetingSessionData, agent: LoadedAgent, signal?: AbortSignal,
 ): Promise<void> {
   const messages = buildChairContext({ role: 'system', content: '' }, session);
-  await compactMessages({ ...chairCompactionOptions(dataDir, session, agent, true, signal),
-    messages, mode: 'full', reason: 'manual' });
+  await withMeetingModelUsage(session, () => compactMessages({
+    ...chairCompactionOptions(dataDir, session, agent, true, signal),
+    messages, mode: 'full', reason: 'manual' }),
+  event => broadcastToMeeting(session.nodeId, event, session.executionId));
 }
 
 export function finishChairContext(

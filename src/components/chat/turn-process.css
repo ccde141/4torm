@@ -1,6 +1,12 @@
-.turn-process { min-width: 0; margin-bottom: 16px; }
+.turn-process { min-width: 0; margin-bottom: 16px; padding-left: 10px; border-left: 2px solid color-mix(in srgb, var(--color-warning) 45%, var(--glass-border)); }
 .turn-process-toolbar { display: flex; align-items: center; gap: 12px; padding: 6px 0; color: var(--color-text-secondary); font-size: 12px; }
-.turn-process-toolbar button { margin-left: auto; padding: 5px 9px; background: transparent; color: inherit; border: 1px solid var(--color-border); border-radius: 6px; cursor: pointer; }
+.turn-process-toolbar button { background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.turn-process-disclosure { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 5px 0; border: 0; text-align: left; }
+.turn-process-arrow { flex-shrink: 0; font-size: 10px; transition: transform 160ms ease; }
+.turn-process-disclosure[aria-expanded="true"] .turn-process-arrow { transform: rotate(90deg); }
+.turn-process-toolbar .turn-process-height { flex-shrink: 0; margin-left: auto; padding: 5px 9px; border: 1px solid color-mix(in srgb, var(--color-text-secondary) 28%, var(--glass-border)); border-radius: 6px; background: var(--glass-bg); white-space: nowrap; }
+.turn-process-toolbar .turn-process-height:hover { border-color: var(--color-accent); }
+.turn-process-toolbar button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .turn-process-body { max-height: min(360px, 55vh); overflow-y: auto; scrollbar-width: none; }
 .turn-process-body::-webkit-scrollbar { display: none; }
 .turn-process-content { display: flow-root; }
@@ -15,3 +21,8 @@
 .turn-process-body.is-expanded { max-height: none; }
 .turn-process-reasoning-divider { border: 0; border-top: 1px solid var(--color-border); opacity: .55; margin: 12px 0; }
 .turn-process-body:focus-visible { outline: 1px solid var(--color-border); outline-offset: 2px; }
+@media (max-width: 600px) {
+  .turn-process-toolbar { flex-wrap: wrap; }
+  .turn-process-disclosure { flex-basis: 100%; flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) { .turn-process-arrow { transition: none; } }

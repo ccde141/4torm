@@ -35,6 +35,35 @@ test('one projection handles output, tools and the final answer in order', () =>
   assert.equal(projection.content, '答');
 });
 
+test('tool preparation is visible before complete arguments arrive', () => {
+  const projection = new MonsoonMessageProjection([placeholder], 'run-a', 'agent-a', () => 'next');
+  assert.deepEqual(projection.apply({ type: 'tool-progress', tool: 'write_file', argumentChars: 2400, elapsed: 1500 }),
+    { flush: 'throttled', firstOutput: true });
+  assert.equal(projection.messages[0].streamingPhase, 'tool-preparing');
+  assert.equal(projection.messages[0].streamingArgumentChars, 2400);
+  assert.equal(projection.messages[0].phaseElapsed, 2);
+  assert.equal(projection.messages[0].toolSteps, undefined);
+  projection.apply({ type: 'tool-call', tool: 'write_file', args: { path: 'a', content: 'full content' } });
+  assert.equal(projection.messages[0].streamingPhase, 'tool-exec');
+  assert.equal(projection.messages[0].toolSteps?.[0].args.content, 'full content');
+});
+
+test('text, tools and team reports retain received order across saving', () => {
+  const projection = new MonsoonMessageProjection([placeholder], 'run-a', 'agent-a', () => 'next');
+  projection.apply({ type: 'token', content: '先核对' });
+  projection.apply({ type: 'tool-call', tool: 'framework_capability_cyclone', args: { action: 'inspect' } });
+  projection.apply({ type: 'tool-result', result: 'found', ok: true });
+  const report = { type: 'team-activity', id: 'report-event', stage: 'reported',
+    memberId: 'member-a', runId: 'work-a', reportId: 'report-a', timestamp: placeholder.timestamp };
+  projection.apply(report); projection.apply(report);
+  projection.apply({ type: 'token', content: '然后汇报' });
+  projection.apply({ type: 'answer', content: '先核对\n\n然后汇报' });
+  const saved = JSON.parse(JSON.stringify(projection.messages[0])) as ChatMessage;
+  assert.deepEqual(saved.activitySequence?.map(item => item.kind), ['text', 'tool', 'team', 'text']);
+  assert.equal(saved.activitySequence?.filter(item => item.kind === 'team').length, 1);
+  assert.equal(saved.toolSteps?.[0].result, 'found');
+});
+
 test('ask, taskboard and usage are explicit projection effects', () => {
   const projection = new MonsoonMessageProjection([placeholder], 'run-a', 'agent-a', () => 'ask-a');
   const board = { revision: 1, items: [] };

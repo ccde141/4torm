@@ -16,6 +16,9 @@ import { summarizeConvectionSession } from './manual-summary.js';
 import { clearConvectionChairContext } from '../execution/chair-context.js';
 import { runConvectionContextChange, type ConvectionCompactionSink } from './compaction-progress.js';
 import type { CompactionProgress } from '../../../engine/shared/compaction/contracts.js';
+import type { ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
+import { withConvectionModelUsage } from '../execution/model-usage.js';
+import { readConvectionCurrentInput, type ConvectionCurrentInput } from '../execution/current-input.js';
 
 export interface CreateConvectionSessionInput {
   chairAgentId: string;
@@ -42,10 +45,21 @@ export class ConvectionSessionService {
     private readonly hasAgent?: (agentId: string) => Promise<boolean>,
     private readonly onChange?: (sessionId: string) => void,
     private readonly onCompaction?: ConvectionCompactionSink,
+    private readonly onModelRequest?: (sessionId: string, scope: 'public' | 'chair', request: ModelRequestUsage) => void,
   ) {}
 
-  list(): Promise<ConvectionSessionSummary[]> {
-    return listSessions(this.dataDir);
+  async list(): Promise<ConvectionSessionSummary[]> {
+    const summaries = await listSessions(this.dataDir);
+    for (const summary of summaries) {
+      const session = await loadSession(this.dataDir, summary.id);
+      if (session) Object.assign(summary, await readConvectionCurrentInput(this.dataDir, session));
+    }
+    return summaries;
+  }
+
+  async read(sessionId: string): Promise<ConvectionSessionData & ConvectionCurrentInput> {
+    const session = await this.require(sessionId);
+    return { ...session, ...await readConvectionCurrentInput(this.dataDir, session) };
   }
 
   async require(sessionId: string): Promise<ConvectionSessionData> {
@@ -184,9 +198,10 @@ export class ConvectionSessionService {
   async changeChairContext(sessionId: string, mode: 'clean' | 'summary', signal?: AbortSignal) {
     return this.withMutationLock(sessionId, async () => {
       const { changeConvectionChairContext } = await import('./chair-context.js');
-      return runConvectionContextChange(await this.require(sessionId), 'chair', mode,
+      const session = await this.require(sessionId);
+      return this.withContextUsage(session, 'chair', () => runConvectionContextChange(session, 'chair', mode,
         next => this.save(next), (session, completed) => changeConvectionChairContext(
-          this.dataDir, session, mode, (next, commitSignal) => this.save(next, commitSignal), signal, completed), signal, this.onCompaction);
+          this.dataDir, session, mode, (next, commitSignal) => this.save(next, commitSignal), signal, completed), signal, this.onCompaction));
     });
   }
 
@@ -195,9 +210,18 @@ export class ConvectionSessionService {
     mode: 'clean' | 'summary',
     signal?: AbortSignal,
   ): Promise<ResetConvectionContextResult> {
-    return this.withMutationLock(sessionId, async () => runConvectionContextChange(
-      await this.require(sessionId), 'public', mode, next => this.save(next),
-      (session, completed) => this.resetLocked(session, mode, signal, completed), signal, this.onCompaction));
+    return this.withMutationLock(sessionId, async () => {
+      const session = await this.require(sessionId);
+      return this.withContextUsage(session, 'public', () => runConvectionContextChange(
+        session, 'public', mode, next => this.save(next),
+        (session, completed) => this.resetLocked(session, mode, signal, completed), signal, this.onCompaction));
+    });
+  }
+
+  private withContextUsage<T>(session: ConvectionSessionData, scope: 'public' | 'chair', run: () => Promise<T>): Promise<T> {
+    return withConvectionModelUsage(this.dataDir, session, scope, event => {
+      if (event.type === 'model-request') this.onModelRequest?.(session.id, scope, event.request);
+    }, run);
   }
 
   private async resetLocked(session: ConvectionSessionData, mode: 'clean' | 'summary',

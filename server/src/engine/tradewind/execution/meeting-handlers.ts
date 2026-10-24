@@ -32,9 +32,10 @@ import {
 } from './tradewind-react-adapter';
 import { activeNodeRunners } from '../nodes/agent';
 import { runTradewindReActNative } from './native-adapter';
-import { emitMeetingUsage, recordMeetingUsage, TokenUsageRecordError } from './meeting-usage.js';
+import { emitMeetingUsage, recordMeetingUsage, recordMeetingRequest, TokenUsageRecordError } from './meeting-usage.js';
 import type { TokenUsageProgress } from './token-usage.js';
 import { captureTokenUsage } from './token-usage.js';
+import { callPreparedModel } from '../../shared/react/model-call.js';
 import { meetingContextMessages } from './meeting-compaction-context.js';
 import { meetingCompactionTransform, meetingOpeningCaller } from './meeting-context-compaction.js';
 import { buildChairContext, captureChairContextBoundary, chairCompactionCaller, finishChairContext } from './chair-context-compaction.js';
@@ -61,6 +62,7 @@ const HEARTBEAT_INTERVAL_MS = 5_000;
 // ── 事件类型 ──────────────────────────────────────────────────────
 
 export type MeetingStreamEvent =
+  | (import('../../shared/model-request-usage.js').ModelRequestUsageEvent & { label?: string })
   | { type: 'agent-start'; label: string }
   | { type: 'token'; label: string; chunk: string }
   | { type: 'reasoning'; label: string; chunk: string }
@@ -329,6 +331,8 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
               onEvent?.({ type: 'error', message: ev.message });
             } else if (ev.type === 'usage') {
               emitMeetingUsage(session, ev.usage, onEvent, label);
+            } else if (ev.type === 'model-request') {
+              recordMeetingRequest(session, ev, onEvent, label);
             }
           },
           signal: idleGuard.signal,
@@ -382,6 +386,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
               onEvent?.({ type: 'reasoning', label, chunk: ev.chunk });
             }
             if (ev.type === 'usage') emitMeetingUsage(session, ev.usage, onEvent, label);
+            if (ev.type === 'model-request') recordMeetingRequest(session, ev, onEvent, label);
             if (ev.type === 'heartbeat') onEvent?.({ type: 'heartbeat', label, phase: ev.phase, elapsed: ev.elapsed });
             if (ev.type === 'tool-call') onEvent?.({ type: 'tool-call', label, tool: ev.tool, args: ev.args });
             if (ev.type === 'tool-result') onEvent?.({ ...ev, label });
@@ -474,23 +479,7 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
     });
   }
 
-  const system: ContextMessage = {
-    role: 'system',
-    content: [
-      buildTradewindChairMeta(),
-      `你是会议室节点「${session.meetingLabel}」的会长「${agent.name}」，正在与人类**私聊**。`,
-      agent.rolePrompt?.trim() ? `# 角色\n\n${agent.rolePrompt.trim()}` : '',
-      ``,
-      `## 当前场景`,
-      `- 这条通道只有你和人类，其他参与者看不到`,
-      `- 你能看到完整的公共对话记录`,
-      `- 你的角色是参谋：分析对话、指出问题、给人类出主意`,
-      ``,
-      `话题：${session.topic}`,
-      ``,
-      `下面包含当前公共会议快照与私聊记录，请区分两种来源。`,
-    ].join('\n'),
-  };
+  const system = buildMeetingChairSystem(agent, session);
 
   const boundary = captureChairContextBoundary(session);
   const msgs = buildChairContext(system, session);
@@ -507,11 +496,13 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
   }) }, dataDir, session, agent);
 
   try {
-    const r = await captureTokenUsage(() => caller.call(msgs, undefined,
-      onChunk ? chunk => { idleGuard.touch(); onChunk(chunk); } : undefined,
-      idleGuard.signal, undefined,
-      onReasoning ? chunk => { idleGuard.touch(); onReasoning(chunk); } : undefined),
-    usage => recordMeetingUsage(session, usage, onEvent, 'chair'));
+    const r = await captureTokenUsage(() => callPreparedModel(caller, msgs, idleGuard.signal, {
+      onChunk: onChunk ? chunk => { idleGuard.touch(); onChunk(chunk); } : undefined,
+      onReasoning: onReasoning ? chunk => { idleGuard.touch(); onReasoning(chunk); } : undefined,
+      onEvent: event => { if (event.type === 'model-request') recordMeetingRequest(session, event, onEvent, 'chair'); },
+    }),
+    usage => recordMeetingUsage(session, usage, onEvent, 'chair'),
+    event => recordMeetingRequest(session, event, onEvent, 'chair'));
     session.chairMessages.push(createChairAssistantMessage(r.content, r.reasoningContent));
     finishChairContext(session, msgs, createChairAssistantMessage(r.content, r.reasoningContent), boundary);
     onEvent?.({ type: 'chair-done', content: r.content, reasoningContent: r.reasoningContent });
@@ -610,19 +601,21 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
         dataDir, fullModelKey: agent.model, messages: context, onChunk: chunk,
         signal: callSignal, onReasoning: reasoning,
       }) }, dataDir, session, agent.model, participant);
-      const r = await captureTokenUsage(() => caller.call(messages, undefined,
-        (chunk) => {
+      const r = await captureTokenUsage(() => callPreparedModel(caller, messages, idleGuard.signal, {
+        onChunk: (chunk) => {
           idleGuard.touch(); streamRaw += chunk;
           const slot = session.publicMessages[placeholderIdx];
           if (slot) slot.content = streamRaw;
           onEvent?.({ type: 'token', label, chunk });
-        }, idleGuard.signal, undefined,
-        (chunk) => {
+        },
+        onReasoning: (chunk) => {
           idleGuard.touch();
           const slot = session.publicMessages[placeholderIdx];
           if (slot) appendMeetingReasoning(slot, chunk);
           onEvent?.({ type: 'reasoning', label, chunk });
-        }), usage => recordMeetingUsage(session, usage, onEvent, label));
+        }, onEvent: event => { if (event.type === 'model-request') recordMeetingRequest(session, event, onEvent, label); },
+        }), usage => recordMeetingUsage(session, usage, onEvent, label),
+        event => recordMeetingRequest(session, event, onEvent, label));
       const answer = r.content.trim();
       const finalContent = answer || `（${label} 未给出有效入会发言）`;
       // 定稿：content 替换为 answer，rawContent 保留完整流，streaming=false
@@ -852,8 +845,10 @@ export async function handleEnd(opts: HandleEndOpts): Promise<MeetingEndResult> 
 
   try {
     const r = await captureTokenUsage(
-      () => caller.call(msgs, undefined, onChunk, signal),
+      () => callPreparedModel(caller, msgs, signal, { onChunk,
+        onEvent: event => { if (event.type === 'model-request') recordMeetingRequest(session, event, onEvent, 'minutes'); } }),
       usage => recordMeetingUsage(session, usage, onEvent, 'minutes'),
+      event => recordMeetingRequest(session, event, onEvent, 'minutes'),
     );
     onEvent?.({ type: 'minutes-done', content: r.content });
     return { minutes: r.content, transcript };
@@ -902,6 +897,16 @@ function buildMeetingContactToolDef(
       required: ['target', 'message'],
     },
   };
+}
+
+export function buildMeetingChairSystem(agent: LoadedAgent, session: MeetingSessionData): ContextMessage {
+  return { role: 'system', content: [buildTradewindChairMeta(),
+    `你是会议室节点「${session.meetingLabel}」的会长「${agent.name}」，正在与人类**私聊**。`,
+    agent.rolePrompt?.trim() ? `# 角色\n\n${agent.rolePrompt.trim()}` : '', '', '## 当前场景',
+    '- 这条通道只有你和人类，其他参与者看不到', '- 你能看到完整的公共对话记录',
+    '- 你的角色是参谋：分析对话、指出问题、给人类出主意', '', `话题：${session.topic}`, '',
+    '下面包含当前公共会议快照与私聊记录，请区分两种来源。',
+  ].join('\n') };
 }
 
 export function buildMeetingAgentPrompt(

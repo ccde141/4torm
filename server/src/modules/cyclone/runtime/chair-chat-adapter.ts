@@ -49,7 +49,7 @@ async function runChairChat(
   try {
     await execute(
       dataDir, input.workshopId, input.roomId, input.message,
-      event => onEvent?.(event), signal,
+      event => onEvent?.(event), signal, { inputMessageId: execution.runId },
     );
   } catch (error) { failure = error; }
   const status = signal.aborted ? 'aborted' : failure ? 'failed' : 'completed';

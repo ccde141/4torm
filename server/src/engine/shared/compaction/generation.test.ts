@@ -77,6 +77,7 @@ for (const type of ['deepseek', 'kimi'] as const) {
       assert.equal(displayed.join(''), summary);
       assert.equal(context.requests.length, 2);
       if (type === 'deepseek') {
+        assert.deepEqual(context.requests[0].thinking, { type: 'disabled' });
         assert.deepEqual(context.requests[1].thinking, { type: 'disabled' });
         assert.equal(context.requests[1].reasoning_effort, undefined);
       } else assert.notDeepEqual(context.requests[1].thinking, { type: 'disabled' });
@@ -100,16 +101,13 @@ test('body cap clips Unicode safely and the streamed display equals the retained
   } finally { await context.close(); }
 });
 
-test('two empty length endings retain a clearly labelled source excerpt without a third request', async () => {
+test('two empty length endings fail without replacing context by an incomplete source excerpt', async () => {
   const context = await fixture('kimi', (_, response) => stream(response,
     { delta: { reasoning_content: '思考完成但正文空间已耗尽。' }, finish_reason: 'length' }));
   try {
     const displayed: string[] = [];
-    const summary = await generateCompactionSummary({ ...context.input, onChunk: text => displayed.push(text) });
-    assert.match(summary, /原文节选/);
-    assert.match(summary, /尚待验收/);
-    assert.equal(displayed.join(''), summary);
-    assert.ok(estimateTextTokens(summary) <= context.input.maxContentTokens);
+    await assert.rejects(generateCompactionSummary({ ...context.input, onChunk: text => displayed.push(text) }), /仍未给出正文/);
+    assert.equal(displayed.join(''), '');
     assert.equal(context.requests.length, 2);
   } finally { await context.close(); }
 });

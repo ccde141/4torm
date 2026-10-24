@@ -67,7 +67,7 @@ An ordinary task uses the same instructions each time. With **Agent-led continua
 
 ## Review and Manage Runs
 
-Task cards show the schedule or execution status, remaining runs, and previous and next trigger times. Open a task to inspect its assigned Agent, schedule, push mode, input usage, and recent run history. Input usage comes from the latest model request. When available, the previous measurement remains visible during execution or compaction and refreshes when new data arrives. New conversations or conversations without recorded usage may show **Unknown**.
+Task cards show the schedule or execution status, remaining runs, and previous and next trigger times. Open a task to inspect its assigned Agent, schedule, push mode, current input count, and recent run history. The number shows the current effective input; its tooltip identifies estimates and their basis. It refreshes after compaction, edits, or deletion without predicting the next message. A new empty conversation may have no estimate. Run history retains the measurements from each run rather than replacing past costs with a current preview.
 
 Each run record shows its result, time, duration, and turn count. Click **Expand full result** for a long reply and expand tool calls to inspect arguments and results. A conversation link is available when its conversation can be viewed. Independent tasks with one retained round archive every run; use run history to review their results. Failures retain their reasons. After three consecutive failures, the task pauses automatically and can be enabled again after you fix the cause.
 

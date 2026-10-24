@@ -8,6 +8,7 @@ import { useLocale } from '../../i18n/LocaleContext';
 import { isTeamTool, TeamToolMessage } from './team/TeamToolMessage';
 import type { ToolMediaScope } from '../../engine/tool-media';
 import ToolResultImages from '../common/ToolResultImages';
+import { toolActivitySummary } from './tool-activity-summary';
 
 export default function ToolCallMessage({ toolCall, actions, timestamp, interrupted, mediaScope }: {
   mediaScope?: ToolMediaScope;
@@ -20,6 +21,7 @@ export default function ToolCallMessage({ toolCall, actions, timestamp, interrup
   const { t, locale } = useLocale();
   const output = useMemo(() => toolOutputSummary(toolCall.result ?? ''), [toolCall.result]);
   const isRunning = !interrupted && (toolCall.status === 'pending' || toolCall.status === 'running');
+  const target = toolActivitySummary(toolCall.toolName, toolCall.params);
   if (isTeamTool(toolCall.toolName)) return <TeamToolMessage toolCall={toolCall} actions={actions} timestamp={timestamp} interrupted={interrupted} />;
 
   // 文件改动类工具（edit_file / write_file）渲染成 diff 卡片，直观展示 AI 改了什么
@@ -50,6 +52,7 @@ export default function ToolCallMessage({ toolCall, actions, timestamp, interrup
               : isRunning ? t('chat.tool.runningShort') : (!expanded && toolCall.result ? summary : '')}
           </span>
         </button>
+        {!expanded && target && <div className="tool-record-target" title={target}>{target}</div>}
         {expanded && (
           <div style={{ marginTop: 'var(--space-2)', paddingTop: 'var(--space-2)', borderTop: '1px solid var(--border-color)' }}>
             {toolCall.params && Object.keys(toolCall.params).length > 0 && (

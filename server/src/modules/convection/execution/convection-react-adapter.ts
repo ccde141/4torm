@@ -23,7 +23,7 @@ export interface AgentReActResult {
 }
 
 export interface ConvectionReActEvent {
-  type: 'token' | 'reasoning' | 'tool-call' | 'tool-result' | 'heartbeat' | 'error' | 'usage';
+  type: 'token' | 'reasoning' | 'tool-call' | 'tool-result' | 'heartbeat' | 'error' | 'usage' | 'model-request';
   label: string;
   chunk?: string;
   tool?: string;
@@ -35,6 +35,7 @@ export interface ConvectionReActEvent {
   elapsed?: number;
   message?: string;
   usage?: TokenUsage | null;
+  request?: import('../../../engine/shared/model-request-usage.js').ModelRequestUsage;
 }
 
 export interface RunReActParams {
@@ -110,6 +111,8 @@ export async function runConvectionReActWith(
   const result = await runSharedTextLoop({
     messages: params.messages,
     llm: {
+      prepare: params.llm?.prepare,
+      recover: params.llm?.recover,
       call: async (messages, options, onChunk, signal, _tools, onReasoning) => {
         let response: ModelResult;
         try {

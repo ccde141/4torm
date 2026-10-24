@@ -1,3 +1,4 @@
+import { withCycloneSummaryUsage } from './summary-model-usage.js';
 import { deleteContextMessage, editContextMessage } from '../../../engine/cyclone/message-mutations.js';
 import { resetRoomContext, saveRoom, tryAcquireRoomLock } from '../../../engine/cyclone/room-store.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
@@ -31,7 +32,7 @@ export class CycloneChairService {
     );
     const room = await this.rooms.require(workshopId, roomId);
     return { chairAgentId: workshop.chairAgentId, messages: room.chairMessages || [],
-      tokenUsage: room.chairTokenUsage, compactionNotice: room.chairCompactionNotice, compaction: room.chairCompaction };
+      tokenUsage: room.chairTokenUsage, modelUsage: room.chairModelUsage, compactionNotice: room.chairCompactionNotice, compaction: room.chairCompaction };
   }
 
   async editMessage(workshopId: string, roomId: string, index: number, content?: string) {
@@ -70,7 +71,11 @@ export class CycloneChairService {
             this.dataDir, workshopId, `chair-${roomId}`, { type: 'cyclone-chair-context-compact', roomId,
               messages: status.messages, chairMessages: status.messages, publicMessages: room.publicMessages,
               chairActiveContext: room.chairActiveContext, tokenUsage: room.chairTokenUsage }) : undefined;
-          const chairSummary = mode === 'summary' ? await this.summarizer.summarize({
+          const chairSummary = mode === 'summary' ? await withCycloneSummaryUsage({
+            get: () => room.chairModelUsage, set: value => { room.chairModelUsage = value; },
+            persist: () => saveRoom(this.dataDir, workshopId, room),
+            emit: () => this.changes?.publish(workshopId, 'activity', roomId),
+          }, () => this.summarizer.summarize({
             agentId: status.chairAgentId, kind: 'meeting', signal, subject: `群聊「${room.title}」会长私聊`,
             messages: toCycloneSummaryMessages(buildCycloneChairContext(room, { role: 'system', content: '' }).slice(1)),
             onNotice: async notice => {
@@ -78,7 +83,7 @@ export class CycloneChairService {
               await saveRoom(this.dataDir, workshopId, room);
               this.changes?.publish(workshopId, 'activity', roomId);
             },
-          }) : undefined;
+          })) : undefined;
           if (mode === 'summary' && !chairSummary?.trim()) throw new Error('压缩摘要为空，原会话保留');
           signal?.throwIfAborted();
           const result = await resetRoomContext(this.dataDir, workshopId, roomId, {

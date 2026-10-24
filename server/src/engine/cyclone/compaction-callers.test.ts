@@ -6,6 +6,7 @@ import test from 'node:test';
 import type { ContextMessage } from '../shared/types.js';
 import type { LoadedAgent } from '../shared/agent-loader.js';
 import { defaultCompactionPolicy, saveCompactionPolicy } from '../shared/compaction/index.js';
+import { callPreparedModel } from '../shared/react/model-call.js';
 import { createWorkshop } from './workshop-store.js';
 import { addSeat, loadSeat, saveSeat, updateSeatRole } from './seat-store.js';
 import { createRoom, loadRoom, saveRoom } from './room-store.js';
@@ -77,9 +78,9 @@ test('工位下一次模型调用才压缩，热提高阈值取消旧触发，�
       return { content: '答复', finishReason: 'stop', usage }; } } });
   assert.equal(summaries, 0);
   policy.thresholds.cycloneConversation = 20_000; await saveCompactionPolicy(dataDir, policy);
-  await caller.call(messages); assert.equal(summaries, 0);
+  await callPreparedModel(caller, messages, undefined, {}); assert.equal(summaries, 0);
   policy.thresholds.cycloneConversation = 1_000; await saveCompactionPolicy(dataDir, policy);
-  await caller.call(messages);
+  await callPreparedModel(caller, messages, undefined, {});
   assert.equal(summaries, 1); assert.equal(modelCalls, 2);
   assert.doesNotMatch(requestSystems[0], /## 接续工作/);
   assert.match(requestSystems[1], /本工位私聊上下文于/);
@@ -90,7 +91,7 @@ test('工位下一次模型调用才压缩，热提高阈值取消旧触发，�
   assert.deepEqual((await loadSeat(dataDir, workshop.id, seat.id))?.messages, messages.slice(1));
   assert.equal((await fs.readdir(path.join(dataDir, 'cyclone', workshop.id, 'bak'))).length, 1);
   policy.thresholds.cycloneConversation = 20_000; await saveCompactionPolicy(dataDir, policy);
-  await caller.call(messages);
+  await callPreparedModel(caller, messages, undefined, {});
   assert.doesNotMatch(requestSystems[2], /## 接续工作/);
 });
 
@@ -114,10 +115,10 @@ test('岗位提醒仅成功请求消费一次，保持原始消息和 native 工
       if (fail) throw new Error('request rejected');
       return { content: '完成', finishReason: 'stop' };
     } } });
-  await assert.rejects(caller.call(messages), /request rejected/);
+  await assert.rejects(callPreparedModel(caller, messages, undefined, {}), /request rejected/);
   assert.equal(seat.historySeen, undefined);
   fail = false;
-  await caller.call(messages);
+  await callPreparedModel(caller, messages, undefined, {});
   assert.match(systems[1], /岗位配置于.*更新：岗位提示词、职责、绑定 Agent/);
   assert.doesNotMatch(systems[1], /当前职责正文|完整岗位提示词正文/);
   assert.deepEqual(messages, original);
@@ -129,7 +130,7 @@ test('岗位提醒仅成功请求消费一次，保持原始消息和 native 工
       assert.doesNotMatch(request[0].content, /## 接续工作/);
       return { content: '继续', finishReason: 'stop' };
     } } });
-  await resumed.call(messages);
+  await callPreparedModel(resumed, messages, undefined, {});
 });
 
 test('压缩阶段被中止时不发送工作请求，也不消费岗位提醒或替换原始上下文', async t => {
@@ -146,7 +147,7 @@ test('压缩阶段被中止时不发送工作请求，也不消费岗位提醒�
   summarizeFetch(t, () => { summaryCalls++; });
   const caller = createSeatCompactionCaller({ dataDir, workshopId: workshop.id, seat, agent, messages,
     llm: { call: async () => { modelCalls++; return { content: '不应执行', finishReason: 'stop' }; } } });
-  await assert.rejects(caller.call(messages, undefined, undefined, abort.signal), { name: 'AbortError' });
+  await assert.rejects(callPreparedModel(caller, messages, abort.signal, {}), { name: 'AbortError' });
   assert.equal(modelCalls, 0); assert.equal(summaryCalls, 0);
   assert.equal(seat.historySeen, undefined);
   assert.deepEqual(messages, original);
@@ -239,7 +240,7 @@ test('群聊压缩固定会长模型和压缩提示词，完整轮次留尾且�
   const messages: ContextMessage[] = [{ role: 'system', content: '会议规则' }, ...cycloneMeetingContext(room.publicMessages)];
   const caller = await createRoomCompactionCaller({ dataDir, workshopId: workshop.id, room, agent, messages,
     llm: { call: async () => ({ content: '新意见', finishReason: 'stop', usage }) } });
-  await caller.call(messages);
+  await callPreparedModel(caller, messages, undefined, {});
   assert.equal(summaries, 1);
   assert.equal(room.publicMessages.at(-1)?.content, '继续讨论');
   assert.equal(room.publicMessages[0].speaker, '系统');
@@ -285,7 +286,7 @@ test('会长私聊压缩始终优先会长模型与其提示词，固定全局�
   const caller = createChairCompactionCaller({ dataDir, workshopId: workshop.id, room,
     agent: { ...agent, model: 'p:chair', compactionPrompt: '会长压缩要求' }, messages,
     initialPromptTokens: 2000, llm: { call: async () => ({ content: '答复', finishReason: 'stop' }) } });
-  await caller.call(messages);
+  await callPreparedModel(caller, messages, undefined, {});
   assert.deepEqual(summaryModels, ['chair']);
   assert.match(messages[1].content, /历史压缩记录/);
 });

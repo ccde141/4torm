@@ -21,6 +21,8 @@ export interface ChatSession {
   rolePrompt?: string;
   lastReadAt?: string;
   tokenUsage?: TokenUsage;
+  modelUsage?: import('../lib/model-usage').ModelUsageProgress;
+  currentInput?: import('../lib/model-usage').CurrentInputEstimate;
   createdAt: string;
   updatedAt: string;
   unreadCount?: number;
@@ -93,6 +95,15 @@ async function readSessionWire(agentId: string, id: string): Promise<
 
 export function getCachedMessages(sessionId: string): ChatMessage[] | undefined {
   return messages.get(sessionId);
+}
+
+export async function previewSessionInput(agentId: string, sessionId: string, model: string) {
+  const response = await backendFetch(`${sessionUrl(agentId, sessionId)}/input-preview`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }),
+  });
+  if (response.status === 404) return undefined;
+  return await responseJson<import('../lib/model-usage').CurrentInputEstimate | null>(response,
+    '预估当前上下文失败') ?? undefined;
 }
 
 export async function markSessionRead(sessionId: string): Promise<void> {

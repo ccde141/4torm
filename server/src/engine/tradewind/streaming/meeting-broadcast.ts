@@ -15,6 +15,7 @@ import { ExecutionRegistry } from '../execution/execution-registry.js';
 import type { CompactionProgress } from '../../shared/compaction/index.js';
 
 export type MeetingBroadcastEvent =
+  | (import('../../shared/model-request-usage.js').ModelRequestUsageEvent & { label?: string })
   | { type: 'connected'; phase: string; round: number; runId?: string; messages: unknown[]; chairMessages: unknown[]; participants: unknown[]; configuredParticipants: unknown[]; tokenUsage?: TokenUsageProgress; compactionNotice?: string; compactions?: { public?: CompactionProgress; chair?: CompactionProgress } }
   | { type: 'round-start'; runId: string; startedAt: string }
   | { type: 'agent-start'; label: string }

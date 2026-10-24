@@ -3,6 +3,25 @@ import test from 'node:test';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import { runConvectionReActNativeWith } from './native-adapter.js';
 
+test('convection native adapter retains preparation and recovery across its model wrapper', async () => {
+  const order: string[] = [];
+  await runConvectionReActNativeWith({
+    dataDir: 'unused', model: 'demo:model', temperature: 0, agentId: 'a', sessionId: 's', label: 'A',
+    messages: [{ role: 'user', content: 'Discuss.' }], toolDefs: [],
+    llm: { prepare: async () => { order.push('prepare'); },
+      recover: async () => { order.push('recover'); return true; },
+      call: async () => { throw new Error('dependencies own inference'); } },
+  }, {
+    callModel: async () => {
+      order.push('call');
+      if (order.filter(item => item === 'call').length === 1) throw new Error('context overflow');
+      return { content: 'Done.', finishReason: 'stop' };
+    },
+    callAgentTool: async () => 'unused',
+  });
+  assert.deepEqual(order, ['prepare', 'call', 'recover', 'call']);
+});
+
 test('convection native loop sends failed tool status to the model and stream once', async () => {
   const events: Array<{ type: string; ok?: boolean }> = [];
   let secondMessages: ContextMessage[] = [];

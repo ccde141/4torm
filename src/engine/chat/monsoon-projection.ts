@@ -6,6 +6,7 @@ import { applyInputEvent, type InputEvent } from './input-events';
 import type { MonsoonBrowserEvent } from './sse-events';
 import { appendToolStep, finishLatestToolStep } from './tool-step-events';
 import { clearCompactionNotices, compactionCheckpoint } from './compaction-events';
+import { appendActivityText, appendActivityTool, appendTeamActivity, parseTeamActivity } from './activity-sequence';
 
 export interface ProjectionEffect {
   flush?: 'immediate' | 'throttled';
@@ -46,9 +47,27 @@ export class MonsoonMessageProjection {
       return { flush: 'immediate' };
     }
     if (event.type === 'token' || event.type === 'reasoning') return this.output(event);
+    if (event.type === 'tool-progress') {
+      this.patch({ streamingPhase: 'tool-preparing', phaseElapsed: Math.round(Number(event.elapsed ?? 0) / 1000),
+        streamingTool: typeof event.tool === 'string' ? event.tool : undefined,
+        streamingArgumentChars: Number(event.argumentChars ?? 0), streamingStatus: undefined });
+      return { flush: 'throttled', firstOutput: true };
+    }
+    if (event.type === 'team-activity') {
+      const activity = parseTeamActivity(event);
+      const message = this.find();
+      if (activity && message) this.replace(appendTeamActivity(message, activity));
+      return { flush: 'immediate' };
+    }
     if (event.type === 'tool-call' || event.type === 'tool-result') return this.tool(event);
+    const startsDelegate = event.type === 'delegate-start';
     if (isDelegateStreamEvent(event)) {
+      const toolIndex = this.find()?.toolSteps?.length ?? 0;
       this.current = applyDelegateStreamEvent(this.current, this.assistantId, event);
+      if (startsDelegate) {
+        const message = this.find();
+        if (message) this.replace(appendActivityTool(message, toolIndex));
+      }
       return { flush: 'throttled' };
     }
     return this.lifecycle(event);
@@ -59,14 +78,15 @@ export class MonsoonMessageProjection {
     if (!message) return {};
     const content = requiredText(event.content, event.type);
     if (event.type === 'token') this.streamContent += content;
-    this.replace({
+    const next: ChatMessage = {
       ...message,
       ...(event.type === 'token'
         ? { content: this.streamContent }
         : { reasoningContent: `${message.reasoningContent ?? ''}${content}` }),
       streamingPhase: 'model-output', phaseElapsed: 0,
       streamingStatus: undefined, streamingTool: undefined, streamingArgumentChars: undefined,
-    });
+    };
+    this.replace(event.type === 'token' ? appendActivityText(next, content) : next);
     return { flush: 'throttled', firstOutput: true };
   }
 
@@ -76,6 +96,8 @@ export class MonsoonMessageProjection {
     if (event.type === 'tool-call') {
       this.current = appendToolStep(this.current, this.assistantId,
         requiredText(event.tool, 'tool'), isRecord(event.args) ? event.args : {});
+      const next = this.find();
+      if (next) this.replace(appendActivityTool(next, (next.toolSteps?.length ?? 1) - 1));
       this.patch({ streamingPhase: 'tool-exec', phaseElapsed: 0,
         streamingTool: event.tool, streamingArgumentChars: undefined });
       return { flush: 'immediate' };

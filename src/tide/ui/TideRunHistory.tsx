@@ -9,6 +9,7 @@ import { tideRunSessionTarget } from './tide-run-session';
 import { formatTideContextTokens } from './tide-token-label';
 import { formatRelative } from './tide-styles';
 import ToolResultImages from '../../components/common/ToolResultImages';
+import { formatModelUsage } from '../../lib/model-usage';
 
 interface TideRunHistoryProps {
   task: TideTask;
@@ -43,6 +44,7 @@ function RunCard({ run, fallbackAgentId, onViewSession }: {
   const identity = tideRunIdentity(run);
   const exactTime = new Date(run.timestamp).toLocaleString(locale);
   const session = tideRunSessionTarget(run, fallbackAgentId);
+  const metering = formatModelUsage(run.usage?.modelUsage, locale, run.usage?.latest);
 
   return <article className="tide-run-card">
     <header className="tide-run-card__header">
@@ -56,8 +58,8 @@ function RunCard({ run, fallbackAgentId, onViewSession }: {
       <span><TideIcon name="clock" />{t('tide.detail.runMeta', {
         time: new Date(run.timestamp).toLocaleTimeString(locale), duration: run.durationMs, turns: run.turns,
       })}</span>
-      <span title={t('tide.detail.inputUsage')}>
-        {t('tide.detail.inputUsage')}<strong>{formatTideContextTokens(run.usage?.latest, locale)}</strong>
+      <span title={metering?.title ?? t('tide.detail.inputUsage')}>
+        {t('tide.detail.inputUsage')}<strong>{metering?.label ?? formatTideContextTokens(run.usage?.latest, locale)}</strong>
       </span>
     </div>
     {run.error && <div className="tide-run-card__error" data-status={run.status}>

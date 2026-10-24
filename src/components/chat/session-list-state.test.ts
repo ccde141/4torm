@@ -24,9 +24,9 @@ test('display usage stays known through reply and compaction, without changing t
   const base = { agentId: 'agent-a', id: 'session-a', tokenUsage: known };
   const initial = projectSessionUsage({}, [base], () => false);
   const active = projectSessionUsage(initial, [{ ...base, tokenUsage: updated }], () => true);
-  assert.deepEqual(active['agent-a/session-a'], known);
+  assert.deepEqual(active['agent-a/session-a'], updated);
   const compacted = { ...base, tokenUsage: undefined };
-  assert.deepEqual(projectSessionUsage(active, [compacted], () => false)['agent-a/session-a'], known);
+  assert.deepEqual(projectSessionUsage(active, [compacted], () => false)['agent-a/session-a'], updated);
   assert.equal(compacted.tokenUsage, undefined);
   const completed = projectSessionUsage(active, [{ ...base, tokenUsage: updated }], () => false);
   assert.deepEqual(completed['agent-a/session-a'], updated);

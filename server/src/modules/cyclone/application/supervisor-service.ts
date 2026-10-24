@@ -1,3 +1,4 @@
+import { withCycloneSummaryUsage } from './summary-model-usage.js';
 import { loadAgent } from '../../../engine/shared/agent-loader.js';
 import { withAgentActivity } from '../../../engine/shared/agent-activity.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
@@ -118,7 +119,8 @@ export class CycloneSupervisorService {
       try {
         if (input.mode !== 'information') await mutateSupervisor(this.dataDir, input.workshopId,
           current => { current.followUpPaused = false; });
-        const result = await withAgentActivity(supervisor.agentId!, 'cyclone', () => runSupervisorTurn(this.dataDir, input.workshopId, input, event => {
+        const result = await withAgentActivity(supervisor.agentId!, 'cyclone', () => runSupervisorTurn(this.dataDir, input.workshopId,
+          { ...input, inputMessageId: execution.runId }, event => {
           if (event && typeof event === 'object' && 'type' in event && event.type === 'error') return;
           emit(event);
         }, signal));
@@ -261,14 +263,18 @@ export class CycloneSupervisorService {
     const inboxBefore = mode === 'clear'
       ? (await readPendingSupervisorInformation(this.dataDir, workshopId)).map(item => item.id) : [];
         const archivePath = await archiveSupervisorContext(this.dataDir, workshopId, current);
-        const summary = mode === 'summary' ? await this.summarizer.summarize({
+        const summary = mode === 'summary' ? await withCycloneSummaryUsage({
+          get: () => current.modelUsage, set: value => { current.modelUsage = value; },
+          persist: () => mutateSupervisor(this.dataDir, workshopId, next => { next.modelUsage = current.modelUsage; }),
+          emit: event => { this.changed(workshopId); emit(event); },
+        }, () => this.summarizer.summarize({
           agentId: current.agentId!, subject: '工作室主管会话',
           messages: toCycloneSummaryMessages(current.messages), signal,
           onNotice: async notice => {
             await mutateSupervisor(this.dataDir, workshopId, next => { next.compactionNotice = notice; });
             this.changed(workshopId); emit(notice);
           },
-        }) : undefined;
+        })) : undefined;
         if (mode === 'summary' && !summary?.trim()) throw failure('摘要为空，原会话保留', 'io');
         signal?.throwIfAborted();
         await mutateSupervisor(this.dataDir, workshopId, next => {

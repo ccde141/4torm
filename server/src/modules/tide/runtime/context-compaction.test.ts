@@ -14,6 +14,7 @@ import { readTideSession, writeTideSession } from '../sessions/session-store.js'
 import { TideContextCompaction } from './context-compaction.js';
 import { tideGeneratedMediaContext } from './turn-context.js';
 import { resolveTarget, saveTurn } from '../sessions/session-resolver.js';
+import { callPreparedModel } from '../../../engine/shared/react/model-call.js';
 
 test('fixed-model fallback publishes a durable live notice before alternate execution and retains it in run history', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-tide-compaction-notice-'));
@@ -52,8 +53,8 @@ test('fixed-model fallback publishes a durable live notice before alternate exec
   const messages: ContextMessage[] = [{ role: 'system', content: 'Static identity' },
     ...fixture.messages.map(message => ({ role: message.role as 'user' | 'assistant', content: message.content })),
     { role: 'user', content: 'Continue with the next step.' }];
-  await compactor.transform({ call: async () => ({ content: 'Completed', toolCalls: [] }) })
-    .call(messages, {}, () => {}, new AbortController().signal);
+  await callPreparedModel(compactor.transform({ call: async () => ({ content: 'Completed', finishReason: 'stop' }) }),
+    messages, new AbortController().signal, {});
   await assertFinalFacts(dataDir, task, queued.runId, states, compactor.notices);
   assert.deepEqual(models, ['p:fixed', 'p:current']);
   unsubscribe();
@@ -77,8 +78,8 @@ test('a real automatic compaction rebases current turn media before rolling rete
     { role: 'tool', content: 'image metadata', toolCallId: 'call', toolImages }];
   const compactor = new TideContextCompaction(dataDir, task, resolved, resolved.existing!, undefined, undefined, undefined,
     { summarize: async () => 'old summary', resolveSummaryBudget: async () => 100_000 });
-  await compactor.transform({ call: async () => ({ content: 'current answer', toolCalls: [] }) })
-    .call(messages, {}, () => {}, new AbortController().signal);
+  await callPreparedModel(compactor.transform({ call: async () => ({ content: 'current answer', finishReason: 'stop' }) }),
+    messages, new AbortController().signal, {});
   assert.ok(messages.length < 6);
   messages.push({ role: 'assistant', content: 'current answer' });
   await compactor.checkpoint(messages);

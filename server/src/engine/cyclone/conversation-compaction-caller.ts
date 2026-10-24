@@ -1,3 +1,4 @@
+import { trackModelUsage } from '../shared/track-model-usage.js';
 import { createCompactionCaller, estimateCompactionTokens, type CompactionNotice, type CompactionCommit } from '../shared/compaction/index.js';
 import type { LoadedAgent } from '../shared/agent-loader.js';
 import type { LLMCaller } from '../shared/react/native-loop.js';
@@ -27,7 +28,7 @@ export function createSeatCompactionCaller(options: ConversationCallerOptions): 
   const { dataDir, workshopId, seat, agent, messages } = options;
   const measured = trackSeatModelUsage(withSeatContinuity(options.llm, seat, 'solo'), seat, messages,
     () => saveSeat(dataDir, workshopId, seat));
-  return createCompactionCaller({ llm: measured, dataDir,
+  const caller = createCompactionCaller({ llm: measured, dataDir,
     area: 'cycloneConversation', kind: 'conversation', model: agent.model,
     prompt: agent.compactionPrompt, protectedPrefixCount: 1,
     scopeKey: `cyclone:${workshopId}:seat:${seat.id}`,
@@ -57,4 +58,6 @@ export function createSeatCompactionCaller(options: ConversationCallerOptions): 
     },
     onCompacted: options.onCompacted,
   });
+  return trackModelUsage(caller, { get: () => seat.modelUsage, set: value => { seat.modelUsage = value; },
+    persist: () => saveSeat(dataDir, workshopId, seat) });
 }

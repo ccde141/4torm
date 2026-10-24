@@ -15,6 +15,7 @@ import type { TideScheduler } from '../runtime/scheduler.js';
 import type { TideChangeFeed } from './change-feed.js';
 import { ambiguousTideSession } from '../sessions/session-io.js';
 import { parseTideCompactionProgress } from '../domain/compaction-progress.js';
+import { observeModelRequests, recordModelRequest, type ModelRequestUsageEvent } from '../../../engine/shared/model-request-usage.js';
 
 const activeCompactions = new Set<string>();
 function compactionKey(dataDir: string, agentId: string, sessionId: string) {
@@ -72,11 +73,24 @@ export class TideSessionCompaction {
     let current = session;
     let progress: CompactionProgress | undefined;
     let lifecycleError: unknown;
-    const plan = await compactMessages({ ...this.summaryPorts, dataDir: this.dataDir, area: 'tide',
+    let writes = Promise.resolve();
+    const recordUsage = (event: ModelRequestUsageEvent) => {
+      const usage = current.usage ?? { calls: 0, reportedCalls: 0 };
+      current = { ...current, usage: { ...usage, modelUsage: recordModelRequest(usage.modelUsage, event.request) } };
+      writes = writes.then(async () => {
+        const snapshot = current;
+        await commitTideCompaction(this.dataDir, task, snapshot, snapshot);
+        this.changes?.publish({ scope: 'session', agentId: task.agentId, taskId: task.id, sessionId });
+      });
+      void writes.catch(() => undefined);
+    };
+    const plan = await observeModelRequests(recordUsage, async () => {
+      try { return await compactMessages({ ...this.summaryPorts, dataDir: this.dataDir, area: 'tide',
       model: agent?.model ?? session.model, prompt: agent?.compactionPrompt, kind: 'conversation', protectedPrefixCount: 0,
       scopeKey: `tide:${task.agentId}:${sessionId}`, messages: activeTideContext(session.messages),
       mode: 'full', reason: 'manual', onNotice, signal,
       onProgress: async event => {
+        await writes;
         progress = parseTideCompactionProgress(event);
         if (event.type !== 'compact-done') {
           const next = { ...current, compaction: progress };
@@ -95,6 +109,7 @@ export class TideSessionCompaction {
           JSON.stringify({ reason, session, context }));
       },
       commit: async (commit, commitSignal) => {
+        await writes;
         const timestamp = new Date().toISOString();
         const next = { ...current, updatedAt: timestamp, compaction: { ...progress!, type: 'compact-done' as const,
           updatedAt: Date.now(), summaryLength: commit.summary.length, archivedMessages: commit.prefix.length },
@@ -105,7 +120,8 @@ export class TideSessionCompaction {
         if (next.usage) next.usage = { ...next.usage, latest: undefined };
         await commitTideCompaction(this.dataDir, task, current, next, commitSignal);
         current = next;
-      } });
+      } }); } finally { await writes; }
+    });
     if (!plan) throw compactionError('TIDE_COMPACTION_EMPTY', 'validation', '没有可压缩的会话内容');
   }
 }

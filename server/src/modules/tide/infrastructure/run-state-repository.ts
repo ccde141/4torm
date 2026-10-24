@@ -10,6 +10,7 @@ import type { CompactionProgress } from '../../../engine/shared/compaction/index
 import { parseTideCompactionProgress } from '../domain/compaction-progress.js';
 import { recoverTideCompaction } from './compaction-recovery.js';
 import { advanceTideUsage } from '../domain/token-usage.js';
+import { recordModelRequest, type ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
 import type { TideChangeFeed } from '../application/change-feed.js';
 import { staleState, corruptState, runtimeIoError } from './run-state-errors.js';
 import {
@@ -27,6 +28,7 @@ export interface TideRunStateRepository {
   removeTask(taskId: string): Promise<void>;
   markRunning(taskId: string, runId: string, agentId?: string): Promise<TideRunState>;
   recordUsage(taskId: string, runId: string, usage: TokenUsage | null): Promise<TideRunState>;
+  recordModelRequest?(taskId: string, runId: string, request: ModelRequestUsage): Promise<TideRunState>;
   recordCompactionNotice(taskId: string, runId: string, message: string): Promise<TideRunState>;
   recordCompactionProgress(taskId: string, runId: string, event: CompactionProgress,
     sessionId?: string, sourceRevision?: number): Promise<TideRunState>;
@@ -122,6 +124,13 @@ export class FileTideRunStateRepository implements TideRunStateRepository {
   recordUsage(taskId: string, runId: string, usage: TokenUsage | null): Promise<TideRunState> {
     return this.update(taskId, runId, state => ({ ...state,
       usage: advanceTideUsage(state.usage, usage), updatedAt: new Date().toISOString() }));
+  }
+
+  recordModelRequest(taskId: string, runId: string, request: ModelRequestUsage): Promise<TideRunState> {
+    return this.update(taskId, runId, state => ({ ...state, usage: {
+      calls: state.usage?.calls ?? 0, reportedCalls: state.usage?.reportedCalls ?? 0, ...state.usage,
+      modelUsage: recordModelRequest(state.usage?.modelUsage, request),
+    }, updatedAt: new Date().toISOString() }));
   }
 
   recordCompactionNotice(taskId: string, runId: string, message: string): Promise<TideRunState> {

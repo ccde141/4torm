@@ -1,3 +1,4 @@
+import { recordModelRequest } from '../../../engine/shared/model-request-usage.js';
 /**
  * 潮汐 — 推送目标解析（读哪个会话 / 写哪里 / 归档）
  *
@@ -150,6 +151,11 @@ export async function saveTurn(
     content: '[历史压缩记录]', type: 'compact-marker', contextExact: true,
     nativeContext: resolved.compactedContext, timestamp: now });
   base.usage = resolved.liveUsageCalls ? base.usage : mergeTideUsage(base.usage, usage);
+  if (usage?.modelUsage && base.usage) {
+    for (const request of Object.values(usage.modelUsage.requests)) {
+      base.usage.modelUsage = recordModelRequest(base.usage.modelUsage, request);
+    }
+  }
   base.tokenUsage = base.usage?.latest;
   base.updatedAt = now;
   await writeTideSession(dataDir, base, task.id, task.name);

@@ -117,7 +117,8 @@ export async function runConvectionReActNativeWith(
 }> {
   const { label, messages, toolDefs, onEvent, signal } = params;
 
-  const llm: LLMCaller = { call: async (...args) => {
+  const llm: LLMCaller = { prepare: params.llm?.prepare, recover: params.llm?.recover,
+    call: async (...args) => {
     let response: Awaited<ReturnType<LLMCaller['call']>>;
     try { response = await dependencies.callModel(...args); }
     catch (error) {

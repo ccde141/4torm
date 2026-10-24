@@ -1,6 +1,8 @@
 import type { TokenUsage } from '../../../engine/shared/llm-bridge.js';
+import { recordModelRequest, parseModelUsageProgress, type ModelUsageProgress } from '../../../engine/shared/model-request-usage.js';
 
 export interface TideUsageProgress {
+  modelUsage?: ModelUsageProgress;
   calls: number;
   reportedCalls: number;
   latest?: TokenUsage;
@@ -13,11 +15,13 @@ export function advanceTideUsage(
   const calls = (previous?.calls ?? 0) + 1;
   if (usage === null) {
     return { calls, reportedCalls: previous?.reportedCalls ?? 0,
+      ...(previous?.modelUsage ? { modelUsage: previous.modelUsage } : {}),
       ...(previous?.total ? { total: previous.total } : {}) };
   }
   const actual = parseTokenUsage(usage);
   const prior = previous?.total;
   return { calls, reportedCalls: (previous?.reportedCalls ?? 0) + 1,
+    ...(previous?.modelUsage ? { modelUsage: previous.modelUsage } : {}),
     latest: actual,
     total: prior ? { promptTokens: prior.promptTokens + actual.promptTokens,
       completionTokens: prior.completionTokens + actual.completionTokens,
@@ -34,7 +38,10 @@ export function mergeTideUsage(
       completionTokens: previous.total.completionTokens + current.total.completionTokens,
       totalTokens: previous.total.totalTokens + current.total.totalTokens }
     : current.total ?? previous.total;
+  let modelUsage = previous.modelUsage;
+  for (const request of Object.values(current.modelUsage?.requests ?? {})) modelUsage = recordModelRequest(modelUsage, request);
   return { calls: previous.calls + current.calls,
+    ...(modelUsage ? { modelUsage } : {}),
     reportedCalls: previous.reportedCalls + current.reportedCalls,
     ...(current.latest ? { latest: current.latest } : {}),
     ...(total ? { total } : {}) };
@@ -49,7 +56,8 @@ export function parseTideUsageProgress(value: unknown): TideUsageProgress {
   const total = value.total === undefined ? undefined : parseTokenUsage(value.total);
   if (latest && !total) throw new Error('latest token usage lacks total');
   if (reportedCalls === 0 && (latest || total)) throw new Error('unreported token usage has values');
-  return { calls, reportedCalls, ...(latest ? { latest } : {}), ...(total ? { total } : {}) };
+  return { calls, reportedCalls, ...(latest ? { latest } : {}), ...(total ? { total } : {}),
+    ...(value.modelUsage ? { modelUsage: parseModelUsageProgress(value.modelUsage) } : {}) };
 }
 
 export function parseTokenUsage(value: unknown): TokenUsage {

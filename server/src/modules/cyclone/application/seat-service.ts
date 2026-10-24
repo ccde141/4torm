@@ -1,3 +1,4 @@
+import { withCycloneSummaryUsage } from './summary-model-usage.js';
 import { loadAgent } from '../../../engine/shared/agent-loader.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
 import { deleteContextMessage, editContextMessage } from '../../../engine/cyclone/message-mutations.js';
@@ -114,7 +115,11 @@ export class CycloneSeatService {
           const archivePath = options.mode === 'summary' ? await archiveCycloneCompaction(
             this.dataDir, workshopId, `seat-${seatId}`, { type: 'cyclone-seat-context-compact',
               seatId, messages: seat.messages, pending: seat.pending, tokenUsage: seat.tokenUsage }) : undefined;
-          const summary = options.mode === 'summary' ? await this.summarizer.summarize({
+          const summary = options.mode === 'summary' ? await withCycloneSummaryUsage({
+            get: () => seat.modelUsage, set: value => { seat.modelUsage = value; },
+            persist: () => saveSeat(this.dataDir, workshopId, seat),
+            emit: () => this.changes?.publish(workshopId, 'activity', seatId),
+          }, () => this.summarizer.summarize({
             agentId: seat.agentId, signal, subject: `工位「${seat.title}」私聊`,
             messages: toCycloneSummaryMessages(seat.messages || []),
             onNotice: async notice => {
@@ -122,7 +127,7 @@ export class CycloneSeatService {
               await saveSeat(this.dataDir, workshopId, seat);
               this.changes?.publish(workshopId, 'activity', seatId);
             },
-          }) : undefined;
+          })) : undefined;
           if (options.mode === 'summary' && !summary?.trim()) throw new Error('压缩摘要为空，原会话保留');
           signal?.throwIfAborted();
           const result = await resetSeatContext(this.dataDir, workshopId, seatId, {

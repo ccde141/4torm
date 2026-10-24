@@ -63,6 +63,25 @@ test('私聊 token 不触发刷新，保存后和终态触发', async () => {
   assert.deepEqual(signals, ['activity', 'activity', 'activity']);
 });
 
+test('工位私聊用框架执行身份绑定入站消息，不依赖正文', async () => {
+  const commands = { begin: async () => ({ operationId: 'seat:cyc-1:seat-1',
+    runId: 'run-input', startedAt: 'now' }), finish: async () => ({}) } as CycloneCommands;
+  const seats = { require: async () => ({ id: 'seat-1' }) } as CycloneSeatService;
+  const executions = { signal: () => new AbortController().signal } as CycloneExecutionPort;
+  let identity: unknown;
+  const runtime: CycloneSeatChatRuntime = {
+    chat: async (_data, _workshop, _seat, _text, _emit, _signal, inputIdentity) => {
+      identity = inputIdentity;
+      return { content: '已完成', termination: { status: 'succeeded' } };
+    },
+    resume: async () => { throw new Error('unexpected resume'); },
+    completeAwaiting: async () => undefined, kick: () => undefined,
+  };
+  const port = createCycloneSeatChatPort('data', seats, commands, executions, runtime);
+  await (await port.prepare({ workshopId: 'cyc-1', seatId: 'seat-1', mode: 'chat', text: '检查' })).run();
+  assert.deepEqual(identity, { inputMessageId: 'run-input' });
+});
+
 test('工位私聊失败仍保存 failed、唤醒派发队列并释放执行身份', async () => {
   const finishes: unknown[] = [];
   let kicked = 0;
@@ -177,6 +196,7 @@ for (const textMode of [false, true]) {
     await assert.rejects(prepared.run(event => events.push(event as never)), /request budget reached/);
     const saved = await loadSeat(dataDir, workshop.id, source.id);
     assert.equal(calls, 2);
+    assert.equal(saved?.messages.find(message => message.role === 'user')?.inputMessageId, 'fixture-run');
     assert.ok(saved?.messages.some(message => message.role === 'tool' || message.content.includes('tool_result')));
     assert.ok(!saved?.messages.some(message => message.role === 'assistant' && message.content.startsWith('[错误]')));
     assert.equal(events.filter(event => event.type === 'tool-result').length, 1);

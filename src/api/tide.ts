@@ -20,6 +20,7 @@ export interface TideTokenUsage {
 }
 
 export interface TideUsageProgress {
+  modelUsage?: import('../lib/model-usage').ModelUsageProgress;
   calls: number;
   reportedCalls: number;
   latest?: TideTokenUsage;
@@ -48,6 +49,7 @@ export interface TideCompactionProgress {
 }
 
 export interface TideTask {
+  currentInput?: import('../lib/model-usage').CurrentInputEstimate;
   id: string;
   name: string;
   schedule: string;
@@ -152,6 +154,7 @@ export async function listRuns(taskId: string, limit = 20): Promise<TideRunRecor
 // ── 会话内容 ────────────────────────────────────────────────────
 
 export interface TideSession {
+  currentInput?: import('../lib/model-usage').CurrentInputEstimate;
   id: string;
   agentId: string;
   agentName: string;

@@ -87,7 +87,7 @@ export class MonsoonChatPreparation {
   }
 }
 
-function turnSpec(
+export function turnSpec(
   dataDir: string,
   sessionId: string,
   agent: LoadedAgent,

@@ -1,3 +1,4 @@
+import { formatModelUsage, mergeModelUsage } from '../../../lib/model-usage';
 import { CompactionStatus } from '../../../components/common/CompactionStatus';
 import { compactionActivity } from '../../../components/common/compaction-activity';
 import { visibleCycloneCompaction } from './cyclone-compaction-activity';
@@ -19,6 +20,7 @@ import type { RoomStreamRunners } from './useRoomStreamRunners';
 import type { FeedMsg } from './room-stream-events';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import DispatchIndex from './DispatchIndex';
+import CycloneConversationHeader from './CycloneConversationHeader';
 import RoomTimeline from './RoomTimeline';
 import RoomComposer from './RoomComposer';
 import RoomSettingsPanel from './RoomSettingsPanel';
@@ -33,7 +35,7 @@ import { useSmartChatScroll } from './useSmartChatScroll';
 import { useLocale } from '../../../i18n/LocaleContext';
 import type { ExternalRoomView } from './useRoomExternalActivity';
 import { abortCycloneExecution } from './cyclone-execution-client';
-import { formatCycloneUsage, useCycloneUsage } from './cyclone-token-usage';
+import { formatCycloneRoomCurrentInput, formatCycloneUsage, useCycloneUsage } from './cyclone-token-usage';
 import { CompactionNotice } from '../../../components/common/CompactionNotice';
 import { ContactActivityScope } from './ContactActivityScope';
 import { visibleCompactionFeedback } from '../../../components/common/compaction-feedback';
@@ -95,7 +97,10 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
     liveUsage?.lastKnownTokenUsage ?? liveUsage?.tokenUsage,
     loadedScope === `${workshopId}:${roomId}` ? room?.publicLatestTokenUsage : undefined,
     streaming || contextBusy);
-  const token = formatCycloneUsage(tokenUsage, locale);
+  const modelUsage = mergeModelUsage(loadedScope === `${workshopId}:${roomId}` ? room?.modelUsage : undefined, liveUsage?.modelUsage);
+  const token = formatCycloneRoomCurrentInput(loadedScope === `${workshopId}:${roomId}` ? room?.publicCurrentInput : undefined, locale, modelUsage)
+    ?? formatModelUsage(modelUsage, locale, tokenUsage)
+    ?? formatCycloneUsage(tokenUsage, locale);
   const editingMessageIndex = editingMessage && room
     ? findRoomMessageIndex(room.publicMessages, editingMessage) : null;
   const editingMessageChanged = editingMessage !== null && editingMessageIndex === -1;
@@ -274,16 +279,13 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
     <ContactActivityScope workshopId={workshopId} targetId={roomId} active={active}>
     <div className="cyclone-room" style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, position: 'relative' }}>
       {/* Header */}
-      <div className="conv__header">
-        <span className="conv__header-title"># {room.title}</span>
-        <span className="conv__header-id">{room.topic}</span>
-        <span className="conv__header-tokens" title={token.title}>{token.label}</span>
+      <CycloneConversationHeader title={`# ${room.title}`} topic={room.topic} token={token}>
         <DispatchIndex dispatches={roomDispatches} onSelect={focusDispatch} />
         <RoomSettingsPanel room={room} seats={seats}
           workshopId={workshopId} roomId={roomId}
           roomUrl={`/api/cyclone/workshop/${workshopId}/room/${roomId}`}
           locked={streaming || settingsLocked || contextBusy} onChanged={async () => { await reload(true); }} />
-      </div>
+      </CycloneConversationHeader>
 
       {loadError && <div role="alert" className="agent-detail__error">
         {t('cyclone.roomPanel.loadFailed')}: {loadError}

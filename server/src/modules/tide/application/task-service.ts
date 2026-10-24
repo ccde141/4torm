@@ -19,6 +19,7 @@ import { isTideSessionCompacting } from './session-compaction.js';
 import { parseTideCompactionProgress } from '../domain/compaction-progress.js';
 import type { SeasonSessionPort } from '../sessions/season-session-port.js';
 import { prepareTaskReassignment } from './task-reassignment.js';
+import { currentTideInput } from '../sessions/current-input.js';
 
 export interface CreateTideTaskInput {
   name: string;
@@ -54,7 +55,11 @@ export class TideTaskService {
     const [recent, runState] = await Promise.all([
       this.runs.list(taskId, 5), this.runStates.get(taskId),
     ]);
-    return { task, recent, runState };
+    const session = task.targetSessionId ? await readTideSession(this.dataDir, task.agentId, task.targetSessionId)
+      ?? (task.pushMode === 'designated' && this.seasonSessions
+        ? await readSeasonSession(this.seasonSessions, task.agentId, task.targetSessionId) : null) : null;
+    const currentInput = session ? await currentTideInput(this.dataDir, session, task, this.seasonSessions) : undefined;
+    return { task: { ...task, currentInput }, recent, runState };
   }
 
   async create(input: CreateTideTaskInput, options: { enabled?: boolean } = {}): Promise<TideTask> {
@@ -169,7 +174,8 @@ export class TideTaskService {
       // Keep the original timestamp: reopening a stale snapshot must not replay feedback forever.
       compaction = { ...compaction, type: 'compact-failed', aborted: true, message: '压缩已中断，原始记录已保留' };
     }
-    return { ...session, ...(compaction ? { compaction } : {}),
+    const currentInput = await currentTideInput(this.dataDir, session, owners[0], this.seasonSessions);
+    return { ...session, currentInput, ...(compaction ? { compaction } : {}),
       ...(latest?.compactionNotice ? { compactionNotice: latest.compactionNotice } : {}) };
   }
 

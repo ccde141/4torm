@@ -1,3 +1,4 @@
+import { callPreparedModel } from '../shared/react/model-call.js';
 /**
  * 气旋会长执行器 —— 每场会议（room）的场外私聊参谋
  *
@@ -9,7 +10,7 @@
  * - 与群聊发言共用 per-room 锁：同一 room 内会长与 speak 串行，避免并发覆盖 room 文件
  */
 
-import type { ContextMessage } from '../shared/types';
+import type { CycloneInputIdentity } from './types.js';
 import { callLLM } from '../shared/llm-bridge';
 import { loadAgent } from '../shared/agent-loader';
 import { buildChairPrompt } from './seat-prompt';
@@ -54,6 +55,7 @@ export async function chatChairWithinExecution(
   humanMessage: string,
   onEvent: (ev: SeatEvent) => void,
   signal?: AbortSignal,
+  inputIdentity?: CycloneInputIdentity,
 ): Promise<{ content: string; rawContent: string }> {
   const w = await loadWorkshop(dataDir, workshopId);
     if (!w) throw new Error('工作室不存在');
@@ -67,8 +69,7 @@ export async function chatChairWithinExecution(
     const { systemMessage } = await buildChairPrompt(dataDir, workshopId, room, w, agent);
 
     const previousPromptTokens = room.chairTokenUsage?.promptTokens;
-    room.chairMessages.push({ role: 'user', content: humanMessage });
-    room.chairTokenUsage = undefined;
+    room.chairMessages.push({ role: 'user', content: humanMessage, ...inputIdentity });
     room.chairCompactionNotice = undefined;
     room.chairCompaction = undefined;
     await saveRoom(dataDir, workshopId, room);
@@ -88,9 +89,11 @@ export async function chatChairWithinExecution(
 
     let content: string;
     try {
-      const r = await withAgentActivity(agent.id, 'cyclone', () => llm.call(messages, undefined, onChunk, signal));
+      const r = await withAgentActivity(agent.id, 'cyclone', () => callPreparedModel(llm, messages, signal, { onChunk, onEvent: event => {
+        if (event.type === 'model-request') onEvent(event);
+      } }));
       content = r.content;
-      room.chairTokenUsage = r.usage ? { ...r.usage } : undefined;
+      if (r.usage) room.chairTokenUsage = { ...r.usage };
       room.chairRequestEstimate = estimateCompactionTokens(messages);
     } catch (e) {
       // abort：保住已流式产出的片段；其他错误向上抛由路由 emit error

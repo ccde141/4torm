@@ -25,7 +25,9 @@ function projectMessage(message: MonsoonMessage): StoredMonsoonContextMessage[] 
   if (message.contextOmitted === true) return [];
   if (message.runCommitted === false && !message.content && !Array.isArray(message.toolSteps)) return [];
   let context: StoredMonsoonContextMessage[];
-  if (message.contextExact === true && Array.isArray(message.nativeContext)) {
+  if (isRecord(message.ask) && message.ask.answered === true && typeof message.ask.reply === 'string') {
+    context = [{ role: 'assistant', content: message.content }, { role: 'user', content: message.ask.reply }];
+  } else if (message.contextExact === true && Array.isArray(message.nativeContext)) {
     context = readStoredMonsoonContext(message.nativeContext);
   } else if (message.type === 'compact-marker') {
     context = [{ role: 'system', content: `[历史上下文摘要]\n${message.content}` }];
@@ -34,7 +36,7 @@ function projectMessage(message: MonsoonMessage): StoredMonsoonContextMessage[] 
   } else context = readStoredMonsoonContext([{ role: message.role, content: message.content,
     ...(Array.isArray(message.images) ? { images: message.images } : {}) }]);
   if (message.streamStopped === true) context.push({ role: 'assistant',
-    content: '上一轮执行被人类停止。已返回的工具结果仍有效；没有结果的步骤不得视为完成。' });
+    content: '上一轮执行被人类停止。已返回的工具结果和已经产生的文件改动仍然有效；没有结果的步骤不得视为完成，以上记录不代表任务完成。请结合人类的新消息判断是否继续。' });
   return context;
 }
 
@@ -45,7 +47,12 @@ function assistantContext(message: MonsoonMessage): StoredMonsoonContextMessage[
       .map(item => item.content).join('\n\n');
     const remaining = claimed && message.content.startsWith(`${claimed}\n\n`)
       ? message.content.slice(claimed.length + 2) : message.content === claimed ? '' : message.content;
-    if (remaining.trim()) context.push({ role: 'assistant', content: remaining });
+    const claimedReasoning = context.reduce((sum, item) => sum
+      + (item.role === 'assistant' ? item.reasoningContent?.length ?? 0 : 0), 0);
+    const remainingReasoning = typeof message.reasoningContent === 'string'
+      ? message.reasoningContent.slice(claimedReasoning) : undefined;
+    if (remaining.trim() || remainingReasoning) context.push({ role: 'assistant', content: remaining,
+      ...(remainingReasoning ? { reasoningContent: remainingReasoning } : {}) });
     return context;
   }
   const steps = Array.isArray(message.toolSteps) ? message.toolSteps

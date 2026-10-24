@@ -135,7 +135,7 @@ test('a disconnected stream keeps its journal recoverable after saving visible p
   assert.equal(writes[1]?.messages.at(-1)?.runCommitted, false);
 });
 
-test('intermediate usage preserves current context facts and refreshes only after the final save', async () => {
+test('intermediate usage refreshes immediately while missing reports remain unknown facts', async () => {
   const order: string[] = [];
   const request: typeof fetch = async () => new Response([
     { type: 'usage', usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12 } },
@@ -156,5 +156,5 @@ test('intermediate usage preserves current context facts and refreshes only afte
     refreshSessions: () => { order.push('refresh'); },
     generateMessageIdFn: () => 'run-a',
   });
-  assert.deepEqual(order, ['save:1:2', 'save:2:unknown', 'refresh']);
+  assert.deepEqual(order, ['save:1:2', 'refresh', 'refresh', 'save:2:unknown', 'refresh']);
 });

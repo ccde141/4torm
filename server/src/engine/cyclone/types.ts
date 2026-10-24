@@ -25,9 +25,13 @@ export type { ContextMessage };
 export interface SeatContextMessage extends ContextMessage {
   kind?: 'dispatch-receipt';
   dispatchId?: string;
+  /** Stable identity of the accepted private-chat input, shared with its live activity. */
+  inputMessageId?: string;
   /** 本轮原生思考流，仅供重载展示；LLM 请求仍只映射 ContextMessage 标准字段。 */
   reasoning?: string;
 }
+
+export type CycloneInputIdentity = Pick<SeatContextMessage, 'inputMessageId' | 'dispatchId'>;
 
 /** 工位职责名片默认值（空 duty 兜底，借信风 DEFAULT_ROLE 同款语义） */
 export const DEFAULT_DUTY = '补位协作者，可处理任意交办事务。专业事务请交给对应专业工位。';
@@ -75,6 +79,7 @@ export interface SeatData {
   /** 私聊会话历史（= 该工位的 contact 收件箱） */
   messages: SeatContextMessage[];
   tokenUsage?: CycloneTokenUsage;
+  modelUsage?: import('../shared/model-request-usage.js').ModelUsageProgress;
   compactState?: CycloneCompactState;
   compactionNotice?: import('../shared/compaction/contracts.js').CompactionNotice;
   compaction?: import('../shared/compaction/contracts.js').CompactionProgress;
@@ -194,7 +199,7 @@ export interface RoomData {
    * 会长是本会议的场外参谋——纯文本、零工具，只读本 room 的会议快照。
    * 按 room 隔离，换会议不串台。
    */
-  chairMessages?: ContextMessage[];
+  chairMessages?: SeatContextMessage[];
   /** Exact compacted chair context; public and private source records are retained separately. */
   chairActiveContext?: ContextMessage[];
   chairContextRawCount?: number;
@@ -204,7 +209,9 @@ export interface RoomData {
   chairRequestEstimate?: number;
   /** 会长私聊累计 token 用量 */
   chairTokenUsage?: CycloneTokenUsage;
+  chairModelUsage?: import('../shared/model-request-usage.js').ModelUsageProgress;
   tokenUsage?: CycloneTokenUsage;
+  modelUsage?: import('../shared/model-request-usage.js').ModelUsageProgress;
   /** 群聊最近一次模型调用输入用量，供界面展示；tokenUsage 保留本轮最大值。 */
   publicLatestTokenUsage?: CycloneTokenUsage;
   /** 本轮任一群聊模型未报告用量时，聚合值不完整。 */

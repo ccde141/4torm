@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { loadAgent } from '../shared/agent-loader.js';
+import { loadAgent, type LoadedAgent } from '../shared/agent-loader.js';
 import { loadAgentToolDefs, type ToolDef } from '../shared/tool-defs-loader.js';
 import { callLLM, resolveNativeMode } from '../shared/llm-bridge.js';
 import { execToolUnifiedOutcome } from '../shared/exec-tool.js';
@@ -34,8 +34,28 @@ const MEMORY_TOOL: ToolDef = { name: 'supervisor_memory',
   } } };
 function forbidden(name: string): boolean { return GLOBAL_ACTIONS.has(name) || isFrameworkCapabilityToolName(name); }
 
-export type SupervisorTurnInput = { mode: 'chat' | 'resume' | 'information'; text: string }
-  | { mode: 'delegated'; text: string; origin: Extract<SupervisorGoalOrigin, { kind: 'agent' }> };
+export type SupervisorTurnInput = ({ mode: 'chat' | 'resume' | 'information'; text: string }
+  | { mode: 'delegated'; text: string; origin: Extract<SupervisorGoalOrigin, { kind: 'agent' }> })
+  & { inputMessageId?: string };
+
+/** Prompt and tool assembly is read-only and shared with status input estimates. */
+export async function buildSupervisorRequestContext(dataDir: string, workshopId: string,
+  supervisor: SupervisorData, agent: LoadedAgent, native: boolean, taskHint: string) {
+  const scoped = supervisorTools(dataDir);
+  const definitions = [
+    ...(await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode)).filter(tool => !forbidden(tool.name)),
+    ...buildSeatVirtualToolDefs({ allowAsk: true, allowDelegate: false }).filter(tool => tool.name !== 'bulletin'),
+    MEMORY_TOOL, ...scoped.definitions, ...buildMemoryToolDefs(),
+  ];
+  const tools = [...new Map(definitions.map(tool => [tool.name, tool])).values()];
+  const messages: SupervisorMessage[] = [
+    { role: 'system', content: [buildSupervisorPrompt(dataDir, workshopId, supervisor, agent, tools, native),
+      await recallMemory(dataDir, agent.id, taskHint),
+      '项目资料和纠正写入 supervisor_memory；绑定 Agent 的 memory_list/read/write 用于跨项目通用经验，勿将本项目个例泛化到所有项目。'].filter(Boolean).join('\n\n') },
+    ...supervisor.messages,
+  ];
+  return { scoped, tools, messages };
+}
 
 export async function runSupervisorTurn(dataDir: string, workshopId: string, input: SupervisorTurnInput,
   onEvent: (event: unknown) => void, signal?: AbortSignal) {
@@ -48,20 +68,7 @@ export async function runSupervisorTurn(dataDir: string, workshopId: string, inp
   }
   if (input.mode !== 'resume' && supervisor.pending) throw new Error('主管正在等待人类回答');
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
-  const scoped = supervisorTools(dataDir);
-  const definitions = [
-    ...(await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode)).filter(tool => !forbidden(tool.name)),
-    ...buildSeatVirtualToolDefs({ allowAsk: true, allowDelegate: false }).filter(tool => tool.name !== 'bulletin'),
-    MEMORY_TOOL, ...scoped.definitions,
-    ...buildMemoryToolDefs(),
-  ];
-  const tools = [...new Map(definitions.map(tool => [tool.name, tool])).values()];
-  const messages: SupervisorMessage[] = [
-    { role: 'system', content: [buildSupervisorPrompt(dataDir, workshopId, supervisor, agent, tools, native),
-      await recallMemory(dataDir, agent.id, input.text),
-      '项目资料和纠正写入 supervisor_memory；绑定 Agent 的 memory_list/read/write 用于跨项目通用经验，勿将本项目个例泛化到所有项目。'].filter(Boolean).join('\n\n') },
-    ...supervisor.messages,
-  ];
+  const { scoped, tools, messages } = await buildSupervisorRequestContext(dataDir, workshopId, supervisor, agent, native, input.text);
   applyInput(supervisor, messages, input);
   if (input.mode !== 'information') {
     if (input.mode === 'delegated') {
@@ -175,9 +182,11 @@ function applyInput(supervisor: SupervisorData, messages: SupervisorMessage[], i
       : { role: 'user', content: `人类回答：${input.text}` });
     supervisor.pending = undefined;
   } else if (input.mode === 'delegated') messages.push({ role: 'user',
+    inputMessageId: input.inputMessageId,
     supervisorGoalOrigin: input.origin,
     content: `[委托目标：Agent ${input.origin.agentId}；会话 ${input.origin.sessionId}。这是框架 Agent 的委托，不是人类直接发言。]\n${input.text}` });
-  else messages.push({ role: 'user', content: input.text, supervisorGoalOrigin: { kind: 'human' } });
+  else messages.push({ role: 'user', content: input.text, inputMessageId: input.inputMessageId,
+    supervisorGoalOrigin: { kind: 'human' } });
 }
 async function persistMessages(dataDir: string, workshopId: string, messages: SupervisorMessage[],
   supervisor: SupervisorData, signal?: AbortSignal, clearNotice = false): Promise<void> {

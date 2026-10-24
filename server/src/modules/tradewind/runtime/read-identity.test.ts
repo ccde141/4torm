@@ -19,6 +19,7 @@ test('节点快照与会议状态公开原始工作流和执行身份', async ()
     getIdentity: () => ({ workflowId: 'wf-1', executionId: 'exec-1' }),
     getDataDir: () => 'unused',
     getSnapshot: () => ({ messages: [], roundLog: [], busy: false, lastSeq: 0, compaction }),
+    getCurrentInput: async () => undefined,
     isBusy: () => false,
   } as unknown as NodeRunner);
   activeMeetings.set(meetingId, {
@@ -39,7 +40,7 @@ test('节点快照与会议状态公开原始工作流和执行身份', async ()
     assert.deepEqual(reads.nodeStatus(nodeId), {
       workflowId: 'wf-1', executionId: 'exec-1', busy: false,
     });
-    const meeting = reads.meetingStatus(meetingId) as Record<string, unknown>;
+    const meeting = await reads.meetingStatus(meetingId) as Record<string, unknown>;
     assert.equal(meeting.workflowId, 'wf-1');
     assert.equal(meeting.executionId, 'exec-1');
     assert.deepEqual(meeting.compactions, { public: compaction });

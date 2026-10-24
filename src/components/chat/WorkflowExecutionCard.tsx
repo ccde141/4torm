@@ -4,12 +4,14 @@ import { phaseFromExecutionStatus, phasePresentation, type ExecutionPhase } from
 import { executionUpdateFromProbe } from '../../tradewind/ui/hooks/execution-sync';
 import { useLocale } from '../../i18n/LocaleContext';
 import { inspectOperation } from '../../api/collaboration';
+import ToolRecordDetails from './ToolRecordDetails';
 
 type Execution = NonNullable<ToolCall['workflowExecution']>;
 
-export default function WorkflowExecutionCard({ execution, timestamp }: {
+export default function WorkflowExecutionCard({ execution, timestamp, toolRecord }: {
   execution: Execution;
   timestamp?: string;
+  toolRecord?: Pick<ToolCall, 'params' | 'result'>;
 }) {
   const [phase, setPhase] = useState<ExecutionPhase>('running');
   const { t } = useLocale();
@@ -50,6 +52,7 @@ export default function WorkflowExecutionCard({ execution, timestamp }: {
         <div style={{ marginTop: 'var(--space-2)', color: phasePresentation[phase].tone === 'running' ? 'var(--color-accent)' : 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
           {phaseLabel}
         </div>
+        {toolRecord && <ToolRecordDetails {...toolRecord} />}
         {timestamp && <div className="chat__timestamp">{timestamp}</div>}
       </div>
     </div>

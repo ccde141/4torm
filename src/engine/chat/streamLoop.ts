@@ -148,7 +148,9 @@ export async function runStreamLoop(ctx: StreamCtx) {
       if (Object.hasOwn(effect, 'usage')) {
         if (effect.usage) session.tokenUsage = effect.usage;
         else delete session.tokenUsage;
+        refreshSessions(agent);
       }
+      if (ev.type === 'model-request') refreshSessions(agent);
       if (effect.flush === 'immediate') doFlush();
       else if (effect.flush === 'throttled') scheduleFlush();
     };

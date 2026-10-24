@@ -76,6 +76,26 @@ export async function deliverSeatDispatchReceipts(
   workshopId: string,
   seat: SeatData,
 ): Promise<number> {
+  const { due, missing } = await pendingSeatReceipts(dataDir, workshopId, seat);
+  if (missing.length > 0) {
+    seat.messages.push(...missing);
+    await saveSeat(dataDir, workshopId, seat);
+  }
+  await Promise.all(due.map(item => updateDispatch(dataDir, workshopId, item.id, {
+    receiptState: 'delivered',
+  })));
+  return missing.length;
+}
+
+/** Preview the next request's receipts without consuming or persisting their delivery. */
+export async function projectSeatDispatchReceiptContext(
+  dataDir: string, workshopId: string, seat: SeatData,
+): Promise<SeatContextMessage[]> {
+  const { missing } = await pendingSeatReceipts(dataDir, workshopId, seat);
+  return [...seat.messages, ...missing];
+}
+
+async function pendingSeatReceipts(dataDir: string, workshopId: string, seat: SeatData) {
   const due = (await listWorkshopDispatches(dataDir, workshopId)).filter(item => (
     item.sourceKind === 'seat'
     && item.sourceSeatId === seat.id
@@ -83,13 +103,5 @@ export async function deliverSeatDispatchReceipts(
     && (item.status === 'completed' || item.status === 'failed')
   ));
   const existing = new Set(seat.messages.map(message => message.dispatchId).filter(Boolean));
-  const missing = due.filter(item => !existing.has(item.id));
-  if (missing.length > 0) {
-    seat.messages.push(...missing.map(receiptMessage));
-    await saveSeat(dataDir, workshopId, seat);
-  }
-  await Promise.all(due.map(item => updateDispatch(dataDir, workshopId, item.id, {
-    receiptState: 'delivered',
-  })));
-  return missing.length;
+  return { due, missing: due.filter(item => !existing.has(item.id)).map(receiptMessage) };
 }

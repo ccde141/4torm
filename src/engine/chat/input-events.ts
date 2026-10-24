@@ -41,13 +41,17 @@ function updateStates(message: ChatMessage): ChatMessage {
 }
 
 export function editInputAnswer(message: ChatMessage, content: string): ChatMessage {
-  if (!message.contextExact) return { ...message, content };
+  // Replace the answer while retaining the tool and collaboration evidence beside it.
+  const activitySequence: ChatMessage['activitySequence'] = message.activitySequence
+    ? [...message.activitySequence.filter(item => item.kind !== 'text'), { kind: 'text', content }]
+    : undefined;
+  if (!message.contextExact) return { ...message, content, activitySequence };
   const context = [...(message.nativeContext ?? [])];
   const last = context.at(-1);
   if (last?.role === 'assistant' && !last.toolCalls?.length) {
     context[context.length - 1] = { ...last, content };
   } else context.push({ role: 'assistant', content });
-  return { ...message, content, nativeContext: context, inputClosed: true, inputReady: false };
+  return { ...message, content, activitySequence, nativeContext: context, inputClosed: true, inputReady: false };
 }
 
 /** Read-only recovery. An interrupted run is never restarted by loading its history. */

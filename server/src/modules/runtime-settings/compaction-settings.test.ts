@@ -37,9 +37,9 @@ test('model verification reserves the same output budget as a real compression r
     received.push(budget);
     response.setHeader('content-type', 'text/event-stream');
     response.end(`data: ${JSON.stringify({ choices: [{ delta: {
-      content: budget >= 52000 ? '资料已读取；校验待完成。' : '',
+      content: budget <= 8192 ? '资料已读取；校验待完成。' : '',
       reasoning_content: '核对记录中的事实和待办。',
-    }, finish_reason: budget >= 52000 ? 'stop' : 'length' }] })}\n\ndata: [DONE]\n\n`);
+    }, finish_reason: budget <= 8192 ? 'stop' : 'length' }] })}\n\ndata: [DONE]\n\n`);
   });
   await new Promise<void>(resolve => provider.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise<void>(resolve => provider.close(() => resolve())));
@@ -52,7 +52,7 @@ test('model verification reserves the same output budget as a real compression r
   }] }));
   const service = new CompactionSettings(dir);
   assert.deepEqual(await service.test({ model: 'budget:thinking' }), { ok: true, model: 'budget:thinking' });
-  assert.deepEqual(received, [52000]);
+  assert.deepEqual(received, [768]);
 });
 
 test('a local archive excerpt cannot report an empty capped model as successfully verified', async t => {
@@ -69,7 +69,7 @@ test('a local archive excerpt cannot report an empty capped model as successfull
       + 'data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
   };
   t.after(() => { globalThis.fetch = previous; });
-  await assert.rejects(new CompactionSettings(dataDir).test({ model: 'p:thinking' }), /未在输出限额内生成压缩正文/);
+  await assert.rejects(new CompactionSettings(dataDir).test({ model: 'p:thinking' }), /仍未给出正文/);
   assert.equal(calls, 2);
   assert.equal((await loadCompactionPolicy(dataDir)).modelMode, 'current');
 });

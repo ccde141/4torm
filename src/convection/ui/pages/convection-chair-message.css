@@ -1,0 +1,19 @@
+.convection-chair-turn .conv__chair-bubble {
+  min-width: 0;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-lg);
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+}
+.convection-chair-turn .conv__chair-bubble--assistant {
+  border-bottom-left-radius: var(--border-radius-sm);
+  box-shadow: var(--glass-shadow);
+}
+.convection-chair-turn .conv__chair-bubble--user { border-bottom-right-radius: var(--border-radius-sm); }
+.convection-chair-turn__answer { min-width: 0; overflow-wrap: anywhere; }
+.convection-chair-turn__answer--separated {
+  border-top: 1px solid var(--glass-border);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+}

@@ -9,6 +9,14 @@ export type CompactionArea = typeof COMPACTION_AREAS[number];
 export type CompactionReason = 'threshold' | 'provider-overflow' | 'manual';
 export type CompactionMode = 'partial' | 'full';
 
+export interface CompactionStageProgress {
+  level: number;
+  index: number;
+  total: number;
+  completed: number;
+  resumed: boolean;
+}
+
 export interface CompactionProgress {
   type: 'compact-start' | 'compact-done' | 'compact-failed';
   id: string;
@@ -90,6 +98,7 @@ export interface CompactionOptions {
   onProgress?: (event: CompactionProgress) => void | Promise<void>;
   onCompacted?: (plan: CompactionCommit) => void | Promise<void>;
   onSummaryChunk?: (text: string) => void;
+  onStageProgress?: (stage: CompactionStageProgress) => void | Promise<void>;
   summarize?: (input: CompactionSummaryInput) => Promise<string>;
   resolveSummaryBudget?: (model: string) => Promise<number | undefined>;
 }

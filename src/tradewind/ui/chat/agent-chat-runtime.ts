@@ -4,6 +4,7 @@ import { requirePanelIdentity } from '../stream/panel-identity';
 import type { ExecutionIdentity } from '../hooks/execution-visibility';
 import type { ProviderUsage } from '../token-usage';
 import type { CompactionEvent } from '../compaction-events';
+import type { CurrentInputEstimate, ModelUsageProgress } from '../../../lib/model-usage';
 
 export interface NodeHistoryMessage {
   role: string;
@@ -27,6 +28,7 @@ export function projectNodeHistoryMessages(messages: NodeHistoryMessage[], nextI
 }
 
 export interface NodeSnapshot<TEvent extends { type: string }> {
+  currentInput?: CurrentInputEstimate;
   messages: NodeHistoryMessage[];
   roundLog: Array<TEvent & { seq?: number }>;
   busy: boolean;
@@ -36,7 +38,7 @@ export interface NodeSnapshot<TEvent extends { type: string }> {
   lastSeq: number;
   workflowId?: string;
   executionId?: string;
-  tokenUsage?: { calls: number; latest: ProviderUsage | null };
+  tokenUsage?: { calls: number; latest: ProviderUsage | null; modelUsage?: ModelUsageProgress };
   compactionNotice?: string;
   compaction?: CompactionEvent;
 }

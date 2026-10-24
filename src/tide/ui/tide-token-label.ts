@@ -6,11 +6,11 @@ export interface TideUsageDisplay { scope: string; usage?: TideTokenUsage; }
 
 export function projectTideUsage(
   previous: TideUsageDisplay, scope: string,
-  usage: TideTokenUsage | undefined, busy: boolean,
+  usage: TideTokenUsage | undefined, _busy: boolean,
 ): TideUsageDisplay {
   if (previous.scope !== scope) return { scope, usage };
   if (!previous.usage && usage) return { scope, usage };
-  if (busy || !usage || previous.usage === usage) return previous;
+  if (!usage || previous.usage === usage) return previous;
   return { scope, usage };
 }
 

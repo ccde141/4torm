@@ -47,7 +47,7 @@ import { execContactOutcome } from './contact';
 import { readContactCommunicationOutcome } from './contact-communication.js';
 import { reportToSupervisor, withSupervisorReporting } from './supervisor-tools.js';
 import { listOtherSeats, listWorkshopSeats } from './contact-registry';
-import type { SeatContextMessage, SeatData } from './types';
+import type { CycloneInputIdentity, SeatContextMessage, SeatData } from './types';
 import { rememberToolImages } from '../shared/tool-media-access.js';
 import path from 'node:path';
 import { toSeatProgressEvent } from './loop-event-forwarder';
@@ -70,7 +70,7 @@ import {
 } from './cyclone-memory.js';
 
 /** 工位执行事件（流式推送用） */
-export type SeatEvent =
+export type SeatEvent = import('../shared/model-request-usage.js').ModelRequestUsageEvent
   | import('../shared/compaction/contracts.js').CompactionProgress
   | import('../shared/compaction/contracts.js').CompactionNotice
   | { type: 'input-accepted' }
@@ -478,6 +478,7 @@ export async function chatSeat(
 export async function chatSeatWithinExecution(
   dataDir: string, workshopId: string, seatId: string,
   humanMessage: string, onEvent: (ev: SeatEvent) => void, signal?: AbortSignal,
+  inputIdentity?: CycloneInputIdentity,
 ): ReturnType<typeof chatSeat> {
   signal?.throwIfAborted();
   const queuedSeat = await loadSeat(dataDir, workshopId, seatId);
@@ -498,7 +499,7 @@ export async function chatSeatWithinExecution(
             wsRelPath: wsRelPath(dataDir, workshopId), bulletinSeenAt: seat.bulletinSeenAt,
           }),
         };
-        seat.messages.push({ role: 'user', content: humanMessage });
+        seat.messages.push({ role: 'user', content: humanMessage, ...inputIdentity });
         seat.compactionNotice = undefined;
         seat.compaction = undefined;
         await saveSeat(dataDir, workshopId, seat, signal);

@@ -1,5 +1,6 @@
 import { loadCompactionPolicy, parseCompactionPolicy, saveCompactionPolicy,
-  resolveSummaryModelBudget, generateCompactionResult, type CompactionPolicy } from '../../engine/shared/compaction/index.js';
+  resolveSummaryModelBudget, summaryStageBudget, estimateTextTokens, generateCompactionResult,
+  type CompactionPolicy } from '../../engine/shared/compaction/index.js';
 import { frameworkError } from '../../engine/shared/framework-error.js';
 
 export type CompressionModelTest = (model: string) => Promise<void>;
@@ -40,11 +41,12 @@ async function verifyModel(dataDir: string, model: string): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('压缩模型验证超时')), 30_000);
   try {
-    // Verify the real combined request allowance; the body limit is checked independently.
-    const budget = await resolveSummaryModelBudget(dataDir, model);
+    const limits = await resolveSummaryModelBudget(dataDir, model);
+    const text = '资料已读取，校验仍在等待。下一步核对内容，不要宣布任务完成。';
+    const budget = summaryStageBudget(estimateTextTokens(text), true, limits);
     const result = await generateCompactionResult({ dataDir, model, ...budget, signal: controller.signal,
       prompt: '将给定记录压缩为一句简短事实，保留尚未完成的工作。只返回摘要。',
-      text: '资料已读取，校验仍在等待。下一步核对内容，不要宣布任务完成。' });
+      text });
     if (result.source !== 'model') throw new Error('模型已响应，但未在输出限额内生成压缩正文，无法验证压缩能力');
   } finally { clearTimeout(timer); }
 }

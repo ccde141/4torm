@@ -150,6 +150,8 @@ test('工位来信保留来源而非人类目标，重复派发回报仅进同�
   assert.equal(incoming.filter(message => message.supervisorInboxId === 'fixed-information').length, 1);
   assert.ok(incoming.every(message => message.content.startsWith('[协作信息：')));
   assert.equal(status.messages.filter(message => message.content === '人类目标：检查证据').length, 1);
+  assert.equal(status.messages.find(message => message.content === '人类目标：检查证据')?.inputMessageId,
+    prepared.execution.runId);
   assert.ok((await readSupervisorInbox(f.dataDir, f.workshop.id)).every(message => message.consumedAt));
   const next = await f.feature.supervisor.prepare({ workshopId: f.workshop.id, mode: 'chat', text: '继续核对' });
   await next.run();

@@ -1,0 +1,63 @@
+.monsoon-team-event pre { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--glass-bg-soft); border: 1px solid var(--glass-border); border-radius: var(--radius-sm); padding: var(--space-2); }
+.monsoon-team-event { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0 12px 40px; padding: 12px 14px; background: var(--glass-bg-soft); border: 1px solid var(--glass-border); border-radius: var(--radius-md); color: var(--color-text-secondary); font-size: var(--text-xs); }
+.monsoon-team-event__dot { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--color-accent); flex-shrink: 0; }
+.monsoon-team-event > div { flex: 1; min-width: 0; }
+.monsoon-team-event strong { color: var(--color-text-primary); font-weight: var(--font-semibold); margin-right: 10px; }
+.monsoon-team-event p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 7px 0; }
+.monsoon-team-event details { margin-top: 5px; }
+.monsoon-team-event summary { cursor: pointer; }
+.monsoon-team-event time { white-space: nowrap; color: var(--color-text-tertiary); }
+@media (max-width: 600px) { .monsoon-team-event { margin-left: 0; flex-wrap: wrap; } }
+
+.monsoon-turn { min-width: 0; }
+.monsoon-turn__bubble { width: min(100%, 1060px); min-width: 0; }
+.monsoon-turn__worklog { margin-bottom: var(--space-3); border: 1px solid var(--glass-border); border-left: 2px solid color-mix(in srgb, var(--color-warning) 45%, var(--glass-border)); border-radius: var(--radius-md); background: var(--glass-bg-soft); overflow: hidden; }
+.monsoon-turn__worklog-header { display: flex; align-items: center; gap: var(--space-2); padding-right: 10px; }
+.monsoon-turn__worklog-summary { display: flex; flex: 1; min-width: 0; align-items: center; gap: var(--space-2); min-height: 42px; padding: 10px 12px; color: var(--color-text-secondary); background: transparent; border: 0; font: inherit; font-size: var(--text-xs); text-align: left; cursor: pointer; transition: background 160ms ease; }
+.monsoon-turn__worklog-summary:hover { background: var(--glass-bg); }
+.monsoon-turn__worklog-summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -3px; }
+.monsoon-turn__worklog-arrow { flex-shrink: 0; font-size: 10px; transition: transform 160ms ease; }
+.monsoon-turn__worklog-icon { flex-shrink: 0; color: color-mix(in srgb, var(--color-warning) 65%, var(--color-text-secondary)); }
+.monsoon-turn__worklog-title { min-width: 0; }
+.monsoon-turn__worklog-summary[aria-expanded="true"] .monsoon-turn__worklog-arrow { transform: rotate(90deg); }
+.monsoon-turn__worklog-state { flex-shrink: 0; margin-left: auto; color: var(--color-text-tertiary); white-space: nowrap; }
+.monsoon-turn__worklog-toggle { flex-shrink: 0; color: var(--color-text-primary); padding: 5px 9px; background: var(--glass-bg); font: inherit; font-size: var(--text-xs); border: 1px solid color-mix(in srgb, var(--color-text-secondary) 28%, var(--glass-border)); border-radius: var(--radius-sm); white-space: nowrap; cursor: pointer; }
+.monsoon-turn__worklog-toggle:hover { background: var(--color-accent-subtle); border-color: var(--color-accent); }
+.monsoon-turn__worklog-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.monsoon-turn__worklog-body { max-height: min(360px, 55vh); overflow-y: auto; padding: 0 12px 12px; scrollbar-width: thin;
+  --process-top: #000; --process-bottom: #000;
+  mask-image: linear-gradient(to bottom, var(--process-top), #000 10%, #000 90%, var(--process-bottom));
+  -webkit-mask-image: linear-gradient(to bottom, var(--process-top), #000 10%, #000 90%, var(--process-bottom)); }
+.monsoon-turn__worklog-body[data-fade-top="true"] { --process-top: transparent; }
+.monsoon-turn__worklog-body[data-fade-bottom="true"] { --process-bottom: transparent; }
+.monsoon-turn__worklog-body.is-expanded { max-height: none; }
+.monsoon-turn__worklog-body:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -2px; }
+.monsoon-turn__worklog-content { display: flow-root; animation: monsoon-worklog-in 160ms ease-out; }
+.monsoon-turn__note { color: var(--color-text-secondary); font-size: var(--text-sm); line-height: 1.65; overflow-wrap: anywhere; margin: var(--space-2) 0; }
+.monsoon-turn__worklog .chat__message { margin: var(--space-2) 0; min-width: 0; max-width: 100%; }
+.monsoon-turn__worklog .chat__avatar { display: none; }
+.monsoon-turn__worklog .chat__bubble { flex: 1; min-width: 0 !important; max-width: 100%; width: 100%; box-shadow: none; }
+.monsoon-turn__tools .chat__message--tool .chat__bubble > button { flex-wrap: wrap; }
+.monsoon-turn__tools .chat__message--tool .chat__bubble > button > span:nth-child(2) { min-width: 0; overflow-wrap: anywhere; }
+.monsoon-turn__tools .chat__message--tool .chat__bubble > button > span:nth-child(3) { flex-shrink: 0; max-width: 100%; }
+.monsoon-turn__worklog .tool-activity-group { margin: var(--space-2) 0; }
+.monsoon-turn__worklog .tool-activity-group__summary { flex-wrap: wrap; padding-block: var(--space-2); }
+.monsoon-turn__worklog .tool-activity-group__state { flex-shrink: 0; white-space: nowrap; }
+.monsoon-turn__worklog .tool-activity-group__target { flex: 1; }
+.monsoon-turn__worklog .monsoon-team-event { margin: var(--space-2) 0; }
+.monsoon-turn__answer { min-width: 0; overflow-wrap: anywhere; }
+.monsoon-turn__answer--separated { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--glass-border); }
+.monsoon-turn__phase { margin: var(--space-2) 0; }
+@keyframes monsoon-worklog-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 600px) {
+  .monsoon-turn__worklog-header { flex-wrap: wrap; padding: 0 8px 8px; gap: 0 8px; }
+  .monsoon-turn__worklog-summary { flex-basis: 100%; flex-wrap: wrap; padding-inline: 2px; }
+  .monsoon-turn__worklog-state { margin-left: 0; }
+  .monsoon-turn__worklog-toggle { margin-left: auto; }
+  .monsoon-turn__worklog-body { padding-inline: 8px; }
+  .monsoon-turn__tools .chat__message--tool .chat__bubble > button > span:nth-child(3) { flex-basis: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .monsoon-turn__worklog-arrow, .monsoon-turn__worklog-summary { transition: none; }
+  .monsoon-turn__worklog-content { animation: none; }
+}

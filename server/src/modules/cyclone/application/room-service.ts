@@ -1,3 +1,4 @@
+import { withCycloneSummaryUsage } from './summary-model-usage.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
 import {
   createRoom,
@@ -163,18 +164,26 @@ export class CycloneRoomService {
       'CYCLONE_ROOM_CHAIR_REQUIRED', 'validation', '摘要重置需要先设置会长 Agent',
     );
     const publicSummary = scope === 'public' || scope === 'both'
-      ? await this.summarizer.summarize({ agentId: chairId,
+      ? await withCycloneSummaryUsage({
+        get: () => room.modelUsage, set: value => { room.modelUsage = value; },
+        persist: () => saveRoom(this.dataDir, workshopId, room),
+        emit: () => this.changes?.publish(workshopId, 'activity', room.id),
+      }, () => this.summarizer.summarize({ agentId: chairId,
         kind: 'meeting', signal, onNotice: async notice => {
           room.compactionNotice = notice;
           await saveRoom(this.dataDir, workshopId, room);
           this.changes?.publish(workshopId, 'activity', room.id);
         },
         subject: `群聊「${room.title}」公共上下文`,
-        messages: toCycloneSummaryMessages(room.publicMessages || []) })
+        messages: toCycloneSummaryMessages(room.publicMessages || []) }))
       : undefined;
     const chairSummary = (scope === 'chair' || scope === 'both')
       && (room.chairMessages?.length || room.publicMessages.length)
-      ? await this.summarizer.summarize({ agentId: chairId,
+      ? await withCycloneSummaryUsage({
+        get: () => room.chairModelUsage, set: value => { room.chairModelUsage = value; },
+        persist: () => saveRoom(this.dataDir, workshopId, room),
+        emit: () => this.changes?.publish(workshopId, 'activity', room.id),
+      }, () => this.summarizer.summarize({ agentId: chairId,
         kind: 'meeting', signal, onNotice: async notice => {
           room.chairCompactionNotice = notice;
           await saveRoom(this.dataDir, workshopId, room);
@@ -182,7 +191,7 @@ export class CycloneRoomService {
         },
         subject: `群聊「${room.title}」会长私聊`,
         messages: toCycloneSummaryMessages(buildCycloneChairContext(room,
-          { role: 'system', content: '' }).slice(1)) })
+          { role: 'system', content: '' }).slice(1)) }))
       : undefined;
     if ((scope !== 'chair' && !publicSummary?.trim())
       || (chairSummary !== undefined && !chairSummary.trim())) throw new Error('压缩摘要为空，原会话保留');

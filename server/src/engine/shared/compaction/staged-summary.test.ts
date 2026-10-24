@@ -26,3 +26,10 @@ test('empty, ineffective and aborted summaries report failure rather than succes
   const controller = new AbortController(); controller.abort();
   await assert.rejects(summarizeInStages('text', 300, async () => 'facts', controller.signal), /aborted/i);
 });
+
+test('quoted tool output counts JSON escapes in the model input budget without losing bytes', () => {
+  const source = ('C:\\path\\file\n\t"quoted"\u0000').repeat(2_000);
+  const chunks = splitSummaryText(source, 300, true);
+  assert.equal(chunks.join(''), source);
+  assert.ok(chunks.every(chunk => estimateTextTokens(JSON.stringify(chunk)) <= 300));
+});

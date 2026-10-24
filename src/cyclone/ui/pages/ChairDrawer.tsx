@@ -9,6 +9,7 @@
  */
 
 import type { Agent } from '../../../types';
+import { useState } from 'react';
 import SeatChat from './SeatChat';
 import type { SeatStreamRunners } from './useSeatStreamRunners';
 import { useLocale } from '../../../i18n/LocaleContext';
@@ -41,6 +42,7 @@ export default function ChairDrawer({
   onReloaded?: () => void;
 }) {
   const { t } = useLocale();
+  const [tokenContainer, setTokenContainer] = useState<HTMLSpanElement | null>(null);
   return (
     <div style={wrapperStyle}>
       {/* 收起态竖条 tab：常驻细标签，展开时淡出并让出点击 */}
@@ -75,6 +77,7 @@ export default function ChairDrawer({
             {t('cyclone.chair.chat')}
           </span>
           <div style={{ flex: 1 }} />
+          <span ref={setTokenContainer} style={{ display: 'inline-flex', flexShrink: 0 }} />
           <select
             value={chairAgentId ?? ''}
             onChange={e => onSetChair(e.target.value)}
@@ -96,6 +99,7 @@ export default function ChairDrawer({
               chairBase={chairBaseUrl(workshopId, roomId)}
               chairRoomId={roomId}
               runners={runners}
+              tokenContainer={tokenContainer}
               active={open}
               onReloaded={onReloaded}
             />

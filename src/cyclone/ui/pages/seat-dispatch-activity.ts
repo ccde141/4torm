@@ -5,6 +5,12 @@ type Translate = (key: MessageKey, values?: MessageValues) => string;
 
 const ACTIVE_STATUSES = new Set<CycloneDispatch['status']>(['queued', 'running']);
 
+export function hasStoredDispatchInput(
+  messages: ReadonlyArray<{ role: string; dispatchId?: string }>, dispatchId: string,
+): boolean {
+  return messages.some(message => message.role === 'user' && message.dispatchId === dispatchId);
+}
+
 export function formatSeatDispatchOrigin(item: CycloneDispatch, t?: Translate): string {
   if (!t) return item.sourceKind === 'seat' ? '来自工位' : '来自群聊工位';
   return item.sourceKind === 'seat' ? t('cyclone.dispatch.originSeat') : t('cyclone.dispatch.originRoom');
@@ -58,4 +64,10 @@ export function dispatchesRequiringSeatReload(
     && ACTIVE_STATUSES.has(previous.get(item.id) ?? 'completed')
     && !ACTIVE_STATUSES.has(item.status)
   )).map(item => item.id);
+}
+
+export function seatReceiptsRequiringReload(previous: ReadonlyMap<string, CycloneDispatch['status']>,
+  items: CycloneDispatch[], seatId: string): boolean {
+  return items.some(item => item.sourceKind === 'seat' && item.sourceSeatId === seatId
+    && (item.status === 'completed' || item.status === 'failed') && previous.get(item.id) !== item.status);
 }

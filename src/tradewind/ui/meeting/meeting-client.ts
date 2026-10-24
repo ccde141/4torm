@@ -15,8 +15,10 @@ import { requirePanelIdentity, panelReadUrl } from '../stream/panel-identity';
 import type { ExecutionIdentity } from '../hooks/execution-visibility';
 import type { ProviderUsage } from '../token-usage';
 import type { ToolImageRef } from '../../../engine/tool-media';
+import type { CurrentInputEstimate, ModelRequestUsage, ModelUsageProgress } from '../../../lib/model-usage';
 
 export interface MeetingTokenUsage {
+  modelUsage?: ModelUsageProgress;
   calls: number;
   reportedCalls: number;
   latest: ProviderUsage | null;
@@ -59,6 +61,7 @@ export interface MeetingChairMessage {
 }
 
 export interface MeetingStatus {
+  currentInput?: { public?: CurrentInputEstimate; chair?: CurrentInputEstimate };
   nodeId: string;
   workflowId: string;
   executionId: string;
@@ -81,6 +84,7 @@ export interface MeetingStatus {
 }
 
 export type MeetingBroadcastEvent =
+  | { type: 'model-request'; request: ModelRequestUsage; label?: string }
   | { type: 'connected'; phase: string; round: number; runId?: string; messages: MeetingMessage[]; chairMessages: MeetingChairMessage[]; participants: MeetingParticipant[]; configuredParticipants: MeetingParticipant[]; tokenUsage?: MeetingTokenUsage; compactionNotice?: string; compactions?: MeetingStatus['compactions'] }
   | { type: 'round-start'; runId: string; startedAt: string }
   | { type: 'agent-start'; label: string }

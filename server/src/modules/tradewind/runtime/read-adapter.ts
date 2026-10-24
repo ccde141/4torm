@@ -14,6 +14,8 @@ import { readAgentMeetingConversation } from './agent-meeting-read.js';
 import { readTokenUsageFile } from '../../../engine/tradewind/execution/token-usage.js';
 import { projectNodeHistory } from '../../../engine/tradewind/execution/node-history-view.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
+import { estimateCurrentInput } from '../../../engine/shared/llm-bridge.js';
+import { estimateMeetingCurrentInput } from '../../../engine/tradewind/execution/meeting-current-input.js';
 
 export function createTradewindReadPort(dataDir: string): TradewindReadPort {
   return {
@@ -80,7 +82,10 @@ async function nodeSnapshot(dataDir: string, nodeId: string, identity?: Tradewin
   const runner = activeNodeRunners.get(nodeId, requestedExecution);
   if (runner && !sameTradewindDataRoot(runner.getDataDir(), dataDir)) throw missing('节点执行身份不匹配');
   if (runner && identity?.workflowId && runner.getIdentity().workflowId !== identity.workflowId) throw missing('节点执行身份不匹配');
-  if (runner) return { ...runner.getSnapshot(), ...runner.getIdentity() };
+  if (runner) {
+    const currentInput = await runner.getCurrentInput();
+    return { ...runner.getSnapshot(), ...runner.getIdentity(), ...(currentInput ? { currentInput } : {}) };
+  }
   const orchestrator = getActiveTradewindOrchestrator({ ...identity, dataDir });
   const executionId = identity?.executionId ?? orchestrator?.getExecutionId();
   const workflowId = identity?.workflowId ?? orchestrator?.getWorkflowId();
@@ -96,8 +101,9 @@ async function nodeSnapshot(dataDir: string, nodeId: string, identity?: Tradewin
       const messages = JSON.parse(await fs.readFile(file, 'utf8')) as unknown;
       if (!Array.isArray(messages)) throw new Error('节点消息记录格式无效');
       const tokenUsage = await readTokenUsageFile(path.join(path.dirname(file), 'usage.json'));
+      const currentInput = await estimateCurrentInput({ dataDir, fullModelKey: '', messages: messages as ContextMessage[] });
       return { messages: projectNodeHistory((messages as ContextMessage[]).slice(1)), roundLog: [], busy: false, lastSeq: 0,
-        tokenUsage, workflowId, executionId };
+        tokenUsage, workflowId, executionId, currentInput };
     } catch (error) {
       if (!isMissingFile(error)) throw error;
     }
@@ -110,7 +116,8 @@ function meetingStatus(nodeId: string, identity?: TradewindReadIdentity, dataDir
   if (!meeting) throw missing('No active meeting');
   if (dataDir && !sameTradewindDataRoot(meeting.dataDir, dataDir)) throw missing('会议执行身份不匹配');
   if (identity?.workflowId && meeting.workflowId !== identity.workflowId) throw missing('会议执行身份不匹配');
-  return {
+  return estimateMeetingCurrentInput(meeting.dataDir, meeting.session, meeting.workspace).then(currentInput => ({
+    currentInput,
     nodeId, workflowId: meeting.workflowId, executionId: meeting.executionId,
     round: meeting.session.round,
     busy: meeting.session.busy, runId: meeting.roundIdentity?.runId,
@@ -124,7 +131,7 @@ function meetingStatus(nodeId: string, identity?: TradewindReadIdentity, dataDir
     compactions: meeting.session.compactions,
     tokenUsage: meeting.session.usageRecorder.state,
     streamingCurrent: meeting.session.streamingCurrent || null,
-  };
+  }));
 }
 
 function resolveExecution(identity?: TradewindReadIdentity, dataDir?: string): string | undefined {

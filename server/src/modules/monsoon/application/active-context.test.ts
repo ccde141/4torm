@@ -52,3 +52,16 @@ test('legacy tool evidence restores MCP media references and its failure status'
   assert.equal(context.find(message => message.role === 'tool')?.toolOk, false);
   assert.doesNotMatch(JSON.stringify(context), /base64|data:image/);
 });
+
+test('current model context includes answered human questions and unclaimed native reasoning', () => {
+  const context = projectMonsoonContext({ messages: [
+    message('ask', 'assistant', 'Choose a format', { ask: { answered: true, reply: 'Markdown' } }),
+    message('answer', 'assistant', 'first\n\nfinal', { reasoningContent: 'beforeafter', nativeContext: [
+      { role: 'assistant', content: 'first', reasoningContent: 'before' },
+    ] }),
+  ] });
+  assert.deepEqual(context.map(item => [item.role, item.content]), [
+    ['assistant', 'Choose a format'], ['user', 'Markdown'], ['assistant', 'first'], ['assistant', 'final'],
+  ]);
+  assert.equal(context.at(-1)?.reasoningContent, 'after');
+});

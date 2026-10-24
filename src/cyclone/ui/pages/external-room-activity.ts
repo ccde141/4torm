@@ -23,6 +23,7 @@ export interface ExternalRoomActivity {
   roundFeed: FeedMsg[];
   activeSpeaker: string;
   tokenUsage: CycloneUsage | null;
+  modelUsage?: import('../../../lib/model-usage').ModelUsageProgress;
   lastKnownTokenUsage?: CycloneUsage;
   compactionNotice?: string | null;
   compaction?: CompactionActivity | null;

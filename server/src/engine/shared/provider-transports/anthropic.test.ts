@@ -215,6 +215,7 @@ test('Anthropic stream accumulator keeps tool JSON fragments separate from text'
     reasoningContent: undefined,
     finishReason: 'tool_calls',
     usage: { promptTokens: 5, completionTokens: 7, totalTokens: 12 },
+    usageComplete: true,
     toolCalls: [{ id: 'toolu_3', name: 'write_file', arguments: '{"path":"b.txt"}' }],
   });
 });

@@ -36,6 +36,7 @@ export interface AnthropicResult {
   reasoningEnvelope?: ProviderReasoningEnvelope;
   finishReason: 'stop' | 'length' | 'tool_calls' | null;
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  usageComplete?: boolean;
   toolCalls?: Array<{ id: string; name: string; arguments: string }>;
 }
 
@@ -165,6 +166,7 @@ export function parseAnthropicResponse(
     ...(reasoningEnvelope ? { reasoningEnvelope } : {}),
     finishReason: normalizeStopReason(source.stop_reason),
     usage: normalizeUsage(source.usage?.input_tokens, source.usage?.output_tokens),
+    usageComplete: Number.isSafeInteger(source.usage?.input_tokens) && Number.isSafeInteger(source.usage?.output_tokens),
     toolCalls: toolCalls.length ? toolCalls : undefined,
   };
 }
@@ -176,6 +178,7 @@ export function createAnthropicStreamAccumulator(
 ) {
   const state: StreamState = {
     content: '', reasoning: '', finishReason: null, inputTokens: 0, outputTokens: 0,
+    inputReported: false, outputReported: false,
     tools: new Map(), thinkingBlocks: new Map(),
   };
 
@@ -198,6 +201,7 @@ export function createAnthropicStreamAccumulator(
         ...(reasoningEnvelope ? { reasoningEnvelope } : {}),
         finishReason: state.finishReason,
         usage: normalizeUsage(state.inputTokens, state.outputTokens),
+        usageComplete: state.inputReported && state.outputReported,
         toolCalls: toolCalls.length ? toolCalls : undefined,
       };
     },
@@ -210,6 +214,8 @@ interface StreamState {
   finishReason: AnthropicResult['finishReason'];
   inputTokens: number;
   outputTokens: number;
+  inputReported: boolean;
+  outputReported: boolean;
   tools: Map<number, { id: string; name: string; json: string }>;
   thinkingBlocks: Map<number, ContentBlock>;
 }
@@ -220,7 +226,10 @@ function applyStreamEvent(
   onChunk: (chunk: string) => void,
   onReasoning?: (chunk: string) => void,
 ) {
-  if (event.type === 'message_start') state.inputTokens = event.message?.usage?.input_tokens ?? state.inputTokens;
+  if (event.type === 'message_start' && Number.isSafeInteger(event.message?.usage?.input_tokens)) {
+    state.inputTokens = event.message.usage.input_tokens;
+    state.inputReported = true;
+  }
   if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
     state.tools.set(event.index ?? 0, {
       id: event.content_block.id ?? '', name: event.content_block.name ?? '',
@@ -252,6 +261,7 @@ function applyStreamEvent(
   if (event.type === 'message_delta') {
     state.finishReason = normalizeStopReason(event.delta?.stop_reason);
     state.outputTokens = event.usage?.output_tokens ?? state.outputTokens;
+    state.outputReported ||= Number.isSafeInteger(event.usage?.output_tokens);
   }
 }
 

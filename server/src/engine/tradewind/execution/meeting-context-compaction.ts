@@ -15,6 +15,7 @@ import { meetingContextBoundaries, replaceMeetingPrefix } from './meeting-compac
 import { reportMeetingCompactionNotice } from './meeting-compaction-notice.js';
 import { tradewindCompactionGuidance } from './compaction-guidance.js';
 import { publishMeetingCompaction } from './meeting-compaction-progress.js';
+import { withMeetingModelUsage } from './meeting-usage.js';
 
 /** Opening summaries are isolated from the public meeting and the originating node history. */
 export async function meetingOpeningCaller(
@@ -94,6 +95,8 @@ async function meetingCompactionOptions(
 export async function compactMeetingManually(dataDir: string, session: MeetingSessionData): Promise<void> {
   const { meetingContextMessages } = await import('./meeting-compaction-context.js');
   const options = await meetingCompactionOptions(dataDir, session, '', false);
-  await compactMessages({ ...options, messages: [{ role: 'system', content: '' },
-    ...meetingContextMessages(session.publicMessages)], mode: 'full', reason: 'manual' });
+  await withMeetingModelUsage(session, () => compactMessages({ ...options,
+    messages: [{ role: 'system', content: '' }, ...meetingContextMessages(session.publicMessages)],
+    mode: 'full', reason: 'manual' }),
+  event => broadcastToMeeting(session.nodeId, event, session.executionId));
 }

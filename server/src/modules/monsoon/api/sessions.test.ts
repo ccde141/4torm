@@ -39,6 +39,17 @@ test('session API creates, lists, updates and rejects stale writes', async t => 
   } });
   assert.equal(saved.statusCode, 200);
   assert.equal(saved.json().revision, 2);
+  assert.ok(saved.json().currentInput.tokens > 0);
+  assert.equal(saved.json().currentInput.contextRevision, 2);
+  const withEstimate = (await app.inject('/sessions/agent-a')).json()[0];
+  assert.equal(withEstimate.currentInput.tokens, saved.json().currentInput.tokens);
+  assert.deepEqual(withEstimate.messages, []);
+  const preview = await app.inject({ method: 'POST', url: '/sessions/agent-a/session-a/input-preview',
+    payload: { model: 'different:model' } });
+  assert.equal(preview.statusCode, 200);
+  assert.equal(preview.json().model, 'different:model');
+  assert.equal((await feature.sessions.get('agent-a', 'session-a'))?.model, 'model-a');
+  assert.equal((await feature.sessions.get('agent-a', 'session-a'))?.modelUsage, undefined);
 
   const stale = await app.inject({ method: 'PUT', url: '/sessions/agent-a/session-a', payload: {
     expectedRevision: 1, mode: 'content', session: saved.json(),

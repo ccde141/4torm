@@ -4,10 +4,12 @@ import type { TideRunRecord } from '../domain/run.js';
 import { advanceTideUsage, type TideUsageProgress } from '../domain/token-usage.js';
 import type { TideMessage } from '../sessions/session-types.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
+import { recordModelRequest, type ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
 
 export function createTideEventState(
   persistUsage?: (usage: TokenUsage | null) => Promise<void>,
   onPersistFailure?: () => void,
+  persistModelRequest?: (request: ModelRequestUsage) => Promise<void>,
 ) {
   const toolCalls: TideRunRecord['toolCalls'] = [];
   const intermediate: TideMessage[] = [];
@@ -17,6 +19,14 @@ export function createTideEventState(
   let writes = Promise.resolve();
   let toolContext: ContextMessage[] | undefined;
   const onEvent = (event: ConversationEvent) => {
+    if (event.type === 'model-request') {
+      usage = { calls: usage?.calls ?? 0, reportedCalls: usage?.reportedCalls ?? 0, ...usage,
+        modelUsage: recordModelRequest(usage?.modelUsage, event.request) };
+      if (persistModelRequest) {
+        writes = writes.then(() => persistModelRequest(event.request));
+        void writes.catch(() => onPersistFailure?.());
+      }
+    }
     if (event.type === 'answer' && event.nativeContext?.some(message => message.toolImages?.length)) {
       toolContext = structuredClone(event.nativeContext);
     }

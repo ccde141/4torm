@@ -4,6 +4,7 @@ import type { ChatMessage } from '../../types';
 import { formatTimestamp } from '../../utils/time';
 import { computeDiffView, type DiffLine } from '../../utils/diff';
 import { useLocale } from '../../i18n/LocaleContext';
+import ToolRecordDetails from './ToolRecordDetails';
 
 /** 单次展示的最大 diff 行数，超出截断（write_file 写大文件时防止卡死）。 */
 const MAX_LINES = 400;
@@ -105,6 +106,7 @@ export default function FileDiffCard({ toolCall, edit, actions, timestamp }: {
             )}
           </div>
         )}
+        <ToolRecordDetails params={toolCall.params} result={toolCall.result} />
         {actions && <div className="chat__bubble-actions" style={{ marginTop: 'var(--space-1)' }}>{actions}</div>}
         {timestamp && <div className="chat__timestamp" title={formatTimestamp(timestamp, true)}>{formatTimestamp(timestamp)}</div>}
       </div>

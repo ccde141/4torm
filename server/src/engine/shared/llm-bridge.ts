@@ -54,6 +54,8 @@ import { resolveProviderGenerationBudget, type ProviderGenerationBudgetRequest }
   from '../../model-runtime/providers/generation-budget.js';
 import { enforceProviderOutputBudget } from './provider-output-budget.js';
 import { applyProviderOutputControl, type ProviderOutputControl } from './provider-output-control.js';
+import { createModelRequestUsage, estimateRequestInput, type CurrentInputEstimate,
+  type ModelRequestPurpose } from './model-request-usage.js';
 
 interface Provider {
   id: string;
@@ -117,6 +119,7 @@ export interface LLMResult {
   finishReason: 'stop' | 'length' | 'tool_calls' | null;
   /** API 返回的真实 token 用量（部分 provider 可能不返回，此时为 undefined） */
   usage?: TokenUsage;
+  usageComplete?: boolean;
   /** 原生模式：解析出的工具调用（文本模式或无调用时为 undefined） */
   toolCalls?: NativeToolCall[];
 }
@@ -197,6 +200,7 @@ function applyTextToolFallback(
 }
 
 export interface LLMCallParams {
+  purpose?: ModelRequestPurpose;
   dataDir: string;
   fullModelKey: string;
   messages: ContextMessage[];
@@ -388,31 +392,55 @@ function logCustomParameterFields(providerId: string, parameters: unknown): void
 }
 
 /**
- * 调一次 LLM（自动选择流式/非流式）。
- *
- * - 有 onChunk → 流式，逐 chunk 回调，最终返回完整内容
- * - 无 onChunk → 非流式，一次性返回
- *
- * 返回 LLMResult：{ content, finishReason }。
- * finishReason = 'length' 表示输出被 max_tokens 截断，调用方应决定是否续写。
- *
- * 每次调用只发送一次请求。失败由上层明确呈现，不在桥接层隐式重试。
+ * 只读预估当前输入，复用供应商请求编译，不发送请求或产生计费记录。
+ * 模型配置不可用时给出带来源标记的规范上下文近似值。
  */
+export async function estimateCurrentInput(params: LLMCallParams): Promise<CurrentInputEstimate> {
+  let estimate: { tokens: number; images: number };
+  let basis: CurrentInputEstimate['basis'] = 'compiled';
+  try {
+    // Request construction is local. It does not acquire a provider slot or emit usage.
+    estimate = estimateRequestInput((await buildRequest(params, false)).body);
+  } catch {
+    // A removed provider must not make an existing conversation unreadable.
+    // Keep binary images out of the textual fallback, and describe its narrower basis.
+    basis = 'canonical';
+    const messages = params.messages.map(message => ({ ...message,
+      images: undefined, toolImages: undefined,
+      content: message.images?.length || message.toolImages?.length
+        ? [{ type: 'text', text: message.content },
+          ...Array.from({ length: (message.images?.length ?? 0) + (message.toolImages?.length ?? 0) },
+            () => ({ type: 'image_url', image_url: { url: '[image]' } }))]
+        : message.content,
+    }));
+    estimate = estimateRequestInput({ messages, tools: params.tools });
+  }
+  return { ...estimate, model: params.fullModelKey, estimatedAt: new Date().toISOString(), basis };
+}
+
+/** Send one model request; provider slots and billing begin only on this path. */
 export async function callLLM(params: LLMCallParams): Promise<LLMResult> {
   const useStream = typeof params.onChunk === 'function';
   const request = await buildRequest(params, useStream);
-  return providerScheduler.run(
-    request.providerId,
-    request.concurrencyLimit,
-    () => callLLMInner(params, request, useStream),
-    params.signal,
-  );
+  const meter = createModelRequestUsage(request.body, params.purpose);
+  try {
+    const result = await providerScheduler.run(request.providerId, request.concurrencyLimit,
+      () => callLLMInner(params, request, useStream, meter.report,
+        () => meter.update({ state: 'sent', wasSent: true })), params.signal);
+    meter.finish('completed', result.usage, result.usageComplete ?? Boolean(result.usage));
+    return result;
+  } catch (error) {
+    meter.finish(params.signal?.aborted ? 'cancelled' : 'failed');
+    throw error;
+  }
 }
 
 async function callLLMInner(
   params: LLMCallParams,
   request: Awaited<ReturnType<typeof buildRequest>>,
   useStream: boolean,
+  onUsage: (usage: TokenUsage) => void,
+  onSent: () => void,
 ): Promise<LLMResult> {
   const { url, headers, body, nameMap, protocol, cumulativeStream = false } = request;
   const bodyStr = JSON.stringify(body);
@@ -428,6 +456,7 @@ async function callLLMInner(
 
   let res: Response;
   try {
+    onSent();
     res = await fetch(url, {
       method: 'POST',
       headers,
@@ -480,6 +509,7 @@ async function callLLMInner(
         reasoningEnvelope,
         finishReason,
         usage,
+        usageComplete: completeUsageReport(data.usage),
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       }, params.tools, nameMap);
     }
@@ -488,14 +518,14 @@ async function callLLMInner(
     const gate = params.tools ? new TextToolStreamGate(params.onChunk!) : undefined;
     const onChunk = gate ? (chunk: string) => gate.push(chunk) : params.onChunk!;
     if (protocol === 'anthropic-messages') {
-      const result = await parseAnthropicSSEStream(res, nameMap, onChunk, params.onReasoning, params.outputControl);
+      const result = await parseAnthropicSSEStream(res, nameMap, onChunk, params.onReasoning, params.outputControl, onUsage);
       const normalized = applyTextToolFallback(result, params.tools, nameMap);
       gate?.finish(Boolean(normalized.content));
       return normalized;
     }
     const result = await parseSSEStream(
       res, onChunk, !!params.tools, nameMap, params.onReasoning, params.onToolProgress,
-      cumulativeStream, params.outputControl,
+      cumulativeStream, params.outputControl, onUsage,
     );
     const normalized = applyTextToolFallback(result, params.tools, nameMap);
     gate?.finish(Boolean(normalized.content));
@@ -527,6 +557,12 @@ function parseUsage(raw: unknown): TokenUsage | undefined {
   return { promptTokens: prompt, completionTokens: completion, totalTokens: total };
 }
 
+function completeUsageReport(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object') return false;
+  const value = raw as Record<string, unknown>;
+  return Number.isSafeInteger(value.prompt_tokens) && Number.isSafeInteger(value.completion_tokens);
+}
+
 /** 解析 OpenAI SSE 流，逐 chunk 回调，返回 LLMResult */
 /** 从流式 tool_calls delta 里抽出可回显的片段（函数名首次出现 + arguments 增量）。 */
 function extractToolArgDelta(deltas: unknown): string {
@@ -550,6 +586,7 @@ async function parseSSEStream(
   onToolProgress?: (progress: ToolPreparationProgress) => void,
   cumulativeStream = false,
   outputControl?: ProviderOutputControl,
+  onUsage?: (usage: TokenUsage) => void,
 ): Promise<LLMResult> {
   const reader = res.body?.getReader();
   if (!reader) throw new Error('LLM 流式响应无 body');
@@ -561,6 +598,8 @@ async function parseSSEStream(
   let reasoningDetails: unknown[] = [];
   let finishReason: 'stop' | 'length' | 'tool_calls' | null = null;
   let usage: TokenUsage | undefined;
+  let inputReported = false;
+  let outputReported = false;
   const toolAcc = native ? makeToolCallAccumulator() : null;
 
   // ── 诊断埋点：累积生成量日志 ──────────────────────────────────────
@@ -689,8 +728,17 @@ async function parseSSEStream(
           finishReason = normalizeFinishReason(choice.finish_reason);
         }
         // usage 出现在 stream_options.include_usage 启用后的最后一个 chunk
-        const reported = parseUsage(json.usage) ?? parseUsage(choice?.usage);
-        if (reported) usage = reported;
+        const rawUsage = parseUsage(json.usage) ? json.usage : choice?.usage;
+        const reported = parseUsage(rawUsage);
+        if (reported && rawUsage) {
+          inputReported ||= rawUsage.prompt_tokens !== undefined;
+          outputReported ||= rawUsage.completion_tokens !== undefined;
+          const promptTokens = rawUsage.prompt_tokens ?? usage?.promptTokens ?? 0;
+          const completionTokens = rawUsage.completion_tokens ?? usage?.completionTokens ?? 0;
+          usage = { promptTokens, completionTokens,
+            totalTokens: rawUsage.total_tokens ?? promptTokens + completionTokens };
+          onUsage?.(usage);
+        }
         // A delta may contain both thought and body: accept the complete delta before stopping.
         if (outputControl?.shouldStop?.()) {
           finishReason = 'length';
@@ -762,6 +810,7 @@ async function parseSSEStream(
       : undefined,
     finishReason,
     usage,
+    usageComplete: inputReported && outputReported,
     toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
   };
 }

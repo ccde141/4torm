@@ -24,6 +24,7 @@ import type { AskStatus } from '../../engine/chat/ask-status';
 import { CompactionNotice } from '../common/CompactionNotice';
 import { CompactionHistory } from '../common/CompactionHistory';
 import type { ToolMediaScope } from '../../engine/tool-media';
+import MonsoonActivitySequence from './MonsoonActivitySequence';
 
 /** 流式与落定后的工具步骤共用渲染，保持原有顺序。 */
 function renderToolStep(step: ToolStep, key: string, timestamp: string, stopped?: boolean, mediaScope?: ToolMediaScope) {
@@ -42,10 +43,12 @@ function renderToolStep(step: ToolStep, key: string, timestamp: string, stopped?
     );
   }
   if ((step.tool === 'create_automation' || step.tool === 'update_automation') && step.pendingAutomation) {
-    return <AutomationDraftCard key={`automation-${key}`} pending={step.pendingAutomation} timestamp={formatTimestamp(timestamp)} />;
+    return <AutomationDraftCard key={`automation-${key}`} pending={step.pendingAutomation} timestamp={formatTimestamp(timestamp)}
+      toolRecord={{ params: step.args, result: step.result }} />;
   }
   if (step.tool === 'start_workflow' && step.workflowExecution) {
-    return <WorkflowExecutionCard key={`workflow-${key}`} execution={step.workflowExecution} timestamp={formatTimestamp(timestamp)} />;
+    return <WorkflowExecutionCard key={`workflow-${key}`} execution={step.workflowExecution} timestamp={formatTimestamp(timestamp)}
+      toolRecord={{ params: step.args, result: step.result }} />;
   }
   return (
     <ToolCallMessage
@@ -129,10 +132,10 @@ function MessageItemInner({
   if (msg.toolCall) {
     // 潮汐任务信息卡（create/update 成功时带 pendingAutomation；失败则退回普通工具卡）
     if ((msg.toolCall.toolName === 'create_automation' || msg.toolCall.toolName === 'update_automation') && msg.toolCall.pendingAutomation) {
-      return <AutomationDraftCard pending={msg.toolCall.pendingAutomation} timestamp={formatTimestamp(msg.timestamp)} />;
+      return <AutomationDraftCard pending={msg.toolCall.pendingAutomation} timestamp={formatTimestamp(msg.timestamp)} toolRecord={msg.toolCall} />;
     }
     if (msg.toolCall.toolName === 'start_workflow' && msg.toolCall.workflowExecution) {
-      return <WorkflowExecutionCard execution={msg.toolCall.workflowExecution} timestamp={formatTimestamp(msg.timestamp)} />;
+      return <WorkflowExecutionCard execution={msg.toolCall.workflowExecution} timestamp={formatTimestamp(msg.timestamp)} toolRecord={msg.toolCall} />;
     }
     return msg.toolCall.toolName === 'delegate' ? (
       <DelegateCard
@@ -172,6 +175,24 @@ function MessageItemInner({
   }
 
   if (msg.role === 'assistant') {
+    if (msg.activitySequence?.length) {
+      const lastTool = msg.toolSteps?.findLast(step => step.status === 'running')?.tool;
+      return <>
+        <CompactionNotice message={msg.compactionNotice ?? ''} />
+        <MonsoonActivitySequence message={msg} agent={agent} streaming={isStreaming}
+          reasoning={msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent}
+            breaks={msg.reasoningBreaks} isStreaming={isStreaming} preview />}
+          phase={isStreaming && !compacting && <LivePhase phase={msg.streamingPhase ?? 'llm-waiting'}
+            elapsed={msg.phaseElapsed} tool={msg.streamingTool || lastTool}
+            argumentChars={msg.streamingArgumentChars} notice={msg.streamingStatus} />}
+          renderTools={(steps, offset) => <ToolActivityList items={steps} stopped={msg.streamStopped}
+            renderItem={(step, index) => renderToolStep(step, `${msg.id}-${offset + index}`, msg.timestamp, msg.streamStopped, mediaScope)} />}
+          actions={!isStreaming ? <>
+            <button className="chat__msg-action-btn" title={t('common.edit')} aria-label={t('chat.editMessage')} onClick={() => onStartEdit(msg)}>✏</button>
+            <button className="chat__msg-action-btn chat__msg-action-btn--danger" title={t('common.delete')} aria-label={t('chat.deleteMessage')} onClick={() => onDeleteMessage(msg.id)}>🗑</button>
+          </> : undefined} />
+      </>;
+    }
     // 流式正文直接展示；工具与思考由各自的结构化事件渲染。
     if (isStreaming) {
       const display = msg.content.trim();
@@ -190,10 +211,8 @@ function MessageItemInner({
       return (
         <>
           <CompactionNotice message={msg.compactionNotice ?? ''} />
-          {/* 原生思考流（流式中默认展开） */}
-          <TurnProcess kind="reasoning" present={!!msg.reasoningContent} followLatest>
-          {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} breaks={msg.reasoningBreaks} isStreaming />}
-          </TurnProcess>
+          {/* 原生思考流：默认限高预览，折叠与高度分别控制。 */}
+          {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} breaks={msg.reasoningBreaks} isStreaming preview />}
           <TurnProcess kind="tools" present={!!steps?.length}>
           {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
           {steps && renderToolSteps(steps, msg.id, msg.timestamp, undefined, mediaScope)}
@@ -219,10 +238,8 @@ function MessageItemInner({
       return (
         <>
           <CompactionNotice message={msg.compactionNotice ?? ''} />
-          {/* 原生思考流（落定后默认折叠） */}
-          <TurnProcess kind="reasoning" present={!!msg.reasoningContent}>
-          {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} breaks={msg.reasoningBreaks} isStreaming={false} />}
-          </TurnProcess>
+          {/* 兼容历史记录的思考预览。 */}
+          {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} breaks={msg.reasoningBreaks} isStreaming={false} preview />}
           <TurnProcess kind="tools" present={!!toolSteps.length} stopped={msg.streamStopped}>
           {/* 工具步骤独立渲染（delegate 步用 DelegateCard，按调用顺序 inline） */}
           {renderToolSteps(toolSteps, msg.id, msg.timestamp, msg.streamStopped, mediaScope)}
@@ -244,10 +261,8 @@ function MessageItemInner({
     return (
       <>
         <CompactionNotice message={msg.compactionNotice ?? ''} />
-        {/* 原生思考流（落定后默认折叠） */}
-        <TurnProcess kind="reasoning" present={!!msg.reasoningContent} stopped={msg.streamStopped}>
-        {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} breaks={msg.reasoningBreaks} isStreaming={false} />}
-        </TurnProcess>
+        {/* 兼容仅有思考内容的历史记录。 */}
+        {msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent} breaks={msg.reasoningBreaks} isStreaming={false} preview />}
         <div className={`chat__message chat__message--assistant`}>
           <AgentAvatar agent={agent} className="chat__avatar" fallback="AI" />
           <div className="chat__bubble">

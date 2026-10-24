@@ -1,5 +1,5 @@
 import BoundedText from '../../../engine/text-display/BoundedText';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { toolOutputSummary } from '../../../engine/text-display/tool-output';
 import { useLocale } from '../../../i18n/LocaleContext';
 import { renderTextWithCode } from '../../../engine/markdown';
@@ -16,6 +16,7 @@ import { contactStateLabel, projectContactResult } from './contact-result';
 import { useContactActivity } from './ContactActivityScope';
 import type { ToolMediaScope } from '../../../engine/tool-media';
 import ToolResultImages from '../../../components/common/ToolResultImages';
+import { useProcessFade } from '../../../components/chat/useProcessFade';
 
 export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEditContent,
   onStartEdit, onSaveEdit, onCancelEdit, onDelete, dispatches, highlightedId,
@@ -93,13 +94,14 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
       <div className="chat__avatar">{m.isArchiveSummary ? t('cyclone.roomFeed.archiveAvatar') : speakerLabel.slice(0, 2)}</div>
       <div className="chat__bubble cyclone-room-turn__bubble">
         <div className="conv__speaker-label">{speakerLabel}</div>
-        {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} defaultOpen={false} />}
+        {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} preview />}
         <CycloneTurnWorklog segments={workSegments} dispatches={dispatches}
+          streaming={!!m.streaming}
           mediaScope={mediaScope}
           highlightedId={highlightedId} onDispatchAction={onDispatchAction} onOpenSeat={onOpenSeat}
           idPrefix={`room-${prefix}w-${idx}`} />
         {m.phase && <div className="chat__streaming-phase">{m.phase}</div>}
-        {finalContent && <div className="chat__content cyclone-room-turn__answer">
+        {finalContent && <div className={`chat__content cyclone-room-turn__answer${m.reasoning || workSegments.length ? ' cyclone-room-turn__answer--separated' : ''}`}>
           {renderTextWithCode(finalContent, `room-${prefix}s-${idx}`)}{m.streaming ? '▍' : ''}
         </div>}
         {!m.streaming && actions}
@@ -108,7 +110,7 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
   );
 }
 
-function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAction, onOpenSeat, idPrefix, mediaScope }: {
+function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAction, onOpenSeat, idPrefix, mediaScope, streaming }: {
   segments: RoomReplySegment[];
   dispatches: CycloneDispatch[];
   highlightedId: string | null;
@@ -116,8 +118,13 @@ function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAct
   onOpenSeat: (seatId: string) => void;
   idPrefix: string;
   mediaScope?: ToolMediaScope;
+  streaming: boolean;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
+  const id = useId();
+  const [open, setOpen] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const { viewport, content } = useProcessFade(!!segments.length && open, expanded, streaming);
   const contacts = useContactActivity(segments.flatMap(segment => segment.kind === 'tools' ? segment.tools : [])
     .filter(tool => tool.tool === 'contact' || tool.tool === 'contact_read')
     .map(tool => projectContactResult(tool.result, tool.status === 'error' ? false : undefined)));
@@ -134,27 +141,33 @@ function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAct
       ? { ...tool, status: projectContactResult(tool.result, tool.status === 'error' ? false : undefined).status } : tool);
   const operationCount = tools.length + segments.filter(segment => segment.kind === 'dispatch').length;
   const failed = tools.filter(tool => tool.status === 'error').length;
-  const running = tools.some(tool => tool.status === 'running');
-  const autoOpen = failed > 0 || running;
-  const [open, setOpen] = useState(autoOpen);
-  const wasAutoOpen = useRef(autoOpen);
-  useEffect(() => {
-    if (autoOpen && !wasAutoOpen.current) setOpen(true);
-    wasAutoOpen.current = autoOpen;
-  }, [autoOpen]);
+  const running = streaming || tools.some(tool => tool.status === 'running');
   if (!segments.length) return null;
   const state = failed ? t('cyclone.activity.failed', { count: failed })
     : running ? t('cyclone.activity.running') : t('cyclone.activity.completed');
   return (
-    <details className="cyclone-room-turn__worklog" open={open}
-      onToggle={event => setOpen(event.currentTarget.open)}>
-      <summary className="cyclone-room-turn__worklog-summary">
-        <span className="cyclone-room-turn__worklog-arrow">▶</span>
-        <span>{t('cyclone.activity.worklog')}{operationCount ? ` · ${t('cyclone.activity.operations', { count: operationCount })}` : ''}</span>
+    <section className="cyclone-room-turn__worklog">
+      <div className="cyclone-room-turn__worklog-toolbar">
+      <button type="button" className="cyclone-room-turn__worklog-summary" aria-expanded={open}
+        aria-controls={id} onClick={() => setOpen(value => !value)}>
+        <span className="cyclone-room-turn__worklog-arrow" aria-hidden="true">▶</span>
+        <svg className="cyclone-room-turn__worklog-icon" width="14" height="14" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="2" y="2" width="7" height="6" rx="1" /><rect x="15" y="2" width="7" height="6" rx="1" />
+          <rect x="8.5" y="16" width="7" height="6" rx="1" /><path d="M5.5 8v4h13V8M12 12v4" />
+        </svg>
+        <span className="cyclone-room-turn__worklog-title">{t('cyclone.activity.worklog')}{operationCount ? ` · ${t('cyclone.activity.operations', { count: operationCount })}` : ''}</span>
         <span className="cyclone-room-turn__worklog-state">{state}</span>
         {running && <span className="thinking-card__tool-spinner" />}
-      </summary>
-      <div className="cyclone-room-turn__worklog-body">
+      </button>
+      {open && <button type="button" className="cyclone-room-turn__worklog-height" aria-controls={id}
+        aria-pressed={expanded} onClick={() => setExpanded(value => !value)}>{expanded
+          ? (locale === 'en-US' ? 'Limit height' : '限高预览')
+          : (locale === 'en-US' ? 'Full height' : '完整高度')}</button>}
+      </div>
+      <div id={id} ref={viewport} hidden={!open} className={`cyclone-room-turn__worklog-body${expanded ? ' is-expanded' : ''}`}
+        tabIndex={0} role="region" aria-label={t('cyclone.activity.worklog')}>
+        <div ref={content}>
         {contacts.error && <p role="status" className="agent-detail__error">{contacts.error}</p>}
         {projected.map((segment, segmentIndex) => {
           if (segment.kind === 'text') return (
@@ -171,8 +184,9 @@ function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAct
             onAction={action => onDispatchAction(item.id, action)}
             onOpenSeat={() => onOpenSeat(item.targetSeatId)} /> : null;
         })}
+        </div>
       </div>
-    </details>
+    </section>
   );
 }
 

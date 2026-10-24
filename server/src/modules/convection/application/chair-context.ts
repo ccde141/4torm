@@ -45,6 +45,7 @@ async function summarizeChair(
   if (!chair?.model) throw new Error('会议助理未配置可用模型');
   const plan = await compactMessages({ dataDir, area: 'convection', kind: 'meeting',
     model: chair.model, chairModel: chair.model, prompt: chair.compactionPrompt, protectedPrefixCount: 1,
+    scopeKey: `convection:${session.id}:chair`,
     messages: buildConvectionChairContext(session, { role: 'system', content: '' }),
     reason: 'manual', mode: 'full', signal, onNotice: async notice => {
       session.chairCompactionNotice = notice;

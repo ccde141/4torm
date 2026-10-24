@@ -54,7 +54,7 @@ import { executeSeatFactTool, isSeatFactTool, withSeatFactTools } from './seat-f
 import { withSeatContinuity } from './seat-continuity.js';
 
 /** 群聊执行事件 */
-export type RoomEvent =
+export type RoomEvent = import('../shared/model-request-usage.js').ModelRequestUsageEvent
   | import('../shared/compaction/contracts.js').CompactionProgress
   | import('../shared/compaction/contracts.js').CompactionNotice
   | { type: 'input-accepted' }

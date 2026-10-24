@@ -1,3 +1,4 @@
+import { formatCurrentInput, formatModelUsage, mergeModelUsage, type ModelUsageProgress, type CurrentInputEstimate } from '../../../lib/model-usage';
 import { CompactionStatus } from '../../../components/common/CompactionStatus';
 import { compactionActivity } from '../../../components/common/compaction-activity';
 import { visibleCycloneCompaction } from './cyclone-compaction-activity';
@@ -14,6 +15,7 @@ import { useCycloneContextOperation } from './useCycloneContextOperation';
 
 import { backendFetch } from '../../../lib/backend-client';
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useLocale } from '../../../i18n/LocaleContext';
 import { renderTextWithCode } from '../../../engine/markdown';
 import { useConfirm } from '../../../components/common/ConfirmDialog';
@@ -37,6 +39,8 @@ import {
   dispatchesRequiringSeatReload,
   findActiveSeatDispatch,
   formatSeatDispatchActivity,
+  hasStoredDispatchInput,
+  seatReceiptsRequiringReload,
 } from './seat-dispatch-activity';
 import { SeatDispatchReceipt, SeatOutboundDispatch } from './SeatDispatchCard';
 import { useSmartChatScroll } from './useSmartChatScroll';
@@ -60,6 +64,7 @@ import {
 import { loadSupervisorTaskboard, saveSupervisorTaskboard, supervisorBase,
   reconcileSupervisorTaskboard, SUPERVISOR_STREAM_KEY } from './supervisor-client';
 import { ContactActivityScope } from './ContactActivityScope';
+import CycloneConversationHeader, { CycloneTokenBadge } from './CycloneConversationHeader';
 
 interface SeatStatus {
   id: string; title: string;
@@ -68,12 +73,14 @@ interface SeatStatus {
   pending?: { question: string; options?: string[] };
   updatedAt?: string;
   tokenUsage?: CycloneUsage;
+  modelUsage?: ModelUsageProgress;
+  currentInput?: CurrentInputEstimate;
   compactionNotice?: StoredCompactionFeedback;
   compaction?: unknown;
 }
 
 export default function SeatChat({ workshopId, seatId, runners, dispatches = [], onReloaded,
-  chairBase, chairRoomId, active = false }: {
+  chairBase, chairRoomId, active = false, tokenContainer }: {
   workshopId: string; seatId: string; runners: SeatStreamRunners; onReloaded?: () => void;
   dispatches?: CycloneDispatch[];
   /** 会议助理模式下覆盖端点前缀（如 /api/cyclone/workshop/{wid}/room/{rid}/chair）。普通工位不传。 */
@@ -81,6 +88,8 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   chairRoomId?: string;
   /** 当前工作室页是否可见。仅用于桌面拖拽路径接收，会议助理实例（chairBase 存在）始终不接收。 */
   active?: boolean;
+  /** An existing parent identity bar can host the live count without a second header. */
+  tokenContainer?: HTMLElement | null;
 }) {
   const { t, locale } = useLocale();
   const isChair = seatId.startsWith('__chair__');
@@ -235,7 +244,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
       const taskboard = isSupervisor ? await loadSupervisorTaskboard(workshopId) : undefined;
       if (seq !== reloadSeq.current) return false;
       const s: SeatStatus = isChair
-        ? { id: '__chair__', title: tRef.current('cyclone.seatChat.chairTitle', { agent: raw.chairAgentId }), messages: raw.messages, pending: raw.pending, tokenUsage: raw.tokenUsage, compactionNotice: raw.compactionNotice, compaction: raw.compaction }
+        ? { id: '__chair__', title: tRef.current('cyclone.seatChat.chairTitle', { agent: raw.chairAgentId }), messages: raw.messages, pending: raw.pending, tokenUsage: raw.tokenUsage, modelUsage: raw.modelUsage, currentInput: raw.currentInput, compactionNotice: raw.compactionNotice, compaction: raw.compaction }
         : raw;
       s.scope = `${workshopId}:${seatId}`;
       setLoadError(null); setSeat(s);
@@ -265,6 +274,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
     if (isChair || isSupervisor) return;
     const previous = dispatchStatuses.current;
     const settled = dispatchesRequiringSeatReload(previous, dispatches, seatId);
+    const receiptReady = seatReceiptsRequiringReload(previous, dispatches, seatId);
     const delivered = dispatches.some(item => (
       item.sourceKind === 'seat'
       && item.sourceSeatId === seatId
@@ -272,12 +282,14 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
       && receiptStates.current.get(item.id) !== 'delivered'
     ));
     for (const item of dispatches) {
-      if (item.targetSeatId === seatId) previous.set(item.id, item.status);
+      if (item.targetSeatId === seatId || (item.sourceKind === 'seat' && item.sourceSeatId === seatId)) {
+        previous.set(item.id, item.status);
+      }
       if (item.sourceKind === 'seat' && item.sourceSeatId === seatId) {
         receiptStates.current.set(item.id, item.receiptState);
       }
     }
-    if (settled.length === 0 && !delivered) return;
+    if (settled.length === 0 && !delivered && !receiptReady) return;
     void reload(true).then(() => {
       if (settled.length === 0) return;
       if (findActiveSeatDispatch(dispatches, seatId)) return;
@@ -483,6 +495,7 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   const externalOptimistic: DisplayMessage | null = privateActivity.activity
     && (!isSupervisor || privateActivity.activity.message.trim()) ? {
     id: `external-${privateActivity.activity.runId}`, role: 'user',
+    inputMessageId: privateActivity.activity.runId,
     content: privateActivity.activity.message,
   } : null;
   const optimistic = localStreaming ? runner?.pendingUser ?? null
@@ -492,12 +505,17 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
   const orphanedDispatches = isChair || isSupervisor ? [] : selectOrphanedSeatDispatches(
     dispatches, seatId, [...visibleHistory, ...(live?.segments ?? [])],
   );
-  const token = formatCycloneUsage(tokenUsage, locale);
+  const modelUsage = mergeModelUsage(seat?.scope === `${workshopId}:${seatId}` ? seat.modelUsage : undefined, live?.modelUsage);
+  const token = formatCurrentInput(seat?.scope === `${workshopId}:${seatId}` ? seat.currentInput : undefined, locale, modelUsage)
+    ?? formatModelUsage(modelUsage, locale, tokenUsage)
+    ?? formatCycloneUsage(tokenUsage, locale);
 
   return (
     <ContactActivityScope workshopId={workshopId} targetId={seatId} active={active}>
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-      <div title={token.title} style={{ alignSelf: 'flex-end', padding: 'var(--space-1) var(--space-4)', fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>{token.label}</div>
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+      {tokenContainer === undefined ? <CycloneConversationHeader title={seat.title} token={token}
+        endInset={isChair ? 0 : RAIL_W} />
+        : tokenContainer && createPortal(<CycloneTokenBadge token={token} />, tokenContainer)}
       {privateActivity.error && <div role="status" className="agent-detail__error">
         {privateActivity.error}</div>}
       {externalError && <div role="status" className="agent-detail__error">{externalError}</div>}
@@ -524,7 +542,8 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
           onStartEdit={startEditMessage} onSaveEdit={saveEditMessage} onCancelEdit={cancelEditMessage}
           onDelete={deleteMessage} onAskReply={answer => run('resume', answer)} />)}
         {orphanedDispatches.map(item => <SeatOutboundDispatch key={item.id} item={item} />)}
-        {activeDispatch && <SeatDispatchActivity item={activeDispatch} />}
+        {activeDispatch && <SeatDispatchActivity item={activeDispatch}
+          showInput={!hasStoredDispatchInput(visibleHistory, activeDispatch.id)} />}
         {live && <SeatTurnCard turn={createLiveSeatTurn(live.segments, live.reasoning)}
           mediaScope={{ feature: 'cyclone', workshopId, kind: isSupervisor ? 'supervisor' : isChair ? 'chair' : 'seat', targetId: activityTargetId }}
           dispatches={dispatches} streaming={streaming} phase={live.phase}

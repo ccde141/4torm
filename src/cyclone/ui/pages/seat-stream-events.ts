@@ -1,3 +1,4 @@
+import { applyModelRequest, type ModelUsageProgress } from '../../../lib/model-usage';
 import type { CompactionActivity } from '../../../components/common/compaction-activity';
 import { reduceCycloneCompaction } from './cyclone-compaction-activity';
 import type { TaskBoard } from '../../../utils/taskboard';
@@ -14,6 +15,7 @@ import {
 } from './cyclone-reply-sequence';
 
 export interface Live {
+  modelUsage?: ModelUsageProgress;
   segments: CycloneReplySegment[];
   reasoning?: string;
   phase: string;
@@ -34,6 +36,10 @@ export function applySeatEvent(ev: any, live: Live, locale: Locale = 'zh-CN'): v
   const feedback = compactionFeedbackEvent(ev);
   if (feedback !== undefined) live.compactionNotice = feedback;
   switch (ev.type) {
+    case 'model-request':
+      live.modelUsage = applyModelRequest(live.modelUsage, ev.request);
+      if (ev.request.purpose === 'conversation' && ev.request.usage) live.lastKnownTokenUsage = ev.request.usage;
+      break;
     case 'usage':
       live.tokenUsage = ev.usage ?? null;
       if (ev.usage) live.lastKnownTokenUsage = ev.usage;

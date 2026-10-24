@@ -168,7 +168,9 @@ async function consumeReply(
     if (Object.hasOwn(effect, 'usage')) {
       if (effect.usage) state.session.tokenUsage = effect.usage;
       else delete state.session.tokenUsage;
+      ports.refreshSessions(input.agent);
     }
+    if (event.type === 'model-request') ports.refreshSessions(input.agent);
     if (effect.flush) state.flusher.update(state.messages, effect.flush === 'immediate');
   }
   if (!state.accepted) throw new Error('未收到季风回复接收确认');

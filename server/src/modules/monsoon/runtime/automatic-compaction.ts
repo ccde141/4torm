@@ -42,10 +42,12 @@ export function monsoonCompactionTransform(spec: MonsoonTurnSpec,
         onCompacted: plan => { rebase(plan.messages); if (checkpoint) emit(checkpoint); },
       });
     };
-    return { call: async (...args) => {
-      pending ??= prepare(args[0]);
-      return (await pending).call(...args);
-    } };
+    const caller = (messages: ContextMessage[]) => pending ??= prepare(messages);
+    return {
+      prepare: async (messages, options, signal, tools) => (await caller(messages)).prepare?.(messages, options, signal, tools),
+      recover: async (error, messages, signal) => (await caller(messages)).recover?.(error, messages, signal) ?? false,
+      call: async (...args) => (await caller(args[0])).call(...args),
+    };
   };
 }
 

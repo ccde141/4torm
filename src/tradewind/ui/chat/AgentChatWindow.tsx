@@ -34,6 +34,7 @@ import { mergeNodeUserMessage } from './node-message-identity';
 import { compactionActivity, reduceCompactionActivity, type CompactionActivity } from '../../../components/common/compaction-activity';
 import { pendingCompaction, type CompactionEvent } from '../compaction-events';
 import type { ToolImageRef } from '../../../engine/tool-media';
+import type { CurrentInputEstimate, ModelRequestUsage } from '../../../lib/model-usage';
 
 interface AgentChatWindowProps {
   nodeId: string;
@@ -51,6 +52,7 @@ interface AgentChatWindowProps {
 // ── SSE 连接事件类型 ───────────────────────────────────────────────
 
 type StreamEvent =
+  | { type: 'model-request'; request: ModelRequestUsage }
   | { type: 'connected'; busy: boolean }
   | { type: 'transport-disconnected'; message: string }
   | { type: 'transport-reconnected' }
@@ -95,6 +97,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
   const [paused, setPaused] = useState(false);
   const [activity, setActivity] = useState<AgentChatActivity>('idle');
   const [usageDisplay, setUsageDisplay] = useState<ProviderUsageDisplay>();
+  const [currentInput, setCurrentInput] = useState<{ scope: string; value?: CurrentInputEstimate }>();
   const usageScope = JSON.stringify([workflowId, executionId ?? null, nodeId]);
   const usageScopeRef = useRef(usageScope);
   usageScopeRef.current = usageScope;
@@ -189,6 +192,9 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
 
         case 'usage':
           updateUsage({ type: 'usage', usage: ev.usage });
+          break;
+        case 'model-request':
+          updateUsage(ev);
           break;
 
         case 'round-start':
@@ -467,6 +473,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
     const renderHistory = (msgs: NodeHistoryMessage[]) => setMessages(projectNodeHistoryMessages(msgs, nextId));
 
     const restoreSnapshot = (snap: NodeSnapshot<StreamEvent>) => {
+      setCurrentInput({ scope: usageScope, value: snap.currentInput });
       statusRequestGateRef.current.advanceEvent();
       if (streamFrameRef.current !== null) window.cancelAnimationFrame(streamFrameRef.current);
       streamFrameRef.current = null;
@@ -477,6 +484,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
       setCompaction(compactionActivity(snap.compaction));
       if (snap.busy) updateUsage({ type: 'start', operation: 'node' });
       updateUsage({ type: 'usage', usage: latestProviderUsage(snap.tokenUsage) });
+      updateUsage({ type: 'model-usage', progress: snap.tokenUsage?.modelUsage });
       if (!snap.busy) updateUsage({ type: 'done', operation: 'node' });
       setRoundSource(roundSourceFromSnapshot(snap));
       const replay = shouldReplaySnapshotRound(snap);
@@ -518,6 +526,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
         .finally(() => { if (snapshotController === controller) snapshotController = null; });
     };
     // 传输事件不属于模型轮次；断线不清屏，也不伪造 done。
+    let inputVersion = 0;
     const onStreamEvent = (ev: StreamEvent & { scope?: string; nodeId?: string; seq?: number }) => {
       if (cancelled || sealedRef.current || !acceptsPanelEvent(ev, 'agent', { workflowId, executionId: executionId ?? null })) return;
       if (ev.type === 'transport-disconnected') {
@@ -534,6 +543,14 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
         return;
       }
       for (const event of snapshotGate.receive(ev)) applyEvent(event);
+      if (ev.type === 'user-message' || ev.type === 'model-request') inputVersion++;
+      if (ev.type === 'done' || ev.type === 'context-compacted') {
+        const version = ++inputVersion;
+        void backendFetch(panelReadUrl(`/api/tradewind/chat/${encodeURIComponent(nodeId)}/snapshot`,
+          { workflowId, executionId: executionId ?? null })).then(response => readNodeSnapshot<StreamEvent>(response))
+          .then(snapshot => { if (!cancelled && inputVersion === version)
+            setCurrentInput({ scope: usageScope, value: snapshot.currentInput }); }).catch(() => {});
+      }
     };
 
     if (executionId) {
@@ -551,7 +568,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
       }
       if (executionId) unsubscribe(nodeId, onStreamEvent);
     };
-  }, [nodeId, workflowId, executionId, updateUsage]);
+  }, [nodeId, workflowId, executionId, updateUsage, usageScope]);
 
   // 自动滚动（接近底部时才滚，用户手动上翻后不强制拉回）
   useEffect(() => {
@@ -661,6 +678,8 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
     mediaScope={executionId ? { feature: 'tradewind', workflowId, executionId, nodeId, kind: 'node' } : undefined}
     isEnvelopeRound={isEnvelopeRound} activity={activity} nodeLabel={nodeLabel} messages={messages}
     latestUsage={latestUsage}
+    currentInput={currentInput?.scope === usageScope ? currentInput.value : undefined}
+    modelUsage={usageDisplay?.scope === usageScope ? usageDisplay.modelUsage : undefined}
     compactionNotice={compactionNotice}
     compaction={compaction}
     error={error} input={input} messagesContainerRef={messagesContainerRef} messagesEndRef={messagesEndRef}

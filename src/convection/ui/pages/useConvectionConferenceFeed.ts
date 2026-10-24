@@ -7,17 +7,22 @@ import type { ConvectionTurnMessage } from './ConvectionTurnCard';
 import { applyExternalChairEvent, applyExternalPublicEvent, restoreConvectionCompaction,
   type ExternalChairMessage, type ExternalRoundEvent } from './convection-external-events';
 import type { ConvectionRound } from './convection-round-state';
-import { applyConvectionUsage, beginConvectionUsage, mergeConvectionSessions, restoreConvectionUsage,
+import { applyConvectionModelRequest, applyConvectionUsage, beginConvectionUsage, mergeConvectionSessions, restoreConvectionUsage,
   type ConvectionUsage, type ConvectionUsagePending } from './convection-token-usage';
 import { compactionFeedbackEvent, compactionFeedbackMessage, type StoredCompactionFeedback } from '../../../components/common/compaction-feedback';
 import { compactionActivity, reduceCompactionActivity, type CompactionActivity } from '../../../components/common/compaction-activity';
+import type { CurrentInputEstimate, ModelRequestUsage, ModelUsageProgress } from '../../../lib/model-usage';
 
 export interface ConvectionRoomSummary {
+  publicCurrentInput?: CurrentInputEstimate;
+  chairCurrentInput?: CurrentInputEstimate;
   id: string; title: string; chairAgentId: string; participantAgentIds: string[];
   topic: string; messageCount: number; tokenEstimate: number;
   tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   publicLatestTokenUsage?: ConvectionUsage;
   chairTokenUsage?: ConvectionUsage;
+  publicModelUsage?: ModelUsageProgress;
+  chairModelUsage?: ModelUsageProgress;
   usagePending?: ConvectionUsagePending;
   updatedAt: string;
 }
@@ -34,6 +39,7 @@ interface Snapshot {
 }
 
 type FeedEvent = Snapshot | { type: 'session-changed'; sessionId: string }
+  | { type: 'model-request'; sessionId: string; scope: 'public' | 'chair'; request: ModelRequestUsage }
   | { type: 'context-event'; sessionId: string; scope: 'public' | 'chair'; event: ExternalRoundEvent }
   | { type: 'round-start'; sessionId: string; runId: string;
       round: 'public' | 'chair'; message: string }
@@ -76,7 +82,9 @@ export function useConvectionConferenceFeed(bindings: FeedBindings): boolean {
       || latest.current.chairRequest.current);
     const handle = (event: FeedEvent) => {
       if (closed) return;
-      if (event.type === 'snapshot') {
+      if (event.type === 'model-request') {
+        applyConferenceModelRequest(latest.current, event);
+      } else if (event.type === 'snapshot') {
         latest.current.setPublicCompaction(current => restoreConvectionCompaction(current, event.compactionProgress));
         latest.current.setChairCompaction(current => restoreConvectionCompaction(current, event.chairCompactionProgress));
         const pending = event.live?.activeRound?.round ?? (event.compactionProgress && compactionActivity(event.compactionProgress)?.phase === 'running'
@@ -162,6 +170,12 @@ export function useConvectionConferenceFeed(bindings: FeedBindings): boolean {
   return disconnected;
 }
 
+/** Context-only requests have no speaker or active conversational round. */
+export function applyConferenceModelRequest(bindings: Pick<FeedBindings, 'setSessions'>,
+  event: Extract<FeedEvent, { type: 'model-request' }>): void {
+  bindings.setSessions(current => applyConvectionModelRequest(current, event.sessionId, event.scope, event.request));
+}
+
 function appendPrompt(bindings: FeedBindings, round: 'public' | 'chair', message: string): void {
   if (round === 'public') bindings.setMessages(current => [...current,
     { speaker: '人类', content: message, timestamp: new Date().toISOString() }]);
@@ -171,6 +185,10 @@ function appendPrompt(bindings: FeedBindings, round: 'public' | 'chair', message
 
 function applyProgress(bindings: FeedBindings, sessionId: string, round: 'public' | 'chair',
   event: ExternalRoundEvent): void {
+  if (event.type === 'model-request') {
+    bindings.setSessions(current => applyConvectionModelRequest(current, sessionId, round, event.request));
+    return;
+  }
   const feedback = compactionFeedbackEvent(event);
   if (feedback !== undefined) (round === 'public' ? bindings.setPublicNotice : bindings.setChairNotice)(feedback ?? '');
   (round === 'public' ? bindings.setPublicCompaction : bindings.setChairCompaction)(current => reduceCompactionActivity(current, event));

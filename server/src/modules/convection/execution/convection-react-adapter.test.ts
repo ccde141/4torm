@@ -4,6 +4,24 @@ import { runConvectionReActWith } from './convection-react-adapter.js';
 import { parseTextToolResult } from '../../../engine/shared/text-tool-protocol.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 
+test('convection text adapter retains preparation and recovery across its model wrapper', async () => {
+  const order: string[] = [];
+  await runConvectionReActWith({
+    dataDir: 'unused', model: 'demo:model', temperature: 0, agentId: 'a', sessionId: 's', label: 'A',
+    messages: [{ role: 'user', content: 'Discuss.' }],
+    llm: { prepare: async () => { order.push('prepare'); },
+      recover: async () => { order.push('recover'); return true; },
+      call: async () => { throw new Error('dependencies own inference'); } },
+  }, {
+    callModel: async () => {
+      order.push('call');
+      if (order.filter(item => item === 'call').length === 1) throw new Error('context overflow');
+      return { content: 'Done.', finishReason: 'stop' };
+    }, callAgentTool: async () => 'unused',
+  });
+  assert.deepEqual(order, ['prepare', 'call', 'recover', 'call']);
+});
+
 test('convection text loop uses JSON tool calls and returns natural-language content', async () => {
   const responses = [
     { content: '{"type":"tool_call","name":"read_file","arguments":{"filePath":"a.txt"}}', finishReason: 'stop' as const },

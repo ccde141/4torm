@@ -4,14 +4,18 @@ import { useLocale } from '../../i18n/LocaleContext';
 import { formatRelative, formatSchedule } from './tide-styles';
 import { parseTideScheduleForm } from './tide-form-values';
 import { resolveTideRuntime, visibleTideNextRun } from './tide-runtime';
-import { formatTideContextTokens } from './tide-token-label';
 import TideIcon from './TideIcon';
+import { formatCurrentInput, formatModelUsage } from '../../lib/model-usage';
 
-export default function TideTaskOverview({ task, agentName, usage, running, runState, children }: {
+export default function TideTaskOverview({ task, agentName, running, runState, children }: {
   task: TideTask; agentName?: string; usage?: TideTokenUsage; running: boolean;
   runState: TideRunState | null; children?: ReactNode;
 }) {
   const { t, locale } = useLocale();
+  const progress = runState?.usage?.modelUsage;
+  const activeRequest = progress?.latest && ['prepared', 'sent', 'streaming'].includes(progress.latest.state);
+  const metering = formatCurrentInput(task.currentInput, locale, progress)
+    ?? (activeRequest ? formatModelUsage(progress, locale) : undefined);
   const dailySchedule = parseTideScheduleForm(task.schedule).scheduleMode === 'daily';
   const nextRun = visibleTideNextRun(task);
   const runtime = resolveTideRuntime(task, runState ? { operationId: task.id, title: task.name,
@@ -38,8 +42,8 @@ export default function TideTaskOverview({ task, agentName, usage, running, runS
       <Metric icon="clock" label={t('tide.detail.nextRun')} value={dailySchedule && nextRun
         ? new Date(nextRun).toLocaleString(locale, { timeZoneName: 'short' }) : formatRelative(nextRun, locale)}
         title={nextRun ? new Date(nextRun).toLocaleString(locale, { timeZoneName: 'short' }) : undefined} />
-      <Metric icon="message" label={t('tide.detail.inputUsage')} value={formatTideContextTokens(usage, locale)}
-        title={t('tide.session.usageHint')} />
+      <Metric icon="message" label={t('tide.detail.inputUsage')} value={metering?.label ?? '—'}
+        title={metering?.title ?? t('tide.session.usageHint')} />
     </div>
     <dl className="tide-detail__facts">
       <div><dt>{t('tide.detail.pushMode')}</dt><dd>{delivery}</dd></div>

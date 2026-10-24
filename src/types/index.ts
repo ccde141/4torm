@@ -49,6 +49,8 @@ export interface NativeContextMessage {
 
 /** 单条消息 */
 export interface ChatMessage {
+  /** Display order only; model history continues to use nativeContext/toolSteps. */
+  activitySequence?: ChatActivity[];
   /** Display-only observation boundaries; absent in legacy sessions. */
   reasoningBreaks?: number[];
   streamStopped?: boolean;
@@ -112,6 +114,24 @@ export interface ChatMessage {
    */
   native?: boolean;
 }
+
+export interface TeamActivity {
+  id: string;
+  stage: 'dispatched' | 'reported' | 'injected' | 'acknowledged' | 'reviewed';
+  timestamp: string;
+  memberId: string;
+  memberName?: string;
+  runId?: string;
+  reportId?: string;
+  outcome?: string;
+  decision?: string;
+  preview?: string;
+}
+
+export type ChatActivity =
+  | { kind: 'text'; content: string }
+  | { kind: 'tool'; index: number }
+  | { kind: 'team'; event: TeamActivity };
 
 /** 工具调用步骤（StructuredMessage 与流式期间共用） */
 export interface ToolStep {

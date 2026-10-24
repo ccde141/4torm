@@ -3,14 +3,16 @@ import { callLLM, type TokenUsage } from '../../../engine/shared/llm-bridge.js';
 import { FrameworkError } from '../../../engine/shared/framework-error.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import { saveSession, type ConvectionSessionData } from '../infrastructure/session-store.js';
-import { buildConvectionChairPrompt } from './prompt-profiles.js';
 import { loadRequiredAgent } from './round-agent-snapshot.js';
 import { recordChairUsage } from './session-view.js';
 import type { ConvectionEventSink } from './stream-events.js';
 import { createConvectionCompactionCaller } from './compaction-caller.js';
 import type { LLMCaller } from '../../../engine/shared/react/native-loop.js';
-import { buildConvectionChairContext, finishConvectionChairContext } from './chair-context.js';
+import { finishConvectionChairContext } from './chair-context.js';
+import { buildConvectionChairMessages } from './request-context.js';
 import { estimateCompactionTokens } from '../../../engine/shared/compaction/index.js';
+import { withConvectionModelUsage } from './model-usage.js';
+import { callPreparedModel } from '../../../engine/shared/react/model-call.js';
 
 const LLM_TIMEOUT_MS = 3_600_000;
 const HEARTBEAT_INTERVAL_MS = 5_000;
@@ -34,17 +36,14 @@ export async function handleChair(
   emit?.({ type: 'usage', usage: null });
   const agent = await loadRequiredAgent(dataDir, session.chairAgentId);
   emit?.({ type: 'agent-start', agentId: agent.id, label: agent.name });
-  const system: ContextMessage = { role: 'system', content: buildConvectionChairPrompt({
-    chairName: agent.name, topic: session.topic,
-  }) };
-  const messages = buildConvectionChairContext(session, system);
-  const response = await requestChairReply({
+  const messages = buildConvectionChairMessages(session, agent.name);
+  const response = await withConvectionModelUsage(dataDir, session, 'chair', emit, observed => requestChairReply({
     dataDir, agentId: agent.id, label: agent.name, model: agent.model,
     messages,
-    emit, signal,
+    emit: observed, signal,
     llm: createConvectionCompactionCaller({ dataDir, session,
       agent, chair: agent, messages, kind: 'chair', emit, initialPromptTokens: previousPromptTokens }),
-  });
+  }));
   if (!response) return;
   await applyChairReply(session, response, () => saveSession(dataDir, session), emit, runId, messages);
 }
@@ -96,9 +95,12 @@ async function requestChairReply(
     const llm = request.llm ?? { call: (messages, _options, onChunk, signal, _tools, onReasoning) => callLLM({
       dataDir: request.dataDir, fullModelKey: request.model, messages, onChunk, onReasoning, signal,
     }) } satisfies LLMCaller;
-    const response = await withAgentActivity(request.agentId, 'convection', () => llm.call(request.messages, undefined,
-      chunk => { tokenReceived = true; request.emit?.({ type: 'chair-token', chunk }); }, abort.signal, undefined,
-      chunk => { tokenReceived = true; request.emit?.({ type: 'chair-reasoning', chunk }); }));
+    const response = await withAgentActivity(request.agentId, 'convection', () => callPreparedModel(llm,
+      request.messages, abort.signal, {
+        onChunk: chunk => { tokenReceived = true; request.emit?.({ type: 'chair-token', chunk }); },
+        onReasoning: chunk => { tokenReceived = true; request.emit?.({ type: 'chair-reasoning', chunk }); },
+        onEvent: event => { if (event.type === 'model-request') request.emit?.(event); },
+      }));
     const content = response.content.trim();
     return { content, usage: response.usage };
   } catch (error) {

@@ -82,6 +82,8 @@ async function defaultExecuteSeat(dataDir: string, item: CycloneDispatch): Promi
       item.targetSeatId,
       `[异步派发：来自${origin}「${item.sourceSeatTitle}」]\n\n${item.task}`,
       onEvent,
+      undefined,
+      { dispatchId: item.id },
     );
   } finally {
     live.finish();

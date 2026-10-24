@@ -16,6 +16,7 @@ export function SupervisorPanel({ workshopId, agents, runners, active, onChanged
   const [settings, setSettings] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [tokenContainer, setTokenContainer] = useState<HTMLSpanElement | null>(null);
   const [, tick] = useState(0);
   const dirty = useRef(false);
   const mounted = useRef(true);
@@ -49,6 +50,7 @@ export function SupervisorPanel({ workshopId, agents, runners, active, onChanged
       <span className="cyclone-supervisor__symbol" aria-hidden="true">◇</span>
       <div className="cyclone-supervisor__identity"><h2>{text('工作室主管', 'Workshop supervisor')}</h2>
         <span>{boundAgent?.name ?? (status?.configured ? status.agentId : text('尚未配置', 'Not configured'))}</span></div>
+      <span ref={setTokenContainer} style={{ display: 'inline-flex', flexShrink: 0 }} />
       {running && <span className="cyclone-sidebar-status cyclone-sidebar-status--running"
         aria-label={text('运行中', 'Running')}>•</span>}
       <button type="button" className="secondary-action-btn" aria-expanded={settings}
@@ -70,7 +72,7 @@ export function SupervisorPanel({ workshopId, agents, runners, active, onChanged
         }}>{text('取消', 'Cancel')}</button>}</div>
     </form>}
     {status?.configured ? <SeatChat key={workshopId} workshopId={workshopId} seatId={SUPERVISOR_STREAM_KEY}
-      runners={runners} active={active} onReloaded={onChanged} />
+      runners={runners} active={active} tokenContainer={tokenContainer} onReloaded={onChanged} />
       : !status && !error ? <p className="cyclone-supervisor__empty">{text('正在读取主管…', 'Loading supervisor…')}</p> : null}
   </section>;
 }

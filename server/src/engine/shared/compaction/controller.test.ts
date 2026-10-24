@@ -10,6 +10,9 @@ import { compactMessages, createCompactionCaller } from './controller.js';
 import { defaultCompactionPolicy, saveCompactionPolicy } from './policy.js';
 import type { CompactionOptions, CompactionPolicy } from './contracts.js';
 import { estimateCompactionTokens } from './estimate.js';
+import { callPreparedModel } from '../react/model-call.js';
+
+const invoke = (caller: LLMCaller, messages: ContextMessage[]) => callPreparedModel(caller, messages, undefined, {});
 
 async function fixture(run: (options: CompactionOptions, policy: CompactionPolicy) => Promise<void>) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-compact-controller-'));
@@ -126,11 +129,11 @@ test('hot threshold increase cancels old trigger; lowering takes effect next bou
       llm: { call: async () => ({ ...success, usage: { promptTokens: 1_200, completionTokens: 10, totalTokens: 1_210 } }) },
       commit: async () => { compacted++; } });
     const messages = history();
-    await caller.call(messages); assert.equal(compacted, 0);
+    await invoke(caller, messages); assert.equal(compacted, 0);
     policy.thresholds.monsoon = 3_000; await saveCompactionPolicy(options.dataDir, policy);
-    await caller.call(messages); assert.equal(compacted, 0);
+    await invoke(caller, messages); assert.equal(compacted, 0);
     policy.thresholds.monsoon = 1_000; await saveCompactionPolicy(options.dataDir, policy);
-    await caller.call(messages); assert.equal(compacted, 1);
+    await invoke(caller, messages); assert.equal(compacted, 1);
   });
 });
 
@@ -147,7 +150,7 @@ test('newly appended large human input is counted before its first model request
       initialEstimateTokens: priorEstimate,
       commit: async () => { compacted = true; },
       llm: { call: async () => { assert.equal(compacted, true); return success; } } });
-    await caller.call(active);
+    await invoke(caller, active);
   });
 });
 
@@ -157,17 +160,17 @@ test('only context overflow retries failed request once; no general provider ret
     const llm: LLMCaller = { call: async () => { if (++calls === 1) throw overflow(); return success; } };
     const caller = createCompactionCaller({ ...options, llm,
       summarize: async () => { summaries++; return 'facts'; } });
-    await caller.call(history());
+    await invoke(caller, history());
     assert.equal(calls, 2); assert.equal(summaries, 1);
     calls = 0;
     const failing = createCompactionCaller({ ...options, llm: { call: async () => { calls++; throw overflow(); } } });
-    await assert.rejects(failing.call(history()), /模型服务确认/);
+    await assert.rejects(invoke(failing, history()), /模型服务确认/);
     assert.equal(calls, 2);
     calls = 0;
     const invalid = createCompactionCaller({ ...options, llm: { call: async () => {
       calls++; throw providerHttpError(400, '{"error":{"message":"invalid tools"}}');
     } } });
-    await assert.rejects(invalid.call(history()), /invalid tools/);
+    await assert.rejects(invoke(invalid, history()), /invalid tools/);
     assert.equal(calls, 1);
   });
 });
@@ -181,7 +184,7 @@ test('proactive compaction and actual overflow co-trigger recover different rema
     const caller = createCompactionCaller({ ...options, initialPromptTokens: 2_000,
       llm: { call: async () => { if (++calls === 1) throw overflow(); return success; } },
       summarize: async input => { prefixes.push(input.text); return ++summaries === 1 ? 'fact '.repeat(100) : 'facts'; } });
-    await caller.call(history());
+    await invoke(caller, history());
     assert.equal(calls, 2); assert.equal(summaries, 2);
     assert.notEqual(prefixes[0], prefixes[1]);
   });

@@ -120,7 +120,7 @@ export function createCycloneModule(dependencies: {
       },
     },
     handlers: {
-      ...(dependencies.supervisor ? cycloneSupervisorHandlers(dependencies.supervisor) : {}),
+      ...(dependencies.supervisor ? cycloneSupervisorHandlers(dependencies.supervisor, dependencies.dataDir) : {}),
       ...(dependencies.agentSupervisor ? cycloneAgentSupervisorHandlers(dependencies.agentSupervisor) : {}),
       ...(dependencies.dataDir ? cycloneContactHandlers(dependencies.dataDir) : {}),
       ...cycloneReadHandlers(dependencies),

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { TokenUsageRecorder, captureTokenUsage, readTokenUsageFile } from './token-usage.js';
+import { createModelRequestUsage, type ModelRequestUsage } from '../../shared/model-request-usage.js';
 
 test('each reported call persists latest and confirmed total before delivery', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'tw-usage-'));
@@ -55,4 +56,47 @@ test('failed model request records unknown before propagating the real error', a
   assert.equal(recorder.state.calls, 2);
   assert.equal(recorder.state.latest, null);
   assert.deepEqual(recorder.state.total, known);
+});
+
+test('请求快照按身份替换且失败保留流中已知量，压缩不替换主请求输入', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'tw-request-usage-'));
+  try {
+    const file = path.join(dir, 'usage.json');
+    const recorder = new TokenUsageRecorder(file);
+    const request: ModelRequestUsage = { id: 'main', purpose: 'conversation', state: 'sent',
+      startedAt: '2026-10-24T00:00:00Z', updatedAt: '2026-10-24T00:00:00Z',
+      estimatedInputTokens: 120, imageCount: 0, usageComplete: false };
+    await recorder.recordRequest(request);
+    const partial = { ...request, state: 'streaming' as const,
+      usage: { promptTokens: 130, completionTokens: 9, totalTokens: 139 } };
+    await recorder.recordRequest(partial);
+    await recorder.recordRequest(partial);
+    await recorder.recordRequest({ ...partial, state: 'failed' });
+    await recorder.recordRequest({ ...request, id: 'compact', purpose: 'compaction', state: 'completed',
+      startedAt: '2026-10-24T00:00:01Z', usage: { promptTokens: 30, completionTokens: 4, totalTokens: 34 },
+      usageComplete: true });
+    await recorder.record(null);
+    const saved = await readTokenUsageFile(file);
+    assert.equal(saved?.modelUsage?.calls, 2);
+    assert.equal(saved?.modelUsage?.total.totalTokens, 173);
+    assert.equal(saved?.modelUsage?.latest?.id, 'main');
+    assert.equal(saved?.modelUsage?.complete, false);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('直接会议调用也能在响应失败前持久化预计请求', async () => {
+  const recorder = new TokenUsageRecorder();
+  await assert.rejects(captureTokenUsage(async () => {
+    const request = createModelRequestUsage({ messages: [{ role: 'user', content: '检查当前资料' }] });
+    request.update({ state: 'sent', wasSent: true });
+    request.finish('failed');
+    throw new Error('fixture failure');
+  }, usage => recorder.record(usage), event => {
+    void recorder.recordRequest(event.request).catch(() => {});
+  }), /fixture failure/);
+  await recorder.flush();
+  assert.equal(recorder.state.modelUsage?.calls, 1);
+  assert.ok(recorder.state.modelUsage?.latest?.estimatedInputTokens);
+  assert.equal(recorder.state.modelUsage?.latest?.state, 'failed');
+  assert.equal(recorder.state.modelUsage?.total.totalTokens, 0);
 });

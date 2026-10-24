@@ -11,10 +11,11 @@ import type {
 import type { CycloneSeatService } from '../application/seat-service.js';
 import type { CycloneExecutionPort } from '../domain/operation-snapshot.js';
 import type { CycloneChangeFeed } from '../application/change-feed.js';
+import type { CycloneInputIdentity } from '../../../engine/cyclone/types.js';
 
 type SeatExecutor = (
   dataDir: string, workshopId: string, seatId: string, text: string,
-  onEvent: (event: unknown) => void, signal?: AbortSignal,
+  onEvent: (event: unknown) => void, signal?: AbortSignal, inputIdentity?: CycloneInputIdentity,
 ) => Promise<{ content: string; termination: ReActTermination; executionIds?: string[] }>;
 
 export interface CycloneSeatChatRuntime {
@@ -85,7 +86,7 @@ async function runSeatChat(
         // 终态先提交执行事实，再通知读取方，避免刷新仍读到 running 或将失败当完成。
         if (type === 'error') return;
         onEvent?.(event);
-      }, signal,
+      }, signal, input.mode === 'chat' ? { inputMessageId: execution.runId } : undefined,
     );
     termination = result.termination;
     if (input.mode === 'resume' && result.executionIds?.length) {

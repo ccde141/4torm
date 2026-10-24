@@ -6,6 +6,34 @@ import path from 'node:path';
 import { TeamStore } from './store.js';
 import { TeamRuntime } from './runtime.js';
 import { createTeamHandoff } from './handoff.js';
+import type { TeamActivityEvent } from './activity.js';
+
+test('dispatch, received, context and acknowledgement form one trace without replaying work', async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'team-activity-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const store = new TeamStore(dir, { agentId: 'a', sessionId: 's' });
+  const policy = { tools: [], skills: [], sandboxLevel: 'project' as const };
+  const member = await store.create({ name: 'Review', mission: 'review', rolePrompt: '', taskContext: '', constraints: '', permissions: policy }, policy);
+  let calls = 0;
+  const runtime = new TeamRuntime(store, async () => { calls++; return 'Result'; });
+  const events: TeamActivityEvent[] = [];
+  const handoff = createTeamHandoff(runtime, event => events.push(event));
+  const run = await runtime.dispatch(member.id, 'Inspect', policy, 'request-one');
+  await runtime.wait();
+  await handoff.notifications();
+  assert.deepEqual(events.map(event => event.stage), ['dispatched', 'reported']);
+  handoff.inContext(); handoff.inContext();
+  const report = (await store.read()).reports[0];
+  await runtime.acknowledge([report.id]); await runtime.acknowledge([report.id]);
+  await runtime.dispatch(member.id, 'Inspect', policy, 'request-one');
+  assert.equal(calls, 1);
+  assert.deepEqual(events.map(event => event.stage), ['dispatched', 'reported', 'injected', 'acknowledged']);
+  assert.ok(events.every(event => event.memberId === member.id && event.runId === run.id));
+  assert.ok(events.slice(1).every(event => event.reportId === report.id));
+  handoff.close();
+  await runtime.review(report.id, 'accepted', 'Verified');
+  assert.equal(events.length, 4);
+});
 
 test('收尾等待真实回报，一轮只投递一次，未确认回报下轮仍能接收', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'team-handoff-'));

@@ -5,6 +5,7 @@ import type { TokenUsage } from '../../../engine/shared/llm-bridge.js';
 import type { FrameworkErrorKind } from '../../../engine/shared/framework-error.js';
 import type { CompactionProgress } from '../../../engine/shared/compaction/index.js';
 import type { MonsoonContextMarker } from '../application/context-port.js';
+import type { ModelRequestUsageEvent } from '../../../engine/shared/model-request-usage.js';
 
 export interface MonsoonTurnSpec {
   dataDir: string;
@@ -42,7 +43,21 @@ export type MonsoonInputEvent =
   | { type: 'input-closed'; runId: string; retained: MonsoonInputReceipt[] }
   | { type: 'input-skipped'; tool: string; reason: string };
 
-export type MonsoonEvent = MonsoonInputEvent | CompactionProgress
+export interface MonsoonTeamActivityEvent {
+  type: 'team-activity';
+  id: string;
+  stage: 'dispatched' | 'reported' | 'injected' | 'acknowledged' | 'reviewed';
+  timestamp: string;
+  memberId: string;
+  memberName?: string;
+  runId?: string;
+  reportId?: string;
+  outcome?: string;
+  decision?: string;
+  preview?: string;
+}
+
+export type MonsoonEvent = MonsoonInputEvent | CompactionProgress | MonsoonTeamActivityEvent | ModelRequestUsageEvent
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
   | { type: 'notice'; message: string }

@@ -24,6 +24,7 @@ import { acceptsPanelEvent } from '../stream/panel-identity';
 import { latestProviderUsage, updateProviderUsage, type ProviderUsageDisplay, type ProviderUsageDisplayEvent } from '../token-usage';
 import { compactionActivity, reduceCompactionActivity, type CompactionActivity } from '../../../components/common/compaction-activity';
 import { historyCommand, pendingCompaction } from '../compaction-events';
+import { updateMeetingInputUsage, type MeetingInputUsage } from './meeting-input-usage';
 
 interface MeetingPanelProps {
   nodeId: string;
@@ -55,6 +56,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
   const [status, setStatus] = useState<MeetingStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [usageDisplay, setUsageDisplay] = useState<ProviderUsageDisplay>();
+  const [inputUsage, setInputUsage] = useState<MeetingInputUsage>();
   const usageScope = JSON.stringify([workflowId, executionId, nodeId]);
   const usageScopeRef = useRef(usageScope);
   usageScopeRef.current = usageScope;
@@ -66,6 +68,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
   const restoreUsage = useCallback((value: Pick<MeetingStatus, 'busy' | 'tokenUsage'>) => {
     if (value.busy) updateUsage({ type: 'start', operation: 'public' });
     updateUsage({ type: 'usage', usage: latestProviderUsage(value.tokenUsage) });
+    updateUsage({ type: 'model-usage', progress: value.tokenUsage?.modelUsage });
     if (!value.busy) updateUsage({ type: 'done', operation: 'public' });
   }, [updateUsage]);
   const usageVersionRef = useRef(0);
@@ -197,11 +200,18 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
 
   // 事件处理中枢：所有会议室事件通过此函数路由
   const handleEvent = useCallback((ev: MeetingBroadcastEvent) => {
+    if (['round-done', 'chair-done', 'history-updated', 'compact-done', 'done'].includes(ev.type)) {
+      const version = usageVersionRef.current;
+      void getStatus(nodeId, { workflowId, executionId }).then(value => {
+        if (!acceptsStatus(value) || version !== usageVersionRef.current) return;
+        setStatus(previous => previous ? { ...previous, currentInput: value.currentInput } : value);
+      }).catch(() => {});
+    }
     switch (ev.type) {
       case 'connected': {
         usageVersionRef.current++;
         roundIdRef.current = ev.runId ?? null;
-        setStatus({
+        setStatus(previous => ({
           nodeId, workflowId,
           executionId,
           round: ev.round,
@@ -214,7 +224,8 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
           publicMessages: ev.messages as MeetingMessage[],
           chairMessages: ev.chairMessages as MeetingStatus['chairMessages'],
           tokenUsage: ev.tokenUsage,
-        });
+          currentInput: previous && acceptsStatus(previous) ? previous.currentInput : undefined,
+        }));
         restoreUsage({ busy: ev.messages.some(message => message.streaming), tokenUsage: ev.tokenUsage });
         setCompactionNotice(ev.compactionNotice ?? null);
         restoreCompactions(ev.compactions, compactionVersionRef.current);
@@ -285,6 +296,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
         handleStreamEvent(ev);
         break;
       case 'agent-start':
+      case 'model-request':
       case 'usage':
       case 'token':
       case 'reasoning':
@@ -370,6 +382,11 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
   const handleStreamEvent = useCallback((ev: MeetingBroadcastEvent) => {
     const stream = publicStreamRef.current;
     switch (ev.type) {
+      case 'model-request':
+        usageVersionRef.current++;
+        updateUsage(ev);
+        setInputUsage(previous => updateMeetingInputUsage(previous, usageScope, ev));
+        break;
       case 'usage':
         usageVersionRef.current++;
         updateUsage({ type: 'usage', usage: ev.usage });
@@ -621,7 +638,7 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
       case 'minutes-done':
         break;
     }
-  }, [executionId, flushStreamFrame, nodeId, scheduleStreamFrame, updateLastPublic, updateCompaction, updateUsage]);
+  }, [executionId, flushStreamFrame, nodeId, scheduleStreamFrame, updateLastPublic, updateCompaction, updateUsage, usageScope]);
 
   const phase = status?.phase ?? 'opening';
 
@@ -858,6 +875,9 @@ export function MeetingPanel({ workflowId, executionId, nodeId, nodeLabel, onClo
       setActiveView={setActiveView}
       status={status}
       latestUsage={latestUsage}
+      currentInput={status && acceptsStatus(status) ? status.currentInput : undefined}
+      inputModelUsage={inputUsage?.scope === usageScope ? inputUsage[activeView] : undefined}
+      modelUsage={usageDisplay?.scope === usageScope ? usageDisplay.modelUsage : undefined}
       publicMsgs={publicMsgs}
       chairMsgs={chairMsgs}
       publicInput={publicInput}

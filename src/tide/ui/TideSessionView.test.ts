@@ -42,10 +42,22 @@ test('潮汐会话保留实际消息、独立会话身份及真实用量，不�
   assert.match(html, /研究员/);
   assert.match(html, /2 条消息 · model-test/);
   assert.match(html, /1,200 tokens/);
+  assert.match(html, /上次请求的实测输入/);
   assert.match(html, /执行中/);
   assert.match(html, /汇总本日资料/);
   assert.match(html, /<strong>已完成汇总<\/strong>/);
   assert.doesNotMatch(html, /PRIVATE_PROMPT|PRIVATE_SYSTEM_MESSAGE/);
+});
+
+test('当前输入预估优先于旧账单，空活跃会话不把历史账单当成当前上下文', () => {
+  const previous = { promptTokens: 50000, completionTokens: 60, totalTokens: 50060 };
+  const html = render({ ...session([{ id: 'user', role: 'user', content: '保留的最近内容' }]),
+    tokenUsage: previous, currentInput: { tokens: 820, images: 0, model: 'model-test',
+      estimatedAt: '2026-10-24T00:00:00Z', basis: 'compiled' } });
+  assert.match(html, /820 tokens/);
+  assert.doesNotMatch(html, /50,000 tokens/);
+  const empty = render({ ...session([]), tokenUsage: previous });
+  assert.doesNotMatch(empty, /50,000 tokens/);
 });
 
 test('工具参数和结果保留完整内容，使用可展开的记录且区分失败结果', () => {

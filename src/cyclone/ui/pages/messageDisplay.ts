@@ -29,6 +29,7 @@ export interface DisplayMessage {
   role: 'user' | 'assistant' | 'system';
   kind?: 'dispatch-receipt' | 'supervisor-information';
   dispatchId?: string;
+  inputMessageId?: string;
   sourceTitle?: string;
   /** 文本气泡内容（已剥工具调用标签） */
   content: string;
@@ -47,6 +48,7 @@ interface StoredMsg {
   toolImages?: ToolImageRef[];
   kind?: 'dispatch-receipt';
   dispatchId?: string;
+  inputMessageId?: string;
   reasoning?: string;
   supervisorInboxId?: string;
   supervisorSourceTitle?: string;
@@ -193,7 +195,9 @@ export function contextToDisplay(stored: StoredMsg[], askFallback = '需要你�
         reasoning: m.reasoning, blocks: blocks.length ? blocks : undefined,
       });
     } else if (m.role === 'user') {
-      out.push({ id: `d${seq++}`, sourceIndex, role: 'user', content: m.content });
+      out.push({ id: `d${seq++}`, sourceIndex, role: 'user', content: m.content,
+        ...(m.inputMessageId ? { inputMessageId: m.inputMessageId } : {}),
+        ...(m.dispatchId ? { dispatchId: m.dispatchId } : {}) });
     }
   }
   return out;

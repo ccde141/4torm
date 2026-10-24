@@ -10,6 +10,10 @@
 
 import type { ContextMessage, LLMOptions, ProviderReasoningEnvelope, ToolImageRef } from '../types';
 import type { TokenUsage } from '../llm-bridge';
+import type { ModelRequestUsageEvent } from '../model-request-usage.js';
+import { callPreparedModel, ModelCallTimeout } from './model-call.js';
+import { MAX_TURNS, MAX_CONTINUATIONS, MAX_NUDGES, HEARTBEAT_INTERVAL_MS } from './limits.js';
+export { MAX_TURNS, MAX_CONTINUATIONS, MAX_NUDGES, LLM_TIMEOUT_MS, HEARTBEAT_INTERVAL_MS } from './limits.js';
 import type { ToolPreparationProgress } from '../tool-progress';
 import { salvageToolArgs } from '../tool-bridge';
 import type { ToolArguments } from '../tool-arguments.js';
@@ -31,17 +35,6 @@ export { SuspendSignal } from '../suspend-signal.js';
 
 // ── 共享常量（native + text 双路径共用） ──────────────────────────
 
-/** 最大工具循环轮次 */
-export const MAX_TURNS = 200;
-/** 单次 LLM 输出被截断时最多续写次数 */
-export const MAX_CONTINUATIONS = 5;
-/** 无 action 无 answer 时强制再问的最大次数 */
-export const MAX_NUDGES = 10;
-/** LLM 调用硬超时（毫秒） */
-export const LLM_TIMEOUT_MS = 3_600_000;
-/** 心跳推送间隔（毫秒） */
-export const HEARTBEAT_INTERVAL_MS = 5_000;
-
 // ── 类型 ──────────────────────────────────────────────────────────
 
 export interface ParsedAction {
@@ -61,6 +54,9 @@ export interface ToolCallRecord {
 
 /** LLM 调用抽象——调用方注入具体实现 */
 export interface LLMCaller {
+  prepare?(messages: ContextMessage[], options?: LLMOptions, signal?: AbortSignal,
+    tools?: import('../tool-defs-loader').ToolDef[]): Promise<void>;
+  recover?(error: unknown, messages: ContextMessage[], signal?: AbortSignal): Promise<boolean>;
   call(
     messages: ContextMessage[],
     options?: LLMOptions,
@@ -92,7 +88,7 @@ export interface ToolCaller {
 }
 
 /** ReAct 循环事件（流式推送用） */
-export type ReActStreamEvent =
+export type ReActStreamEvent = ModelRequestUsageEvent
   | { type: 'token'; chunk: string }
   | { type: 'reasoning'; chunk: string }
   | { type: 'usage'; usage: TokenUsage | null }
@@ -249,33 +245,14 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     }
 
     applyPendingInput(params);
-    // ── LLM 调用（带 tools 参数，激活原生）+ 心跳/超时 ──
-    const llmStart = Date.now();
-    const abortCtrl = new AbortController();
-    let timedOut = false;
-    const llmTimer = setTimeout(() => { timedOut = true; abortCtrl.abort(); }, LLM_TIMEOUT_MS);
-    const onAbort = () => abortCtrl.abort();
-    signal?.addEventListener('abort', onAbort, { once: true });
-
-    let tokenReceived = false;
     let streamedContent = '';
-    const hbInterval = onEvent
-      ? setInterval(() => {
-          if (!tokenReceived) onEvent({ type: 'heartbeat', phase: 'llm-waiting', elapsed: Date.now() - llmStart });
-        }, HEARTBEAT_INTERVAL_MS)
-      : null;
     const onChunk = onEvent
-      ? (chunk: string) => { streamedContent += chunk; tokenReceived = true; onEvent({ type: 'token', chunk }); }
+      ? (chunk: string) => { streamedContent += chunk; onEvent({ type: 'token', chunk }); }
       : undefined;
     const onReasoning = onEvent
-      ? (chunk: string) => { tokenReceived = true; onEvent({ type: 'reasoning', chunk }); }
-      : undefined;
+      ? (chunk: string) => onEvent({ type: 'reasoning', chunk }) : undefined;
     const onToolProgress = onEvent
-      ? (progress: ToolPreparationProgress) => {
-          tokenReceived = true;
-          onEvent({ type: 'tool-progress', ...progress });
-        }
-      : undefined;
+      ? (progress: ToolPreparationProgress) => onEvent({ type: 'tool-progress', ...progress }) : undefined;
 
     let content: string;
     let reasoningContent: string | undefined;
@@ -283,7 +260,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     let finishReason: 'stop' | 'length' | 'tool_calls' | null;
     let toolCalls: import('../types').NativeToolCall[] | undefined;
     try {
-      const result = await llm.call(msgs, undefined, onChunk, abortCtrl.signal, toolDefs, onReasoning, onToolProgress);
+      const result = await callPreparedModel(llm, msgs, signal, { onChunk, onReasoning, onToolProgress, onEvent }, toolDefs);
       content = result.content;
       reasoningContent = result.reasoningContent;
       reasoningEnvelope = result.reasoningEnvelope;
@@ -301,7 +278,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
           usage: latestUsage, termination: abortedTermination(),
         };
       }
-      const fallback = timedOut
+      const fallback = e instanceof ModelCallTimeout
         ? reactErrorData('MODEL_TIMEOUT', 'timeout', '模型响应超时', 'react.native.model')
         : reactErrorData('MODEL_REQUEST_FAILED', 'provider', '模型请求失败', 'react.native.model');
       const failure = reactError(e, fallback);
@@ -310,10 +287,6 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
         content: partial || `[错误] ${failure.message}`, rawContent: partial, toolCalls: allToolCalls, turns: turn,
         usage: latestUsage, termination: failedTermination(failure),
       };
-    } finally {
-      if (hbInterval) clearInterval(hbInterval);
-      clearTimeout(llmTimer);
-      signal?.removeEventListener('abort', onAbort);
     }
 
     if (signal?.aborted) {

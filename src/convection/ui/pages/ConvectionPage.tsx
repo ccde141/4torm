@@ -15,7 +15,6 @@ import { compactionFeedbackEvent, compactionFeedbackMessage } from '../../../com
 import { CompactionStatus } from '../../../components/common/CompactionStatus';
 import { compactionActivity, reduceCompactionActivity, type CompactionActivity } from '../../../components/common/compaction-activity';
 import { renderTextWithCode } from '../../../engine/markdown';
-import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import QueuedChips, { MAX_QUEUE } from '../../../components/chat/QueuedChips';
 import { formatTimestamp } from '../../../utils/time';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
@@ -24,8 +23,9 @@ import { getConvectionCreateError } from './convection-guards';
 import { createConvectionCreateGate } from './convection-create-gate';
 import { shouldLoadConvectionSession } from './convection-session-guards';
 import { ConvectionHttpError, streamConvectionSSE } from './convection-sse';
-import { convectionReasoningProps, resolveConvectionAgent, restoreConvectionMessage } from './convection-message-map';
+import { resolveConvectionAgent, restoreConvectionMessage } from './convection-message-map';
 import ConvectionTurnCard, { type ConvectionToolStep, type ConvectionTurnMessage } from './ConvectionTurnCard';
+import ConvectionChairMessage from './ConvectionChairMessage';
 import {
   getConvectionComposerMode,
   normalizeConvectionRound,
@@ -57,7 +57,7 @@ import type { Agent } from '../../../types';
 import AgentAvatar from '../../../components/agents/AgentAvatar';
 import { useLocale } from '../../../i18n/LocaleContext';
 import { useConvectionConferenceFeed, type ConvectionRoomSummary } from './useConvectionConferenceFeed';
-import { applyConvectionUsage, beginConvectionUsage, formatConvectionUsage,
+import { applyConvectionModelRequest, applyConvectionUsage, beginConvectionUsage, formatConvectionUsage,
   mergeConvectionSessions, restoreConvectionUsage } from './convection-token-usage';
 import { restoreConvectionCompaction } from './convection-external-events';
 
@@ -597,6 +597,8 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
           setActiveRunId(typeof ev.runId === 'string' ? ev.runId : null);
         } else if (ev.type === 'usage') {
           setSessions(current => applyConvectionUsage(current, activeId, 'public', ev.usage));
+        } else if (ev.type === 'model-request') {
+          setSessions(current => applyConvectionModelRequest(current, activeId, 'public', ev.request));
         } else if (ev.type === 'agent-start') {
           currentLabel = ev.label;
           streamContent = '';
@@ -766,6 +768,8 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
           setActiveRunId(typeof ev.runId === 'string' ? ev.runId : null);
         } else if (ev.type === 'usage') {
           setSessions(current => applyConvectionUsage(current, activeId, 'chair', ev.usage));
+        } else if (ev.type === 'model-request') {
+          setSessions(current => applyConvectionModelRequest(current, activeId, 'chair', ev.request));
         } else if (ev.type === 'heartbeat') {
           const info: WaitingInfo = { phase: ev.phase, elapsed: ev.elapsed };
           setCMsgs(p => p.map((m, i) => i === p.length - 1 && (m as any).streaming ? { ...m, waitingInfo: info } : m));
@@ -844,7 +848,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         </div>
         <div className="conv__sessions">
           {sessions.map(s => {
-            const token = formatConvectionUsage(s.publicLatestTokenUsage, s.tokenEstimate, locale);
+            const token = formatConvectionUsage(s.publicLatestTokenUsage, s.tokenEstimate, locale, s.publicModelUsage, s.publicCurrentInput, 'public');
             return (
             <div key={s.id} className={`conv__session-card${activeId === s.id ? ' conv__session-card--active' : ''}`}>
               <button type="button" onClick={() => loadSession(s.id)} className="conv__session-card-main">
@@ -881,7 +885,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
                 <span className="conv__workspace-btn-icon" aria-hidden="true">↗</span>
                 <span>{translate('convection.page.workspace')}</span>
               </button>
-              <span className="conv__header-tokens" title={formatConvectionUsage(activeSession.publicLatestTokenUsage, activeSession.tokenEstimate, locale).title}>{formatConvectionUsage(activeSession.publicLatestTokenUsage, activeSession.tokenEstimate, locale).label}</span>
+              <span className="conv__header-tokens" title={formatConvectionUsage(activeSession.publicLatestTokenUsage, activeSession.tokenEstimate, locale, activeSession.publicModelUsage, activeSession.publicCurrentInput, 'public').title}>{formatConvectionUsage(activeSession.publicLatestTokenUsage, activeSession.tokenEstimate, locale, activeSession.publicModelUsage, activeSession.publicCurrentInput, 'public').label}</span>
             </div>
             {/* Config bar */}
             <div className="conv__config">
@@ -941,7 +945,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
                   );
                 }
                 // 对流拥有自己的回合实现；与气旋只统一视觉契约，不建立跨功能依赖。
-                return <ConvectionTurnCard key={i} message={publicCompaction?.phase === 'running'
+                return <ConvectionTurnCard key={`${activeId}-${i}`} message={publicCompaction?.phase === 'running'
                   ? { ...m, waitingInfo: undefined } : m} agent={resolveConvectionAgent(agents, m.speaker, m.agentId)} messageId={`conv-${i}`}
                   mediaScope={activeId ? { feature: 'convection', sessionId: activeId } : undefined}
                   onEdit={() => handleStartEdit(i, m.content)} onDelete={() => handleDeleteMsg(i)} />;
@@ -997,31 +1001,16 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         <div aria-hidden={!chairOpen} className="conv__chair-panel" style={{ ...chairPanelStyle, opacity: chairOpen ? 1 : 0, transform: chairOpen ? 'translateX(0) scale(1)' : 'translateX(30px) scale(0.985)', pointerEvents: chairOpen ? 'auto' : 'none' }}>
         <div className="conv__chair-header">
           <span className="conv__chair-name">{translate('convection.page.chairPrivate')}</span>
-          {activeSession && <span title={formatConvectionUsage(activeSession.chairTokenUsage, 0, locale).title}>{formatConvectionUsage(activeSession.chairTokenUsage, 0, locale).label}</span>}
+          {activeSession && <span title={formatConvectionUsage(activeSession.chairTokenUsage, 0, locale, activeSession.chairModelUsage, activeSession.chairCurrentInput).title}>{formatConvectionUsage(activeSession.chairTokenUsage, 0, locale, activeSession.chairModelUsage, activeSession.chairCurrentInput).label}</span>}
           <div style={{ flex: 1 }} />
           <button onClick={toggleChair} title={translate('convection.page.collapse')} aria-label={translate('convection.page.collapseChair')} style={chairCollapseBtnStyle}>×</button>
         </div>
         <div ref={cRef} className="conv__chair-messages">
           <CompactionNotice message={chairNotice} />
           {cMsgs.map((m, i) => m.role === 'system' && isCompactionHistory(m.content)
-            ? <CompactionHistory key={i} content={m.content} /> : (
-            <div key={i} className={`conv__chair-msg conv__chair-msg--${m.role === 'user' ? 'user' : 'assistant'}`}>
-              <div className={`conv__chair-bubble conv__chair-bubble--${m.role === 'user' ? 'user' : 'assistant'}`}>
-                {convectionReasoningProps(m.reasoning, !!m.streaming) && (
-                  <ReasoningBlock {...convectionReasoningProps(m.reasoning, !!m.streaming)!} />
-                )}
-                {m.waitingInfo && m.streaming && chairCompaction?.phase !== 'running' && (
-                  <div className="conv__waiting-hint">
-                    {translate('convection.turn.waitingModel')}
-                    <span className="conv__waiting-elapsed">{Math.round(m.waitingInfo.elapsed / 1000)}s</span>
-                    <span className="thinking-card__tool-spinner" />
-                  </div>
-                )}
-                {renderTextWithCode(m.content, `chair-${i}`)}{m.streaming && !m.waitingInfo && chairCompaction?.phase !== 'running' ? '▍' : ''}
-                {m.timestamp && <div className="chat__timestamp" title={formatTimestamp(m.timestamp, true)}>{formatTimestamp(m.timestamp)}</div>}
-              </div>
-            </div>
-          ))}
+            ? <CompactionHistory key={`${activeId}-${i}`} content={m.content} />
+            : <ConvectionChairMessage key={`${activeId}-${i}`} message={m} messageId={`chair-${i}`}
+              suppressWaiting={chairCompaction?.phase === 'running'} />)}
         </div>
         <div className="chat__input-area">
           <CompactionStatus activity={chairCompaction} />

@@ -6,6 +6,41 @@ import test from 'node:test';
 import { createDispatch, loadDispatch, updateDispatch } from './dispatch-store.js';
 import { executeDispatchRecord } from './dispatch-runtime.js';
 import { withdrawExpiredDispatch } from './dispatch-admission.js';
+import { addSeat, loadSeat } from './seat-store.js';
+import { createWorkshop } from './workshop-store.js';
+
+test('真实派发执行只保存一份带派发身份的入站消息，重复领取不再次运行', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-dispatch-input-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await fs.mkdir(path.join(dataDir, 'agents'), { recursive: true });
+  await fs.writeFile(path.join(dataDir, 'agents', 'registry.json'), JSON.stringify({
+    agent: { id: 'agent', model: 'test:model', config: { tools: [], toolMode: 'selected', skills: [] } },
+  }));
+  await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [{
+    id: 'test', baseUrl: 'https://example.test/v1', models: ['model'],
+    providerType: 'openai-compatible', transport: 'openai-chat-completions',
+  }] }));
+  const workshop = await createWorkshop(dataDir);
+  const target = await addSeat(dataDir, workshop.id, { agentId: 'agent', title: '核验' });
+  const item = await createDispatch(dataDir, {
+    workshopId: workshop.id, sourceKind: 'seat', sourceRoomId: '', sourceSeatId: 'seat-source',
+    sourceSeatTitle: '资料', sourceTurnId: 'turn-input', sourceRoundSeq: 0,
+    dispatchOrder: 0, targetSeatId: target.id, targetSeatTitle: target.title, task: '核验相同内容',
+  });
+  let modelCalls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    modelCalls++;
+    return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: '核验完成' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 40, completion_tokens: 4, total_tokens: 44 } })}\n\ndata: [DONE]\n\n`,
+    { headers: { 'Content-Type': 'text/event-stream' } });
+  });
+  assert.equal(await executeDispatchRecord(dataDir, item), 'completed');
+  assert.equal(await executeDispatchRecord(dataDir, item), 'completed');
+  const incoming = (await loadSeat(dataDir, workshop.id, target.id))?.messages.filter(message => message.role === 'user');
+  assert.equal(incoming?.length, 1);
+  assert.equal(incoming?.[0].dispatchId, item.id);
+  assert.equal(modelCalls, 1);
+});
 
 test('后台派发完成后写入回执与三轮决策期限', async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-dispatch-run-'));

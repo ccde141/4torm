@@ -1,3 +1,4 @@
+import { trackModelUsage } from '../shared/track-model-usage.js';
 import { createCompactionCaller, estimateCompactionTokens } from '../shared/compaction/index.js';
 import type { LoadedAgent } from '../shared/agent-loader.js';
 import type { LLMCaller } from '../shared/react/native-loop.js';
@@ -19,7 +20,7 @@ export function createSupervisorCompactionCaller(options: {
     });
     return response;
   } };
-  return createCompactionCaller({ llm: measured, dataDir,
+  const caller = createCompactionCaller({ llm: measured, dataDir,
     area: 'cycloneConversation', kind: 'conversation', model: agent.model,
     prompt: agent.compactionPrompt, protectedPrefixCount: 1,
     scopeKey: `cyclone:${workshopId}:supervisor`,
@@ -46,4 +47,6 @@ export function createSupervisorCompactionCaller(options: {
       onEvent(progress);
     },
   });
+  return trackModelUsage(caller, { get: () => supervisor.modelUsage, set: value => { supervisor.modelUsage = value; },
+    persist: () => mutateSupervisor(dataDir, workshopId, current => { current.modelUsage = supervisor.modelUsage; }) });
 }

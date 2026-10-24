@@ -7,12 +7,14 @@ import { projectMonsoonContext } from './active-context.js';
 import { MonsoonContextPort } from './context-port.js';
 import { acquireMonsoonSessionLease } from '../runtime/session-lease-adapter.js';
 import type { FileMonsoonSessionRepository } from '../infrastructure/session-repository.js';
+import type { ModelRequestUsageEvent } from '../../../engine/shared/model-request-usage.js';
+import { withMonsoonCompactionUsage } from './compaction-usage.js';
 
 export type MonsoonCompactionSummarizer = (input: {
   dataDir: string; model: string; dialogText: string; signal: AbortSignal;
   onChunk: (content: string) => void;
   onOutputLimited?: () => void;
-  prompt?: string; maxOutputTokens?: number; maxContentTokens?: number;
+  prompt?: string; maxOutputTokens?: number; maxContentTokens?: number; maxReasoningTokens?: number;
 }) => Promise<string>;
 
 export interface PreparedMonsoonCompaction {
@@ -20,6 +22,7 @@ export interface PreparedMonsoonCompaction {
   dispose?(): void;
   run(input: { signal: AbortSignal; onChunk: (content: string) => void;
     onNotice?: (notice: CompactionNotice) => void;
+    onModelRequest?: (event: ModelRequestUsageEvent) => void;
     onProgress?: (progress: CompactionProgress) => void | Promise<void> }): Promise<{
     markerId: string; markerIdx: number;
   }>;
@@ -59,10 +62,11 @@ export class MonsoonCompactionService {
     const port = new MonsoonContextPort(this.dataDir);
     const agent = await loadAgent(this.dataDir, input.agentId);
     return { compressedCount: prepared.compressedCount, dispose: release,
-      run: async ({ signal, onChunk, onNotice, onProgress }) => {
+      run: async ({ signal, onChunk, onNotice, onProgress, onModelRequest }) => {
         try {
           let saved = session;
-          const plan = await compactMessages({ dataDir: this.dataDir, area: 'monsoon', model,
+          const plan = await withMonsoonCompactionUsage(this.sessions, { agentId: session.agentId, sessionId: session.id },
+            () => compactMessages({ dataDir: this.dataDir, area: 'monsoon', model,
             kind: 'conversation', prompt: agent?.compactionPrompt, protectedPrefixCount: 0,
             scopeKey: `monsoon:${session.id}`, messages: projectMonsoonContext(session),
             mode: 'full', reason: 'manual', signal, onNotice, onProgress, onSummaryChunk: onChunk,
@@ -71,11 +75,12 @@ export class MonsoonCompactionService {
             summarize: request => this.summarize({ dataDir: this.dataDir, model: request.model,
               dialogText: request.text, prompt: request.prompt, maxOutputTokens: request.maxOutputTokens,
               maxContentTokens: request.maxContentTokens,
+              maxReasoningTokens: request.maxReasoningTokens,
               onOutputLimited: request.onOutputLimited,
               signal, onChunk: request.onChunk ?? (() => {}) }),
             commit: async (commit, commitSignal) => { saved = await port.commit(session.agentId, session.id,
               prepared.expectedRevision, commit, 0, commitSignal); },
-          });
+          }), onModelRequest);
           if (!plan) throw new Error('没有可压缩的对话内容');
           const marker = saved.messages[saved.messages.length - 1]!;
           return { markerId: marker.id, markerIdx: saved.messages.length - 1 };

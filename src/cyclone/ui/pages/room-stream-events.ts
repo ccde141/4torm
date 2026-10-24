@@ -1,3 +1,4 @@
+import { applyModelRequest, type ModelUsageProgress } from '../../../lib/model-usage';
 import type { CompactionActivity } from '../../../components/common/compaction-activity';
 import { reduceCycloneCompaction } from './cyclone-compaction-activity';
 import { formatStreamStatus } from '../../../components/chat/stream-status';
@@ -30,6 +31,7 @@ export interface FeedMsg {
 }
 
 export interface RoomEventState {
+  modelUsage?: ModelUsageProgress;
   roundFeed: FeedMsg[];
   activeSpeaker: string;
   tokenUsage?: CycloneUsage | null;
@@ -44,6 +46,10 @@ export function applyRoomEvent(ev: any, state: RoomEventState, locale: Locale = 
   if (feedback !== undefined) state.compactionNotice = feedback;
   const feed = state.roundFeed;
   switch (ev.type) {
+    case 'model-request':
+      state.modelUsage = applyModelRequest(state.modelUsage, ev.request);
+      if (ev.request.purpose === 'conversation' && ev.request.usage) state.lastKnownTokenUsage = ev.request.usage;
+      break;
     case 'usage':
       state.tokenUsage = ev.usage ?? null;
       if (ev.usage) state.lastKnownTokenUsage = ev.usage;

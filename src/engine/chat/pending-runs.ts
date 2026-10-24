@@ -73,7 +73,7 @@ function closeRecoveredRun(messages: ChatMessage[], run: PendingMonsoonRun, fail
 /** A journal starts at the beginning of a run, never at the saved snapshot's tail. */
 function replayPlaceholder(message: ChatMessage, run: PendingMonsoonRun): ChatMessage {
   const result = { ...message, content: '' };
-  const fields: Array<keyof ChatMessage> = ['reasoningContent', 'reasoningBreaks', 'toolSteps',
+  const fields: Array<keyof ChatMessage> = ['reasoningContent', 'reasoningBreaks', 'toolSteps', 'activitySequence',
     'native', 'streamStopped', 'inputSkipped', 'compactionNotice',
     'streamingPhase', 'streamingStatus', 'streamingTool', 'streamingArgumentChars', 'phaseElapsed'];
   if (run.events.some(event => event.type === 'input-context' || event.type === 'context-compacted'
@@ -182,6 +182,14 @@ function retainSavedPrefix(replayed: ChatMessage, original: ChatMessage, retainN
     result.toolSteps = savedSteps.map((step, index) => replayedSteps[index]?.result === undefined
       ? step : { ...step, ...replayedSteps[index] });
   }
+  const sequence = result.activitySequence ?? [];
+  const savedSequence = original.activitySequence ?? [];
+  if (savedSequence.length >= sequence.length && sequence.every((item, index) => {
+    const saved = savedSequence[index];
+    if (item.kind === 'text' && saved?.kind === 'text') return index === sequence.length - 1
+      ? saved.content.startsWith(item.content) : saved.content === item.content;
+    return JSON.stringify(item) === JSON.stringify(saved);
+  })) result.activitySequence = original.activitySequence;
   if (retainNative && original.nativeContext && original.contextExact && (!replayed.nativeContext
     || isContextPrefix(replayed.nativeContext, original.nativeContext))) {
     result.nativeContext = original.nativeContext;

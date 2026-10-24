@@ -29,6 +29,7 @@ interface RoomRunner {
   /** 当前正在说话的工位标签；'' = 无（用于把 token/tool 定位到对应消息） */
   activeSpeaker: string;
   tokenUsage: CycloneUsage | null;
+  modelUsage?: import('../../../lib/model-usage').ModelUsageProgress;
   lastKnownTokenUsage?: CycloneUsage;
   compactionNotice?: string | null;
   compaction?: CompactionActivity | null;

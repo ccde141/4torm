@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ContextMessage } from '../../shared/types.js';
 import { mutateTeam, readTeam } from './storage.js';
 import { enforcePermissions, validateContext, validateDefinition } from './validation.js';
-import { teamError, type MemberDefinition, type TeamMember, type TeamOutcome, type TeamOwner,
+import { teamError, type MemberDefinition, type MemberReport, type TeamMember, type TeamOutcome, type TeamOwner,
   type TeamPermissions, type TeamState } from './types.js';
 
 const processIdentity = randomUUID();
@@ -110,13 +110,14 @@ export class TeamStore {
     });
   }
 
-  async finish(memberId: string, runId: string, outcome: TeamOutcome, content: string): Promise<void> {
+  async finish(memberId: string, runId: string, outcome: TeamOutcome, content: string): Promise<MemberReport> {
     if (!['completed', 'failed', 'aborted', 'crashed'].includes(outcome) || typeof content !== 'string') {
       throw teamError('TEAM_INVALID_OUTCOME');
     }
-    await mutateTeam(this.dataDir, this.owner, state => {
+    return mutateTeam(this.dataDir, this.owner, state => {
       const member = runningMember(state, memberId, runId, this.runtimeId);
       report(state, member, outcome, content);
+      return state.reports.at(-1)!;
     });
   }
 
@@ -128,19 +129,21 @@ export class TeamStore {
     });
   }
 
-  async acknowledge(reportIds: string[]): Promise<void> {
+  async acknowledge(reportIds: string[]): Promise<MemberReport[]> {
     const ids = [...reportIds];
-    await mutateTeam(this.dataDir, this.owner, state => {
+    return mutateTeam(this.dataDir, this.owner, state => {
       for (const id of ids) if (!state.reports.some(item => item.id === id)) throw teamError('TEAM_REPORT_NOT_FOUND');
-      for (const item of state.reports) if (ids.includes(item.id)) item.acknowledged = true;
+      const changed = state.reports.filter(item => ids.includes(item.id) && !item.acknowledged);
+      for (const item of changed) item.acknowledged = true;
+      return changed;
     });
   }
 
-  async review(reportId: string, decision: string, reason: string): Promise<void> {
+  async review(reportId: string, decision: string, reason: string): Promise<MemberReport | undefined> {
     if (!['accepted', 'continue', 'blocked'].includes(decision) || typeof reason !== 'string' || !reason.trim()) {
       throw teamError('TEAM_INVALID_REVIEW');
     }
-    await mutateTeam(this.dataDir, this.owner, state => {
+    return mutateTeam(this.dataDir, this.owner, state => {
       const item = state.reports.find(report => report.id === reportId);
       if (!item) throw teamError('TEAM_REPORT_NOT_FOUND');
       if (item.review) {
@@ -151,6 +154,7 @@ export class TeamStore {
       else if (decision === 'continue') item.review = { decision, reason };
       else item.review = { decision: 'blocked', reason };
       item.acknowledged = true;
+      return item;
     });
   }
 

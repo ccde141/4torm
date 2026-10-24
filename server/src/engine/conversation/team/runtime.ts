@@ -1,6 +1,7 @@
 import type { ContextMessage } from '../../shared/types.js';
 import { TeamStore } from './store.js';
 import type { TeamMember, TeamPermissions } from './types.js';
+import { teamActivity, type TeamActivityEvent } from './activity.js';
 
 export type MemberExecutor = (member: TeamMember, task: string,
   checkpoint: (context: ContextMessage[]) => Promise<void>, signal: AbortSignal) => Promise<string>;
@@ -10,6 +11,7 @@ export class TeamRuntime {
   private readonly active = new Map<string, { controller: AbortController; done: Promise<void> }>();
   private readonly failures: unknown[] = [];
   private stopVersion = 0;
+  private readonly listeners = new Set<(event: TeamActivityEvent) => void>();
   constructor(readonly store: TeamStore, private execute: MemberExecutor) {}
   configure(execute: MemberExecutor): void { this.execute = execute; }
 
@@ -17,6 +19,7 @@ export class TeamRuntime {
     const version = this.stopVersion;
     const run = await this.store.start(memberId, task, policy, requestId);
     if (run.replayed) return run;
+    this.publish(teamActivity('dispatched', { memberId, runId: run.id, preview: task }));
     this.launch(memberId, run.id, task, version);
     return run;
   }
@@ -25,6 +28,8 @@ export class TeamRuntime {
     const version = this.stopVersion;
     const run = await this.store.createAndStart(definition, task, policy, requestId);
     if (run.replayed) return run;
+    this.publish(teamActivity('dispatched', { memberId: run.memberId, runId: run.id, preview: task,
+      memberName: typeof definition === 'object' && definition && 'name' in definition ? String(definition.name) : undefined }));
     this.launch(run.memberId, run.id, task, version);
     return run;
   }
@@ -51,7 +56,33 @@ export class TeamRuntime {
       outcome = signal.aborted ? 'aborted' : 'failed';
       content = error instanceof Error ? error.message : String(error);
     }
-    await this.store.finish(memberId, runId, outcome, content);
+    const report = await this.store.finish(memberId, runId, outcome, content);
+    this.publish(teamActivity('reported', { memberId, runId, reportId: report.id, outcome, preview: content }));
+  }
+
+  subscribe(listener: (event: TeamActivityEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  async acknowledge(ids: string[]): Promise<void> {
+    const reports = await this.store.acknowledge(ids);
+    for (const report of reports) this.publish(teamActivity('acknowledged', {
+      memberId: report.memberId, runId: report.runId, reportId: report.id,
+    }));
+  }
+
+  async review(id: string, decision: string, reason: string): Promise<void> {
+    const report = await this.store.review(id, decision, reason);
+    if (report) this.publish(teamActivity('reviewed', { memberId: report.memberId,
+      runId: report.runId, reportId: report.id, decision, preview: reason }));
+  }
+
+  private publish(event: TeamActivityEvent): void {
+    for (const listener of this.listeners) {
+      try { listener(event); }
+      catch (error) { console.error('[conversation.team] Activity delivery failed', error); }
+    }
   }
 
   stop(): void {

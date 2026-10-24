@@ -66,6 +66,11 @@ for (const native of [true, false]) test(`node retains exact tool evidence, medi
   assert.deepEqual(messages.flatMap(message => message.toolImages ?? []), [image]);
   const persisted = JSON.parse(await fs.readFile(path.join(runner.getDataDir(), 'node', 'messages.json'), 'utf8'));
   assert.deepEqual(persisted, messages);
+  const usage = JSON.parse(await fs.readFile(path.join(runner.getDataDir(), 'node', 'usage.json'), 'utf8'));
+  assert.equal(usage.modelUsage.calls, 3);
+  assert.equal(usage.modelUsage.total.totalTokens, 0);
+  assert.equal(usage.modelUsage.complete, false);
+  assert.ok(usage.modelUsage.latest.estimatedInputTokens > 0);
   if (native) {
     const next = JSON.parse(requests[2]);
     assert.equal(next.messages.filter((message: { role: string }) => message.role === 'tool').length, 1);

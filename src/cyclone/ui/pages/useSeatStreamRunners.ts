@@ -260,6 +260,7 @@ export function useSeatStreamRunners(onSeatFinished: (seatId: string) => void, l
             if (ev.type === 'execution-start') {
               runner.operationId = ev.operationId;
               runner.runId = ev.runId;
+              if (runner.pendingUser?.role === 'user') runner.pendingUser.inputMessageId = ev.runId;
               if (runner.abortRequested) requestAbort(seatId, runner);
             }
             if (ev.type === 'error') runner.outcome = 'failed';

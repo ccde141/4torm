@@ -48,9 +48,9 @@ test('compaction route streams progress and commits through the revisioned repos
   assert.match(response.body, /"type":"done"/);
   const events = response.body.split('\n').filter(line => line.startsWith('data:'))
     .map(line => JSON.parse(line.slice(5).trim()));
-  assert.deepEqual(events.map(event => event.type),
+  assert.deepEqual(events.filter(event => event.type !== 'compact-start' || !event.message).map(event => event.type),
     ['start', 'compact-start', 'token', 'token', 'compact-done', 'done']);
-  assert.equal(events[1].id, events[4].id);
+  assert.equal(events[1].id, events.find(event => event.type === 'compact-done').id);
   const saved = await sessions.get('agent-a', 'session-a');
   assert.equal(saved?.messages[8]?.content, 'summary');
   assert.equal(saved?.revision, 2);
@@ -73,6 +73,7 @@ test('manual lifecycle publishes completion after commit and preserves originals
   const prepared = await service.prepare({ agentId: original.agentId, sessionId: original.id });
   await prepared.run({ signal: new AbortController().signal, onChunk: () => {},
     onProgress: async progress => {
+      if (progress.message && progress.type === 'compact-start') return;
       order.push(progress.type);
       const stored = (await sessions.get(original.agentId, original.id))!;
       observed.push({ type: progress.type, revision: stored.revision, content: stored.messages.at(-1)?.content });
@@ -91,8 +92,8 @@ test('manual lifecycle publishes completion after commit and preserves originals
   const progress: CompactionProgress[] = [];
   await assert.rejects(pending.run({ signal: abort.signal, onChunk: () => {},
     onProgress: event => { progress.push(event); } }), { name: 'AbortError' });
-  assert.deepEqual(progress.map(event => event.type), ['compact-start', 'compact-failed']);
-  assert.equal(progress[1].aborted, true);
+  assert.deepEqual(progress.filter(event => event.type !== 'compact-start' || !event.message).map(event => event.type), ['compact-start', 'compact-failed']);
+  assert.equal(progress.at(-1)!.aborted, true);
   assert.deepEqual(await sessions.get(original.agentId, original.id), beforeAbort);
   const retry = await interrupted.prepare({ agentId: original.agentId, sessionId: original.id });
   retry.dispose?.();
@@ -108,7 +109,7 @@ async function captureStreamingSummaryProvider(dataDir: string, content = '海�
     response.setHeader('content-type', 'text/event-stream');
     response.end(`data: ${JSON.stringify({ choices: [{
       delta: { content }, finish_reason: finishReason,
-    }] })}\n\ndata: [DONE]\n\n`);
+    }], usage: { prompt_tokens: 123, completion_tokens: 4, total_tokens: 127 } })}\n\ndata: [DONE]\n\n`);
   });
   await new Promise<void>(resolve => provider.listen(0, '127.0.0.1', resolve));
   const address = provider.address();
@@ -131,7 +132,7 @@ test('Monsoon streaming summarizer preserves the same quoted historical source b
   const chunks: string[] = [];
   const summary = await summarizeMonsoonCompaction({ dataDir, model: 'p:kimi-k2.7-code',
     dialogText, signal: new AbortController().signal, onChunk: chunk => chunks.push(chunk),
-    maxOutputTokens: 52_000 });
+    maxOutputTokens: 8_192 });
   assert.equal(summary, '海桥 Q72；索引未完成。');
   assert.equal(chunks.join(''), summary);
   assert.equal(provider.received.length, 1);
@@ -145,10 +146,10 @@ test('Monsoon streaming summarizer preserves the same quoted historical source b
   assert.match(source.slice(end), /现在的任务.*压缩/);
   assert.ok(source.endsWith('仅输出可接续的事实记录。'));
   assert.equal(payload.stream, true);
-  assert.equal(payload.max_completion_tokens, 52_000);
+  assert.equal(payload.max_completion_tokens, 8_192);
 });
 
-test('the Monsoon SSE port saves exactly one bounded partial body after an intermediate stage hits its cap', async t => {
+test('the Monsoon SSE port covers every capped fragment before committing one bounded final summary', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-monsoon-capped-stage-'));
   const provider = await captureStreamingSummaryProvider(dataDir, '资'.repeat(20_010), 'length');
   const sessions = new FileMonsoonSessionRepository(dataDir);
@@ -166,6 +167,7 @@ test('the Monsoon SSE port saves exactly one bounded partial body after an inter
   const messages = Array.from({ length: 4 }, (_, index) => ({ id: `m-${index}`,
     role: index % 2 ? 'assistant' : 'user', content: '原始事实'.repeat(1_500),
     timestamp: `2026-01-01T00:00:0${index}.000Z` }));
+  messages.at(-1)!.content += '末尾待办TAIL-81';
   await sessions.create({ id: 'session-capped', agentId: 'agent-capped', agentName: 'Capped', title: 'Long',
     messages, model: 'p:unknown', systemPrompt: '', createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z' });
@@ -179,7 +181,13 @@ test('the Monsoon SSE port saves exactly one bounded partial body after an inter
   const visible = events.filter(event => event.type === 'token').map(event => event.content).join('');
   const saved = await sessions.get('agent-capped', 'session-capped');
   assert.equal(saved?.messages.at(-1)?.content, visible);
-  assert.match(visible, /部分摘要/);
+  assert.doesNotMatch(visible, /部分摘要/);
+  assert.ok(visible.length <= 20_000);
   assert.deepEqual(saved?.messages.slice(0, messages.length), messages);
-  assert.equal(provider.received.length, 1);
+  assert.ok(provider.received.length > 2);
+  assert.ok(provider.received.some(request => request.messages[1].content.includes('TAIL-81')));
+  assert.equal(saved?.modelUsage?.calls, provider.received.length);
+  assert.equal(saved?.modelUsage?.total.totalTokens, provider.received.length * 127);
+  assert.equal(saved?.modelUsage?.latest, undefined, 'summary requests are not a new conversation prompt');
+  assert.ok(events.some(event => event.type === 'model-request'));
 });

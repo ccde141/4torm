@@ -9,9 +9,13 @@ import type { ConversationInputEvent } from './input-runtime.js';
 import type { DelegateToolEvent } from './delegate-tool.js';
 import type { SessionToolExtension } from './session-tool-dispatcher.js';
 import type { TeamHandoff } from './team/handoff.js';
+import type { TeamActivityEvent } from './team/activity.js';
 import type { LLMCaller } from '../shared/react/native-loop.js';
+import type { ModelRequestUsageEvent } from '../shared/model-request-usage.js';
 
 export type ConversationEvent =
+  | ModelRequestUsageEvent
+  | TeamActivityEvent
   | ConversationInputEvent
   | DelegateToolEvent
   | CompactionProgress
@@ -41,7 +45,7 @@ export type ConversationEvent =
 export interface SessionRunnerOpts {
   toolMediaScope?: import('../shared/tool-media-access.js').ToolMediaScope;
   mainAgent?: boolean;
-  extension?: SessionToolExtension & { createHandoff?: () => TeamHandoff };
+  extension?: SessionToolExtension & { createHandoff?: (emit?: (event: TeamActivityEvent) => void) => TeamHandoff };
   memberTools?: string[];
   maxTurns?: number;
   checkpoint?: (messages: ContextMessage[]) => Promise<void>;

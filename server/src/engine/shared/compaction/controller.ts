@@ -33,7 +33,11 @@ export async function compactMessages(options: CompactMessagesOptions): Promise<
       options.signal?.throwIfAborted();
       await options.archive?.(structuredClone(split.before), options.reason);
       options.signal?.throwIfAborted();
-      const summary = await summarizeCompactionPrefix(options, split.prefix, options.signal, options.reason, policy);
+      const summary = await summarizeCompactionPrefix({ ...options, onStageProgress: async stage => {
+        await emit({ type: 'compact-start', message: `${stage.resumed ? '接续压缩' : '正在压缩历史'}`
+          + ` · 第 ${stage.level + 1} 层 · ${stage.completed}/${stage.total} 段` });
+        await observe(() => options.onStageProgress?.(stage));
+      } }, split.prefix, options.signal, options.reason, policy);
       options.signal?.throwIfAborted();
       if (revision !== fingerprint(options.messages)) throw new Error('压缩期间会话已发生变化，原文未更改');
       // Retained messages stay identical objects: temporary continuation frames and live
@@ -68,33 +72,37 @@ async function observe(notify: () => void | Promise<void>): Promise<void> {
 export function createCompactionCaller(options: CompactionCallerOptions): LLMCaller {
   let promptTokens = options.initialPromptTokens;
   let baselineEstimate = options.initialEstimateTokens;
-  return { call: async (messages, callOptions, onChunk, signal, tools, onReasoning, onToolProgress) => {
+  const update = (messages: ContextMessage[], usage?: { promptTokens: number }) => {
+    promptTokens = usage?.promptTokens;
+    baselineEstimate = estimateCompactionTokens(messages);
+  };
+  return { prepare: async (messages, callOptions, signal, tools) => {
+    await options.llm.prepare?.(messages, callOptions, signal, tools);
     const policy = await loadCompactionPolicy(options.dataDir);
     const estimate = estimateCompactionTokens(messages);
     if (baselineEstimate === undefined) baselineEstimate = estimate;
     const measured = promptTokens === undefined ? estimate
       : Math.max(0, promptTokens + estimate - baselineEstimate);
     if (policy.enabled && measured >= policy.thresholds[options.area]) {
-      await compactMessages({ ...options, messages, mode: 'partial',
+      const plan = await compactMessages({ ...options, messages, mode: 'partial',
         reason: 'threshold', signal, policy });
+      if (plan) update(messages);
     }
-    const invoke = () => options.llm.call(messages, callOptions, onChunk, signal, tools, onReasoning, onToolProgress);
-    let result: Awaited<ReturnType<LLMCaller['call']>>;
-    try { result = await invoke(); } catch (error) {
-      if (!isProviderContextOverflow(error) || signal?.aborted) throw error;
-      const recovered = await compactMessages({ ...options, messages, mode: 'partial',
-        reason: 'provider-overflow', signal, policy });
-      if (!recovered) throw error;
-      result = await invoke(); // Exactly one retry of this rejected request; no tool loop restart.
-    }
-    promptTokens = result.usage?.promptTokens;
-    baselineEstimate = estimateCompactionTokens(messages);
+  }, recover: async (error, messages, signal) => {
+    if (!isProviderContextOverflow(error) || signal?.aborted) return false;
+    const recovered = await compactMessages({ ...options, messages, mode: 'partial',
+      reason: 'provider-overflow', signal });
+    if (recovered) update(messages);
+    return !!recovered;
+  }, call: async (messages, callOptions, onChunk, signal, tools, onReasoning, onToolProgress) => {
+    const result = await options.llm.call(messages, callOptions, onChunk, signal, tools, onReasoning, onToolProgress);
+    update(messages, result.usage);
     return result;
   } };
 }
 
 async function serialize<T>(options: CompactMessagesOptions, run: () => Promise<T>): Promise<T> {
-  const key = options.scopeKey ? `${options.dataDir}:${options.scopeKey}` : null;
+  const key = options.scopeKey ? JSON.stringify([options.dataDir, options.scopeKey]) : null;
   const previous = key ? gates.get(key) : arrayGates.get(options.messages);
   const current = (previous ?? Promise.resolve()).catch(() => undefined).then(run);
   if (key) gates.set(key, current); else arrayGates.set(options.messages, current);

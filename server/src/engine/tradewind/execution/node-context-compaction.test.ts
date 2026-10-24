@@ -74,7 +74,10 @@ test('node compaction reports running before work and completes only after its d
       assert.deepEqual(messages, original);
       return '完整摘要';
     } });
-  assert.deepEqual(events.map(event => event.type), ['compact-start', 'context-compacted', 'compact-done']);
+  assert.deepEqual(events.filter(event => !(event.type === 'compact-start' && event.message))
+    .map(event => event.type), ['compact-start', 'context-compacted', 'compact-done']);
+  const progress = events.filter(event => event.type === 'compact-start' || event.type === 'compact-done');
+  assert.equal(new Set(progress.map(event => 'id' in event ? event.id : undefined)).size, 1);
   assert.deepEqual(diskAtDone, messages);
   const first = events[0], last = events.at(-1)!;
   assert.ok('id' in first && 'id' in last);
@@ -164,6 +167,11 @@ test('a real node manual compaction preserves originals and treats a wrapped pro
   assert.equal(events.some(event => event.type === 'error'), false);
   assert.equal(events.at(-1)?.type, 'done');
   assert.equal((events.at(-1) as { outcome?: string }).outcome, 'stopped');
+  const usage = JSON.parse(await fs.readFile(path.join(directory, 'node', 'usage.json'), 'utf8'));
+  assert.equal(usage.modelUsage.calls, 1);
+  assert.equal(usage.modelUsage.latest, undefined);
+  assert.equal(Object.values(usage.modelUsage.requests).every(request =>
+    (request as { purpose: string }).purpose === 'compaction'), true);
   const previousEvents = events.length;
   const previousSeq = runner.getSnapshot().lastSeq;
   const nextRound = new Promise<void>(resolve => {

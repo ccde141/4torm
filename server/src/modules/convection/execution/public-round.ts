@@ -14,6 +14,7 @@ import { createConvectionCompactionCaller } from './compaction-caller.js';
 import { loadRequiredAgent, loadRoundAgents, roundAgent, type RoundAgentSnapshot } from './round-agent-snapshot.js';
 import { recordPublicUsage } from './session-view.js';
 import type { ConvectionEventSink } from './stream-events.js';
+import { withConvectionModelUsage } from './model-usage.js';
 
 export async function handleSpeak(
   dataDir: string,
@@ -35,7 +36,8 @@ export async function handleSpeak(
     [...session.participantAgentIds, session.chairAgentId]);
   await saveSession(dataDir, session);
   emit?.({ type: 'usage', usage: null });
-  await runSequence({ dataDir, session, agents, emit, signal, runId });
+  await withConvectionModelUsage(dataDir, session, 'public', emit,
+    observed => runSequence({ dataDir, session, agents, emit: observed, signal, runId }));
   await saveSession(dataDir, session);
 }
 
@@ -115,7 +117,8 @@ function forwardParticipantEvent(
   emit?: ConvectionEventSink,
 ): void {
   if (!emit) return;
-  if (event.type === 'token') emit({ type: 'token', agentId, label: event.label, chunk: event.chunk! });
+  if (event.type === 'model-request' && event.request) emit({ type: 'model-request', request: event.request });
+  else if (event.type === 'token') emit({ type: 'token', agentId, label: event.label, chunk: event.chunk! });
   else if (event.type === 'reasoning') emit({ type: 'reasoning', agentId, label: event.label, chunk: event.chunk! });
   else if (event.type === 'tool-call') emit({ type: 'tool-call', agentId, label: event.label,
     tool: event.tool!, args: event.args! });

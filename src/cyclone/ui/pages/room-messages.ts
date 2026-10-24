@@ -29,6 +29,7 @@ export interface RoomMsg {
 }
 
 export interface RoomData {
+  publicCurrentInput?: import('../../../lib/model-usage').CurrentInputEstimate;
   id: string;
   title: string;
   topic: string;
@@ -36,6 +37,7 @@ export interface RoomData {
   participantSeatIds: string[];
   publicMessages: RoomMsg[];
   tokenUsage?: CycloneUsage;
+  modelUsage?: import('../../../lib/model-usage').ModelUsageProgress;
   publicLatestTokenUsage?: CycloneUsage;
   compactionNotice?: StoredCompactionFeedback;
   compaction?: unknown;

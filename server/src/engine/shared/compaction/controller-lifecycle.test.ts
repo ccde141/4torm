@@ -28,7 +28,7 @@ test('lifecycle starts before archiving and completes only after durable commit'
   const events: CompactionProgress[] = [];
   const order: string[] = [];
   const plan = await compactMessages({ ...request,
-    onProgress: event => { events.push(event); order.push(event.type); },
+    onProgress: event => { events.push(event); if (!event.message) order.push(event.type); },
     archive: async () => { order.push('archive'); },
     summarize: async summary => {
       order.push('summary'); summary.onChunk?.('provisional fragment');
@@ -44,8 +44,9 @@ test('lifecycle starts before archiving and completes only after durable commit'
   assert.equal(events[1].startedAt, events[0].startedAt);
   assert.ok(events[1].updatedAt >= events[0].updatedAt);
   assert.equal(events[1].operation, 'compact');
-  assert.equal(events[1].archivedMessages, plan!.prefix.length);
-  assert.equal(events[1].summaryLength, plan!.summary.length);
+  assert.equal(events.at(-1)!.archivedMessages, plan!.prefix.length);
+  assert.equal(events.at(-1)!.summaryLength, plan!.summary.length);
+  assert.ok(events.filter(event => event.message).every(event => event.id === events[0].id));
 });
 
 test('a queued cancellation never archives or summarizes its original history', async () => {
@@ -100,8 +101,8 @@ test('commit rejection preserves original context and reports failure without co
     commit: async () => { throw new Error('atomic replacement failed'); },
   }), /atomic replacement failed/);
   assert.deepEqual(request.messages, original);
-  assert.deepEqual(events.map(event => event.type), ['compact-start', 'compact-failed']);
-  assert.equal(events[1].aborted, false);
+  assert.deepEqual(events.filter(event => !event.message || event.type !== 'compact-start').map(event => event.type), ['compact-start', 'compact-failed']);
+  assert.equal(events.at(-1)!.aborted, false);
 });
 
 test('successful commit survives a late abort and rejected completion observers', async () => {
@@ -115,8 +116,8 @@ test('successful commit survives a late abort and rejected completion observers'
   });
   assert.deepEqual(request.messages, durable);
   assert.deepEqual(request.messages, plan!.messages);
-  assert.deepEqual(events.map(event => event.type), ['compact-start', 'compact-done']);
-  assert.equal(events[1].aborted, undefined);
+  assert.deepEqual(events.filter(event => !event.message).map(event => event.type), ['compact-start', 'compact-done']);
+  assert.equal(events.at(-1)!.aborted, undefined);
 });
 
 test('archive callbacks receive detached history and cannot edit the source or summary', async () => {

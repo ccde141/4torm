@@ -7,6 +7,7 @@ import {
   buildSession,
   getCachedMessages,
   markSessionRead,
+  previewSessionInput,
 } from '../../store/chat';
 import type { Agent, ChatMessage } from '../../types';
 import type { ChatSession } from '../../store/chat';
@@ -14,6 +15,7 @@ import { createLatestRequestGuard } from '../../lib/latest-request';
 import { ensureSessionListRefresher, projectSessionUsage, type SessionUsageDisplay } from './session-list-state';
 import { useLocale } from '../../i18n/LocaleContext';
 import { useMonsoonCompaction } from './useMonsoonCompaction';
+import { applyModelRequest, mergeModelUsage } from '../../lib/model-usage';
 import type { MonsoonBrowserEvent } from '../../engine/chat/sse-events';
 
 /** 流注册表钩子（来自 useStreamRunners）：让切会话/删会话与后台流协同。 */
@@ -48,6 +50,23 @@ export function useSessionList(
   // HMR may retain the old sequence ref in this slot without rerunning the id-based effect.
   visibleAgentIdRef.current = selectedAgent?.id ?? null;
   const isRunning = streamHooks?.isRunning;
+  const activePreview = sessions.find(session => session.id === activeSessionId);
+
+  useEffect(() => {
+    const agentId = selectedAgent?.id;
+    if (!agentId || !activeSessionId || !selectedModel) return;
+    if (activePreview?.currentInput?.model === selectedModel
+      && activePreview.currentInput.contextRevision === activePreview.messageRevision) return;
+    let current = true;
+    void previewSessionInput(agentId, activeSessionId, selectedModel).then(estimate => {
+      if (!current || !estimate) return;
+      setSessions(previous => previous.map(session => session.id === activeSessionId
+        && (estimate.contextRevision === undefined || estimate.contextRevision === session.messageRevision)
+        ? { ...session, currentInput: estimate } : session));
+    }).catch(error => console.warn('[chat] 当前上下文预估失败', error));
+    return () => { current = false; };
+  }, [activeSessionId, selectedModel, selectedAgent?.id, activePreview?.messageRevision,
+    activePreview?.currentInput?.model, activePreview?.currentInput?.contextRevision]);
 
   useEffect(() => {
     visibleAgentIdRef.current = selectedAgent?.id ?? null;
@@ -173,12 +192,18 @@ export function useSessionList(
   }, [activeSessionId, setMessages, streamHooks, selectedAgent, refreshSessions, translate]);
 
   const compaction = useMonsoonCompaction({ agentId: selectedAgent?.id, sessionId: activeSessionId,
-    model: selectedModel, progress: streamHooks?.onCompaction,
+    model: selectedModel, progress: (sessionId, event) => {
+      streamHooks?.onCompaction?.(sessionId, event);
+      if (event.type === 'model-request' && event.request) setSessions(current => current.map(session =>
+        session.id === sessionId ? { ...session, modelUsage: applyModelRequest(session.modelUsage, event.request!) } : session));
+    },
     apply: fresh => {
       setMessages(fresh.messages);
       setDisplayUsage(previous => projectSessionUsage(previous, [fresh], () => false));
       setSessions(previous => previous.map(session => session.id === fresh.id
-        ? { ...session, updatedAt: fresh.updatedAt, tokenUsage: fresh.tokenUsage } : session));
+        ? { ...session, updatedAt: fresh.updatedAt, tokenUsage: fresh.tokenUsage,
+          currentInput: fresh.currentInput, messageRevision: fresh.messageRevision,
+          modelUsage: mergeModelUsage(session.modelUsage, fresh.modelUsage) } : session));
     } });
 
   return {

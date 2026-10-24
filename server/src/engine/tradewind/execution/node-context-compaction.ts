@@ -8,6 +8,7 @@ import type { LLMCaller } from '../../shared/react/native-loop.js';
 import type { NodeRunnerEvent } from './node-runner.js';
 import { tradewindCompactionGuidance, type NodeCompactionIdentity } from './compaction-guidance.js';
 import { projectNodeHistory } from './node-history-view.js';
+import { observeModelRequests } from '../../shared/model-request-usage.js';
 
 interface NodeCompactionOptions {
   dataDir: string;
@@ -77,6 +78,6 @@ export function nodeCompactionCaller(llm: LLMCaller, options: NodeCompactionOpti
 }
 
 export async function compactNodeManually(options: NodeCompactionOptions): Promise<void> {
-  await compactMessages({ ...nodeCompactionOptions(options), messages: [...options.messages],
-    mode: 'full', reason: 'manual' });
+  await observeModelRequests(options.emit, () => compactMessages({ ...nodeCompactionOptions(options),
+    messages: [...options.messages], mode: 'full', reason: 'manual' }));
 }

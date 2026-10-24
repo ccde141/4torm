@@ -13,6 +13,7 @@ import TideIcon from './TideIcon';
 import { formatTimestamp } from '../../utils/time';
 import ToolResultImages from '../../components/common/ToolResultImages';
 import type { ToolImageRef, ToolMediaScope } from '../../engine/tool-media';
+import { formatCurrentInput, formatModelUsage } from '../../lib/model-usage';
 
 interface TideSessionViewProps {
   session: TideSession;
@@ -28,6 +29,13 @@ export default function TideSessionView({ session, running = false, onClose, onC
   const messages = visibleTideMessages(session);
   const tokenUsage = useTideUsage(`${session.agentId}:${session.id}`, session.tokenUsage,
     running || compacting || activity?.phase === 'running');
+  const liveUsage = session.usage?.modelUsage;
+  const activeRequest = liveUsage?.latest && ['prepared', 'sent', 'streaming'].includes(liveUsage.latest.state);
+  const metering = formatCurrentInput(session.currentInput, locale, liveUsage)
+    ?? (activeRequest ? formatModelUsage(liveUsage, locale, tokenUsage) : undefined)
+    ?? (tokenUsage && messages.length ? { label: formatTideContextTokens(tokenUsage, locale),
+      title: locale === 'en-US' ? 'Last reported request input; the current context estimate is unavailable.'
+        : '上次请求的实测输入；当前上下文预估尚不可用。' } : undefined);
   return (
     <section className="tide-session" aria-label={t('tide.session.title')}>
       <header className="tide-session__header">
@@ -55,8 +63,8 @@ export default function TideSessionView({ session, running = false, onClose, onC
         <div className="tide-session__meta">
           {session.agentName && <span className="tide-session__agent">{session.agentName}</span>}
           <span>{t('tide.session.messageCount', { count: messages.length, model: session.model })}</span>
-          <span className="tide-session__usage" title={t('tide.session.usageHint')}>
-            {formatTideContextTokens(tokenUsage, locale)}{tokenUsage ? ' tokens' : ''}
+          <span className="tide-session__usage" title={metering?.title ?? t('tide.session.usageHint')}>
+            {metering?.label ?? '—'}{metering ? ' tokens' : ''}
           </span>
         </div>
       </header>

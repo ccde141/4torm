@@ -1,0 +1,31 @@
+.reasoning-block.reasoning-block--preview { border-left-color: color-mix(in srgb, var(--color-accent) 42%, transparent); }
+.reasoning-block__toolbar { display: flex; align-items: center; gap: var(--space-2); }
+.reasoning-block__icon { flex-shrink: 0; color: color-mix(in srgb, var(--color-accent) 70%, var(--color-text-secondary)); }
+.reasoning-block--preview .reasoning-block__header { flex: 1; min-width: 0; min-height: 34px; }
+.reasoning-block--preview .reasoning-block__header:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
+.reasoning-block__height-control {
+  flex-shrink: 0; min-height: 28px; padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--color-text-secondary) 35%, var(--glass-border));
+  border-radius: var(--radius-sm); color: var(--color-text-primary); background: var(--glass-bg);
+  font: inherit; font-size: var(--text-xs); white-space: nowrap; cursor: pointer; transition: border-color 160ms ease;
+}
+.reasoning-block__height-control:hover { border-color: var(--color-accent); }
+.reasoning-block__height-control:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
+.reasoning-block__preview-body {
+  max-height: min(300px, 45vh);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  --reasoning-top: #000;
+  --reasoning-bottom: #000;
+  mask-image: linear-gradient(to bottom, var(--reasoning-top) 0%, #000 8%, #000 92%, var(--reasoning-bottom) 100%);
+  -webkit-mask-image: linear-gradient(to bottom, var(--reasoning-top) 0%, #000 8%, #000 92%, var(--reasoning-bottom) 100%);
+}
+.reasoning-block__preview-body[data-fade-top="true"] { --reasoning-top: transparent; }
+.reasoning-block__preview-body[data-fade-bottom="true"] { --reasoning-bottom: transparent; }
+.reasoning-block__preview-body.is-expanded { max-height: none; }
+.reasoning-block__preview-body:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-block__height-control { transition: none; }
+  .reasoning-block--preview .reasoning-block__spinner { animation: none; }
+  .reasoning-block--preview .thinking-cursor { animation: none; }
+}

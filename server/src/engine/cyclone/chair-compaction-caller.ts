@@ -1,3 +1,4 @@
+import { trackModelUsage } from '../shared/track-model-usage.js';
 import { createCompactionCaller, estimateCompactionTokens, type CompactionNotice } from '../shared/compaction/index.js';
 import type { ContextMessage } from '../shared/types.js';
 import type { LoadedAgent } from '../shared/agent-loader.js';
@@ -22,7 +23,7 @@ export function createChairCompactionCaller(options: {
   onProgress?: (progress: CompactionProgress) => void;
 }): LLMCaller {
   const { dataDir, workshopId, room, agent } = options;
-  return createCompactionCaller({ llm: options.llm, dataDir, area: 'cycloneConversation',
+  const caller = createCompactionCaller({ llm: options.llm, dataDir, area: 'cycloneConversation',
     kind: 'meeting', model: agent.model, chairModel: agent.model, prompt: agent.compactionPrompt,
     protectedPrefixCount: 1, initialPromptTokens: options.initialPromptTokens,
     initialEstimateTokens: room.chairRequestEstimate ?? estimateCompactionTokens(options.messages.slice(0, -1)),
@@ -53,4 +54,6 @@ export function createChairCompactionCaller(options: {
       options.onProgress?.(progress);
     },
   });
+  return trackModelUsage(caller, { get: () => room.chairModelUsage, set: value => { room.chairModelUsage = value; },
+    persist: () => saveRoom(dataDir, workshopId, room) });
 }

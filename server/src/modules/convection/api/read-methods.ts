@@ -13,7 +13,7 @@ export function convectionReadHandlers(sessions: ConvectionSessionService): Reco
   return {
     listSessions: { parse: parseEmpty, invoke: () => sessions.list() },
     readSession: { parse: parseSession,
-      invoke: (_context, input) => sessions.require((input as { sessionId: string }).sessionId) },
+      invoke: (_context, input) => sessions.read((input as { sessionId: string }).sessionId) },
   };
 }
 

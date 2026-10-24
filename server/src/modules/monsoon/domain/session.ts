@@ -1,3 +1,5 @@
+import { parseModelUsageProgress, type ModelUsageProgress } from '../../../engine/shared/model-request-usage.js';
+
 export interface MonsoonTokenUsage {
   promptTokens: number;
   completionTokens: number;
@@ -25,6 +27,7 @@ export interface MonsoonSession {
   rolePrompt?: string;
   lastReadAt?: string;
   tokenUsage?: MonsoonTokenUsage;
+  modelUsage?: ModelUsageProgress;
   createdAt: string;
   updatedAt: string;
   unreadCount?: number;
@@ -81,6 +84,7 @@ function optionalFields(value: Record<string, unknown>, session: MonsoonSession)
     if (typeof value[field] === 'string') session[field] = value[field];
   }
   if (value.tokenUsage !== undefined) session.tokenUsage = tokenUsage(value.tokenUsage);
+  if (value.modelUsage !== undefined) session.modelUsage = parseModelUsageProgress(value.modelUsage);
   if (Number.isInteger(value.unreadCount) && Number(value.unreadCount) >= 0) {
     session.unreadCount = Number(value.unreadCount);
   }

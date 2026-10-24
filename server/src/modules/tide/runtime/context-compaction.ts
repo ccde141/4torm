@@ -42,7 +42,10 @@ export class TideContextCompaction {
       onNotice: async notice => { this.notices.push(notice.message);
         await this.onNotice?.(notice.message); },
     });
-    return { call: async (...args) => { await this.flushUsage(); return caller.call(...args); } };
+    return { ...caller,
+      prepare: async (...args) => { await this.flushUsage(); await caller.prepare?.(...args); },
+      recover: async (...args) => { await this.flushUsage(); return await caller.recover?.(...args) ?? false; },
+      call: async (...args) => { await this.flushUsage(); return caller.call(...args); } };
   }
 
   async checkpoint(messages: ContextMessage[]): Promise<void> {

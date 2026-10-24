@@ -4,11 +4,13 @@
 }
 
 .convection-turn__bubble { flex: 1; width: 100%; }
+.convection-turn__process-toolbar { display: flex; align-items: center; gap: var(--space-2); padding-right: var(--space-2); }
 
 .convection-turn__process {
   margin: var(--space-2) 0 var(--space-3);
   overflow: hidden;
   border: 1px solid var(--glass-border);
+  border-left: 2px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
   border-radius: var(--radius-md);
   background: var(--glass-bg-soft);
 }
@@ -29,18 +31,22 @@
 }
 
 .convection-turn__process-summary {
+  flex: 1;
+  min-width: 0;
   min-height: 36px;
   padding: 0 var(--space-3);
   list-style: none;
 }
+.convection-turn__process-summary:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -2px; }
 
 .convection-turn__process-arrow,
 .convection-turn__tool-arrow {
+  flex-shrink: 0;
   font-size: 10px;
   transition: transform var(--duration-fast) var(--ease-out-expo);
 }
 
-.convection-turn__process--open .convection-turn__process-arrow,
+.convection-turn__process-summary[aria-expanded="true"] .convection-turn__process-arrow,
 .convection-turn__tool-arrow--open { transform: rotate(90deg); }
 
 .convection-turn__process-state,
@@ -52,11 +58,34 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.convection-turn__process-state { flex-shrink: 0; }
+.convection-turn__process-icon { flex-shrink: 0; color: color-mix(in srgb, var(--color-warning) 70%, var(--color-text-secondary)); }
+.convection-turn__process-title { min-width: 0; overflow-wrap: anywhere; }
 
 .convection-turn__process-body {
+  max-height: min(360px, 55vh);
+  overflow-y: auto;
+  scrollbar-width: thin;
   padding: 0 var(--space-3) var(--space-3);
   border-top: 1px solid var(--glass-border);
+  --process-top: #000;
+  --process-bottom: #000;
+  mask-image: linear-gradient(to bottom, var(--process-top), #000 6%, #000 94%, var(--process-bottom));
+  -webkit-mask-image: linear-gradient(to bottom, var(--process-top), #000 6%, #000 94%, var(--process-bottom));
 }
+.convection-turn__process-body[data-fade-top="true"] { --process-top: transparent; }
+.convection-turn__process-body[data-fade-bottom="true"] { --process-bottom: transparent; }
+.convection-turn__process-body.is-expanded { max-height: none; }
+.convection-turn__process-body:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+.convection-turn__process-height {
+  flex-shrink: 0; min-height: 28px; padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--color-text-secondary) 35%, var(--glass-border));
+  border-radius: var(--radius-sm); color: var(--color-text-primary); background: var(--glass-bg);
+  font: inherit; font-size: var(--text-xs); white-space: nowrap; cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out-expo);
+}
+.convection-turn__process-height:hover { border-color: var(--color-accent); }
+.convection-turn__process-height:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 
 .convection-turn__tool { border-bottom: 1px solid var(--glass-border); }
 .convection-turn__tool:last-child { border-bottom: 0; }
@@ -66,7 +95,7 @@
   padding: var(--space-1) 0;
 }
 
-.convection-turn__tool-trigger code { color: var(--color-accent); font-size: var(--text-xs); }
+.convection-turn__tool-trigger code { min-width: 0; overflow-wrap: anywhere; color: var(--color-accent); font-size: var(--text-xs); }
 .convection-turn__tool--error .convection-turn__tool-trigger code { color: var(--color-error); }
 .convection-turn__tool-body { padding: 0 0 var(--space-2) calc(var(--space-2) + 10px); }
 .convection-turn__tool-detail + .convection-turn__tool-detail { margin-top: var(--space-2); }
@@ -89,8 +118,17 @@
 }
 
 .convection-turn__answer + .chat__bubble-actions { margin-top: var(--space-2); }
+.convection-turn__answer--separated { border-top: 1px solid var(--glass-border); margin-top: var(--space-3); padding-top: var(--space-3); }
 
+@media (max-width: 600px) {
+  .convection-turn__process-toolbar { flex-wrap: wrap; gap: 0 var(--space-2); padding-bottom: var(--space-2); }
+  .convection-turn__process-summary { flex-basis: 100%; flex-wrap: wrap; padding-block: var(--space-2); font-size: var(--text-xs); }
+  .convection-turn__process-height { margin-left: auto; }
+  .convection-turn__tool-trigger { flex-wrap: wrap; }
+  .convection-turn__tool-state { flex-basis: 100%; margin-left: 0; }
+}
 @media (prefers-reduced-motion: reduce) {
   .convection-turn__process-arrow,
+  .convection-turn__process-height,
   .convection-turn__tool-arrow { transition: none; }
 }

@@ -1,5 +1,5 @@
 const FRAMEWORK_TOOLS = new Set([
-  'ask', 'delegate', 'contact', 'dispatch', 'bulletin', 'task_board',
+  'ask', 'delegate', 'contact', 'dispatch', 'bulletin', 'task_board', 'framework_guide', 'framework_status',
   'register_tool', 'register_skill', 'review_changes', 'list_agents',
   'create_workflow', 'list_workflows', 'update_workflow', 'start_workflow', 'complete_task',
   'create_automation', 'update_automation', 'list_automations',
@@ -16,7 +16,9 @@ export interface ToolActivityPart<T extends ToolActivityLike> {
 }
 
 export function isFrameworkTool(name: string): boolean {
-  return FRAMEWORK_TOOLS.has(name.trim().toLowerCase());
+  const normalized = name.trim().toLowerCase();
+  return FRAMEWORK_TOOLS.has(normalized) || normalized.startsWith('framework_capability_')
+    || normalized.startsWith('team_');
 }
 
 export function partitionToolActivity<T extends ToolActivityLike>(items: T[]): ToolActivityPart<T>[] {

@@ -2,6 +2,7 @@ import type { ToolDef } from '../../shared/tool-defs-loader.js';
 import type { TeamPermissions } from './types.js';
 import { TeamRuntime } from './runtime.js';
 import { createTeamHandoff } from './handoff.js';
+import type { TeamActivityEvent } from './activity.js';
 
 export const TEAM_GUIDANCE = `## 会话工作队 / Session team
 有一个可独立交付或复核的责任单元时，可以用 team_start 一步创建成员并派工；task 要包含执行所需的背景、路径和操作边界。
@@ -49,7 +50,7 @@ export function teamToolDefs(): ToolDef[] {
 }
 
 export function teamExtension(runtime: TeamRuntime, policy: TeamPermissions) {
-  return { definitions: teamToolDefs(), createHandoff: () => createTeamHandoff(runtime), call: async (name: string, args: Record<string, string>, signal?: AbortSignal): Promise<string> => {
+  return { definitions: teamToolDefs(), createHandoff: (emit?: (event: TeamActivityEvent) => void) => createTeamHandoff(runtime, emit), call: async (name: string, args: Record<string, string>, signal?: AbortSignal): Promise<string> => {
     if (signal?.aborted) throw new Error('TEAM_CALL_ABORTED');
     switch (name) {
       case 'team_start': {
@@ -68,12 +69,12 @@ export function teamExtension(runtime: TeamRuntime, policy: TeamPermissions) {
       }
       case 'team_wait': await runtime.waitBriefly(signal); break;
       case 'team_read': break;
-      case 'team_review': await runtime.store.review(args.reportId, args.decision, args.reason); return 'Review recorded. No execution started.';
+      case 'team_review': await runtime.review(args.reportId, args.decision, args.reason); return 'Review recorded. No execution started.';
       case 'team_dismiss': await runtime.store.dismiss(args.memberId); return 'Member dismissed.';
       case 'team_ack': {
         const ids: unknown = JSON.parse(args.reportIds);
         if (!Array.isArray(ids) || !ids.every(id => typeof id === 'string')) throw new Error('TEAM_INVALID_REPORT_IDS');
-        await runtime.store.acknowledge(ids); return 'Reports acknowledged.';
+        await runtime.acknowledge(ids); return 'Reports acknowledged.';
       }
       default: throw new Error('TEAM_UNKNOWN_TOOL');
     }

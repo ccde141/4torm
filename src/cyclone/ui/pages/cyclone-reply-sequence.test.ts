@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { DisplayBlock, DisplayMessage } from './messageDisplay.js';
 import { applySeatEvent, emptyLive } from './seat-stream-events.js';
+import { contextToDisplay } from './messageDisplay.js';
 import {
   appendReplyBlock,
   appendReplyText,
@@ -117,4 +118,26 @@ test('Ask 已回答历史与 resume runner 重叠时仍只显示一张卡', () =
   assert.equal(visible.length, 1);
   assert.equal(visible[0].id, persisted.id);
   assert.deepEqual(visible[0].blocks, optimistic.blocks);
+});
+
+test('工位外部输入落盘后接管同一运行的乐观消息，正文相同的其他输入保留', () => {
+  const history = contextToDisplay([
+    { role: 'user', content: '检查交付', inputMessageId: 'run-earlier' },
+    { role: 'user', content: '检查交付', inputMessageId: 'run-current' },
+  ]);
+  const optimistic: DisplayMessage = { id: 'external-run-current', role: 'user',
+    content: '检查交付', inputMessageId: 'run-current' };
+  const visible = buildSeatDisplayHistory(history, optimistic);
+  assert.equal(visible.length, 2);
+  assert.equal(visible[1].id, history[1].id);
+  assert.equal(visible[1].sourceIndex, 1);
+});
+
+test('输入尚未持久化时保留乐观内容，不按正文或其他运行的身份误合并', () => {
+  const history = contextToDisplay([{ role: 'user', content: '检查交付', inputMessageId: 'run-earlier' }]);
+  const optimistic: DisplayMessage = { id: 'external-run-current', role: 'user',
+    content: '检查交付', inputMessageId: 'run-current' };
+  assert.equal(buildSeatDisplayHistory(history, optimistic).length, 2);
+  const legacy = contextToDisplay([{ role: 'user', content: '检查交付' }]);
+  assert.equal(buildSeatDisplayHistory(legacy, optimistic).length, 2);
 });

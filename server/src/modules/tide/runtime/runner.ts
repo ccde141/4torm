@@ -101,7 +101,9 @@ async function executeTideTask(
       if (runId && dependencies.runStates) {
         await dependencies.runStates.recordCompactionProgress(task.id, runId, event, sessionId, revision);
       }
-    }, dependencies.seasonSessions, dependencies.runControl?.signal);
+    }, dependencies.seasonSessions, dependencies.runControl?.signal, async request => {
+      if (runId && dependencies.runStates) await dependencies.runStates.recordModelRequest?.(task.id, runId, request);
+    });
   const loop = task.selfLoop ? extractNextPrompt(conversation.answer) : null;
   const answer = loop?.cleaned ?? conversation.answer;
   dependencies.runControl?.beginCommit();

@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { isFrameworkTool, partitionToolActivity } from './tool-activity-group.js';
+import { toolActivitySummary } from './tool-activity-summary.js';
+
+test('new capability and team tools remain individually visible with meaningful action targets', () => {
+  const tools = ['framework_guide', 'framework_status', 'framework_capability_cyclone', 'team_start', 'team_ack'];
+  assert.ok(tools.every(isFrameworkTool));
+  assert.ok(partitionToolActivity(tools.map(tool => ({ tool }))).every(part => part.kind === 'single'));
+  assert.equal(toolActivitySummary('framework_capability_cyclone', { action: 'contactSeat', input: { target: 'Research' } }),
+    'contactSeat · Research');
+  assert.equal(toolActivitySummary('framework_capability_cyclone', { action: 'dispatchSeat', input: '{"seatId":"seat-a"}' }),
+    'dispatchSeat · seat-a');
+});
 
 test('框架工具始终保持独立', () => {
   for (const name of [

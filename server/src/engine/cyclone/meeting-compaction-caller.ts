@@ -1,3 +1,4 @@
+import { trackModelUsage } from '../shared/track-model-usage.js';
 import { createCompactionCaller, estimateCompactionTokens, type CompactionCommit, type CompactionNotice } from '../shared/compaction/index.js';
 import { loadAgent, type LoadedAgent } from '../shared/agent-loader.js';
 import type { LLMCaller } from '../shared/react/native-loop.js';
@@ -46,7 +47,7 @@ export async function createRoomCompactionCaller(options: MeetingCallerOptions):
   const chair = workshop?.chairAgentId ? await loadAgent(dataDir, workshop.chairAgentId) : null;
   const measured = trackRoomModelUsage(options.llm, room,
     () => saveRoom(dataDir, workshopId, room));
-  return createCompactionCaller({ llm: measured, dataDir, area: 'cycloneMeeting',
+  const caller = createCompactionCaller({ llm: measured, dataDir, area: 'cycloneMeeting',
     kind: 'meeting', model: agent.model, chairModel: chair?.model,
     prompt: chair?.compactionPrompt, protectedPrefixCount: 1,
     scopeKey: `cyclone:${workshopId}:room:${room.id}:public`,
@@ -76,6 +77,8 @@ export async function createRoomCompactionCaller(options: MeetingCallerOptions):
     },
     onCompacted: options.onCompacted,
   });
+  return trackModelUsage(caller, { get: () => room.modelUsage, set: value => { room.modelUsage = value; },
+    persist: () => saveRoom(dataDir, workshopId, room) });
 }
 
 async function commitRoom(options: MeetingCallerOptions, plan: CompactionCommit, signal?: AbortSignal): Promise<void> {
