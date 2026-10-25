@@ -12,7 +12,6 @@ import { TextToolStreamGate } from '../text-tool-stream-gate.js';
 import { applyPendingInput, skipTextTool } from './steering.js';
 import {
   HEARTBEAT_INTERVAL_MS,
-  MAX_CONTINUATIONS,
   MAX_TURNS,
   SuspendSignal,
   normalizeToolCallResult,
@@ -87,7 +86,7 @@ async function completeTruncatedResponse(
   tokenGate: TextToolStreamGate,
 ): Promise<ContinuedResponse> {
   let content = initial;
-  for (let count = 0; count < MAX_CONTINUATIONS; count++) {
+  for (;;) {
     if (params.signal?.aborted) return { content, truncated: true, failure: { error: params.signal.reason } };
     if (params.steering?.hasPending()) return { content, truncated: true };
     const answer = { role: 'assistant' as const, content };
@@ -108,7 +107,6 @@ async function completeTruncatedResponse(
       }
     }
   }
-  return { content, truncated: true };
 }
 
 async function executeTool(

@@ -12,6 +12,7 @@ import { buildConvectionMemoryPrompt, withConvectionMemoryTools } from './convec
 import { buildNativeConvectionProtocol } from './native-adapter.js';
 import { buildConvectionParticipantMeta } from './prompt-profiles.js';
 import { convectionContext } from './compaction-context.js';
+import { convectionSkillIds, convectionTools } from './tool-policy.js';
 
 export function buildConvectionToolSections(toolDefs: ToolDef[], native: boolean): string[] {
   if (toolDefs.length === 0) return [];
@@ -26,9 +27,9 @@ export async function buildAgentMessages(
   agent: LoadedAgent,
   native: boolean,
 ): Promise<{ messages: ContextMessage[]; agent: LoadedAgent; toolDefs: ToolDef[] }> {
-  const toolDefs = withConvectionMemoryTools(
-    await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode),
-  );
+  const toolDefs = withConvectionMemoryTools(convectionTools(
+    await loadAgentToolDefs(dataDir, agent.tools, convectionSkillIds(agent.skills), agent.toolMode),
+  ));
   const parts = await promptParts(dataDir, session, agent, toolDefs, native);
   return { messages: [
     { role: 'system', content: parts.join('\n\n') },

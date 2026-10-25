@@ -4,11 +4,12 @@ import { skillDir, toolRegistryFile } from '../services/data-paths.js';
 import { isFrameworkCapabilityToolName } from '../shared/framework-capability.js';
 import { isFrameworkToolName } from './framework/catalog.js';
 import type { ToolDefinition } from './tool-definition.js';
+import { findRuntimeSkillTool, isRuntimeSkillToolName } from './runtime-skill-catalog.js';
 
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const VIRTUAL_NAMES = new Set([
   // Runtime-owned calls never dispatch to custom/skill executors.
-  'done', 'memory_write', 'memory_list', 'memory_read', 'browser',
+  'done', 'memory_write', 'memory_list', 'memory_read',
   'seat_memory_read', 'seat_memory_write',
   'seat_activity_read', 'seat_dispatch_read',
   'contact_read', 'supervisor_message', 'supervisor_memory',
@@ -47,7 +48,7 @@ export function configureDynamicToolNames(source: () => readonly string[]): void
 
 export function toolNameProblem(name: string, extraNames: readonly string[] = []): string | null {
   if (!TOOL_NAME.test(name)) return `工具名称无效：${name}`;
-  if (isFrameworkToolName(name) || VIRTUAL_NAMES.has(name)
+  if (isFrameworkToolName(name) || VIRTUAL_NAMES.has(name) || isRuntimeSkillToolName(name)
     || isFrameworkCapabilityToolName(name)
     || dynamicNames().includes(name) || extraNames.includes(name)) {
     return `工具名称属于框架保留名称：${name}`;
@@ -95,6 +96,9 @@ function collectDefinitions(
 function markConflicts(snapshot: ToolNameSnapshot, extraNames: readonly string[]): void {
   const owners = new Map<string, ToolNameIssue[]>();
   const add = (tool: ToolDefinition, owner: Omit<ToolNameIssue, 'name' | 'reason'>) => {
+    // A bundled skill references a code-owned runtime tool, not a data executor.
+    // Other declarations retain the reserved-name error and cannot shadow it.
+    if (owner.skillId && findRuntimeSkillTool(owner.skillId, tool)) return;
     const entry = { ...owner, name: tool.name, reason: '' };
     const group = owners.get(tool.name) ?? [];
     group.push(entry);

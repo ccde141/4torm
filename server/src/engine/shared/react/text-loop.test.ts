@@ -4,7 +4,7 @@ import type { ContextMessage } from '../types.js';
 import { frameworkError } from '../framework-error.js';
 import { parseTextToolResult } from '../text-tool-protocol.js';
 import { runReActLoop } from './text-loop.js';
-import { MAX_CONTINUATIONS } from './native-loop.js';
+const CONTINUED_FRAGMENTS = 8;
 
 function reply(content: string) {
   return { content, finishReason: 'stop' as const };
@@ -196,7 +196,7 @@ test('text loop refuses a tool that was not offered this turn', async () => {
   assert.match(String(result.toolCalls[0]?.result), /not authorized/);
 });
 
-test('text exhausted continuation preserves readable body and completed side effects, then removes temporary frames', async () => {
+test('text extended continuation preserves readable body and completed side effects', async () => {
   const messages: ContextMessage[] = [{ role: 'user', content: 'write then explain' }];
   const tokens: string[] = [];
   let requests = 0; let executions = 0;
@@ -206,17 +206,16 @@ test('text exhausted continuation preserves readable body and completed side eff
       const content = requests === 1 ? '{"type":"tool_call","name":"write","arguments":{}}' : `正文-${requests}`;
       onChunk?.(content);
       if (requests === 3) messages.push({ role: 'system', content: '运行中新增事实' });
-      return { content, finishReason: requests === 1 ? 'stop' : 'length',
+      return { content, finishReason: requests === 1 || requests === CONTINUED_FRAGMENTS + 2 ? 'stop' : 'length',
         usage: { promptTokens: requests, completionTokens: 1, totalTokens: requests + 1 } };
     } },
     tools: { call: async () => { executions++; return '原件已保存'; } },
     onEvent: event => { if (event.type === 'token') tokens.push(event.chunk); },
   });
-  assert.equal(requests, MAX_CONTINUATIONS + 2);
+  assert.equal(requests, CONTINUED_FRAGMENTS + 2);
   assert.equal(executions, 1);
   assert.equal(result.toolCalls[0]?.result, '原件已保存');
-  assert.equal(result.termination.status, 'failed');
-  if (result.termination.status === 'failed') assert.equal(result.termination.error.code, 'MODEL_OUTPUT_LIMIT');
+  assert.equal(result.termination.status, 'succeeded');
   for (let index = 2; index <= requests; index++) assert.match(result.content, new RegExp(`正文-${index}`));
   assert.equal(tokens.join(''), result.content);
   assert.equal(result.usage?.promptTokens, requests);
@@ -226,27 +225,28 @@ test('text exhausted continuation preserves readable body and completed side eff
 });
 
 for (const variant of ['complete', 'incomplete', 'early-type', 'early-fence'] as const) {
-  test(`text exhausted continuation never executes or displays tool protocol (${variant})`, async () => {
+  test(`text interrupted continuation never executes or displays tool protocol (${variant})`, async () => {
     const messages: ContextMessage[] = [{ role: 'user', content: 'write' }];
     const tokens: string[] = [];
     let requests = 0; let executions = 0;
     const result = await runReActLoop({ messages,
       llm: { call: async (_messages, _options, onChunk) => {
         requests++;
+        if (requests > CONTINUED_FRAGMENTS + 1) throw new Error('provider stopped');
         const prefix = variant === 'early-type' ? '{"type":"tool_ca' : variant === 'early-fence' ? '```tool_ca'
           : '{"type":"tool_call","name":"write","arguments":{';
         const content = requests === 1 ? prefix
-          : requests === MAX_CONTINUATIONS + 1 && variant === 'complete' ? '}}' : ' ';
+          : requests === CONTINUED_FRAGMENTS + 1 && variant === 'complete' ? '}}' : ' ';
         onChunk?.(content);
         return { content, finishReason: 'length' };
       } },
       tools: { call: async () => { executions++; return '不得执行'; } },
       onEvent: event => { if (event.type === 'token') tokens.push(event.chunk); },
     });
-    assert.equal(requests, MAX_CONTINUATIONS + 1);
+    assert.equal(requests, CONTINUED_FRAGMENTS + 2);
     assert.equal(executions, 0);
     assert.equal(result.termination.status, 'failed');
-    if (result.termination.status === 'failed') assert.equal(result.termination.error.code, 'MODEL_OUTPUT_LIMIT');
+    if (result.termination.status === 'failed') assert.equal(result.termination.error.code, 'MODEL_REQUEST_FAILED');
     assert.doesNotMatch(result.content, /tool_call|arguments/);
     assert.ok(result.rawContent.startsWith(variant === 'early-type' ? '{"type":"tool_ca'
       : variant === 'early-fence' ? '```tool_ca' : '{"type":"tool_call"'));
@@ -263,8 +263,8 @@ test('text output exhaustion still hands pending human input to steering before 
     steering: { hasPending: () => pending.length > 0, drain: () => pending.splice(0) },
     llm: { call: async () => {
       requests++;
-      if (requests === MAX_CONTINUATIONS + 1) pending.push('new task');
-      if (requests > MAX_CONTINUATIONS + 1) {
+      if (requests === CONTINUED_FRAGMENTS + 1) pending.push('new task');
+      if (requests > CONTINUED_FRAGMENTS + 1) {
         assert.equal(messages.at(-1)?.content, 'new task');
         return reply('new answer');
       }
@@ -272,7 +272,7 @@ test('text output exhaustion still hands pending human input to steering before 
         finishReason: 'length' };
     } }, tools: { call: async () => { assert.fail('Old partial tool call must not run'); } },
   });
-  assert.equal(requests, MAX_CONTINUATIONS + 2);
+  assert.equal(requests, CONTINUED_FRAGMENTS + 2);
   assert.equal(result.content, 'new answer');
   assert.equal(result.termination.status, 'succeeded');
   assert.ok(!messages.some(message => message.content.startsWith('[System: continuation]')));
@@ -326,9 +326,9 @@ test('text continuation failure does not expose or execute a partial tool envelo
 test('text undecided long JSON is retained as raw evidence without claiming a delivered answer', async () => {
   let requests = 0;
   const result = await runReActLoop({ messages: [{ role: 'user', content: 'JSON report' }],
-    llm: { call: async () => ({ content: ++requests === 1 ? '{"items":[' : '1,', finishReason: 'length' }) },
+    llm: { call: async () => { if (++requests > CONTINUED_FRAGMENTS + 1) throw new Error('provider stopped'); return { content: requests === 1 ? '{"items":[' : '1,', finishReason: 'length' }; } },
   });
   assert.equal(result.termination.status, 'failed');
   assert.doesNotMatch(result.content, /items/);
-  assert.equal(result.rawContent, '{"items":[' + '1,'.repeat(MAX_CONTINUATIONS));
+  assert.equal(result.rawContent, '{"items":[' + '1,'.repeat(CONTINUED_FRAGMENTS));
 });

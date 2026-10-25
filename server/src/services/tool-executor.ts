@@ -16,6 +16,7 @@ import { assertAgentToolAccess } from '../engine/shared/tool-authorization.js';
 import { inspectToolNames } from '../tools/tool-name-policy.js';
 import type { McpToolOutcome } from '../engine/shared/mcp-types.js';
 import { legacyToolArguments, type ToolArguments } from '../engine/shared/tool-arguments.js';
+import { persistToolOutcome } from '../engine/shared/tool-media-store.js';
 
 export { ToolPermissionError } from '../engine/shared/tool-authorization.js';
 
@@ -136,9 +137,10 @@ export async function executeToolOutcome(
   }
 
   if (toolDef.executorType === 'builtin' || toolDef.executorType === 'custom') {
-    return { result: await executeModuleTool(
-      dataDir, canonicalTool, toolDef, args, ctx, onMeta, signal,
-    ), ok: true };
+    let inlineImages: McpToolOutcome['inlineImages'];
+    const result = await executeModuleTool(dataDir, canonicalTool, toolDef, args, ctx, onMeta, signal,
+      images => { inlineImages = images; });
+    return persistToolOutcome(dataDir, { result, ok: true, ...(inlineImages ? { inlineImages } : {}) });
   }
 
   throw new Error(`未知执行器类型: ${toolDef.executorType}`);
@@ -210,6 +212,7 @@ async function executeModuleTool(
   dataDir: string, tool: string, toolDef: ToolDefWithSource,
   args: Record<string, string>, ctx: object,
   onMeta?: (meta: unknown) => void, signal?: AbortSignal,
+  onImages?: (images: NonNullable<McpToolOutcome['inlineImages']>) => void,
 ): Promise<string> {
   const fileName = toolDef.executorFile || tool;
   const candidates = toolDef._skillId
@@ -222,6 +225,7 @@ async function executeModuleTool(
       if (typeof fn !== 'function') throw new Error(`执行器未导出 default 函数: ${filePath}`);
       const out = await fn(args, ctx);
       if (!out || typeof out !== 'object' || !('result' in out)) return out;
+      if ('inlineImages' in out) onImages?.(readInlineImages(out.inlineImages));
       onMeta?.((out as { meta?: unknown }).meta);
       return String((out as { result: unknown }).result ?? '');
     } catch (error) {
@@ -234,6 +238,16 @@ async function executeModuleTool(
     throw new Error(`执行器文件不存在: ${fileName}.js`);
   }
   throw lastError;
+}
+
+function readInlineImages(value: unknown): NonNullable<McpToolOutcome['inlineImages']> {
+  if (!Array.isArray(value)) throw new Error('工具图片结果必须是数组');
+  return value.map(image => {
+    if (!image || typeof image !== 'object' || typeof image.mimeType !== 'string' || typeof image.data !== 'string') {
+      throw new Error('工具图片结果缺少类型或内容');
+    }
+    return { mimeType: image.mimeType, data: image.data };
+  });
 }
 
 function createAbortError(): Error {

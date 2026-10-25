@@ -9,71 +9,18 @@ import { agentRegistryFile } from '../../../services/data-paths.js';
 import type { TideTask } from '../domain/task.js';
 import { writeTideSession } from '../sessions/session-store.js';
 import { TideContextCompaction } from './context-compaction.js';
-import { TideConversationDeadline } from './conversation-deadline.js';
 import { executeTideConversation, TideConversationFailure } from './tide-conversation.js';
 
 const MINUTE = 60_000;
 
-test('潮汐保留十分钟普通工作预算，自动压缩耗时不计入其中', t => {
-  const advance = fakeClock(t);
-  let expired = 0;
-  const deadline = new TideConversationDeadline(10 * MINUTE, () => expired++);
-  advance(3 * MINUTE);
-  deadline.setCompacting(true);
-  advance(120 * MINUTE);
-  assert.equal(expired, 0);
-  deadline.setCompacting(false);
-  advance(7 * MINUTE - 1);
-  assert.equal(expired, 0);
-  advance(1);
-  assert.equal(expired, 1);
-  assert.equal(deadline.timedOut, true);
-});
-
-test('压缩分段进度和多次压缩不会重置已使用的潮汐工作预算', t => {
-  const advance = fakeClock(t);
-  let expired = 0;
-  const deadline = new TideConversationDeadline(10 * MINUTE, () => expired++);
-  advance(4 * MINUTE);
-  deadline.setCompacting(true);
-  advance(30 * MINUTE);
-  deadline.setCompacting(true);
-  advance(30 * MINUTE);
-  deadline.setCompacting(false);
-  advance(2 * MINUTE);
-  deadline.setCompacting(true);
-  advance(60 * MINUTE);
-  deadline.setCompacting(false);
-  advance(4 * MINUTE - 1);
-  assert.equal(expired, 0);
-  advance(1);
-  assert.equal(expired, 1);
-});
-
-test('清理暂停中的潮汐计时后，迟到压缩结束通知不会重启计时', t => {
-  const advance = fakeClock(t);
-  let expired = 0;
-  const deadline = new TideConversationDeadline(10 * MINUTE, () => expired++);
-  advance(MINUTE);
-  deadline.setCompacting(true);
-  deadline.dispose();
-  deadline.setCompacting(false);
-  advance(180 * MINUTE);
-  assert.equal(expired, 0);
-  assert.equal(deadline.timedOut, false);
-});
-
 for (const outcome of ['success', 'failure', 'abort'] as const) {
-  test(`真实潮汐运行的长压缩${outcome}不被十分钟截断，通知失败也不影响计时与清理`, async t => {
+  test(`真实潮汐运行的长压缩${outcome}不受执行时长限制，且通知失败不改变结果`, async t => {
     const fixture = await conversationFixture(t);
     const advance = fakeClock(t);
     const controller = new AbortController();
     let aborts = 0;
-    const activity: boolean[] = [];
     const transform = TideContextCompaction.prototype.transform;
     t.mock.method(TideContextCompaction.prototype, 'transform', function(this: TideContextCompaction, llm) {
-      const notify = this.onActivityChanged;
-      this.onActivityChanged = active => { activity.push(active); notify?.(active); };
       Object.assign(Reflect.get(this, 'summaryPorts'), {
         resolveSummaryBudget: async () => 100_000,
         summarize: async () => {
@@ -96,8 +43,8 @@ for (const outcome of ['success', 'failure', 'abort'] as const) {
       const caller = options.llmTransform!({ call: async () => ({ content: '完成', finishReason: 'stop' }) });
       await caller.prepare?.(messages, {}, controller.signal, []);
       if (outcome === 'success') {
-        advance(8 * MINUTE - 1);
-        assert.equal(aborts, 0, '压缩结束后保留原剩余工作预算');
+        advance(80 * MINUTE);
+        assert.equal(aborts, 0, '长任务不受固定执行时限影响');
       }
       return { content: '完成', rawContent: '完成' };
     });
@@ -106,10 +53,8 @@ for (const outcome of ['success', 'failure', 'abort'] as const) {
     if (outcome === 'success') assert.equal((await run).answer, '完成');
     else await assert.rejects(run, error => error instanceof TideConversationFailure
       && error.aborted === (outcome === 'abort'));
-    assert.equal(activity[0], true);
-    assert.equal(activity.at(-1), false);
     advance(180 * MINUTE);
-    assert.equal(aborts, 0, '完成、失败和取消都须释放外层计时器');
+    assert.equal(aborts, 0, '没有残留的执行计时器');
   });
 }
 

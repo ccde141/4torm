@@ -49,7 +49,6 @@ export async function executeDelegateToolOutcome(
     model: input.model,
     dataDir: input.dataDir,
     signal: input.signal,
-    timeout: 1_200_000,
     maxRounds: SUB_AGENT_MAX_ROUNDS,
     parentSandboxLevel: input.sandboxLevel,
     emit: event => {

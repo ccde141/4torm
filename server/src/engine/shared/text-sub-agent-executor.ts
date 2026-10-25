@@ -6,8 +6,12 @@ import type { ContextMessage } from './types.js';
 import type { SubAgentEvent, SubAgentResult } from './sub-agent-types.js';
 import { buildTextToolProtocol } from './prompt.js';
 import { runTextSubAgentLoop } from './text-sub-agent-loop.js';
+import { subAgentCompaction } from './sub-agent-compaction.js';
+import { callPreparedModel } from './react/model-call.js';
+import type { CompactionArea } from './compaction/contracts.js';
 
 export interface TextSubAgentParams {
+  compactionArea?: CompactionArea;
   agent: LoadedAgent;
   model: string;
   tools: ToolDef[];
@@ -46,18 +50,18 @@ export async function runTextSubAgent(params: TextSubAgentParams): Promise<SubAg
     },
     { role: 'user', content: `任务：${params.task}\n\n背景：${params.context}` },
   ];
+  const llm = subAgentCompaction({ call: (context, _options, onChunk, signal, _tools, onReasoning) => callLLM({
+    dataDir: params.dataDir, fullModelKey: params.model, messages: context,
+    options: { temperature: params.agent.temperature }, onChunk, signal, onReasoning,
+  }) }, params);
   try {
     const result = await runTextSubAgentLoop({
       messages,
       maxRounds: params.maxRounds,
       signal: params.signal,
-      callModel: () => callLLM({
-        dataDir: params.dataDir,
-        fullModelKey: params.model,
-        messages,
-        options: { temperature: params.agent.temperature },
+      callModel: () => callPreparedModel(llm, messages, params.signal, {
         onChunk: chunk => params.emitEvent({ type: 'token', data: { t: chunk } }),
-        signal: params.signal,
+        onReasoning: chunk => params.emitEvent({ type: 'reasoning', data: { t: chunk } }),
       }),
       callTool: async (tool, args) => {
         const { executeToolOutcome } = await import('../../services/tool-executor.js');

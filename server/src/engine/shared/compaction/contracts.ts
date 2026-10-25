@@ -70,8 +70,6 @@ export interface CompactionSummaryInput {
   maxOutputTokens: number;
   /** First-phase thinking allowance; the final body phase is bounded by maxOutputTokens. */
   maxReasoningTokens?: number;
-  /** The owning automatic job also limits the combined duration of all requests. */
-  requestTimeoutMs?: number;
   /** Preserve limit completion through island adapters; it is not a provider failure. */
   onOutputLimited?: () => void;
   /** Present only for the selected final stage, never for intermediate working fragments. */

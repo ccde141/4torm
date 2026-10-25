@@ -1,6 +1,7 @@
 import type { ProviderEntry } from '../../llm';
 import { readModelCapability, type ModelCapability } from '../../llm/model-capabilities';
 import { useLocale } from '../../i18n/LocaleContext';
+import { ModelResponseWaitField } from './ModelResponseWaitField';
 
 interface Props {
   provider: ProviderEntry;
@@ -8,6 +9,7 @@ interface Props {
   messages: Readonly<Record<string, string>>;
   onProbe: (model: string, capability: ModelCapability) => void;
   onRemove: (model: string) => void;
+  onRefresh: () => void;
 }
 
 function probeKey(model: string, capability: ModelCapability) {
@@ -54,7 +56,7 @@ function CapabilityCell({ provider, model, capability, probing, message, onProbe
   );
 }
 
-export function ModelCapabilityPanel({ provider, probing, messages, onProbe, onRemove }: Props) {
+export function ModelCapabilityPanel({ provider, probing, messages, onProbe, onRemove, onRefresh }: Props) {
   const { t } = useLocale();
   return (
     <section className="provider-capability-panel" style={{ marginTop: 'var(--space-3)' }}>
@@ -86,6 +88,10 @@ export function ModelCapabilityPanel({ provider, probing, messages, onProbe, onR
               message={messages[probeKey(model, 'vision')]}
               onProbe={() => onProbe(model, 'vision')}
             />
+            <div style={{ gridColumn: '1 / -1' }}>
+              <ModelResponseWaitField key={`${provider.id}:${model}:${provider.modelResponseWaitMinutes?.[model] ?? 30}`}
+                provider={provider} model={model} onRefresh={onRefresh} />
+            </div>
           </div>
         ))}
       </div>

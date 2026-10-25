@@ -1,3 +1,4 @@
+import { frameworkError } from '../framework-error.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -6,7 +7,6 @@ import test from 'node:test';
 import { openSummaryCheckpoint } from './checkpoint.js';
 import { compactMessages } from './controller.js';
 import { summarizeCompactionPrefix } from './summary.js';
-import { compactionRequestDeadline, CompactionRequestTimeout } from './request-deadline.js';
 import { defaultCompactionPolicy } from './policy.js';
 import type { CompactionOptions } from './contracts.js';
 
@@ -71,8 +71,8 @@ test('a timed out request is not automatically replayed against the alternate mo
     const policy = { ...defaultCompactionPolicy(), fixedModel: 'p:alternate' };
     let calls = 0;
     await assert.rejects(summarizeCompactionPrefix({ ...options, summarize: async () => {
-      calls++; throw new CompactionRequestTimeout('片段超时');
-    } }, [{ role: 'user', content: '记录'.repeat(200) }], undefined, 'manual', policy), /片段超时/);
+      calls++; throw frameworkError({ code: 'MODEL_RESPONSE_TIMEOUT', kind: 'timeout', message: '模型无响应超时', source: 'fixture', retryable: false });
+    } }, [{ role: 'user', content: '记录'.repeat(200) }], undefined, 'manual', policy), /模型无响应超时/);
     assert.equal(calls, 1);
   });
 });
@@ -100,20 +100,3 @@ for (const size of [256_000, 500_000, 999_000]) {
     });
   });
 }
-
-test('request deadlines are independent, activity renews idle timeout, cancellation propagates', t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const deadline = compactionRequestDeadline(undefined, { totalMs: 500, idleMs: 25 });
-  try {
-    t.mock.timers.tick(10);
-    deadline.touch();
-    assert.equal(deadline.signal.aborted, false);
-    t.mock.timers.tick(40);
-    assert.match(deadline.signal.reason.message, /长时间未响应/);
-  } finally { deadline.dispose(); }
-  const parent = new AbortController();
-  const linked = compactionRequestDeadline(parent.signal);
-  parent.abort(new Error('human stopped'));
-  assert.equal(linked.signal.reason.message, 'human stopped');
-  linked.dispose();
-});

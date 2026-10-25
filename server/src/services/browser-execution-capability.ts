@@ -1,12 +1,13 @@
 import { browserExecutionProducer } from './browser-execution-producer.js';
 import { executeBrowserTool } from './browser-tool-adapter.js';
 import type { ExecutionCapabilityProvider } from './execution-capability-registry.js';
+import { BROWSER_TOOL } from '../tools/runtime-skill-catalog.js';
 
 /** Browser is bundled, but participates through the same provider seam as future capabilities. */
 export const browserExecutionCapability: ExecutionCapabilityProvider = {
   id: 'browser',
   tool: {
-    name: 'browser',
+    name: BROWSER_TOOL.name,
     execute: input => executeBrowserTool(input),
   },
   surface: {

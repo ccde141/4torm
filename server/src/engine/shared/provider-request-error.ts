@@ -1,4 +1,4 @@
-import { frameworkError, type FrameworkError } from './framework-error.js';
+import { frameworkError, FrameworkError } from './framework-error.js';
 
 const SOURCE = 'llm-bridge';
 const CONTEXT_CODES = new Set([
@@ -25,6 +25,10 @@ export function providerHttpError(status: number, responseBody: string): Framewo
     return make('MODEL_CONTEXT_LIMIT_EXCEEDED', 'provider',
       `模型服务确认输入超过上下文容量${detailSuffix(responseBody)}`);
   }
+  if ((status === 400 || status === 413 || status === 422) && isImageCapacityRejection(responseBody)) {
+    return make('MODEL_IMAGE_LIMIT_EXCEEDED', 'validation',
+      `模型服务确认图片输入超过限制${detailSuffix(responseBody)}`);
+  }
   if (status === 401) {
     return make('MODEL_AUTH_FAILED', 'permission', `模型服务鉴权失败（HTTP ${status}），请检查 API Key`);
   }
@@ -48,6 +52,17 @@ export function providerHttpError(status: number, responseBody: string): Framewo
   return make(`MODEL_PROVIDER_HTTP_${status}`, 'provider', `模型服务请求失败（HTTP ${status}）`);
 }
 
+function isImageCapacityRejection(body: string): boolean {
+  try {
+    const parsed = JSON.parse(body);
+    const code = parsed?.error?.code ?? parsed?.code;
+    if (['too_many_images', 'image_limit_exceeded', 'image_count_exceeded', 'image_size_exceeded', 'image_too_large'].includes(code)) return true;
+  } catch { /* Text diagnostics are checked below. */ }
+  const detail = safeProviderDetail(body) || body;
+  return /too many images|(?:image|images).{0,90}(?:limit|exceed|too (?:large|big)|maximum|max allowed)|(?:maximum|at most|no more than).{0,30}(?:images|image inputs)|(?:图片|图像).{0,50}(?:过多|超出|超过|上限|太大)/i.test(detail)
+    && !/invalid (?:image|base64)|unsupported|not support|不支持|格式|编码/i.test(detail);
+}
+
 function isContextRejection(body: string): boolean {
   try {
     const parsed = JSON.parse(body) as Record<string, unknown>;
@@ -69,6 +84,14 @@ export function providerNetworkError(error: unknown): FrameworkError {
   const code = networkCauseCode(error);
   const suffix = code ? `（${code}）` : '';
   return make('MODEL_PROVIDER_UNREACHABLE', 'provider', `无法连接模型服务${suffix}`, true, error);
+}
+
+/** A body reader can lose its socket after fetch has already returned headers. */
+export function providerTransportError(error: unknown): unknown {
+  if (error instanceof FrameworkError) return error;
+  const code = networkCauseCode(error);
+  return /^(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)$/.test(code)
+    ? providerNetworkError(error) : error;
 }
 
 function make(

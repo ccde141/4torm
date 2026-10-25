@@ -5,6 +5,7 @@ import {
 import { providerResponseError } from '../provider-request-error.js';
 import type { ProviderOutputControl } from '../provider-output-control.js';
 import type { TokenUsage } from '../llm-bridge.js';
+import { createToolProgressTracker, type ToolPreparationProgress } from '../tool-progress.js';
 
 export async function parseAnthropicSSEStream(
   response: Response,
@@ -13,6 +14,7 @@ export async function parseAnthropicSSEStream(
   onReasoning?: (chunk: string) => void,
   outputControl?: ProviderOutputControl,
   onUsage?: (usage: TokenUsage) => void,
+  onToolProgress?: (progress: ToolPreparationProgress) => void,
 ): Promise<AnthropicResult> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error('Anthropic 流式响应没有 body');
@@ -20,8 +22,16 @@ export async function parseAnthropicSSEStream(
   const decoder = new TextDecoder();
   const accumulator = createAnthropicStreamAccumulator(nameMap, onChunk, onReasoning);
   let buffer = '';
+  const progress = createToolProgressTracker({ startedAt: Date.now(), onProgress: onToolProgress,
+    restoreName: name => nameMap.get(name) ?? name });
   const push = (event: Record<string, any>): boolean => {
     accumulator.push(event);
+    if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+      progress.push([{ index: event.index, function: { name: event.content_block.name } }]);
+    } else if (event.type === 'content_block_delta' && event.delta?.type === 'input_json_delta'
+      && event.delta.partial_json) {
+      progress.push([{ index: event.index, function: { arguments: event.delta.partial_json } }]);
+    }
     if (event.type === 'message_start' || event.type === 'message_delta') {
       const usage = accumulator.finish().usage;
       if (usage) onUsage?.(usage);

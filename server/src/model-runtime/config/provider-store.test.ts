@@ -15,6 +15,17 @@ async function fixture(t: test.TestContext) {
   return directory;
 }
 
+test('per-model response waits survive storage and public configuration without changing other models', async t => {
+  const dataDir = await fixture(t);
+  const provider = await createProvider(dataDir, { label: 'Local', baseUrl: 'http://127.0.0.1:8080/v1', models: ['a', 'b'] });
+  await patchProvider(dataDir, provider.id, { modelResponseWaitMinutes: { a: 180, b: 30 } });
+  await patchProvider(dataDir, provider.id, { label: 'Renamed' });
+  assert.deepEqual((await findProvider(dataDir, provider.id)).modelResponseWaitMinutes, { a: 180, b: 30 });
+  assert.deepEqual((await publicConfiguration(dataDir)).providers[0].modelResponseWaitMinutes, { a: 180, b: 30 });
+  await assert.rejects(patchProvider(dataDir, provider.id, { modelResponseWaitMinutes: { a: 0 } }));
+  assert.deepEqual((await findProvider(dataDir, provider.id)).modelResponseWaitMinutes, { a: 180, b: 30 });
+});
+
 test('configuration APIs redact credentials while edits retain omitted values and can explicitly clear them', async t => {
   const dataDir = await fixture(t);
   const app = Fastify();

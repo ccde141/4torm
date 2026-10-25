@@ -154,7 +154,7 @@ test('newly appended large human input is counted before its first model request
   });
 });
 
-test('only context overflow retries failed request once; no general provider retry', async () => {
+test('context overflow keeps compacting while history can shrink; other errors never retry', async () => {
   await fixture(async options => {
     let calls = 0; let summaries = 0;
     const llm: LLMCaller = { call: async () => { if (++calls === 1) throw overflow(); return success; } };
@@ -164,8 +164,8 @@ test('only context overflow retries failed request once; no general provider ret
     assert.equal(calls, 2); assert.equal(summaries, 1);
     calls = 0;
     const failing = createCompactionCaller({ ...options, llm: { call: async () => { calls++; throw overflow(); } } });
-    await assert.rejects(invoke(failing, history()), /模型服务确认/);
-    assert.equal(calls, 2);
+    await assert.rejects(invoke(failing, history()), /模型服务确认|未减少/);
+    assert.ok(calls >= 2);
     calls = 0;
     const invalid = createCompactionCaller({ ...options, llm: { call: async () => {
       calls++; throw providerHttpError(400, '{"error":{"message":"invalid tools"}}');

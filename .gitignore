@@ -85,6 +85,7 @@ data/tools/executors/*
 !data/tools/executors/edit_file.js
 !data/tools/executors/list_directory.js
 !data/tools/executors/read_file.js
+!data/tools/executors/read_image.js
 !data/tools/executors/run_command.js
 !data/tools/executors/run_command.test.mjs
 !data/tools/executors/search_content.js

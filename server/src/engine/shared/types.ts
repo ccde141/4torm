@@ -34,7 +34,7 @@ export interface ProviderImage {
   dataUrl: string;
 }
 
-/** MCP 工具产物的持久引用；原始图片不写进消息、工具事件或归档 JSON。 */
+/** 工具图片的持久引用；原始图片不写进消息、工具事件或归档 JSON。 */
 export interface ToolImageRef {
   id: string;
   name: string;

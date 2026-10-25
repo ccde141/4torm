@@ -46,3 +46,13 @@ test('工具桥保留服务端稳定错误身份', async () => {
       && error.data.kind === 'permission',
   );
 });
+
+test('工具桥仅接收有效图片引用，拒绝内联像素与路径伪造', async () => {
+  const image = { id: '60dab69c-9419-40ed-90e5-9f93bab90b8f', name: 'pixel.png', mimeType: 'image/png', size: 8 };
+  const result = await readToolBridgeResponse(new Response(JSON.stringify({ result: 'image loaded', toolImages: [image] })));
+  assert.deepEqual(result.toolImages, [image]);
+  for (const toolImages of [[{ ...image, dataUrl: 'data:image/png;base64,pixels' }], [{ ...image, id: '../outside' }]]) {
+    await assert.rejects(readToolBridgeResponse(new Response(JSON.stringify({ result: 'image', toolImages }))),
+      error => error instanceof FrameworkError && error.data.code === 'TOOL_BRIDGE_PROTOCOL_ERROR');
+  }
+});

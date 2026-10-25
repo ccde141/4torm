@@ -30,7 +30,7 @@ export interface ToolRouteOptions {
 export async function toolRoutes(app: FastifyInstance, options: ToolRouteOptions = {}): Promise<void> {
   const { dataDir } = getAppContext(app);
   const executeLocalTool = options.executeTool ?? executeTool;
-  const executeLocalToolOutcome = options.executeTool
+  const executeLocalToolOutcome: typeof executeToolOutcome = options.executeTool
     ? async (...params: Parameters<typeof executeTool>) => ({
       result: await options.executeTool!(...params), ok: true,
     })
@@ -193,6 +193,7 @@ export async function toolRoutes(app: FastifyInstance, options: ToolRouteOptions
       }
       return reply.send({
         result: outcome.result, ...(outcome.ok ? {} : { ok: false }), meta,
+        ...(outcome.toolImages?.length ? { toolImages: outcome.toolImages } : {}),
       });
     } catch (e) {
       const permissionFailure = e instanceof ToolPermissionError;

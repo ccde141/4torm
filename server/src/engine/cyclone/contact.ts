@@ -277,7 +277,8 @@ export async function runContactedTurn(
         const { runSubAgent } = await import('../shared/sub-agent-runner');
         const r = await runSubAgent({
           task: args.task || '', context: args.context || '', systemPrompt: args.systemPrompt || '',
-          agentId: agent.id, dataDir, signal: signal ?? new AbortController().signal, timeout: 1_200_000, maxRounds: SUB_AGENT_MAX_ROUNDS,
+          agentId: agent.id, dataDir, signal: signal ?? new AbortController().signal, maxRounds: SUB_AGENT_MAX_ROUNDS,
+          compactionArea: 'cycloneConversation',
           parentSandboxLevel: agent.sandboxLevel,
         });
         return { result: `[${r.status}] ${subAgentReport(r)}`, ok: r.status === 'success' };

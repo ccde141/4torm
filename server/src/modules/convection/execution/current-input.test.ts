@@ -33,6 +33,21 @@ async function fixture(t: TestContext, textMode = false) {
   return { dataDir, service, session };
 }
 
+test('对流不继承池化 Agent 的浏览器技能，原生和文本提示词保持一致', async t => {
+  const { dataDir, session } = await fixture(t);
+  await fs.mkdir(path.join(dataDir, 'skills'), { recursive: true });
+  await fs.cp(new URL('../../../../../data/skills/browser/', import.meta.url),
+    path.join(dataDir, 'skills', 'browser'), { recursive: true });
+  const agent = await loadRequiredAgent(dataDir, 'participant');
+  agent.skills = ['browser'];
+  agent.tools.push('browser');
+  for (const native of [true, false]) {
+    const built = await buildAgentMessages(dataDir, session, agent, native);
+    assert.equal(built.toolDefs.some(tool => tool.name === 'browser' || tool.name === 'use_skill'), false);
+    assert.equal(built.toolDefs.some(tool => tool.name === 'read_file'), true);
+  }
+});
+
 test('公私预估复用实际提示词与工具结构，读取不发送模型请求或产生计量', async t => {
   const { dataDir, session } = await fixture(t);
   session.publicMessages.push({ speaker: '人类', content: '公开问题', timestamp: 1 });

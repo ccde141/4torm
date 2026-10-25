@@ -12,6 +12,7 @@ import { resolveMcpTools } from './mcp-manager';
 import { FRAMEWORK_TOOLS } from '../../tools/framework/catalog.js';
 import { inspectToolNames, toolSourceIssue, type ToolNameSnapshot } from '../../tools/tool-name-policy.js';
 import type { ToolDefinition } from '../../tools/tool-definition.js';
+import { findRuntimeSkillTool } from '../../tools/runtime-skill-catalog.js';
 
 export type ToolDef = ToolDefinition;
 export interface AgentToolBinding {
@@ -121,7 +122,10 @@ export async function loadAgentToolBindings(
   // 2) 仅追加已启用且全局名称无冲突的技能工具。
   for (const skillId of skillIds) {
     for (const tool of snapshot.skills.get(skillId) ?? []) {
-      if (!toolSourceIssue(snapshot, 'skill', tool.name, skillId)) {
+      const runtimeTool = findRuntimeSkillTool(skillId, tool);
+      if (runtimeTool) {
+        addBinding(result, seenNames, structuredClone(runtimeTool), 'skill', skillId);
+      } else if (!toolSourceIssue(snapshot, 'skill', tool.name, skillId)) {
         addBinding(result, seenNames, tool, 'skill', skillId);
       }
     }

@@ -1,5 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import type { ContextMessage } from '../../shared/types.js';
 import { atomicWriteFile } from '../../shared/atomic-io.js';
 import { teamError, type TeamOwner, type TeamState } from './types.js';
 import { parseState, validateOwner } from './validation.js';
@@ -39,6 +41,17 @@ async function readFile(dataDir: string, owner: TeamOwner, file: string): Promis
 }
 export async function readTeam(dataDir: string, owner: TeamOwner): Promise<TeamState> {
   return readFile(dataDir, owner, stateFile(dataDir, owner));
+}
+
+export async function archiveTeamContext(dataDir: string, owner: TeamOwner,
+  memberId: string, context: ContextMessage[]): Promise<void> {
+  const state = await readTeam(dataDir, owner);
+  if (!state.members.some(member => member.id === memberId)) throw teamError('TEAM_MEMBER_NOT_FOUND');
+  const file = path.join(path.dirname(stateFile(dataDir, owner)), 'compactions', `${randomUUID()}.json`);
+  await guard(dataDir, file);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await guard(dataDir, file);
+  await atomicWriteFile(file, JSON.stringify({ memberId, context }));
 }
 export async function mutateTeam<T>(dataDir: string, owner: TeamOwner, update: (state: TeamState) => T): Promise<T> {
   const file = stateFile(dataDir, owner);

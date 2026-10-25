@@ -16,10 +16,9 @@ export async function summarizeInStages(
   signal?: AbortSignal, control?: SummaryStageControl,
 ): Promise<string> {
   let text = original;
-  for (let level = 0; level < 8; level++) {
+  for (let level = 0; ; level++) {
     signal?.throwIfAborted();
     const chunks = splitSummaryText(text, inputBudget, control?.quotedSource);
-    if (chunks.length > 256) throw new Error('压缩记录超过分段处理容量');
     const summaries: string[] = [];
     const keys: string[] = [];
     for (let index = 0; index < chunks.length; index++) {
@@ -51,7 +50,6 @@ export async function summarizeInStages(
     }
     text = combined;
   }
-  throw new Error('压缩记录无法收敛到模型容量内');
 }
 
 export function splitSummaryText(text: string, budget: number, quoted = false): string[] {

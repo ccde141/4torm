@@ -1,3 +1,4 @@
+import { resolveSubAgentRounds } from '../../shared/sub-agent-budget.js';
 /**
  * 信风 SubAgent 执行器（从对流 sub-agent-runner.ts 复制解耦）
  *
@@ -20,6 +21,7 @@ import { runNativeSubAgent } from '../../shared/native-sub-agent-runner.js';
 import { runTextSubAgent } from '../../shared/text-sub-agent-executor.js';
 import { buildSubAgentMeta } from '../../shared/meta-prompt.js';
 import path from 'node:path';
+import { withSubAgentDeadline } from '../../shared/sub-agent-deadline.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -30,6 +32,7 @@ export interface SubAgentParams {
   agentId: string;
   dataDir: string;
   signal: AbortSignal;
+  /** 本次委托总时限（毫秒），默认且最多 60 分钟。 */
   timeout?: number;
   maxRounds: number;
   /** 母 Agent 的文件工具权限。Sub-agent 直接继承使用。缺省项目级。 */
@@ -115,7 +118,7 @@ function buildPromptSections(
 - 在最终 done 摘要中写明被保护的控制面目标
 - 让委托方改用对应专用工具或交由用户处理`,
     constraintsSection: [
-      `【硬性限制】最多执行 ${maxRounds} 轮工具调用，超出后任务直接失败。`,
+      `【执行预算】最多执行 ${maxRounds} 轮模型与工具交互。请在预算内完成任务并汇报结果或阻塞。`,
       '【收口规则】剩余轮次 ≤ 5 时停止新工具调用，立即用 done 汇报已完成部分。',
       '【系统限制】不可调用 delegate，任务完成后必须调用 done。',
     ].join('\n\n'),
@@ -123,6 +126,10 @@ function buildPromptSections(
 }
 
 export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResult> {
+  return withSubAgentDeadline(params, (signal, emit) => executeSubAgent({ ...params, signal, emit }));
+}
+
+async function executeSubAgent(params: SubAgentParams): Promise<SubAgentResult> {
   const parentSandboxLevel = params.parentSandboxLevel ?? 'project';
   const emitEvent = (event: SubAgentEvent): void => { params.emit?.(event); };
   const agent = await loadAgent(params.dataDir, params.agentId);
@@ -133,11 +140,13 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
   }
 
   const tools = await prepareTools(params.dataDir, agent);
-  const sections = buildPromptSections(agent, params.dataDir, params.maxRounds, parentSandboxLevel);
+  const maxRounds = resolveSubAgentRounds(params.maxRounds);
+  const sections = buildPromptSections(agent, params.dataDir, maxRounds, parentSandboxLevel);
   const execution = {
     agent, model: agent.model, tools, systemPrompt: buildSubAgentMeta(params.systemPrompt), task: params.task,
     context: params.context, dataDir: params.dataDir, ...sections,
-    maxRounds: params.maxRounds, signal: params.signal, emitEvent, parentSandboxLevel,
+    maxRounds, signal: params.signal, emitEvent, parentSandboxLevel,
+    compactionArea: 'tradewindConversation' as const,
   };
   const nativeDecision = await resolveNativeMode(params.dataDir, agent.model);
   return nativeDecision.native

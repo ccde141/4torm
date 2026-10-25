@@ -7,7 +7,7 @@ import { defaultCompactionPolicy, saveCompactionPolicy } from '../../../engine/s
 import { createSession, loadSession, saveSession, sessionWorkspace } from '../infrastructure/session-store.js';
 import { handleSpeak } from './public-round.js';
 import { handleChair } from './chair-round.js';
-import { LLM_TIMEOUT_MS } from '../../../engine/shared/react/limits.js';
+const LLM_RESPONSE_WAIT_MS = 30 * 60_000;
 
 async function fixture(t: test.TestContext) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-convection-compact-owner-'));
@@ -185,7 +185,7 @@ test('两次助理私聊之间新增的公共记录计入下一次真实阈值�
   assert.equal((await fs.readdir(path.join(sessionWorkspace(dataDir, session.id), 'bak'))).length, 1);
 });
 
-test('助理自动压缩不被业务推理的一小时计时覆盖，正式推理仍单独计时', async t => {
+test('助理压缩和业务推理都只使用模型无响应等待', async t => {
   const { dataDir, session } = await fixture(t);
   session.chairMessages = [{ role: 'user', content: '先前私聊'.repeat(300) }];
   await saveSession(dataDir, session);
@@ -195,7 +195,7 @@ test('助理自动压缩不被业务推理的一小时计时覆盖，正式推�
   const inferenceTimers = new Set<ReturnType<typeof setTimeout>>();
   globalThis.setTimeout = ((callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]) => {
     const timer = originalSetTimeout(callback, milliseconds, ...args);
-    if (milliseconds === LLM_TIMEOUT_MS) inferenceTimers.add(timer);
+    if (milliseconds === LLM_RESPONSE_WAIT_MS) inferenceTimers.add(timer);
     return timer;
   }) as typeof setTimeout;
   globalThis.clearTimeout = ((timer: ReturnType<typeof setTimeout>) => {
@@ -208,7 +208,7 @@ test('助理自动压缩不被业务推理的一小时计时覆盖，正式推�
     const body = JSON.parse(String(init?.body));
     if (isCompactionRequest(body)) {
       summaries++;
-      assert.equal(inferenceTimers.size, 0);
+      assert.equal(inferenceTimers.size, 1);
       return summarySse('先前讨论与 task-1 已验证，继续分析。');
     }
     replies++;

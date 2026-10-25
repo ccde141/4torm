@@ -6,7 +6,7 @@ export default async function (args, ctx) {
   const fp = args.filePath || args.file_path
   const oldStr = args.oldString || args.old_str || ''
   const newStr = args.newString || args.new_str || ''
-  const replaceAll = args.replaceAll === true || args.replace_all === true
+  const replaceAll = [args.replaceAll, args.replace_all].some(value => value === true || value === 'true')
   if (!fp || !oldStr) throw new Error('缺少必要参数')
 
   const resolved = resolvePath(fp, ctx, { write: true })

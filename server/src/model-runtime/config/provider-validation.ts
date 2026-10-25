@@ -1,9 +1,10 @@
 import { isProviderType, isTransportId } from '../contracts/provider-config.js';
 import { ProviderConfigurationError, isRecord } from './provider-config-error.js';
+import { validResponseWaitMinutes } from '../scheduling/model-response-wait.js';
 
 export const PROVIDER_FIELDS = new Set(['label', 'baseUrl', 'apiKey', 'models', 'customHeaders', 'providerType',
   'transport', 'protocol', 'runtimePolicy', 'generationDefaults', 'customRequestParameters',
-  'customParameterDefinitions', 'modelProfiles', 'nativeMode', 'nativeProbe', 'modelCapabilities', 'toolTransports']);
+  'customParameterDefinitions', 'modelProfiles', 'modelResponseWaitMinutes', 'nativeMode', 'nativeProbe', 'modelCapabilities', 'toolTransports']);
 const maps = ['runtimePolicy', 'generationDefaults', 'customRequestParameters', 'nativeProbe',
   'modelCapabilities', 'toolTransports'];
 
@@ -46,6 +47,8 @@ export function validateProviderPatch(input: unknown, create = false, stored = f
   if (value.modelProfiles !== undefined && (!isRecord(value.modelProfiles)
     || !Object.values(value.modelProfiles).every(profile => typeof profile === 'string'))) throw invalid();
   if (value.customParameterDefinitions !== undefined && !Array.isArray(value.customParameterDefinitions)) throw invalid();
+  if (value.modelResponseWaitMinutes !== undefined && (!isRecord(value.modelResponseWaitMinutes)
+    || !Object.entries(value.modelResponseWaitMinutes).every(([model, minutes]) => model.trim() && validResponseWaitMinutes(minutes)))) throw invalid();
   return structuredClone(original);
 }
 

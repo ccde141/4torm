@@ -128,8 +128,8 @@ async function execDelegate(
     agentId,
     dataDir,
     signal: delegateSignal,
-    timeout: 1_200_000,
     maxRounds: SUB_AGENT_MAX_ROUNDS,
+    compactionArea: 'cycloneConversation',
     parentSandboxLevel: sandboxLevel as SandboxLevel,
     emit: (ev) => {
       if (ev.type === 'token') onEvent({ type: 'delegate-token', delegateId, content: ev.data.t });

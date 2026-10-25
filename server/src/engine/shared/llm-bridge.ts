@@ -10,6 +10,9 @@
  */
 
 import fs from 'node:fs/promises';
+import { modelRetryAfter, withModelRequestRetry } from './model-request-retry.js';
+import { resolveModelResponseWait, withModelResponseWait } from '../../model-runtime/scheduling/model-response-wait.js';
+import { inferenceDispatcher } from '../../model-runtime/providers/inference-transport.js';
 import { logModelDiagnostic } from '../../config/developer-mode.js';
 import { createRuntimeFetch, providerRequestHeaders } from '../../model-runtime/providers/runtime-fetch.js';
 import path from 'node:path';
@@ -37,6 +40,7 @@ import {
 } from './provider-messages.js';
 import { compileModelMessages } from './model-request/compile.js';
 import { prepareToolImageContext } from './model-request/tool-image-context.js';
+import { applyLearnedImageLimit, withImageLimitRecovery } from './model-request/image-limit-recovery.js';
 import {
   buildAnthropicRequest,
   parseAnthropicResponse,
@@ -48,7 +52,7 @@ import { TextToolStreamGate } from './text-tool-stream-gate.js';
 import { resolveProviderSelection } from '../../model-runtime/config/provider-selection.js';
 import { resolveLoggedProviderSelection } from '../../model-runtime/config/provider-selection-log.js';
 import { providerScheduler } from '../../model-runtime/scheduling/provider-scheduler.js';
-import { providerHttpError, providerNetworkError, providerResponseError } from './provider-request-error.js';
+import { providerHttpError, providerNetworkError, providerResponseError, providerTransportError } from './provider-request-error.js';
 import { resolveToolTransportContract } from '../../model-runtime/config/tool-transport-contract.js';
 import { resolveProviderGenerationBudget, type ProviderGenerationBudgetRequest }
   from '../../model-runtime/providers/generation-budget.js';
@@ -74,6 +78,7 @@ interface Provider {
     vision?: { status: 'supported' | 'unsupported'; checkedAt: string };
   }>;
   modelProfiles?: Record<string, string>;
+  modelResponseWaitMinutes?: Record<string, number>;
   toolTransports?: Record<string, {
     status: 'native-confirmed' | 'text-required'; checkedAt: string; fingerprint: string;
   }>;
@@ -298,6 +303,7 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
       protocol,
       providerId: provider.id,
       concurrencyLimit: resolveProviderConcurrency(provider),
+      responseWaitMs: resolveModelResponseWait(provider.modelResponseWaitMinutes, model),
     };
   }
 
@@ -365,6 +371,7 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
     cumulativeStream: selection.providerType === 'minimax',
     providerId: provider.id,
     concurrencyLimit: resolveProviderConcurrency(provider),
+    responseWaitMs: resolveModelResponseWait(provider.modelResponseWaitMinutes, model),
   };
 }
 
@@ -400,7 +407,8 @@ export async function estimateCurrentInput(params: LLMCallParams): Promise<Curre
   let basis: CurrentInputEstimate['basis'] = 'compiled';
   try {
     // Request construction is local. It does not acquire a provider slot or emit usage.
-    estimate = estimateRequestInput((await buildRequest(params, false)).body);
+    const request = await buildRequest(params, false);
+    estimate = estimateRequestInput(applyLearnedImageLimit(imageRequestKey(params, request), request.body));
   } catch {
     // A removed provider must not make an existing conversation unreadable.
     // Keep binary images out of the textual fallback, and describe its narrower basis.
@@ -422,16 +430,43 @@ export async function estimateCurrentInput(params: LLMCallParams): Promise<Curre
 export async function callLLM(params: LLMCallParams): Promise<LLMResult> {
   const useStream = typeof params.onChunk === 'function';
   const request = await buildRequest(params, useStream);
+  let delivered = false;
+  const guarded = { ...params,
+    onChunk: (chunk: string) => { delivered ||= !!chunk; params.onChunk?.(chunk); },
+    onReasoning: (chunk: string) => { delivered ||= !!chunk; params.onReasoning?.(chunk); },
+    onToolProgress: (progress: ToolPreparationProgress) => { delivered = true; params.onToolProgress?.(progress); },
+  };
+  let retryBody = request.body;
+  return withModelRequestRetry({ signal: params.signal, canRetry: () => !delivered,
+    run: () => withImageLimitRecovery({
+      key: imageRequestKey(params, request),
+      body: retryBody, signal: params.signal, canRetry: () => !delivered,
+      send: body => { retryBody = body; return sendModelAttempt(guarded, { ...request, body }, useStream); },
+    }),
+  });
+}
+
+function imageRequestKey(params: LLMCallParams, request: Awaited<ReturnType<typeof buildRequest>>): string {
+  return JSON.stringify([params.dataDir, params.fullModelKey, request.url, request.protocol]);
+}
+
+async function sendModelAttempt(
+  params: LLMCallParams, request: Awaited<ReturnType<typeof buildRequest>>, useStream: boolean,
+): Promise<LLMResult> {
   const meter = createModelRequestUsage(request.body, params.purpose);
   try {
     const result = await providerScheduler.run(request.providerId, request.concurrencyLimit,
-      () => callLLMInner(params, request, useStream, meter.report,
-        () => meter.update({ state: 'sent', wasSent: true })), params.signal);
+      () => withModelResponseWait(params.signal, request.responseWaitMs, (signal, touch) =>
+        callLLMInner({ ...params, signal,
+          onChunk: chunk => { if (chunk) touch(); params.onChunk?.(chunk); },
+          onReasoning: chunk => { if (chunk) touch(); params.onReasoning?.(chunk); },
+          onToolProgress: progress => { touch(); params.onToolProgress?.(progress); } },
+        request, useStream, meter.report, () => meter.update({ state: 'sent', wasSent: true }))), params.signal);
     meter.finish('completed', result.usage, result.usageComplete ?? Boolean(result.usage));
     return result;
   } catch (error) {
     meter.finish(params.signal?.aborted ? 'cancelled' : 'failed');
-    throw error;
+    throw providerTransportError(error);
   }
 }
 
@@ -457,12 +492,14 @@ async function callLLMInner(
   let res: Response;
   try {
     onSent();
-    res = await fetch(url, {
+    const init: RequestInit & { dispatcher: typeof inferenceDispatcher } = {
       method: 'POST',
       headers,
       body: bodyStr,
       signal: params.signal,
-    });
+      dispatcher: inferenceDispatcher,
+    };
+    res = await fetch(url, init);
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw error;
     throw providerNetworkError(error);
@@ -470,7 +507,10 @@ async function callLLMInner(
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw providerHttpError(res.status, text);
+    const failure = providerHttpError(res.status, text);
+    const retryAfterMs = modelRetryAfter(res.headers.get('retry-after'));
+    if (retryAfterMs !== undefined) failure.data.details = { retryAfterMs };
+    throw failure;
   }
 
     // 成功响应
@@ -518,7 +558,7 @@ async function callLLMInner(
     const gate = params.tools ? new TextToolStreamGate(params.onChunk!) : undefined;
     const onChunk = gate ? (chunk: string) => gate.push(chunk) : params.onChunk!;
     if (protocol === 'anthropic-messages') {
-      const result = await parseAnthropicSSEStream(res, nameMap, onChunk, params.onReasoning, params.outputControl, onUsage);
+      const result = await parseAnthropicSSEStream(res, nameMap, onChunk, params.onReasoning, params.outputControl, onUsage, params.onToolProgress);
       const normalized = applyTextToolFallback(result, params.tools, nameMap);
       gate?.finish(Boolean(normalized.content));
       return normalized;

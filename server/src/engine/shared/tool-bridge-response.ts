@@ -1,10 +1,13 @@
 import { FrameworkError, isFrameworkErrorData, type FrameworkErrorKind } from './framework-error.js';
+import { readToolImageRefs } from './tool-media-store.js';
+import type { ToolImageRef } from './types.js';
 
 export interface ToolBridgeResult {
   result: string;
   ok: boolean;
   meta?: unknown;
   observationId?: string;
+  toolImages?: ToolImageRef[];
 }
 
 interface ToolBridgePayload {
@@ -13,6 +16,7 @@ interface ToolBridgePayload {
   error?: unknown;
   meta?: unknown;
   observationId?: unknown;
+  toolImages?: unknown;
   errorCode?: unknown;
   errorKind?: unknown;
   exitCode?: unknown;
@@ -47,11 +51,18 @@ export async function readToolBridgeResponse(response: Response): Promise<ToolBr
     });
   }
 
+  let toolImages: ToolImageRef[];
+  try { toolImages = readToolImageRefs(payload.toolImages); }
+  catch (cause) {
+    throw new FrameworkError({ code: 'TOOL_BRIDGE_PROTOCOL_ERROR', kind: 'protocol',
+      message: '工具桥接返回结构异常：图片引用无效', source: 'tool.bridge', retryable: false }, { cause });
+  }
   return {
     result: payload.result,
     ok: payload.ok ?? true,
     meta: payload.meta,
     observationId: typeof payload.observationId === 'string' ? payload.observationId : undefined,
+    ...(toolImages.length ? { toolImages } : {}),
   };
 }
 

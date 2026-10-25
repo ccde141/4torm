@@ -243,7 +243,7 @@ test('protected custom provider fields fail before an OpenAI-compatible request 
   assert.equal(fetched, false);
 });
 
-test('provider HTTP failures are surfaced after one request without implicit retry', async t => {
+test('transient provider failures stop after three attempts with their typed error', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-provider-no-retry-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
   await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [{
@@ -261,7 +261,7 @@ test('provider HTTP failures are surfaced after one request without implicit ret
   }), (error: unknown) => error instanceof FrameworkError
     && error.data.code === 'MODEL_PROVIDER_HTTP_503'
     && error.data.message === '模型服务暂时不可用（HTTP 503）');
-  assert.equal(requests, 1);
+  assert.equal(requests, 3);
 });
 
 test('provider authentication failure is typed without exposing its response body', async t => {

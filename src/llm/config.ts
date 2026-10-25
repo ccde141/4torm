@@ -39,6 +39,7 @@ export interface ProviderEntry {
   modelCapabilities?: ModelCapabilityMap;
   toolTransports?: ToolTransportMap;
   modelProfiles?: Record<string, ProviderProfileId>;
+  modelResponseWaitMinutes?: Record<string, number>;
 }
 
 export type ProviderCustomParameterKind = 'string' | 'number' | 'boolean' | 'select' | 'json';

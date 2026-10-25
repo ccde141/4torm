@@ -9,8 +9,6 @@ import { resolveSummaryBudget, summaryStageBudget } from './budget.js';
 import { openSummaryCheckpoint, summaryHash } from './checkpoint.js';
 import { clipSummaryBody } from './body-limit.js';
 import { generateCompactionSummary } from './generation.js';
-import { CompactionRequestTimeout } from './request-deadline.js';
-import { AUTOMATIC_COMPACTION_TIMEOUT_MS } from './automatic-deadline.js';
 export { summaryOutputBudget } from './budget.js';
 
 export async function summarizeCompactionPrefix(
@@ -28,10 +26,9 @@ export async function summarizeCompactionPrefix(
       return summary;
     } catch (error) {
       if (signal?.aborted || isAborted(error)) throw error;
-      const unknownOutcome = error instanceof CompactionRequestTimeout
-        || (!!error && typeof error === 'object' && 'data' in error
+      const unknownOutcome = (!!error && typeof error === 'object' && 'data' in error
           && !!error.data && typeof error.data === 'object' && 'code' in error.data
-          && error.data.code === 'MODEL_PROVIDER_UNREACHABLE');
+          && ['MODEL_PROVIDER_UNREACHABLE', 'MODEL_RESPONSE_TIMEOUT'].includes(String(error.data.code)));
       const fallbackModel = unknownOutcome ? undefined : models[index + 1];
       await options.onNotice?.({ type: 'compaction-notice', severity: 'error', model,
         fallbackModel, reason,
@@ -72,7 +69,6 @@ async function summarizeWithModel(
     const stageBudget = summaryStageBudget(estimateTextTokens(fragment), final, { maxContentTokens, maxOutputTokens });
     const summary = await run({ model, prompt: compactionSummaryPrompt(prompt, fragment, stageBudget.maxContentTokens),
       text: fragment, ...stageBudget, signal,
-      requestTimeoutMs: reason === 'manual' ? undefined : AUTOMATIC_COMPACTION_TIMEOUT_MS,
       onChunk: final ? options.onSummaryChunk : undefined });
     return clipSummaryBody(summary, stageBudget.maxContentTokens);
   }, signal, { checkpoint, onProgress: options.onStageProgress, onCachedFinal: options.onSummaryChunk,

@@ -8,16 +8,13 @@ import { resolveTarget, type ResolvedTarget } from '../sessions/session-resolver
 import type { TideMessage } from '../sessions/session-types.js';
 import type { TideUsageProgress } from '../domain/token-usage.js';
 import type { TokenUsage } from '../../../engine/shared/llm-bridge.js';
-import { assertTideRunNotTimedOut } from './run-outcome.js';
 import { createTideEventState } from './tide-conversation-events.js';
 import { TideContextCompaction } from './context-compaction.js';
 import type { SeasonSessionPort } from '../sessions/season-session-port.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import { tideGeneratedMediaContext } from './turn-context.js';
 import type { ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
-import { TideConversationDeadline } from './conversation-deadline.js';
 
-const TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface TideConversationResult {
   agentName: string;
@@ -71,7 +68,7 @@ export async function executeTideConversation(
   signal?.throwIfAborted();
   const prepared = await prepareConversation(dataDir, task, onNotice, onProgress, seasonSessions, signal);
   signal?.throwIfAborted();
-  const result = await chatWithTimeout(prepared, onUsage, signal, onModelRequest);
+  const result = await chatConversation(prepared, onUsage, signal, onModelRequest);
   return { ...prepared, ...result };
 }
 
@@ -106,7 +103,7 @@ export async function prepareConversation(dataDir: string, task: TideTask,
   };
 }
 
-async function chatWithTimeout(
+async function chatConversation(
   prepared: PreparedConversation,
   onUsage?: (usage: TokenUsage | null, resolved: ResolvedTarget) => Promise<void>,
   signal?: AbortSignal,
@@ -116,14 +113,9 @@ async function chatWithTimeout(
     ? usage => onUsage(usage, prepared.resolved) : undefined,
   () => prepared.runner.abort(), onModelRequest ? request => onModelRequest(request, prepared.resolved) : undefined);
   prepared.compaction.flushUsage = () => state.flush();
-  const deadline = new TideConversationDeadline(TIMEOUT_MS, () => prepared.runner.abort());
-  prepared.compaction.onActivityChanged = active => deadline.setCompacting(active);
-  const disposeDeadline = () => deadline.dispose();
-  signal?.addEventListener('abort', disposeDeadline, { once: true });
   try {
     const result = await prepared.runner.chat(prepared.systemPrompt, prepared.messages, state.onEvent);
     await state.flush();
-    assertTideRunNotTimedOut(deadline.timedOut, TIMEOUT_MS);
     signal?.throwIfAborted();
     prepared.resolved.turnContext = tideGeneratedMediaContext(prepared.messages, prepared.turnInput, state.snapshot().toolContext);
     if (prepared.resolved.compactedContext?.at(-1)?.role !== 'assistant') {
@@ -143,12 +135,8 @@ async function chatWithTimeout(
       snapshot.usage,
       { cause: failure },
       prepared.compaction.notices,
-      !!signal?.aborted && !persistFailed && !deadline.timedOut,
+      !!signal?.aborted && !persistFailed,
     );
-  } finally {
-    prepared.compaction.onActivityChanged = undefined;
-    signal?.removeEventListener('abort', disposeDeadline);
-    deadline.dispose();
   }
 }
 

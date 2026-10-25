@@ -8,6 +8,7 @@
 import type { FastifyInstance } from 'fastify';
 import { getAppContext } from '../services/app-context.js';
 import { runSubAgent } from '../engine/shared/sub-agent-runner.js';
+import { SUB_AGENT_MAX_ROUNDS } from '../engine/shared/sub-agent-budget.js';
 import type { SubAgentEvent } from '../engine/shared/sub-agent-types.js';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse.js';
 
@@ -26,19 +27,19 @@ export async function delegateRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: '缺少 agentId' });
     }
 
-    const rounds = typeof maxRounds === 'number' && maxRounds > 0 ? maxRounds : 30;
+    const rounds = Number.isSafeInteger(maxRounds) && maxRounds > 0
+      ? Math.min(maxRounds, SUB_AGENT_MAX_ROUNDS) : SUB_AGENT_MAX_ROUNDS;
     const timeoutMs = typeof timeout === 'number' && timeout > 0 ? timeout : 3_600_000;
 
     // 创建 AbortController
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), timeoutMs);
 
     // 切换为 SSE 模式
     reply.hijack();
     initSSE(reply);
 
     // 客户端断开时 abort（监听 response socket，不是 request）
-    reply.raw.on('close', () => { if (!ac.signal.aborted) { ac.abort(); clearTimeout(timer); } });
+    reply.raw.on('close', () => { if (!ac.signal.aborted) ac.abort(); });
 
     const stopHB = startHeartbeat(reply);
 
@@ -63,7 +64,6 @@ export async function delegateRoutes(app: FastifyInstance): Promise<void> {
       // runSubAgent 内部已消化所有错误，这里是最终兜底
       pushSSE(reply, { event: 'error', status: 'error', summary: '未知错误', rounds: 0 });
     } finally {
-      clearTimeout(timer);
       stopHB();
       endSSE(reply);
     }

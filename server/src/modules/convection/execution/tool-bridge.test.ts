@@ -8,6 +8,17 @@ const baseParams = {
   workspaceDir: 'data/convection/sessions/conv-a/workspace',
 };
 
+test('对流拒绝浏览器及其技能入口，不启动工具桥或 MCP', async () => {
+  const deps = {
+    callMcp: async () => { throw new Error('不应调用 MCP'); },
+    fetcher: async () => { throw new Error('不应调用工具桥'); },
+  };
+  for (const call of [callTool, callToolOutcome]) {
+    await assert.rejects(call({ ...baseParams, tool: 'browser' }, deps), /对流未开放/);
+    await assert.rejects(call({ ...baseParams, tool: 'use_skill', args: { skill: 'browser' } }, deps), /对流未开放/);
+  }
+});
+
 test('MCP 工具直接交给 MCP 执行器且不请求本地工具入口', async () => {
   let fetched = false;
   const result = await callTool(

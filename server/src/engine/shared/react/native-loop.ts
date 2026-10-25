@@ -11,9 +11,9 @@
 import type { ContextMessage, LLMOptions, ProviderReasoningEnvelope, ToolImageRef } from '../types';
 import type { TokenUsage } from '../llm-bridge';
 import type { ModelRequestUsageEvent } from '../model-request-usage.js';
-import { callPreparedModel, ModelCallTimeout } from './model-call.js';
-import { MAX_TURNS, MAX_CONTINUATIONS, MAX_NUDGES, HEARTBEAT_INTERVAL_MS } from './limits.js';
-export { MAX_TURNS, MAX_CONTINUATIONS, MAX_NUDGES, LLM_TIMEOUT_MS, HEARTBEAT_INTERVAL_MS } from './limits.js';
+import { callPreparedModel } from './model-call.js';
+import { MAX_TURNS, HEARTBEAT_INTERVAL_MS } from './limits.js';
+export { MAX_TURNS, HEARTBEAT_INTERVAL_MS } from './limits.js';
 import type { ToolPreparationProgress } from '../tool-progress';
 import { salvageToolArgs } from '../tool-bridge';
 import type { ToolArguments } from '../tool-arguments.js';
@@ -145,8 +145,7 @@ export interface NativeReActLoopParams extends ReActLoopParams {
    *
    * 设置后，循环的终结语义从"无 tool_call 即交付"翻转为"必须显式调用终结工具"：
    * - 模型某轮调用了 `completion.tool` → 该工具执行结果即最终交付，立刻终结（autoOutcome='completed'）。
-   * - 模型某轮无 tool_call（想用文本收尾）→ 绝不当交付，注入"继续/必须调用终结工具"提示推它继续（配额 MAX_NUDGES）。
-   * - 配额耗尽仍未调终结工具 → 判异常，返回 autoOutcome='anomaly'（调用方据此不封信、升级给人）。
+   * - 模型某轮无 tool_call（想用文本收尾）→ 绝不当交付，注入"继续/必须调用终结工具"提示推它继续。
    *
    * 用于信风自动模式（complete_task）。手动/普通会话不传 → 行为完全不变。
    */
@@ -226,9 +225,6 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
   const maxTurns = params.maxTurns ?? MAX_TURNS;
   const allToolCalls: ToolCallRecord[] = [];
   let latestUsage: TokenUsage | undefined;
-  let continuations = 0;
-  let continueNudge = 0; // completion 门：无终结工具时"继续"提示计数
-  let escalated = false; // completion 门：已进入"强制总结"升级阶段（此后收口一律判 anomaly）
   const answerParts: string[] = [];
   const allowedTools = new Set([
     ...toolDefs.map(tool => tool.name),
@@ -278,9 +274,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
           usage: latestUsage, termination: abortedTermination(),
         };
       }
-      const fallback = e instanceof ModelCallTimeout
-        ? reactErrorData('MODEL_TIMEOUT', 'timeout', '模型响应超时', 'react.native.model')
-        : reactErrorData('MODEL_REQUEST_FAILED', 'provider', '模型请求失败', 'react.native.model');
+      const fallback = reactErrorData('MODEL_REQUEST_FAILED', 'provider', '模型请求失败', 'react.native.model');
       const failure = reactError(e, fallback);
       onEvent?.({ type: 'error', message: failure.message });
       return {
@@ -301,10 +295,8 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       continue;
     }
 
-    // Exhaustion never turns a truncated answer or tool batch into a successful delivery.
     // A reasoning-only limited response has no body to continue from, so do not retry it blindly.
-    if (finishReason === 'length' && (continuations >= MAX_CONTINUATIONS
-      || (!toolCalls?.length && !content.trim()))) {
+    if (finishReason === 'length' && !toolCalls?.length && !content.trim()) {
       const failure = modelOutputLimitError('react.native.output');
       const partial = completeAnswer(answerParts, content);
       if (content.trim() || reasoningContent || reasoningEnvelope) {
@@ -320,52 +312,21 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
     // 无工具调用：普通模式交付文本；显式终结模式继续等待终结工具。
     if (!toolCalls || toolCalls.length === 0) {
       // length 截断且有内容时继续生成，不把半句当最终结果。
-      if (finishReason === 'length' && content.trim() && continuations < MAX_CONTINUATIONS) {
-        continuations++;
+      if (finishReason === 'length' && content.trim()) {
         answerParts.push(content);
         msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
         msgs.push({
           role: 'user',
           content: '【系统：续写指令】你上一条输出因长度上限被截断。请直接从被截断处紧接着往下写，补全剩余内容。严禁重复已输出的内容，严禁重头叙述。',
         });
-        continue; // 续写不计入 turn 收口
+        continue;
       }
       // 显式终结门（opt-in）：无 tool_call = 没有显式终结，绝不把文本当交付。
-      // 未显式终结时的三段处理：
-      //   1) 配额内：温和提示继续，推模型自己调用 completion.tool。
-      //   2) 配额耗尽：进入"强制总结"升级——命令模型立刻把进展写入信封并封口。此后收口一律判 anomaly。
-      //   3) 强制总结后仍不封口：系统替它封口（把末轮文本塞进备注），照样交接下游，只打 anomaly 标记。
       if (params.completion) {
-        if (escalated) {
-          const note = content.trim()
-            ? `【异常自动封口】模型多轮未显式调用 ${params.completion.tool}。以下为其最后输出，供下游参考：\n${content.trim()}`
-            : `【异常自动封口】模型多轮未显式完成，且末轮无有效输出。已按当前信封内容强制封口。`;
-          const sealed = tools
-            ? normalizeToolCallResult(await tools.call(params.completion.tool, { note })).result : note;
-          const failure = reactErrorData(
-            'REACT_COMPLETION_ANOMALY', 'protocol', '模型未显式完成任务，已异常封口', 'react.native.completion',
-          );
-          return {
-            content: sealed, rawContent: content, toolCalls: allToolCalls, turns: turn + 1,
-            usage: latestUsage, autoOutcome: 'anomaly', termination: anomalyTermination(failure),
-          };
-        }
-        if (continueNudge < MAX_NUDGES) {
-          continueNudge++;
-          msgs.push({
-            role: 'user',
-            content: content.trim()
-              ? `【系统提示】你输出了文本但没有调用任何工具。若工作已完成，必须调用 ${params.completion.tool} 封口并交接给下游——纯文本不代表完成；若尚未完成，请继续工作或调用所需工具。`
-              : `【系统提示】你的回复为空。请继续推进任务；完成后必须调用 ${params.completion.tool} 才会交接给下游。`,
-          });
-          continue;
-        }
-        // 配额耗尽 → 升级为强制总结（最后一次机会）
-        escalated = true;
-        msgs.push({
-          role: 'user',
-          content: `【系统强制指令】你已连续多轮未显式完成任务。现在立刻：把当前所有进展、结论与（若有）受阻原因，用 envelope_add 补全到交接信封，然后必须调用 ${params.completion.tool} 封口。这是最后一次机会——即使工作未尽善尽美，也要把已有内容交接下去。`,
-        });
+        msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
+        msgs.push({ role: 'user', content: content.trim()
+          ? `【系统提示】纯文本不代表交接完成。若工作已完成，请调用 ${params.completion.tool}；否则继续工作或使用所需工具。`
+          : `【系统提示】请继续推进任务；完成后调用 ${params.completion.tool} 交接。` });
         continue;
       }
 
@@ -400,14 +361,11 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       };
     }
 
-    continueNudge = 0; // 有工具调用 = 有进展，重置终结门的"继续"计数
-
     // ── 被截断的 tool_call：finishReason='length' 表示输出（含最后一个 tool_call 的参数 JSON）
     //    被 max_tokens 截断，参数大概率残缺。绝不拿残缺 JSON 去执行——否则 parse 失败→回填错误→
     //    模型重试→再截，陷入烧 token 的死循环。丢弃本次调用，提示模型缩短/分块后重发。
     //    注意：不把带 toolCalls 的 assistant 入历史（那会要求配对 tool 结果），只 push 纯文本。
     if (finishReason === 'length') {
-      continuations++;
       if (content.trim()) answerParts.push(content);
       msgs.push(createAssistantContextMessage(
         content || '（工具调用因输出长度上限被截断）', undefined, reasoningContent, reasoningEnvelope,
@@ -527,26 +485,19 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
         ...(toolImages?.length ? { toolImages } : {}) });
 
       // 显式终结门：模型调用了终结工具 → 其执行结果即最终交付，立刻收口。
-      // （同轮终结工具之后的其它 tool_call 不再处理——任务已声明完成。）
-      // 若是被"强制总结"逼出来的封口（escalated），仍照常交接下游，但打 anomaly 标记。
+      // 同轮终结工具之后的调用不再执行：任务已经完成。
       if (params.completion && tc.name === params.completion.tool && resultOk) {
         for (const skipped of toolCalls.slice(ti + 1)) {
           msgs.push(toolMessage(skipped.id, '（任务已完成，未执行）', false));
         }
-        const autoOutcome = escalated ? 'anomaly' : 'completed';
-        const termination = escalated
-          ? anomalyTermination(reactErrorData(
-            'REACT_COMPLETION_ANOMALY', 'protocol', '模型在强制升级后才完成任务', 'react.native.completion',
-          ))
-          : succeededTermination();
         return {
           content: result,
           rawContent: content,
           toolCalls: allToolCalls,
           turns: turn + 1,
           usage: latestUsage,
-          autoOutcome,
-          termination,
+          autoOutcome: 'completed',
+          termination: succeededTermination(),
         };
       }
     }

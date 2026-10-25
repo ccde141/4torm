@@ -45,10 +45,15 @@ for (const scope of ['public', 'chair'] as const) for (const failed of [false, t
     assert.equal(parentEvents, 0);
     assert.ok(events.length >= 3);
     assert.ok(events.every(event => event.purpose === 'compaction'));
-    assert.equal(new Set(events.map(event => event.id)).size, 1);
+    assert.equal(new Set(events.map(event => event.id)).size, failed ? 3 : 1);
     const saved = await service.require(session.id);
     const ledger = saved[scope === 'public' ? 'publicModelUsage' : 'chairModelUsage'];
-    assert.equal(ledger?.calls, 2);
+    assert.equal(ledger?.calls, failed ? 4 : 2);
+    if (failed) {
+      const attempts = Object.values(ledger!.requests).filter(request => request.purpose === 'compaction');
+      assert.equal(attempts.length, 3);
+      assert.ok(attempts.every(request => request.state === 'failed' && request.wasSent));
+    }
     assert.equal(ledger?.latest?.usage?.promptTokens, 50);
     assert.equal(ledger?.total.totalTokens, failed ? 60 : 369);
     assert.equal(saved[scope === 'public' ? 'chairModelUsage' : 'publicModelUsage'], undefined);

@@ -12,8 +12,7 @@ import { finishConvectionChairContext } from './chair-context.js';
 import { buildConvectionChairMessages } from './request-context.js';
 import { estimateCompactionTokens } from '../../../engine/shared/compaction/index.js';
 import { withConvectionModelUsage } from './model-usage.js';
-import { callPreparedModel, ModelCallTimeout } from '../../../engine/shared/react/model-call.js';
-import { LLM_TIMEOUT_MS } from '../../../engine/shared/react/limits.js';
+import { callPreparedModel } from '../../../engine/shared/react/model-call.js';
 
 const HEARTBEAT_INTERVAL_MS = 5_000;
 
@@ -119,8 +118,6 @@ function startChairHeartbeat(
 }
 
 function normalizeChairError(error: unknown): unknown {
-  if (error instanceof ModelCallTimeout) return chairError('MODEL_TIMEOUT', 'timeout',
-    `会议助理响应超时（${LLM_TIMEOUT_MS / 1000}s）`, error);
   if (error instanceof FrameworkError) return error;
   return chairError('MODEL_REQUEST_FAILED', 'provider', '模型请求失败', error);
 }

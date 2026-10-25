@@ -1,4 +1,17 @@
 [
+  {
+    "name": "read_image",
+    "description": "查看工作区或权限允许路径中的图片。支持 PNG、JPEG、GIF、WebP，单张不超过 8 MiB。返回图片内容供具备视觉能力的模型理解，不把图片编码作为文本输出。",
+    "category": "io",
+    "dangerous": false,
+    "executorType": "builtin",
+    "executorFile": "read_image",
+    "parameters": {
+      "type": "object",
+      "properties": { "filePath": { "type": "string", "description": "图片文件路径，相对路径基于当前工作区。" } },
+      "required": ["filePath"]
+    }
+  },
 
   {
     "name": "read_file",

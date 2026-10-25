@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { MAX_CONTINUATIONS, runReActLoopNative, type LLMCaller } from './native-loop.js';
+import { runReActLoopNative, type LLMCaller } from './native-loop.js';
 import type { ContextMessage } from '../types.js';
 import { frameworkError } from '../framework-error.js';
 
@@ -64,39 +64,37 @@ test('native loop reports repeated empty model output as failure', async () => {
   assert.equal(requests, 1);
 });
 
-test('native limited tool calls never execute after the continuation allowance, even with valid JSON', async () => {
+test('native truncated tool batches remain unexecuted across extended continuation', async () => {
   const messages: ContextMessage[] = [{ role: 'user', content: 'write once' }];
   let requests = 0; let executions = 0;
   const result = await runReActLoopNative({ messages,
     llm: { call: async () => {
       requests++;
       return { content: requests === 1 ? '原件已准备' : `本轮正文-${requests}`,
-        finishReason: requests === 1 ? 'tool_calls' : 'length',
-        toolCalls: [{ id: `write-${requests}`, name: 'write', arguments: '{"text":"valid JSON"}' }] };
+        finishReason: requests === 1 ? 'tool_calls' : requests < 10 ? 'length' : 'stop',
+        toolCalls: requests < 10 ? [{ id: `write-${requests}`, name: 'write', arguments: '{"text":"valid JSON"}' }] : undefined };
     } },
     tools: { call: async () => { executions++; return '已保存原件'; } },
     toolDefs: [{ name: 'write', description: 'write', parameters: { type: 'object' } }],
   });
-  assert.equal(requests, MAX_CONTINUATIONS + 2);
+  assert.equal(requests, 10);
   assert.equal(executions, 1);
   assert.equal(result.toolCalls.length, 1);
   assert.equal(result.toolCalls[0].result, '已保存原件');
-  assert.equal(result.termination.status, 'failed');
-  if (result.termination.status === 'failed') assert.equal(result.termination.error.code, 'MODEL_OUTPUT_LIMIT');
+  assert.equal(result.termination.status, 'succeeded');
   assert.match(result.content, /原件已准备/);
-  assert.match(result.content, /本轮正文-7/);
+  assert.match(result.content, /本轮正文-10/);
   assert.equal(messages.filter(message => message.toolCalls?.length).length, 1);
   assert.equal(messages.filter(message => message.role === 'tool').length, 1);
 });
 
-test('native retains every readable body fragment when continued output still reaches its limit', async () => {
+test('native retains all body fragments past the old continuation allowance', async () => {
   let requests = 0;
   const result = await runReActLoopNative({ messages: [{ role: 'user', content: 'long answer' }],
-    llm: { call: async () => ({ content: `正文-${++requests}`, finishReason: 'length' }) }, toolDefs: [],
+    llm: { call: async () => ({ content: `正文-${++requests}`, finishReason: requests < 10 ? 'length' : 'stop' }) }, toolDefs: [],
   });
-  assert.equal(requests, MAX_CONTINUATIONS + 1);
-  assert.equal(result.termination.status, 'failed');
-  if (result.termination.status === 'failed') assert.equal(result.termination.error.code, 'MODEL_OUTPUT_LIMIT');
+  assert.equal(requests, 10);
+  assert.equal(result.termination.status, 'succeeded');
   for (let index = 1; index <= requests; index++) assert.match(result.content, new RegExp(`正文-${index}`));
   assert.equal(result.rawContent, result.content);
 });

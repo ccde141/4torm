@@ -1,3 +1,4 @@
+import { resolveSubAgentRounds } from './sub-agent-budget.js';
 /**
  * SubAgentRunner —— 普通对话 sub-agent 核心执行循环
  *
@@ -20,6 +21,7 @@ import { runNativeSubAgent } from './native-sub-agent-runner.js';
 import { runTextSubAgent } from './text-sub-agent-executor.js';
 import path from 'node:path';
 import { buildSubAgentMeta } from './meta-prompt.js';
+import { withSubAgentDeadline } from './sub-agent-deadline.js';
 
 /** done 工具定义（SubAgent 专用） */
 const DONE_TOOL: ToolDef = {
@@ -77,7 +79,7 @@ function buildPromptSections(
 - 在最终 done 摘要中写明被保护的控制面目标
 - 让委托方改用对应专用工具或交由用户处理`,
     constraintsSection: [
-      `【硬性限制】你最多只能执行 ${maxRounds} 轮工具调用（每调用一次工具算一轮）。超出此限制任务直接失败，不会给你更多机会。`,
+      `【执行预算】最多执行 ${maxRounds} 轮模型与工具交互。请在预算内完成任务并汇报结果或阻塞。`,
       '【收口规则】当剩余轮次 ≤ 5 时，你必须停止新工具调用，立即用 done 汇报已获取的全部信息，并在 summary 中明确标注「剩余轮次不足，仅汇报已完成部分」。母 Agent 可以另派 SubAgent 继续未完成的工作。',
       '【执行策略】\n- 先规划再执行：收到任务先用 1-2 步了解全局结构\n- 避免盲读：不要逐文件读取整个目录，先用 list_directory/grep 定位关键文件\n- 进度过半时检查剩余轮次，收口阶段留 2-3 步余量\n- 信息足够时立即调用 done，宁可汇报不完整也不能超限失败',
       '【系统限制】你不可以调用 delegate 工具。任务完成后必须调用 done 提交结果。',
@@ -86,6 +88,10 @@ function buildPromptSections(
 }
 
 export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResult> {
+  return withSubAgentDeadline(params, (signal, emit) => executeSubAgent({ ...params, signal, emit }));
+}
+
+async function executeSubAgent(params: SubAgentParams): Promise<SubAgentResult> {
   const parentSandboxLevel = params.parentSandboxLevel ?? 'project';
   const emitEvent = (event: SubAgentEvent): void => { params.emit?.(event); };
   const agent = await loadAgent(params.dataDir, params.agentId);
@@ -97,11 +103,12 @@ export async function runSubAgent(params: SubAgentParams): Promise<SubAgentResul
 
   const model = resolveSubAgentModel(params.model, agent.model);
   const tools = await prepareTools(params.dataDir, agent);
-  const sections = buildPromptSections(agent, params.dataDir, params.maxRounds, parentSandboxLevel);
+  const maxRounds = resolveSubAgentRounds(params.maxRounds);
+  const sections = buildPromptSections(agent, params.dataDir, maxRounds, parentSandboxLevel);
   const execution = {
     agent, model, tools, systemPrompt: buildSubAgentMeta(params.systemPrompt), task: params.task,
-    context: params.context, dataDir: params.dataDir, ...sections,
-    maxRounds: params.maxRounds, signal: params.signal, emitEvent, parentSandboxLevel,
+    context: params.context, dataDir: params.dataDir, ...sections, compactionArea: params.compactionArea,
+    maxRounds, signal: params.signal, emitEvent, parentSandboxLevel,
   };
   const nativeDecision = await resolveNativeMode(params.dataDir, model);
   return nativeDecision.native

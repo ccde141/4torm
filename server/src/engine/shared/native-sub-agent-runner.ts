@@ -1,6 +1,8 @@
 import type { ToolArguments } from './tool-arguments.js';
 import { callLLM } from './llm-bridge.js';
 import type { LoadedAgent } from './agent-loader.js';
+import { subAgentCompaction } from './sub-agent-compaction.js';
+import type { CompactionArea } from './compaction/contracts.js';
 import type { ToolDef } from './tool-defs-loader.js';
 import type { SandboxLevel } from './sandbox-prompt.js';
 import type { ContextMessage } from './types.js';
@@ -27,6 +29,7 @@ export type NativeSubAgentEvent =
   | { type: 'done'; data: NativeSubAgentResult };
 
 export interface NativeSubAgentParams {
+  compactionArea?: CompactionArea;
   agent: LoadedAgent;
   model: string;
   tools: ToolDef[];
@@ -51,6 +54,7 @@ interface Runtime {
   doneSummary?: string;
   protocolError?: string;
   toolRounds: number;
+  loopTurns: number;
   doneController: AbortController;
   mainAbort: AbortLink;
   toolCaller: ToolCaller;
@@ -144,12 +148,13 @@ function createRuntime(params: NativeSubAgentParams): Runtime {
     params,
     messages: createMessages(params),
     toolRounds: 0,
+    loopTurns: 0,
     doneController,
     mainAbort,
   } as Runtime;
   runtime.toolCaller = { call: (tool, args) => executeRuntimeTool(runtime, tool, args) };
-  runtime.llm = {
-    call: (messages, _options, onChunk, signal, tools) => callLLM({
+  runtime.llm = subAgentCompaction({
+    call: (messages, _options, onChunk, signal, tools, onReasoning, onToolProgress) => callLLM({
       dataDir: params.dataDir,
       fullModelKey: params.model,
       messages,
@@ -157,8 +162,9 @@ function createRuntime(params: NativeSubAgentParams): Runtime {
       onChunk,
       signal,
       tools,
+      onReasoning, onToolProgress,
     }),
-  };
+  }, params);
   return runtime;
 }
 
@@ -176,10 +182,11 @@ async function runLoop(runtime: Runtime, maxTurns: number, signal: AbortSignal):
     llm: runtime.llm,
     tools: runtime.toolCaller,
     toolDefs: runtime.params.tools,
-    maxTurns,
+    maxTurns: Math.min(maxTurns, Math.max(0, runtime.params.maxRounds - runtime.loopTurns)),
     signal,
     onEvent: event => emitLoopEvent(runtime, event),
   });
+  runtime.loopTurns += result.turns;
   return result;
 }
 
@@ -221,7 +228,7 @@ async function runFallback(runtime: Runtime, main: LoopResult): Promise<NativeSu
     fallbackAbort.dispose();
   }
 
-  const rounds = runtime.params.maxRounds + retry.turns;
+  const rounds = runtime.loopTurns;
   const failure = terminalFailure(runtime, retry);
   if (failure) return finish(runtime, failure);
   if (runtime.doneSummary !== undefined) {
@@ -245,6 +252,9 @@ async function finishAfterMain(runtime: Runtime, main: LoopResult): Promise<Nati
       status: 'aborted', summary: 'SubAgent 被外部中止', rounds: runtime.toolRounds,
     });
   }
+  if (runtime.loopTurns >= runtime.params.maxRounds) return finish(runtime, {
+    status: 'timeout', summary: main.content || 'SubAgent 未能在规定轮次内完成', rounds: runtime.loopTurns,
+  });
   const reminder = await remindDone(runtime);
   const reminderFailure = reminder && terminalFailure(runtime, reminder);
   if (reminderFailure) return finish(runtime, reminderFailure);

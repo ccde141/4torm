@@ -4,6 +4,7 @@ import {
   execToolUnified, execToolUnifiedOutcome, type ExecToolDeps,
 } from '../../../engine/shared/exec-tool.js';
 import type { McpToolOutcome } from '../../../engine/shared/mcp-types.js';
+import { assertConvectionToolAllowed } from './tool-policy.js';
 
 export interface ConvectionToolCallParams {
   mediaAccess?: import('../../../engine/shared/tool-media-access.js').ToolMediaAccess;
@@ -20,6 +21,7 @@ export async function callTool(
   deps?: ExecToolDeps,
 ): Promise<string> {
   if (!params.tool) throw new Error('tool name must not be empty');
+  assertConvectionToolAllowed(params.tool, params.args);
   return execToolUnified({
     tool: params.tool,
     args: params.args,
@@ -35,6 +37,7 @@ export async function callToolOutcome(
   deps?: ExecToolDeps,
 ): Promise<McpToolOutcome> {
   if (!params.tool) throw new Error('tool name must not be empty');
+  assertConvectionToolAllowed(params.tool, params.args);
   return execToolUnifiedOutcome({
     mediaAccess: params.mediaAccess,
     tool: params.tool,

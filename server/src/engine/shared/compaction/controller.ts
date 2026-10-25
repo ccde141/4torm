@@ -7,8 +7,6 @@ import { estimateCompactionTokens } from './estimate.js';
 import { loadCompactionPolicy } from './policy.js';
 import { splitCompactionMessages } from './split.js';
 import { summarizeCompactionPrefix } from './summary.js';
-import { automaticCompactionDeadline } from './automatic-deadline.js';
-import { CompactionRequestTimeout } from './request-deadline.js';
 
 const gates = new Map<string, Promise<unknown>>();
 const arrayGates = new WeakMap<ContextMessage[], Promise<unknown>>();
@@ -29,8 +27,7 @@ export async function compactMessages(options: CompactMessagesOptions): Promise<
       startedAt: Date.now(), reason: options.reason };
     const emit = (event: Pick<CompactionProgress, 'type'> & Partial<CompactionProgress>) =>
       observe(() => options.onProgress?.({ ...progress, ...event, updatedAt: Date.now() }));
-    const deadline = options.reason === 'manual' ? undefined : automaticCompactionDeadline(options.signal);
-    const signal = deadline?.signal ?? options.signal;
+    const signal = options.signal;
     let plan: CompactionCommit;
     try {
       await emit({ type: 'compact-start' });
@@ -51,13 +48,12 @@ export async function compactMessages(options: CompactMessagesOptions): Promise<
       plan = { ...split, summary, messages, mode: options.mode, reason: options.reason };
       await options.commit?.(plan, signal);
     } catch (error) {
-      const failure = deadline?.signal.reason instanceof CompactionRequestTimeout
-        && error instanceof Error && error.name === 'AbortError' ? deadline.signal.reason : error;
+      const failure = signal?.aborted ? signal.reason ?? error : error;
       await emit({ type: 'compact-failed', aborted: options.signal?.aborted
         || (failure instanceof Error && failure.name === 'AbortError'),
       message: failure instanceof Error ? failure.message : String(failure) });
       throw failure;
-    } finally { deadline?.dispose(); }
+    }
     // Commit is the point of no return: late cancellation or observer failure cannot roll it back.
     options.messages.splice(0, options.messages.length, ...plan.messages);
     await observe(() => options.onCompacted?.(plan));

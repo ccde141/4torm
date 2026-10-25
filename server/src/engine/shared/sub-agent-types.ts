@@ -9,6 +9,7 @@ import type { SandboxLevel } from './sandbox-prompt.js';
 
 /** SubAgentRunner 入参 */
 export interface SubAgentParams {
+  compactionArea?: import('./compaction/contracts.js').CompactionArea;
   task: string;
   context: string;
   systemPrompt: string;
@@ -17,7 +18,8 @@ export interface SubAgentParams {
   model?: string;
   dataDir: string;
   signal: AbortSignal;
-  timeout: number;
+  /** 本次委托总时限（毫秒），默认且最多 60 分钟。 */
+  timeout?: number;
   maxRounds: number;
   /**
    * 母 Agent 的沙箱级别。Sub-agent 直接继承使用，不读自己的配置。

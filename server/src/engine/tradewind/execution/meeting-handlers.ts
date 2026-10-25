@@ -41,7 +41,6 @@ import { meetingCompactionTransform, meetingOpeningCaller } from './meeting-cont
 import { buildChairContext, captureChairContextBoundary, chairCompactionCaller, finishChairContext } from './chair-context-compaction.js';
 import { buildVirtualToolDefs } from './virtual-tools';
 import { appendMeetingReasoning, createChairAssistantMessage } from './meeting-reasoning';
-import { createMeetingIdleGuard, MEETING_IDLE_TIMEOUT_MS, withMeetingIdleGuard } from './meeting-idle-guard';
 import { resolveTradewindTermination } from './tradewind-outcome.js';
 import { FrameworkError } from '../../shared/framework-error.js';
 import type { ReActTermination } from '../../shared/react/outcome.js';
@@ -212,7 +211,6 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       if (!agent) continue;
 
       const label = participant.label;
-      const idleGuard = createMeetingIdleGuard(signal);
       session.streamingCurrent = { speaker: label, content: '', reasoning: '' };
       onEvent?.({ type: 'agent-start', label });
 
@@ -245,7 +243,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         ...meetingContextMessages(session.publicMessages),
       ];
       const compact = await meetingCompactionTransform(dataDir, session, agent.model);
-      const llmTransform = (llm: SharedLLMCaller) => withMeetingIdleGuard(compact(llm), idleGuard);
+      const llmTransform = compact;
 
       // toolCaller：双路径共用，contact 路由不变
       //
@@ -264,16 +262,15 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
             const args = legacyToolArguments(rawArgs);
             const target = args.target || '';
             onEvent?.({ type: 'contact-start', label, target });
-            const outcome = await execMeetingContact(args, label, session.meetingLabel, idleGuard.signal, session.executionId);
-            idleGuard.touch();
-            onEvent?.({ type: 'contact-done', label, target, result: outcome.result, ok: outcome.ok });
+            const outcome = await execMeetingContact(args, label, session.meetingLabel, signal, session.executionId);
+              onEvent?.({ type: 'contact-done', label, target, result: outcome.result, ok: outcome.ok });
             return outcome;
           }
           // 普通工具
           if (emitToolEvents) onEvent?.({ type: 'tool-call', label, tool, args: rawArgs });
           try {
             let meta: unknown;
-            const outcome = await execTool(tool, rawArgs, participant.agentId, workspace, idleGuard.signal, (m) => {
+            const outcome = await execTool(tool, rawArgs, participant.agentId, workspace, signal, (m) => {
               meta = m;
               onMeta?.(m);
             }, session.workflowId && session.executionId ? { dataDir, feature: 'tradewind', target: {
@@ -296,7 +293,6 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         lastPromptTokens?: number; termination: ReActTermination;
       };
 
-      try {
       if (nativeDecision.native) {
         // ── native 路径 ──
         // 虚拟工具 schema 注入（contact 必备；meeting 不允许 delegate）
@@ -320,11 +316,9 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           // adapter 自身只 emit token / error，这里只翻译这两类
           onEvent: (ev) => {
             if (ev.type === 'token') {
-              idleGuard.touch();
               if (session.streamingCurrent) session.streamingCurrent.content += ev.content;
               onEvent?.({ type: 'token', label, chunk: ev.content });
             } else if (ev.type === 'reasoning') {
-              idleGuard.touch();
               if (session.streamingCurrent) appendMeetingReasoning(session.streamingCurrent, ev.content);
               onEvent?.({ type: 'reasoning', label, chunk: ev.content });
             } else if (ev.type === 'error') {
@@ -335,7 +329,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
               recordMeetingRequest(session, ev, onEvent, label);
             }
           },
-          signal: idleGuard.signal,
+          signal,
         });
 
         result = {
@@ -373,15 +367,12 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
               contactTargets,
             }),
           ].map(tool => tool.name),
-          maxTurns: 100,
           onEvent: (ev) => {
             if (ev.type === 'token') {
-              idleGuard.touch();
               if (session.streamingCurrent) session.streamingCurrent.content += ev.chunk;
               onEvent?.({ type: 'token', label, chunk: ev.chunk });
             }
             if (ev.type === 'reasoning') {
-              idleGuard.touch();
               if (session.streamingCurrent) appendMeetingReasoning(session.streamingCurrent, ev.chunk);
               onEvent?.({ type: 'reasoning', label, chunk: ev.chunk });
             }
@@ -391,7 +382,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
             if (ev.type === 'tool-call') onEvent?.({ type: 'tool-call', label, tool: ev.tool, args: ev.args });
             if (ev.type === 'tool-result') onEvent?.({ ...ev, label });
           },
-          signal: idleGuard.signal,
+          signal,
         });
         result = {
           content: textResult.content,
@@ -401,22 +392,12 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           termination: textResult.termination,
         };
       }
-      } finally {
-        idleGuard.dispose();
-      }
 
       // 记录最后一个 participant 的 promptTokens
       if (result.lastPromptTokens) lastPromptTokens = result.lastPromptTokens;
 
-      // 外部中止是人类操作；静默超时和模型失败则必须进入错误终态。
+      // 外部中止由调用方确认；模型失败进入错误终态。
       const aborted = signal?.aborted;
-      if (idleGuard.timedOut()) {
-        throw new FrameworkError({
-          code: 'TRADEWIND_MEETING_TIMEOUT', kind: 'timeout',
-          message: `LLM 静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s 无响应）`,
-          source: 'tradewind.meeting', retryable: false,
-        });
-      }
       if (!aborted) resolveTradewindTermination(result.termination);
       const streamedContent = session.streamingCurrent?.content?.trim() || '';
       const reasoning = session.streamingCurrent?.reasoning || undefined;
@@ -490,15 +471,14 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
   const onReasoning = onEvent
     ? (chunk: string) => { onEvent({ type: 'chair-reasoning', chunk }); }
     : undefined;
-  const idleGuard = createMeetingIdleGuard(signal);
-  const caller = withMeetingIdleGuard(chairCompactionCaller({ call: (messages, _options, chunk, callSignal, _tools, reasoning) => callLLM({
+  const caller = chairCompactionCaller({ call: (messages, _options, chunk, callSignal, _tools, reasoning) => callLLM({
     dataDir, fullModelKey: agent.model, messages, onChunk: chunk, signal: callSignal, onReasoning: reasoning,
-  }) }, dataDir, session, agent), idleGuard);
+  }) }, dataDir, session, agent);
 
   try {
-    const r = await captureTokenUsage(() => callPreparedModel(caller, msgs, idleGuard.signal, {
-      onChunk: onChunk ? chunk => { idleGuard.touch(); onChunk(chunk); } : undefined,
-      onReasoning: onReasoning ? chunk => { idleGuard.touch(); onReasoning(chunk); } : undefined,
+    const r = await captureTokenUsage(() => callPreparedModel(caller, msgs, signal, {
+      onChunk: onChunk ? chunk => { onChunk(chunk); } : undefined,
+      onReasoning: onReasoning ? chunk => { onReasoning(chunk); } : undefined,
       onEvent: event => { if (event.type === 'model-request') recordMeetingRequest(session, event, onEvent, 'chair'); },
     }),
     usage => recordMeetingUsage(session, usage, onEvent, 'chair'),
@@ -508,16 +488,7 @@ export async function handleChair(opts: HandleChairOpts): Promise<void> {
     onEvent?.({ type: 'chair-done', content: r.content, reasoningContent: r.reasoningContent });
   } catch (e) {
     if (signal?.aborted) return;
-    if (idleGuard.timedOut()) {
-      throw new FrameworkError({
-        code: 'TRADEWIND_CHAIR_TIMEOUT', kind: 'timeout',
-        message: `LLM 静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s 无响应）`,
-        source: 'tradewind.meeting.chair', retryable: false,
-      }, { cause: e });
-    }
     throw e;
-  } finally {
-    idleGuard.dispose();
   }
 }
 
@@ -593,23 +564,21 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
       timestamp: Date.now(),
       streaming: true,
     });
-    const idleGuard = createMeetingIdleGuard(signal);
 
     try {
       let streamRaw = '';
-      const caller = withMeetingIdleGuard(await meetingOpeningCaller({ call: (context, _options, chunk, callSignal, _tools, reasoning) => callLLM({
+      const caller = await meetingOpeningCaller({ call: (context, _options, chunk, callSignal, _tools, reasoning) => callLLM({
         dataDir, fullModelKey: agent.model, messages: context, onChunk: chunk,
         signal: callSignal, onReasoning: reasoning,
-      }) }, dataDir, session, agent.model, participant), idleGuard);
-      const r = await captureTokenUsage(() => callPreparedModel(caller, messages, idleGuard.signal, {
+      }) }, dataDir, session, agent.model, participant);
+      const r = await captureTokenUsage(() => callPreparedModel(caller, messages, signal, {
         onChunk: (chunk) => {
-          idleGuard.touch(); streamRaw += chunk;
+          streamRaw += chunk;
           const slot = session.publicMessages[placeholderIdx];
           if (slot) slot.content = streamRaw;
           onEvent?.({ type: 'token', label, chunk });
         },
         onReasoning: (chunk) => {
-          idleGuard.touch();
           const slot = session.publicMessages[placeholderIdx];
           if (slot) appendMeetingReasoning(slot, chunk);
           onEvent?.({ type: 'reasoning', label, chunk });
@@ -630,7 +599,7 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
     } catch (e) {
       if (e instanceof TokenUsageRecordError) throw e;
       if ((e as Error).name === 'AbortError' && signal?.aborted) return;
-      const reason = idleGuard.timedOut() ? `静默超时（${MEETING_IDLE_TIMEOUT_MS / 1000}s）` : (e as Error).message;
+      const reason = (e as Error).message;
       const errText = `（${label} 入会摘要生成失败：${reason}）`;
       const slot = session.publicMessages[placeholderIdx];
       if (slot) {
@@ -638,8 +607,6 @@ export async function handleMeetingOpen(opts: HandleMeetingOpenOpts): Promise<vo
         slot.streaming = false;
       }
       onEvent?.({ type: 'agent-done', label, content: errText });
-    } finally {
-      idleGuard.dispose();
     }
   }
 
@@ -1010,4 +977,3 @@ export function buildMeetingAgentPrompt(
 
   return sections.join('\n\n---\n\n');
 }
-

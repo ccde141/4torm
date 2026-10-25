@@ -29,13 +29,21 @@ export function readToolImageRefs(value: unknown): ToolImageRef[] {
 
 /** A tool is never replayed when publishing its returned image fails. */
 export async function persistMcpToolOutcome(dataDir: string, outcome: McpToolOutcome): Promise<McpToolOutcome> {
+  return persistToolOutcome(dataDir, outcome, 'MCP');
+}
+
+/** Local and MCP tool images share durable references and validation. */
+export async function persistToolOutcome(
+  dataDir: string, outcome: McpToolOutcome, source = '工具',
+): Promise<McpToolOutcome> {
+  const label = source === 'MCP' ? 'MCP ' : source;
   const { inlineImages, ...stored } = outcome;
   if (!inlineImages?.length) return stored;
   const toolImages = readToolImageRefs(stored.toolImages);
   const notices: string[] = [];
   for (let index = 0; index < inlineImages.length; index++) {
     if (toolImages.length >= MAX_IMAGES) {
-      notices.push('MCP 返回的图片超过单次 4 张上限，其余图片未保存。');
+      notices.push(`${label}返回的图片超过单次 4 张上限，其余图片未保存。`);
       break;
     }
     try {
@@ -49,9 +57,10 @@ export async function persistMcpToolOutcome(dataDir: string, outcome: McpToolOut
         await fs.writeFile(temporary, data, { flag: 'wx' });
         await fs.rename(temporary, file);
       } catch (error) { await fs.rm(temporary, { force: true }).catch(() => {}); throw error; }
-      toolImages.push({ id, name: `mcp-image-${index + 1}.${extension}`, mimeType: image.mimeType, size: data.length });
+      toolImages.push({ id, name: `${source === 'MCP' ? 'mcp' : 'tool'}-image-${index + 1}.${extension}`,
+        mimeType: image.mimeType, size: data.length });
     } catch (error) {
-      notices.push(`MCP 第 ${index + 1} 张图片未保存：${saveFailure(error)}。`);
+      notices.push(`${label}第 ${index + 1} 张图片未保存：${saveFailure(error)}。`);
     }
   }
   return { ...stored, result: [stored.result, ...notices].filter(Boolean).join('\n'),

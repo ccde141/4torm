@@ -110,7 +110,7 @@ async function execLocalToolBridge(
   const data = await readToolBridgeResponse(res);
   if (data.meta !== undefined && data.meta !== null) onMeta?.(data.meta);
   if (data.observationId) onObservationId?.(data.observationId);
-  return { result: data.result, ok: data.ok };
+  return { result: data.result, ok: data.ok, ...(data.toolImages?.length ? { toolImages: data.toolImages } : {}) };
 }
 
 /** Status-aware route for ToolCaller; the string API above remains available. */
@@ -123,5 +123,7 @@ export async function execToolUnifiedOutcome(
     if (opts.mediaAccess) rememberToolImages(opts.mediaAccess, outcome.toolImages);
     return outcome;
   }
-  return execLocalToolBridge(opts, deps);
+  const outcome = await execLocalToolBridge(opts, deps);
+  if (opts.mediaAccess) rememberToolImages(opts.mediaAccess, outcome.toolImages);
+  return outcome;
 }
