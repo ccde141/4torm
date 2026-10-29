@@ -4,10 +4,11 @@ import { TeamStore } from './store.js';
 import { TeamRuntime } from './runtime.js';
 import { memberExecutor } from './executor.js';
 import { teamExtension } from './tools.js';
+import type { ReportDeliveryEvidence } from './report-delivery.js';
 
 export class SessionTeams {
   private readonly teams = new Map<string, TeamRuntime>();
-  async extension(opts: SessionRunnerOpts) {
+  async extension(opts: SessionRunnerOpts, readDeliveryEvidence?: () => Promise<ReportDeliveryEvidence[]>) {
     const key = `${opts.agentId}/${opts.sessionId}`;
     let runtime = this.teams.get(key);
     if (!runtime) {
@@ -18,7 +19,7 @@ export class SessionTeams {
     await runtime.store.recoverInterrupted();
     const tools = await loadAgentToolDefs(opts.dataDir, opts.toolNames, opts.skillIds, opts.toolMode);
     return teamExtension(runtime, { tools: tools.map(tool => tool.name), skills: opts.skillIds,
-      sandboxLevel: opts.sandboxLevel === 'unrestricted' ? 'unrestricted' : 'project' });
+      sandboxLevel: opts.sandboxLevel === 'unrestricted' ? 'unrestricted' : 'project' }, readDeliveryEvidence);
   }
   stop(sessionId: string): boolean {
     let stopped = false;

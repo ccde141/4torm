@@ -3,7 +3,7 @@ import { logModelDiagnostic } from '../../../config/developer-mode.js';
 import type { LoadedAgent } from '../../../engine/shared/agent-loader.js';
 import { resolveNativeMode } from '../../../engine/shared/llm-bridge.js';
 import { frameworkTransportErrorFromUnknown } from '../../../engine/shared/framework-error-transport.js';
-import { saveSession, type ConvectionSessionData } from '../infrastructure/session-store.js';
+import { saveSession, type ConvectionSessionData, type ConvectionMessage } from '../infrastructure/session-store.js';
 import { runConvectionReAct, type AgentReActResult, type ConvectionReActEvent } from './convection-react-adapter.js';
 import { appendConvectionReasoning, buildConvectionMessage } from './convection-reasoning.js';
 import { resolveConvectionContent } from './convection-outcome.js';
@@ -15,6 +15,7 @@ import { loadRequiredAgent, loadRoundAgents, roundAgent, type RoundAgentSnapshot
 import { recordPublicUsage } from './session-view.js';
 import type { ConvectionEventSink } from './stream-events.js';
 import { withConvectionModelUsage } from './model-usage.js';
+import { ConvectionParticipantDisplay } from './participant-display.js';
 
 export async function handleSpeak(
   dataDir: string,
@@ -24,6 +25,11 @@ export async function handleSpeak(
   signal?: AbortSignal,
   runId?: string,
 ): Promise<void> {
+  if (session.publicExecutionDraft) {
+    session.publicMessages.push({ ...session.publicExecutionDraft,
+      execution: { status: 'stopped', message: '上次执行中断，以下保留已接收的过程。' } });
+    session.publicExecutionDraft = undefined;
+  }
   // 人类输入已开启新一轮；即使压缩前进程退出，也不展示上一轮的最近请求。
   session.publicLatestTokenUsage = undefined;
   session.compactionNotice = undefined;
@@ -72,9 +78,10 @@ async function executeParticipant(context: SequenceContext, agentId: string): Pr
   const native = (await resolveNativeMode(dataDir, agent.model)).native;
   logModelDiagnostic(`[convection] ${agent.name} (${agent.model}) → tools=${native ? 'structured' : 'text'}`);
   const execution = await withAgentActivity(agentId, 'convection', () => (
-    runParticipantModel(dataDir, session, agent, native, emit, signal)
+    runParticipantModel(dataDir, session, agent, native, emit, signal, context.runId)
   ));
-  persistParticipantResult(session, agent, execution.result, execution.reasoning, emit, context.runId);
+  persistParticipantResult(session, agent, execution.result, execution.reasoning, emit, context.runId,
+    execution.compactions, execution.displayContent);
 }
 
 async function runParticipantModel(
@@ -84,10 +91,19 @@ async function runParticipantModel(
   native: boolean,
   emit?: ConvectionEventSink,
   signal?: AbortSignal,
-): Promise<{ result: AgentReActResult; reasoning: string }> {
-  let reasoning = '';
+  runId?: string,
+): Promise<{ result: AgentReActResult; reasoning: string;
+  compactions: NonNullable<ConvectionMessage['compactions']>; displayContent: string }> {
+  const display = new ConvectionParticipantDisplay(agent, runId);
+  const compactionEvents: ConvectionEventSink = event => {
+    if (event.type === 'compact-done' && event.summary) {
+      const boundary = display.boundary({ id: event.id, summary: event.summary });
+      display.compactions.push(boundary);
+      emit?.({ ...event, agentId: agent.id, boundary });
+    } else emit?.(event);
+  };
   const forward = (event: ConvectionReActEvent) => {
-    if (event.type === 'reasoning') reasoning += event.chunk ?? '';
+    display.receive(event);
     if (event.type === 'usage') {
       emit?.({ type: 'usage', usage: session.publicLatestTokenUsage ?? null });
       return;
@@ -100,15 +116,23 @@ async function runParticipantModel(
     agentId: agent.id, sessionId: session.id, label: built.agent.name,
     messages: built.messages, onEvent: forward, signal,
     llm: createConvectionCompactionCaller({ dataDir, session, agent, chair,
-      messages: built.messages, kind: 'public', emit }),
+      messages: built.messages, kind: 'public', emit: compactionEvents,
+      displayDraft: compaction => display.snapshot(compaction) }),
     onUsage: async (usage: import('../../../engine/shared/llm-bridge.js').TokenUsage | null) => {
       recordPublicUsage(session, usage);
       await saveSession(dataDir, session);
     } };
-  const result = native
-    ? await runConvectionReActNative({ ...common, toolDefs: built.toolDefs })
-    : await runConvectionReAct({ ...common, allowedTools: built.toolDefs.map(tool => tool.name) });
-  return { result, reasoning };
+  try {
+    const result = native
+      ? await runConvectionReActNative({ ...common, toolDefs: built.toolDefs })
+      : await runConvectionReAct({ ...common, allowedTools: built.toolDefs.map(tool => tool.name) });
+    if (result.termination.status === 'aborted') await display.preserve(dataDir, session, undefined, true);
+    else resolveConvectionContent(result.cleanContent, result.termination);
+    return { result, reasoning: display.reasoning, compactions: display.compactions, displayContent: display.content };
+  } catch (error) {
+    await display.preserve(dataDir, session, error, signal?.aborted);
+    throw error;
+  }
 }
 
 function forwardParticipantEvent(
@@ -137,14 +161,18 @@ function persistParticipantResult(
   reasoning: string,
   emit?: ConvectionEventSink,
   runId?: string,
+  compactions?: ConvectionMessage['compactions'], displayContent?: string,
 ): void {
   const content = resolveConvectionContent(result.cleanContent, result.termination);
   if (!content) return;
+  session.publicExecutionDraft = undefined;
   session.publicMessages.push({ ...buildConvectionMessage({
     agentId: agent.id, speaker: agent.name, content, timestamp: Date.now(),
     rawContent: result.rawContent || undefined, reasoning: reasoning || undefined,
     toolCalls: result.toolCalls,
+    compactions, displayContent,
   }), ...(runId ? { runId } : {}) });
   emit?.({ type: 'agent-done', agentId: agent.id, label: agent.name, content,
-    rawContent: result.rawContent, reasoning: reasoning || undefined, toolCalls: result.toolCalls });
+    rawContent: result.rawContent, reasoning: reasoning || undefined, toolCalls: result.toolCalls,
+    ...(compactions?.length ? { compactions, displayContent } : {}) });
 }

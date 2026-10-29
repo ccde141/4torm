@@ -1,5 +1,5 @@
 import BoundedText from '../../engine/text-display/BoundedText';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { updateTask, type TideRunRecord, type TideRunState, type TideTask } from '../../api/tide';
 import { useLocale } from '../../i18n/LocaleContext';
 import { buildTideSchedule, parseTideScheduleForm, validateTideScheduleForm } from './tide-form-values';
@@ -11,6 +11,7 @@ import { useTideUsage } from './tide-token-label';
 import { CompactionNotice } from '../../components/common/CompactionNotice';
 import { CompactionStatus } from '../../components/common/CompactionStatus';
 import { compactionActivity } from '../../components/common/compaction-activity';
+import { useConfirm } from '../../components/common/ConfirmDialog';
 
 interface TideTaskDetailProps {
   task: TideTask;
@@ -19,7 +20,7 @@ interface TideTaskDetailProps {
   runState: TideRunState | null;
   running?: boolean;
   onViewSession: (sessionId: string, agentId?: string) => void;
-  onDeleteSession: () => void;
+  onDeleteSession: (taskId: string, agentId: string) => Promise<void>;
   onUpdated: (task: TideTask) => void;
 }
 
@@ -31,11 +32,13 @@ function createForm(task: TideTask) {
 export default function TideTaskDetail({ task, agentName, runs, runState, running = false,
   onViewSession, onDeleteSession, onUpdated }: TideTaskDetailProps) {
   const { t } = useLocale();
+  const confirm = useConfirm();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState(() => createForm(task));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [confirmingSessionDelete, setConfirmingSessionDelete] = useState(false);
+  const [deletingSession, setDeletingSession] = useState(false);
+  const deletionPending = useRef(false);
   const canDeleteSession = !task.enabled && !running && !!task.targetSessionId && task.pushMode === 'accumulate';
   const tokenUsage = useTideUsage(`${task.agentId}:${task.id}`, runState?.usage?.latest
     ?? runs.find(run => run.usage?.latest)?.usage?.latest,
@@ -43,14 +46,20 @@ export default function TideTaskDetail({ task, agentName, runs, runState, runnin
     || runState?.compaction?.type === 'compact-start');
 
   useEffect(() => {
-    if (!confirmingSessionDelete) return;
-    const timeout = setTimeout(() => setConfirmingSessionDelete(false), 3000);
-    return () => clearTimeout(timeout);
-  }, [confirmingSessionDelete]);
-
-  useEffect(() => {
-    setForm(createForm(task)); setEditing(false); setError(''); setConfirmingSessionDelete(false);
+    setForm(createForm(task)); setEditing(false); setError('');
   }, [task.id]);
+
+  const removeSession = async () => {
+    if (deletionPending.current || !canDeleteSession) return;
+    deletionPending.current = true;
+    setDeletingSession(true);
+    try {
+      if (await confirm({ title: t('tide.detail.deleteSessionTitle', { name: task.name }),
+        message: t('tide.detail.deleteSessionMessage'), confirmText: t('common.delete'), danger: true })) {
+        await onDeleteSession(task.id, task.agentId);
+      }
+    } finally { deletionPending.current = false; setDeletingSession(false); }
+  };
 
   const handleSave = async () => {
     if (saving || task.enabled || running) return;
@@ -80,7 +89,7 @@ export default function TideTaskDetail({ task, agentName, runs, runState, runnin
         saving={saving} error={error} selfLoop={task.selfLoop} retainedContext={task.pushMode === 'accumulate'} />
     </> : <>
       <TideTaskOverview task={task} agentName={agentName} usage={tokenUsage} running={running} runState={runState}>
-        {!task.enabled && !running && <button type="button" className="tide-detail__button"
+        {!task.enabled && !running && <button type="button" className="tide-detail__button" disabled={deletingSession}
           onClick={() => { setForm(createForm(task)); setError(''); setEditing(true); }}>
           <TideIcon name="settings" />{t('tide.detail.edit')}</button>}
       </TideTaskOverview>
@@ -89,10 +98,8 @@ export default function TideTaskDetail({ task, agentName, runs, runState, runnin
         <div className="tide-detail__prompt-text"><BoundedText text={task.prompt} /></div>
         {canDeleteSession && <footer>
           <button type="button" className="tide-detail__button tide-detail__button--danger"
-            data-confirming={confirmingSessionDelete} onClick={() => {
-              if (confirmingSessionDelete) { setConfirmingSessionDelete(false); onDeleteSession(); }
-              else setConfirmingSessionDelete(true);
-            }}><TideIcon name="archive" />{t(confirmingSessionDelete ? 'tide.detail.confirmDeleteSession' : 'tide.detail.deleteSession')}</button>
+            disabled={deletingSession} onClick={() => void removeSession()}>
+            <TideIcon name="archive" />{t('tide.detail.deleteSession')}</button>
         </footer>}
       </section>
     </>}

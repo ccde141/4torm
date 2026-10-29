@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import type { ConvectionSessionData, ConvectionMessage } from '../infrastructure/session-store.js';
+import { convectionRecordText } from './compaction-context.js';
 
 /** Public observations are history, never an unbounded protected system instruction. */
 export function buildConvectionChairContext(
@@ -12,7 +13,8 @@ export function buildConvectionChairContext(
   const active = session.chairActiveContext && (!anchor || seen >= 0);
   return [system, ...(active ? session.chairActiveContext! : []),
     ...session.publicMessages.slice(active ? seen + 1 : 0).map(message => ({
-      role: 'user' as const, content: `[公共会议：${message.speaker}] ${message.content}`,
+      role: 'user' as const, content: `[公共会议：${message.speaker}] ${convectionRecordText(message)}`,
+      origin: message.speaker === '人类' ? 'human' as const : 'framework' as const,
     })),
     ...session.chairMessages.slice(active ? session.chairContextRawCount ?? 0 : 0)
       .map(({ runId: _runId, ...message }) => ({ ...message }))];
@@ -44,10 +46,10 @@ export function convectionChairBoundaries(messages: readonly ContextMessage[]): 
   const boundaries: number[] = [];
   for (let end = 2; end <= messages.length; end++) {
     const next = messages[end];
-    const previousIsPublic = messages[end - 1].content.startsWith('[公共会议：');
     const nextIsPublic = next?.content.startsWith('[公共会议：');
+    const previousIsPublic = messages[end - 1].content.startsWith('[公共会议：');
     if (!next || (next.role === 'user' && (!nextIsPublic || next.content.startsWith('[公共会议：人类]')))
-      || (previousIsPublic && !nextIsPublic)) boundaries.push(end);
+      || previousIsPublic) boundaries.push(end);
   }
   return boundaries;
 }

@@ -1,4 +1,4 @@
-export type StreamPhase = 'queued' | 'llm-waiting' | 'model-output' | 'tool-preparing' | 'tool-exec';
+export type StreamPhase = 'queued' | 'llm-waiting' | 'model-output' | 'tool-preparing' | 'tool-exec' | 'team-waiting';
 
 function formatElapsed(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
@@ -15,6 +15,7 @@ export function formatStreamStatus(
 ): string {
   const suffix = elapsed > 0 ? ` ${formatElapsed(elapsed)}` : '';
   if (locale === 'en-US') {
+    if (phase === 'team-waiting') return `Waiting for team${tool ? ` · ${tool}` : ''}${suffix}...`;
     if (phase === 'queued') return `Waiting for Agent availability${suffix}...`;
     if (phase === 'model-output') return `Model is responding${suffix}...`;
     if (phase === 'tool-preparing') {
@@ -27,6 +28,7 @@ export function formatStreamStatus(
     return `Waiting for model response${suffix}...`;
   }
   if (phase === 'queued') return `等待 Agent 空闲${suffix}...`;
+  if (phase === 'team-waiting') return `等待工作队${tool ? ` · ${tool}` : ''}${suffix}...`;
   if (phase === 'model-output') return `模型正在生成${suffix}...`;
   if (phase === 'tool-preparing') {
     const size = argumentChars && argumentChars > 0

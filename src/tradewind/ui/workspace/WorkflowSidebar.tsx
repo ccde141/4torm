@@ -1,4 +1,5 @@
 import { useId, useRef, useState } from 'react';
+import { useConfirm } from '../../../components/common/ConfirmDialog';
 import { WorkflowModeHelp } from './WorkflowModeHelp';
 import { visibleWorkflows, workflowTypeCounts } from './sidebar-model';
 import { useWorkspaceCopy } from './workspace-copy';
@@ -75,16 +76,20 @@ type CardsProps = Pick<WorkflowSidebarProps, 'selectedId' | 'onSelect' | 'onDele
 
 function WorkflowCards({ items, selectedId, acknowledged, onAcknowledge, onSelect, onDelete }: CardsProps) {
   const { copy } = useWorkspaceCopy();
-  const [confirming, setConfirming] = useState<{ id: string; revision: string } | null>(null);
+  const confirm = useConfirm();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const deleting = useRef(false);
-  const remove = async (workflowId: string, revision: string) => {
+  const remove = async (item: WorkflowSidebarItem) => {
     if (deleting.current) return;
     deleting.current = true;
-    setPending(workflowId);
+    setPending(item.workflowId);
     setError(null);
-    try { await onDelete(workflowId, revision); setConfirming(null); }
+    try {
+      if (!await confirm({ title: copy.deleteTitle.replace('{name}', item.name),
+        message: copy.deleteWarning, confirmText: copy.confirmDelete, danger: true })) return;
+      await onDelete(item.workflowId, item.revision);
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : copy.deleteFailed); }
     finally { deleting.current = false; setPending(null); }
   };
@@ -97,15 +102,9 @@ function WorkflowCards({ items, selectedId, acknowledged, onAcknowledge, onSelec
         onAcknowledge(item); onSelect(id);
       }} />
       {!item.isDraft && <div className="tw-workflow-card__delete">
-        {confirming?.id === item.workflowId ? <div className="tw-workflow-card__confirm">
-          <small>{copy.deleteWarning}</small><div>
-            <button type="button" disabled={Boolean(pending)} onClick={() => setConfirming(null)}>{copy.cancel}</button>
-            <button type="button" disabled={Boolean(pending)} className="is-danger"
-              onClick={() => void remove(item.workflowId, confirming.revision)}>
-              {pending === item.workflowId ? copy.deleting : copy.confirmDelete}</button>
-          </div></div> : <button type="button" className="tw-workflow-card__delete-trigger"
+        <button type="button" className="tw-workflow-card__delete-trigger"
             disabled={Boolean(pending)} aria-label={`${copy.delete}：${item.name}`} title={copy.delete}
-            onClick={() => setConfirming({ id: item.workflowId, revision: item.revision })}>×</button>}
+            onClick={() => void remove(item)}>×</button>
       </div>}
     </article>)}
   </>;

@@ -19,7 +19,7 @@ async function fixture(t: TestContext) {
   const registry = agentRegistryFile(dataDir);
   await fs.mkdir(path.dirname(registry), { recursive: true });
   await fs.writeFile(registry, JSON.stringify({ 'agent-a': { name: '统筹' }, 'agent-b': { name: '核验' } }));
-  const feature = createCycloneFeature({ dataDir, summarizer: { summarize: async () => '保留的项目摘要' } });
+  const feature = createCycloneFeature({ dataDir, summarizer: { summarize: async () => ({ summary: '保留的项目摘要', retainedIndexes: [] }) } });
   t.after(async () => {
     feature.dispose(); await feature.supervisor.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });

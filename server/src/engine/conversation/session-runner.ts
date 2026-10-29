@@ -19,6 +19,7 @@ import { ConversationInputRuntime } from './input-runtime.js';
 import { readInputJournal } from './input-journal.js';
 import { inputError } from './input-inbox.js';
 import { executeSessionLoop } from './session-loop.js';
+import { ConversationContextObservation } from './context-observation.js';
 import type { ConversationEvent, SessionRunnerOpts } from './session-runner-contracts.js';
 
 export type { ConversationEvent, SessionRunnerOpts } from './session-runner-contracts.js';
@@ -32,6 +33,8 @@ export class SessionRunner {
   private suspendedState: { messages: ContextMessage[]; systemPrompt: string; pendingToolCallId?: string } | null = null;
   private pendingToolRegistration: ToolRegistrationProposal | null = null;
   private inputRuntime: ConversationInputRuntime | null = null;
+  private contextObservation?: ConversationContextObservation;
+  getCurrentInput() { return this.contextObservation?.ready ? this.contextObservation.read() : undefined; }
   getInputRuntime(): ConversationInputRuntime | null { return this.inputRuntime; }
 
   constructor(opts: SessionRunnerOpts) { this.opts = opts; }
@@ -82,9 +85,9 @@ export class SessionRunner {
         onEvent,
       });
     } else if (pendingToolCallId) {
-      messages.push({ role: 'tool', toolCallId: pendingToolCallId, content: answer });
+      messages.push({ role: 'tool', toolCallId: pendingToolCallId, content: answer, origin: 'human' });
     } else {
-      messages.push({ role: 'user', content: formatTextToolResult('ask', answer, true) });
+      messages.push({ role: 'user', content: formatTextToolResult('ask', answer, true), origin: 'human' });
     }
 
     try {
@@ -146,6 +149,9 @@ export class SessionRunner {
     onEvent: (ev: ConversationEvent) => void,
   ): Promise<{ content: string; rawContent: string }> {
     const signal = this.abortController!.signal;
+    this.contextObservation = this.opts.mainAgent && this.opts.sessionId
+      ? new ConversationContextObservation(this.opts.dataDir, this.opts.model,
+        this.inputRuntime?.owner.runId ?? 'session', estimate => onEvent({ type: 'current-input', estimate })) : undefined;
     const externalAbort = () => this.abort();
     this.opts.signal?.addEventListener('abort', externalAbort, { once: true });
     if (this.opts.signal?.aborted) externalAbort();
@@ -156,6 +162,7 @@ export class SessionRunner {
         messages: chatMessages,
         inputRuntime: this.inputRuntime,
         signal,
+        observeContext: this.contextObservation,
         emit: onEvent,
         setPendingRegistration: proposal => { this.pendingToolRegistration = proposal; },
         suspend: state => {
@@ -165,7 +172,8 @@ export class SessionRunner {
       });
     } finally {
       this.opts.signal?.removeEventListener('abort', externalAbort);
-      await this.opts.checkpoint?.(chatMessages);
+      try { await this.opts.checkpoint?.(chatMessages); }
+      finally { this.contextObservation = undefined; }
     }
   }
 }

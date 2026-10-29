@@ -94,6 +94,7 @@ function validContextMessage(value: unknown): value is ContextMessage {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const message = value as ContextMessage;
   if (!['assistant', 'user', 'tool'].includes(message.role) || typeof message.content !== 'string') return false;
+  if (message.origin !== undefined && !['human', 'framework'].includes(message.origin)) return false;
   if (message.reasoningContent !== undefined && typeof message.reasoningContent !== 'string') return false;
   if (message.toolCallId !== undefined && (message.role !== 'tool' || typeof message.toolCallId !== 'string' || !message.toolCallId)) return false;
   if (message.toolCalls !== undefined && (message.role !== 'assistant' || !Array.isArray(message.toolCalls)

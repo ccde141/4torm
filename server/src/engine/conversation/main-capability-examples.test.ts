@@ -31,7 +31,7 @@ function definitions(descriptor: FrameworkCapabilityDescriptor, actions: string[
   }));
 }
 
-test('功能岛示例引用真实公开 action，位于规则之后和实时定义之前', async () => {
+test('功能岛二级示例引用公开操作，正文不混入三级目录或字段', async () => {
   await withModules(modules => {
     const bindings = new CollaborationRouter(modules).listAgentTools();
     for (const module of modules) {
@@ -41,13 +41,21 @@ test('功能岛示例引用真实公开 action，位于规则之后和实时定�
       const names = new Set(island.map(binding => binding.definition.name));
       const guide = renderMainCapabilityGuide(descriptor.id,
         bindings.map(binding => binding.definition), null);
+      const catalog = bindings.map(binding => binding.definition);
+      const publicGuide = renderMainCapabilityGuide(descriptor.id, [], null, undefined, { catalog });
+      assert.ok(publicGuide.includes(descriptor.guidance));
+      assert.doesNotMatch(publicGuide, /#### action:|input JSON Schema：/);
+      assert.throws(() => renderMainCapabilityGuide(descriptor.id, [], null, undefined,
+        { catalog, view: 'tools' }), /FRAMEWORK_GUIDE_UNAVAILABLE/);
+      const index = renderMainCapabilityGuide(descriptor.id, catalog, null, undefined, { view: 'tools' });
+      assert.ok(index.includes(island[0].definition.name));
+      assert.doesNotMatch(index, /input JSON Schema：/);
+      const detail = renderMainCapabilityGuide(descriptor.id, catalog, null, island[0].definition.name);
+      assert.ok(detail.includes(JSON.stringify(island[0].definition.parameters ?? {})));
       const exampleAt = guide.indexOf('### 使用示例');
-      const definitionAt = descriptor.actionGuide
-        ? guide.indexOf(`- \`${island[0].definition.name}\``)
-        : guide.indexOf(`#### action: ${island[0].definition.name}`);
       assert.ok(exampleAt > guide.indexOf(descriptor.guidance), descriptor.id);
-      assert.ok(exampleAt < definitionAt, descriptor.id);
-      const exampleText = guide.slice(exampleAt, guide.indexOf('通过 `framework_capability_', exampleAt));
+      assert.doesNotMatch(guide, /#### action:|input JSON Schema：|参数 JSON Schema：/);
+      const exampleText = guide.slice(exampleAt, guide.indexOf('准备实际操作时', exampleAt));
       for (const example of descriptor.examples) {
         for (const action of example.actions) {
           assert.ok(names.has(action), `${descriptor.id}: ${action}`);
@@ -74,19 +82,21 @@ test('气旋重任务指南先派到固定工位，群聊只承载共同背景�
   });
 });
 
-test('示例只列出本轮完整开放的操作链，不把已关闭 action 混入', async () => {
+test('二级展示协作示例，三级目录只列当前获准操作', async () => {
   await withModules(modules => {
     const descriptor = modules[0].manifest.agentCapability!;
-    const guide = renderMainCapabilityGuide('convection', definitions(descriptor, [
+    const defs = definitions(descriptor, [
       'list_discussions', 'create_discussion', 'read_discussion',
-    ]), null);
-    assert.doesNotMatch(guide, /### 使用示例/);
-    assert.match(guide, /#### action: read_discussion/);
-    assert.doesNotMatch(guide, /#### action: start_discussion/);
+    ]);
+    const guide = renderMainCapabilityGuide('convection', defs, null);
+    assert.match(guide, /### 使用示例/);
+    const index = renderMainCapabilityGuide('convection', defs, null, undefined, { view: 'tools' });
+    assert.match(index, /- `read_discussion`/);
+    assert.doesNotMatch(index, /start_discussion|### 使用示例|input JSON Schema/);
   });
 });
 
-test('本地能力指南有示例，但主提示词只常驻工作队分工例子', async () => {
+test('能力指南展开操作示例，能力路由保留简短工作队分工例子', async () => {
   await withModules(modules => {
     const descriptor = modules[2].manifest.agentCapability!;
     const defs = [
@@ -104,13 +114,14 @@ test('本地能力指南有示例，但主提示词只常驻工作队分工例�
   });
 });
 
-test('工作队按需示例包含确认回报，缺少确认工具时不推荐整条操作链', () => {
+test('工作队二级说明完整协作链，三级仅提供本轮真实工具', () => {
   const names = ['team_read', 'team_review', 'team_ack', 'team_dispatch'];
   const defs = names.map(name => ({ name, description: name, parameters: {} }));
   const guide = renderMainCapabilityGuide('team', defs, null);
   assert.match(guide, /### 使用示例[\s\S]*`team_read` → `team_review` → `team_ack` → `team_dispatch`/);
-  const withoutAck = renderMainCapabilityGuide('team', defs.filter(def => def.name !== 'team_ack'), null);
-  assert.doesNotMatch(withoutAck, /### 使用示例/);
+  const withoutAck = renderMainCapabilityGuide('team', defs.filter(def => def.name !== 'team_ack'), null,
+    undefined, { view: 'tools' });
+  assert.doesNotMatch(withoutAck, /team_ack|### 使用示例/);
 });
 
 test('同一功能岛的示例元数据漂移会被拒绝', async () => {

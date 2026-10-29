@@ -26,6 +26,7 @@ import { ConvectionHttpError, streamConvectionSSE } from './convection-sse';
 import { resolveConvectionAgent, restoreConvectionMessage } from './convection-message-map';
 import ConvectionTurnCard, { type ConvectionToolStep, type ConvectionTurnMessage } from './ConvectionTurnCard';
 import ConvectionChairMessage from './ConvectionChairMessage';
+import { applyExternalPublicEvent } from './convection-external-events';
 import {
   getConvectionComposerMode,
   normalizeConvectionRound,
@@ -102,11 +103,14 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
   const [input, setInput] = useState('');
   const [cInput, setCInput] = useState('');
   const [activeRound, setActiveRound] = useState<ConvectionRound>(null);
+  const activeRoundRef = useRef(activeRound); activeRoundRef.current = activeRound;
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const visibleRunId = useRef(activeRunId); visibleRunId.current = activeRunId;
   const busy = activeRound === 'public';
   const cBusy = activeRound === 'chair';
-  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const destructivePending = useRef(false);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const messagesRef = useRef(msgs); messagesRef.current = msgs;
   const [editingTitle, setEditingTitle] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [editingMsgIdx, setEditingMsgIdx] = useState<number | null>(null);
@@ -362,11 +366,19 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
 
   // 删除
   const handleDelete = async (id: string) => {
-    if (!(await controlAction(
-      () => deleteConvectionSession(id), translate('convection.page.deleteFailed'),
-    ))) return;
-    if (activeId === id) { setActiveId(null); setMsgs([]); setCMsgs([]); }
-    refreshSessions();
+    if (destructivePending.current) return;
+    const session = sessions.find(item => item.id === id);
+    if (!session) return;
+    destructivePending.current = true; setDeletingSessionId(id);
+    try {
+      if (!await confirm({ title: translate('convection.page.deleteTitle', { title: session.title }),
+        message: translate('convection.page.deleteMessage'), confirmText: translate('common.delete'), danger: true })) return;
+      if (!(await controlAction(
+        () => deleteConvectionSession(id), translate('convection.page.deleteFailed'),
+      ))) return;
+      if (selectedSessionId.current === id) { setActiveId(null); setMsgs([]); setCMsgs([]); }
+      await refreshSessions();
+    } finally { destructivePending.current = false; setDeletingSessionId(null); }
   };
 
   // Agent 热配置
@@ -425,13 +437,37 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
 
   // 消息删除
   const handleDeleteMsg = async (idx: number) => {
-    if (!activeId) return;
-    if (await controlAction(
-      () => deleteConvectionMessage(activeId, idx), translate('convection.page.deleteMessageFailed'),
-    )) {
-      setMsgs(p => p.filter((_, i) => i !== idx));
-    }
+    const sessionId = activeId, message = msgs[idx];
+    if (!sessionId || !message || destructivePending.current) return;
+    destructivePending.current = true;
+    try {
+      if (!await confirm({ title: translate('convection.page.deleteMessageTitle'),
+        message: translate('convection.page.deleteMessageBody'), confirmText: translate('common.delete'), danger: true })) return;
+      if (selectedSessionId.current !== sessionId || messagesRef.current[idx] !== message) return;
+      if (await controlAction(
+        () => deleteConvectionMessage(sessionId, idx), translate('convection.page.deleteMessageFailed'),
+      )) {
+        if (selectedSessionId.current === sessionId) setMsgs(p => p.filter((item, i) => i !== idx || item !== message));
+      }
+    } finally { destructivePending.current = false; }
   };
+
+  const approveReset = useCallback(async (scope: 'public' | 'chair', sessionId: string) => {
+    if (destructivePending.current) return false;
+    destructivePending.current = true;
+    try {
+      const approved = await confirm({
+        title: translate(scope === 'public' ? 'convection.page.resetPublicTitle' : 'convection.page.resetChairTitle'),
+        message: translate(scope === 'public' ? 'convection.page.resetPublicMessage' : 'convection.page.resetChairMessage'),
+        confirmText: translate('convection.page.resetConfirm'), danger: true,
+      });
+      if (!approved || selectedSessionId.current !== sessionId || activeRoundRef.current !== null) {
+        destructivePending.current = false;
+        return false;
+      }
+      return true;
+    } catch (error) { destructivePending.current = false; throw error; }
+  }, [confirm, translate]);
 
   useEffect(() => {
     const el = ref.current;
@@ -508,6 +544,10 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
       return;
     }
     if (cBusy) return;
+    if (msg === '/reset' && !await approveReset('public', activeId)) {
+      if (fromQueue) setInput(previous => previous.trim() ? `${msg}\n${previous}` : msg);
+      return;
+    }
     if (!fromQueue) setInput('');
     setSessions(current => beginConvectionUsage(current, activeId, 'public'));
 
@@ -535,6 +575,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
             ? 'compaction.status.checkingStop' : 'compaction.status.checkingConnection') }));
         if (!ctrl.signal.aborted) console.error(`[convection] ${translate(errorKey)}`, e);
       } finally {
+        if (mode === 'clean') destructivePending.current = false;
         abortRef.current = null; manualCompaction.current = null;
         const saved = await reloadCommittedContext(activeId, undefined, {
           signal: AbortSignal.timeout(5_000), isCurrent: () => selectedSessionId.current === activeId,
@@ -587,11 +628,14 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
       };
       const cancelFlush = () => { if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; } };
       await streamConvectionSSE(streamUrl(`/api/convection/session/${activeId}/speak`), { message: msg }, (ev: any) => {
-        const revision = ++publicStreamRevision.current;
+        publicStreamRevision.current += 1;
         const feedback = compactionFeedbackEvent(ev);
         if (feedback !== undefined) setPublicNotice(feedback ?? '');
         setPublicCompaction(current => reduceCompactionActivity(current, ev));
-        if (ev.type === 'compact-done') void reloadCommittedContext(activeId, { round: 'public', revision });
+        if (ev.type === 'compact-done' && ev.boundary) {
+          cancelFlush(); applyStream();
+          setMsgs(current => applyExternalPublicEvent(current, ev));
+        }
         if (ev.type === 'round-start') {
           setActiveRound(normalizeConvectionRound(ev.round));
           setActiveRunId(typeof ev.runId === 'string' ? ev.runId : null);
@@ -625,16 +669,18 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         } else if (ev.type === 'agent-done') {
           cancelFlush();   // 终答权威，撤掉可能在排队的后沿刷新（否则覆盖 final content）
           const finalTools: ToolStep[] = (ev.toolCalls || []).map((tc: any) => ({ tool: tc.tool, args: tc.args, result: tc.result, toolImages: tc.toolImages, status: 'done' as const }));
-          setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === ev.label ? { ...m, content: ev.content, rawContent: streamContent || ev.rawContent || ev.content, reasoning: reasoningContent || ev.reasoning, toolCalls: finalTools, streaming: false } : m));
+          setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === ev.label ? { ...m, content: ev.content, rawContent: streamContent || ev.rawContent || ev.content, reasoning: reasoningContent || ev.reasoning, toolCalls: finalTools,
+            ...(ev.compactions?.length ? { compactions: ev.compactions, displayContent: ev.displayContent ?? streamContent } : {}), streaming: false } : m));
           currentLabel = '';
           streamContent = '';
           reasoningContent = '';
           pendingTools = [];
         } else if (ev.type === 'agent-failed') {
           cancelFlush();
-          const content = translate('convection.page.participantFailed', { agent: ev.label, detail: ev.message });
           setMsgs(p => p.map((m, i) => i === p.length - 1 && m.speaker === ev.label
-            ? { ...m, content, reasoning: reasoningContent, toolCalls: pendingTools, streaming: false, waitingInfo: undefined }
+            ? { ...m, content: streamContent, displayContent: streamContent, execution: { status: 'failed', message: ev.message },
+              reasoning: reasoningContent, toolCalls: pendingTools.map(tool => tool.status === 'running' || tool.status === 'pending'
+                ? { ...tool, status: 'unresolved' as const } : tool), streaming: false, waitingInfo: undefined }
             : m));
           currentLabel = '';
           streamContent = '';
@@ -682,7 +728,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
       }
       refreshSessions();
     }
-  }, [input, busy, cBusy, activeId, refreshSessions, reloadCommittedContext, translate]);
+  }, [input, busy, cBusy, activeId, refreshSessions, reloadCommittedContext, translate, approveReset]);
 
   // 始终持有最新 handleSpeak，供 busy 落定 effect 调用（避开闭包里过期的 busy）
   speakRef.current = handleSpeak;
@@ -710,9 +756,11 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
 
   const handleChair = useCallback(async () => {
     if (!cInput.trim() || activeRound !== null || !activeId) return;
+    const msg = cInput.trim();
+    if (msg === '/reset' && !await approveReset('chair', activeId)) return;
     setSessions(current => beginConvectionUsage(current, activeId, 'chair'));
     setContextVerification(null);
-    const msg = cInput.trim(); setCInput(''); setActiveRound('chair'); setActiveRunId(null);
+    setCInput(''); setActiveRound('chair'); setActiveRunId(null);
     if (msg === '/compact' || msg === '/reset' || msg === '/reset summary') {
       const ctrl = new AbortController();
       cAbortRef.current = ctrl; manualCompaction.current = 'chair';
@@ -729,7 +777,8 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         phase: 'running', updatedAt: Date.now(), message: translate(ctrl.signal.aborted
           ? 'compaction.status.checkingStop' : 'compaction.status.checkingConnection') }));
         if (!ctrl.signal.aborted) console.error('[convection] chair context request interrupted', error); }
-      finally { cAbortRef.current = null; manualCompaction.current = null;
+      finally { if (msg === '/reset') destructivePending.current = false;
+        cAbortRef.current = null; manualCompaction.current = null;
         const saved = await reloadCommittedContext(activeId, undefined, {
           signal: AbortSignal.timeout(5_000), isCurrent: () => selectedSessionId.current === activeId,
         });
@@ -825,7 +874,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         }
       }
     }
-  }, [cInput, activeRound, activeId, reloadCommittedContext, translate]);
+  }, [cInput, activeRound, activeId, reloadCommittedContext, translate, approveReset]);
 
   return (
     <div className="conv" ref={convRef}>
@@ -858,11 +907,8 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
                   <span className="conv__session-card-tokens" title={token.title}>{token.compactLabel}</span>
                 </span>
               </button>
-              {confirmingDeleteId === s.id ? (
-                <button onClick={() => { setConfirmingDeleteId(null); handleDelete(s.id); }} className="conv__session-card-del conv__session-card-del--confirm" title={translate('convection.page.deleteHint')}>{translate('convection.page.deleteConfirm')}</button>
-              ) : (
-                <button onClick={() => { setConfirmingDeleteId(s.id); setTimeout(() => setConfirmingDeleteId(prev => prev === s.id ? null : prev), 3000); }} className="conv__session-card-del" aria-label={translate('convection.page.deleteMeeting', { title: s.title })}>×</button>
-              )}
+              <button disabled={deletingSessionId !== null} onClick={() => { void handleDelete(s.id); }}
+                className="conv__session-card-del" aria-label={translate('convection.page.deleteMeeting', { title: s.title })}>×</button>
             </div>
             );
           })}
@@ -1008,7 +1054,7 @@ export default memo(function ConvectionPage({ active = true, onNavigate,
         <div ref={cRef} className="conv__chair-messages">
           <CompactionNotice message={chairNotice} />
           {cMsgs.map((m, i) => m.role === 'system' && isCompactionHistory(m.content)
-            ? <CompactionHistory key={`${activeId}-${i}`} content={m.content} />
+            ? <CompactionHistory key={`${activeId}-${i}`} content={m.content} handoff />
             : <ConvectionChairMessage key={`${activeId}-${i}`} message={m} messageId={`chair-${i}`}
               suppressWaiting={chairCompaction?.phase === 'running'} />)}
         </div>

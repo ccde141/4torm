@@ -19,7 +19,7 @@ export function cycloneCollaborationManifests(includeRound = false): ModuleMetho
     audiences: ['human', 'agent', 'internal'],
     agentTool: {
       name: 'create_collaboration_group',
-      description: '创建一个持久的气旋协作组，包括工作室、绑定现有 Agent 的工位和共享群聊。只搭建结构，不会自动启动成员执行。',
+      description: '创建持久工作室、绑定现有 Agent 的工位和共享群聊，不自动启动执行。返回真实工位 ID 后，通过 read_collaboration_structure、update_collaboration_structure 配置协作图中的分组和连线；群聊成员不等于协作组。',
     },
     inputSchema: {
       type: 'object', additionalProperties: false,
@@ -52,7 +52,7 @@ export function cycloneCollaborationManifests(includeRound = false): ModuleMetho
     audiences: ['agent', 'internal'],
     agentTool: {
       name: 'read_collaboration_group',
-      description: '读取气旋协作组结构和跨房间最近公共发言。输出受中心预算限制。',
+      description: '读取工作室工位、群聊与最近公共发言；协作图的分组和连线另用 read_collaboration_structure 分页读取。输出受中心预算限制。',
     },
     inputSchema: { type: 'object', additionalProperties: false, required: ['workshopId'],
       properties: { workshopId: idSchema } },

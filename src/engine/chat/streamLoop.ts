@@ -140,7 +140,7 @@ export async function runStreamLoop(ctx: StreamCtx) {
       streamTerminal.observe(ev.type);
       if (ev.type === 'error') throw new Error(String(ev.message || '执行失败'));
       const effect = projection.apply(ev);
-      if (effect.revision !== undefined) session.revision = effect.revision;
+      if (effect.revision !== undefined) session.revision = Math.max(session.revision ?? 0, effect.revision);
       allMessages = projection.messages;
       streamContent = projection.content;
       if (effect.firstOutput) { firstTokenReceived = true; clearInterval(waitInterval); }
@@ -150,7 +150,7 @@ export async function runStreamLoop(ctx: StreamCtx) {
         else delete session.tokenUsage;
         refreshSessions(agent);
       }
-      if (ev.type === 'model-request') refreshSessions(agent);
+      if (ev.type === 'model-request' || ev.type === 'current-input') refreshSessions(agent);
       if (effect.flush === 'immediate') doFlush();
       else if (effect.flush === 'throttled') scheduleFlush();
     };

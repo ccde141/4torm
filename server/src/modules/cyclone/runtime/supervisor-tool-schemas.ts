@@ -7,8 +7,6 @@ const text = { type: 'string', maxLength: 20_000 };
 const label = { type: 'string', minLength: 1, maxLength: 2_000 };
 const boolean = { type: 'boolean' };
 const ids = { type: 'array', uniqueItems: true, maxItems: 50, items: id };
-const point = { type: 'object', additionalProperties: false, required: ['x', 'y'],
-  properties: { x: { type: 'number' }, y: { type: 'number' } } };
 const scope = { type: 'string', enum: ['public', 'chair', 'both'] };
 
 function method(method: string, name: string, description: string, required: string[],
@@ -30,21 +28,6 @@ export function supervisorManagementTools(): SupervisorMethodTool[] {
     method('deleteSeat', 'retire_collaboration_seat',
       '将工位移出活动结构并退出群聊，保留其历史、任务板、记忆与附件快照。忙碌工位会被拒绝。',
       ['seatId'], { seatId: id }),
-    method('readWorkshopOrganization', 'read_collaboration_structure',
-      '读取当前工作室的协作分组、联络关系及 revision。', [], {}),
-    method('saveWorkshopOrganization', 'update_collaboration_structure',
-      '按当前 revision 更新协作分组和组间联络关系；冲突时先重新读取，不盲目覆盖。',
-      ['expectedRevision', 'groups', 'externalRelations'], {
-        expectedRevision: { type: 'integer', minimum: 0 },
-        groups: { type: 'array', maxItems: 100, items: { type: 'object', additionalProperties: false,
-          required: ['id', 'title', 'seatIds', 'position'], properties: { id, title: label, seatIds: ids,
-            position: point, size: { type: 'object', additionalProperties: false, required: ['width', 'height'],
-              properties: { width: { type: 'number', exclusiveMinimum: 0 }, height: { type: 'number', exclusiveMinimum: 0 } } } } } },
-        externalRelations: { type: 'array', maxItems: 1000, items: { type: 'object', additionalProperties: false,
-          required: ['id', 'sourceSeatId', 'targetSeatId', 'direction'], properties: {
-            id, sourceSeatId: id, targetSeatId: id, direction: { type: 'string', enum: ['both', 'forward'] } } } },
-        seatPositions: { type: 'object', additionalProperties: point },
-      }),
     method('mutateWorkshopBulletin', 'update_collaboration_bulletin',
       '新增、修改、移除或恢复公告条目；保留公告更改记录。', ['operations'], {
         operations: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'object',

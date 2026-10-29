@@ -5,6 +5,8 @@ import type { TokenUsage } from './llm-bridge.js';
 export type ModelRequestPurpose = 'conversation' | 'compaction';
 /** A read-only context preview; never a sent request or a billing observation. */
 export interface CurrentInputEstimate {
+  runId?: string;
+  active?: boolean;
   tokens: number;
   images: number;
   model: string;

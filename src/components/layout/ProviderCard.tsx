@@ -6,9 +6,10 @@ import { useLocale } from '../../i18n/LocaleContext';
 import { ModelCapabilityPanel } from './ModelCapabilityPanel';
 import { ProviderConfigurationForm } from './ProviderConfigurationForm';
 import { ProviderCustomParametersForm } from './ProviderCustomParametersForm';
+import { useConfirm } from '../common/ConfirmDialog';
 
-export function ProviderCard({ provider: p, catalog, highlight, onChange, onRemove, onRefresh }: {
-  provider: ProviderEntry; catalog: ProviderCatalog | null; highlight?: boolean;
+export function ProviderCard({ provider: p, catalog, highlight, removing, onChange, onRemove, onRefresh }: {
+  provider: ProviderEntry; catalog: ProviderCatalog | null; highlight?: boolean; removing?: boolean;
   onChange: (id: string, field: keyof ProviderEntry, value: string) => void;
   onRemove: (id: string) => void; onRefresh: () => void;
 }) {
@@ -16,15 +17,16 @@ export function ProviderCard({ provider: p, catalog, highlight, onChange, onRemo
   const enterMotionRef = useRef(highlight ? 'mo-spring-in' : 'provider-detail-enter');
   useEffect(() => { if (highlight) rootRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, [highlight]);
   return <div ref={rootRef} className={`capability-panel provider-detail-card ${enterMotionRef.current}`} style={highlight ? highlightedCardStyle : cardStyle}>
-    <ProviderHeader provider={p} onChange={onChange} onRemove={onRemove} />
+    <ProviderHeader provider={p} removing={removing} onChange={onChange} onRemove={onRemove} />
     <ProviderConnection provider={p} catalog={catalog} onChange={onChange} onRefresh={onRefresh} />
     <div className="provider-detail-divider" />
     <ProviderModelsAndTests provider={p} onRefresh={onRefresh} />
   </div>;
 }
 
-function ProviderHeader({ provider: p, onChange, onRemove }: {
+function ProviderHeader({ provider: p, removing, onChange, onRemove }: {
   provider: ProviderEntry;
+  removing?: boolean;
   onChange: (id: string, field: keyof ProviderEntry, value: string) => void;
   onRemove: (id: string) => void;
 }) {
@@ -33,7 +35,7 @@ function ProviderHeader({ provider: p, onChange, onRemove }: {
   useEffect(() => setLabel(p.label), [p.label]);
   return <div className="provider-detail-header" style={cardHeaderStyle}>
     <div style={{ position: 'relative', flex: 1 }}><input value={label} onChange={event => setLabel(event.target.value)} onBlur={() => { if (label !== p.label) onChange(p.id, 'label', label); }} placeholder={t('model.provider.unnamed')} style={{ ...inputStyle, fontWeight: 'var(--font-semibold)', width: 'auto', minWidth: '120px' }} /><span style={editHintStyle}>{t('model.provider.editName')}</span></div>
-    <button className="capability-button capability-button--danger provider-danger-action" onClick={() => onRemove(p.id)} style={removeBtnStyle}>{t('model.provider.delete')}</button>
+    <button className="capability-button capability-button--danger provider-danger-action" disabled={removing} onClick={() => onRemove(p.id)} style={removeBtnStyle}>{t(removing ? 'model.provider.deleting' : 'model.provider.delete')}</button>
   </div>;
 }
 
@@ -43,6 +45,8 @@ function ProviderConnection({ provider: p, catalog, onRefresh }: {
   onRefresh: () => void;
 }) {
   const { t } = useLocale();
+  const confirm = useConfirm();
+  const clearPending = useRef(false);
   const descriptor = catalog?.providers.find(provider => provider.id === p.providerType);
   const [baseUrl, setBaseUrl] = useState(p.baseUrl);
   const lastSavedUrl = useRef(p.baseUrl);
@@ -64,6 +68,27 @@ function ProviderConnection({ provider: p, catalog, onRefresh }: {
     catch (cause) { setError(cause instanceof Error ? cause.message : t('model.provider.configurationSaveFailed')); }
     finally { setSaving(false); }
   };
+  const clearKey = async () => {
+    if (clearPending.current || saving) return;
+    clearPending.current = true;
+    try {
+      if (!(await confirm({
+        title: t('model.provider.clearKeyTitle', { name: p.label || t('model.provider.unnamed') }),
+        message: t('model.provider.clearKeyMessage'),
+        confirmText: t('model.provider.clearKey'), danger: true,
+      }))) return;
+      setSaving(true);
+      setError('');
+      await updateProvider(p.id, { apiKey: '' });
+      setApiKey('');
+      onRefresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t('model.provider.clearKeyFailed'));
+    } finally {
+      clearPending.current = false;
+      setSaving(false);
+    }
+  };
   return <><div className="provider-basic-fields">
     {catalog && <ProviderTypeField provider={p} catalog={catalog} onRefresh={onRefresh} />}
     <label style={fieldLabel}>{t('model.provider.apiUrl')}</label>
@@ -78,7 +103,7 @@ function ProviderConnection({ provider: p, catalog, onRefresh }: {
         placeholder={t(p.hasApiKey ? 'model.provider.apiKeyStored' : 'model.provider.apiKeyEmpty')} />
       {p.hasApiKey && <button type="button" className="capability-button capability-button--secondary"
         style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={saving}
-        onClick={() => void save({ apiKey: '' })}>{t('model.provider.clearKey')}</button>}
+        onMouseDown={event => event.preventDefault()} onClick={() => void clearKey()}>{t('model.provider.clearKey')}</button>}
     </div>
     {error && <div role="alert" style={errorStyle}>{error}</div>}
   </div><SchemaDisclosure provider={p} providerLabel={descriptor?.label ?? p.label}
@@ -89,31 +114,56 @@ function ProviderModelsAndTests({ provider: p, onRefresh }: { provider: Provider
   const { t } = useLocale();
   const models = useProviderModels(p, onRefresh);
   const capabilities = useCapabilityTests(p, onRefresh);
-  return <><div className="provider-models-heading"><div><strong>{t('model.provider.modelsAndTests')}</strong><span>{t('model.provider.modelsAndTestsHint')}</span></div><button className="capability-button capability-button--secondary provider-secondary-action provider-fetch-action" data-loading={models.testing} onClick={models.fetchModels} disabled={models.testing} style={smallBtnStyle}>{models.testing ? t('model.provider.fetching') : models.fetched.length ? t('model.provider.refetch') : t('model.provider.fetch')}</button></div>
-    {models.fetched.length > 0 && <ModelPicker models={models.fetched} checked={models.checked} hasChange={models.hasChange} onToggle={models.toggle} onAll={models.selectAll} onClear={models.clear} onConfirm={models.confirm} />}
-    {p.models.length > 0 && <ModelCapabilityPanel provider={p} probing={capabilities.probing} messages={capabilities.messages} onProbe={capabilities.probe} onRemove={models.remove} onRefresh={onRefresh} />}
-    <div style={{ marginTop: 'var(--space-3)' }}><div style={fieldLabel}>{t('model.provider.manual')}</div><div style={{ display: 'flex', gap: 'var(--space-2)' }}><input value={models.manual} onChange={event => models.setManual(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') models.add(); }} placeholder={t('model.provider.modelPlaceholder')} style={{ ...inputStyle, flex: 1 }} /><button className="capability-button capability-button--primary provider-primary-action" onClick={models.add} style={primarySmallButton}>{t('model.provider.add')}</button></div></div>
-    {models.error && <div className="provider-error-reveal" style={errorStyle}>{t('model.provider.fetchHint', { error: models.error })}</div>}</>;
+  return <><div className="provider-models-heading"><div><strong>{t('model.provider.modelsAndTests')}</strong><span>{t('model.provider.modelsAndTestsHint')}</span></div><button className="capability-button capability-button--secondary provider-secondary-action provider-fetch-action" data-loading={models.testing} onClick={models.fetchModels} disabled={models.testing || models.saving} style={smallBtnStyle}>{models.testing ? t('model.provider.fetching') : models.fetched.length ? t('model.provider.refetch') : t('model.provider.fetch')}</button></div>
+    {models.fetched.length > 0 && <ModelPicker models={models.fetched} checked={models.checked} hasChange={models.hasChange} saving={models.saving} onToggle={models.toggle} onAll={models.selectAll} onClear={models.clear} onConfirm={models.confirm} />}
+    {p.models.length > 0 && <ModelCapabilityPanel provider={p} removing={models.saving} probing={capabilities.probing} messages={capabilities.messages} onProbe={capabilities.probe} onRemove={models.remove} onRefresh={onRefresh} />}
+    <div style={{ marginTop: 'var(--space-3)' }}><div style={fieldLabel}>{t('model.provider.manual')}</div><div style={{ display: 'flex', gap: 'var(--space-2)' }}><input disabled={models.saving} value={models.manual} onChange={event => models.setManual(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') models.add(); }} placeholder={t('model.provider.modelPlaceholder')} style={{ ...inputStyle, flex: 1 }} /><button className="capability-button capability-button--primary provider-primary-action" disabled={models.saving} onClick={models.add} style={primarySmallButton}>{t('model.provider.add')}</button></div></div>
+    {models.error && <div className="provider-error-reveal" role="alert" style={errorStyle}>{models.error}</div>}</>;
 }
 
 function useProviderModels(p: ProviderEntry, onRefresh: () => void) {
   const { t } = useLocale();
+  const confirmDeletion = useConfirm();
+  const mutationPending = useRef(false);
+  const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState('');
   const [fetched, setFetched] = useState<string[]>([]);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [manual, setManual] = useState('');
   const add = async () => { const name = manual.trim(); if (!name) return; if (!p.models.includes(name)) await updateProvider(p.id, { models: [...p.models, name] }); setManual(''); onRefresh(); };
-  const remove = async (model: string) => { const models = p.models.filter(item => item !== model); await updateProvider(p.id, { models, modelProfiles: retainModelProfiles(p.modelProfiles, models), ...retainProviderCapabilities(p, models) }); onRefresh(); };
+  const saveModels = async (models: string[], closePicker = false) => {
+    if (mutationPending.current) return;
+    mutationPending.current = true;
+    try {
+      const removed = p.models.filter(model => !models.includes(model));
+      if (removed.length && !(await confirmDeletion({
+        title: t('model.capability.removeTitle', { models: removed.join(', ') }),
+        message: t('model.capability.removeMessage', { provider: p.label || t('model.provider.unnamed') }),
+        confirmText: t('model.capability.remove'), danger: true,
+      }))) return;
+      setSaving(true);
+      setError('');
+      await updateProvider(p.id, { models, modelProfiles: retainModelProfiles(p.modelProfiles, models), ...retainProviderCapabilities(p, models) });
+      if (closePicker) setFetched([]);
+      onRefresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t('model.capability.removeFailed'));
+    } finally {
+      mutationPending.current = false;
+      setSaving(false);
+    }
+  };
+  const remove = (model: string) => saveModels(p.models.filter(item => item !== model));
   const fetchModels = async () => {
     if (!p.baseUrl) return; setTesting(true); setError('');
     try { const response = await listModels({ providerId: p.id }); const ids = response.data.map(model => model.id); setFetched(ids); setChecked(new Set(ids)); }
-    catch (cause) { setFetched([]); setChecked(new Set()); setError(cause instanceof Error ? cause.message : t('model.provider.fetchFailed')); }
+    catch (cause) { setFetched([]); setChecked(new Set()); setError(t('model.provider.fetchHint', { error: cause instanceof Error ? cause.message : t('model.provider.fetchFailed') })); }
     finally { setTesting(false); }
   };
-  const confirm = async () => { const models = [...checked]; await updateProvider(p.id, { models, modelProfiles: retainModelProfiles(p.modelProfiles, models), ...retainProviderCapabilities(p, models) }); setFetched([]); onRefresh(); };
+  const confirm = () => saveModels([...checked], true);
   const toggle = (model: string) => setChecked(current => { const next = new Set(current); if (next.has(model)) next.delete(model); else next.add(model); return next; });
-  return { testing, error, fetched, checked, manual, setManual, add, remove, fetchModels, confirm, toggle,
+  return { testing, saving, error, fetched, checked, manual, setManual, add, remove, fetchModels, confirm, toggle,
     selectAll: () => setChecked(new Set(fetched)), clear: () => setChecked(new Set()),
     hasChange: fetched.length > 0 && (p.models.length !== checked.size || !p.models.every(model => checked.has(model))) };
 }
@@ -172,9 +222,9 @@ function ProviderTypeField({ provider: p, catalog, onRefresh }: { provider: Prov
   return <><label style={fieldLabel}>{t('model.provider.type')}</label><select className="provider-type-select" value={p.providerType ?? ''} onChange={event => changeType(event.target.value)} style={{ ...inputStyle, marginBottom: 'var(--space-2)' }}><option value="" disabled>{t('model.provider.typeLegacy')}</option>{providers.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}</select></>;
 }
 
-function ModelPicker({ models, checked, hasChange, onToggle, onAll, onClear, onConfirm }: { models: string[]; checked: Set<string>; hasChange: boolean; onToggle: (model: string) => void; onAll: () => void; onClear: () => void; onConfirm: () => void }) {
+function ModelPicker({ models, checked, hasChange, saving, onToggle, onAll, onClear, onConfirm }: { models: string[]; checked: Set<string>; hasChange: boolean; saving: boolean; onToggle: (model: string) => void; onAll: () => void; onClear: () => void; onConfirm: () => void }) {
   const { t } = useLocale();
-  return <div className="provider-model-picker" style={{ marginTop: 'var(--space-3)' }}><div style={pickerHeaderStyle}><span style={fieldLabel}>{t('model.provider.selectModels', { selected: checked.size, total: models.length })}</span><div><button className="capability-button capability-button--secondary capability-button--compact provider-inline-action" onClick={onAll} style={tinyBtnStyle}>{t('model.provider.selectAll')}</button><button className="capability-button capability-button--secondary capability-button--compact provider-inline-action" onClick={onClear} style={tinyBtnStyle}>{t('model.provider.clear')}</button><button className="capability-button capability-button--secondary capability-button--compact provider-inline-action" onClick={onConfirm} style={{ ...tinyBtnStyle, color: hasChange ? 'var(--color-accent)' : undefined }}>{t('model.provider.confirm')}</button></div></div><div className="provider-model-tags" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>{models.map(model => <button className="provider-model-tag" key={model} onClick={() => onToggle(model)} style={modelTagStyle}>{checked.has(model) ? '✓ ' : ''}{model}</button>)}</div></div>;
+  return <div className="provider-model-picker" style={{ marginTop: 'var(--space-3)' }}><div style={pickerHeaderStyle}><span style={fieldLabel}>{t('model.provider.selectModels', { selected: checked.size, total: models.length })}</span><div><button className="capability-button capability-button--secondary capability-button--compact provider-inline-action" disabled={saving} onClick={onAll} style={tinyBtnStyle}>{t('model.provider.selectAll')}</button><button className="capability-button capability-button--secondary capability-button--compact provider-inline-action" disabled={saving} onClick={onClear} style={tinyBtnStyle}>{t('model.provider.clear')}</button><button className="capability-button capability-button--secondary capability-button--compact provider-inline-action" disabled={saving} onClick={onConfirm} style={{ ...tinyBtnStyle, color: hasChange ? 'var(--color-accent)' : undefined }}>{t('model.provider.confirm')}</button></div></div><div className="provider-model-tags" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>{models.map(model => <button className="provider-model-tag" key={model} disabled={saving} onClick={() => onToggle(model)} style={modelTagStyle}>{checked.has(model) ? '✓ ' : ''}{model}</button>)}</div></div>;
 }
 
 const cardStyle: React.CSSProperties = { padding: 'var(--space-4)' };

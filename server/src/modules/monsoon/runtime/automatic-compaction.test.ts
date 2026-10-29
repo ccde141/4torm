@@ -18,7 +18,10 @@ test('Monsoon hot boundary archives raw content and publishes the committed chec
   const timestamp = new Date().toISOString();
   const history: ContextMessage[] = [{ role: 'system', content: 'static rules' },
     { role: 'user', content: 'a'.repeat(4000) }, { role: 'assistant', content: 'b'.repeat(4000) },
-    { role: 'user', content: 'c'.repeat(4000) }, { role: 'assistant', content: 'previous answer' },
+    ...Array.from({ length: 4 }, (_, index) => [
+      { role: 'user' as const, content: `recent request ${index}` },
+      { role: 'assistant' as const, content: `recent answer ${index}` },
+    ]).flat(),
     { role: 'user', content: 'continue latest work' }];
   const repository = new FileMonsoonSessionRepository(dataDir);
   const original = await repository.create({ id: 'session-a', agentId: 'agent-a', agentName: 'A',
@@ -35,7 +38,7 @@ test('Monsoon hot boundary archives raw content and publishes the committed chec
   let rebased = false;
   const llm = monsoonCompactionTransform(spec, {
     summarize: async () => 'verified facts', resolveSummaryBudget: async () => 16000,
-  })({ call: async messages => {
+  }, () => ({ runId: 'pending', toolOffset: 500, textOffset: 123, reasoningOffset: 40, eventOffset: 1000 }))({ call: async messages => {
     assert.match(messages[1].content, /verified facts/);
     return { content: 'new answer', finishReason: 'stop' };
   } }, event => {
@@ -58,6 +61,8 @@ test('Monsoon hot boundary archives raw content and publishes the committed chec
   const saved = (await port.read('agent-a', 'session-a'))!;
   assert.equal(saved.messages[0].content, 'a'.repeat(4000));
   assert.equal(saved.messages.at(-1)?.id, 'pending');
+  assert.deepEqual(saved.messages.find(message => message.type === 'compact-marker')?.execution,
+    { assistantId: 'pending', toolOffset: 500, textOffset: 123, reasoningOffset: 40, eventOffset: 1000 });
   assert.match(port.activeContext(saved)[0].content, /verified facts/);
   assert.equal((await fs.readdir(path.join(dataDir, 'agents/agent-a/sessions/session-a.compactions'))).length, 1);
 });
@@ -68,7 +73,11 @@ test('Monsoon automatic compaction reports failure before retrying any model or 
   const timestamp = new Date().toISOString();
   const repository = new FileMonsoonSessionRepository(dataDir);
   const history: ContextMessage[] = [{ role: 'system', content: 'static rules' },
-    { role: 'user', content: 'source'.repeat(2000) }, { role: 'assistant', content: 'previous answer' },
+    { role: 'user', content: 'source'.repeat(2000) }, { role: 'assistant', content: 'previous verified output'.repeat(1000) },
+    ...Array.from({ length: 4 }, (_, index) => [
+      { role: 'user' as const, content: `recent request ${index}` },
+      { role: 'assistant' as const, content: `recent answer ${index}` },
+    ]).flat(),
     { role: 'user', content: 'continue latest work' }];
   const original = await repository.create({ id: 'session-failed', agentId: 'agent-a', agentName: 'A',
     title: 'task', model: 'p:m', systemPrompt: '', createdAt: timestamp, updatedAt: timestamp,

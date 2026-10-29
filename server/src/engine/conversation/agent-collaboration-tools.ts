@@ -113,7 +113,7 @@ function compactDefinitions(definitions: readonly ToolDef[]): {
     actions.set(name, new Set([definition.name]));
     runtime.push({
       name,
-      description: `${descriptor.title}统一入口。${descriptor.route} 先用 framework_guide 读取当前可用 action。`,
+      description: `${descriptor.title}统一入口。${descriptor.route} 用 framework_guide 阅读工作指南，view=tools 查询获准 action，再传 action 读取字段。`,
       frameworkCapability: structuredClone(descriptor),
       parameters: {
         type: 'object',

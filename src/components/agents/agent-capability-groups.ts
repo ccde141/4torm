@@ -1,45 +1,18 @@
 import type { ToolDef } from '../../store/tools.js';
+import {
+  groupCatalogTools as groupAgentTools,
+  type CatalogCapabilityGroup as AgentCapabilityGroup,
+  type GroupedCatalogTools as GroupedAgentTools,
+} from '../capabilities/tool-catalog-groups.js';
+
+export { groupAgentTools };
+export type { AgentCapabilityGroup, GroupedAgentTools };
 
 /** Persisted selection contracts; the server resolves each marker at invocation time. */
-const ATOMIC_GROUPS = new Set(['tide', 'convection']);
+const ATOMIC_GROUPS = new Set(['tide', 'convection', 'cyclone']);
 const groupSwitch = (id: string) => `framework_capability_${id}`;
 
 export type CapabilitySelectionState = 'off' | 'partial' | 'on';
-
-export interface AgentCapabilityGroup {
-  id: string;
-  title: string;
-  route: string;
-  tools: ToolDef[];
-}
-
-export interface GroupedAgentTools {
-  capabilities: AgentCapabilityGroup[];
-  standalone: ToolDef[];
-}
-
-function trustedCapability(tool: ToolDef) {
-  return tool.source === 'framework' ? tool.frameworkCapability : undefined;
-}
-
-export function groupAgentTools(tools: readonly ToolDef[]): GroupedAgentTools {
-  const groups = new Map<string, AgentCapabilityGroup>();
-  const standalone: ToolDef[] = [];
-  for (const tool of tools) {
-    const capability = trustedCapability(tool);
-    if (!capability) {
-      standalone.push(tool);
-      continue;
-    }
-    const existing = groups.get(capability.id);
-    if (existing) {
-      existing.tools.push(tool);
-      continue;
-    }
-    groups.set(capability.id, { ...capability, tools: [tool] });
-  }
-  return { capabilities: [...groups.values()], standalone };
-}
 
 export function getCapabilitySelectionState(
   group: AgentCapabilityGroup,
@@ -83,5 +56,15 @@ export function normalizeCapabilitySelection(
     for (const tool of group.tools) next.delete(tool.name);
     next.add(groupSwitch(group.id));
   }
+  return next;
+}
+
+/** Editing a single action turns a whole-area selection into an explicit action list. */
+export function toggleCapabilityTool(group: AgentCapabilityGroup, selected: ReadonlySet<string>, name: string): Set<string> {
+  const next = new Set(selected);
+  if (next.delete(groupSwitch(group.id))) {
+    for (const tool of group.tools) next.add(tool.name);
+  }
+  if (next.has(name)) next.delete(name); else next.add(name);
   return next;
 }

@@ -28,7 +28,8 @@ test('配置草稿跨导航保持挂载，嵌入状态不建立第二层遮罩�
 
 test('删除行为仍在详情底部，不并入导航', () => {
   const detail = read('AgentDetailDialog.tsx');
-  assert.match(detail, /agent-detail__foot[\s\S]*onDelete/);
+  assert.match(detail, /agent-detail__foot[\s\S]*void remove\(\)/);
+  assert.match(detail, /await confirm\([\s\S]*onDelete\(\)/);
   assert.doesNotMatch(detail, /agent-detail__nav[\s\S]*setSection\('delete'\)/);
 });
 

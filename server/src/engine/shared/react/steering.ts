@@ -17,7 +17,7 @@ export const STEERING_SKIP_REASON = '（因人类插话取消，未执行；请�
 export function applyPendingInput(params: ReActLoopParams): void {
   if (params.signal?.aborted || !params.steering?.hasPending()) return;
   for (const content of params.steering.drain()) {
-    params.messages.push({ role: 'user', content });
+    params.messages.push({ role: 'user', content, origin: 'human' });
   }
 }
 

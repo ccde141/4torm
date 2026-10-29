@@ -16,7 +16,8 @@ test('首次启用显式协作边界即使尚未移动画布也必须保存', ()
 });
 
 test('保存状态区分未保存、保存中与已保存', () => {
-  assert.equal(deriveOrganizationSaveState({ ...draft }, draft, false), 'unsaved');
+  assert.equal(deriveOrganizationSaveState({ ...draft }, draft, false), 'saved');
+  assert.equal(deriveOrganizationSaveState({ ...draft, seatPositions: { a: { x: 1, y: 2 } } }, draft, false), 'unsaved');
   assert.equal(deriveOrganizationSaveState(draft, draft, true), 'saving');
   assert.equal(deriveOrganizationSaveState(draft, draft, false), 'saved');
 });

@@ -16,3 +16,15 @@ test('群聊落盘分段保留正文、工具与派发的真实交错顺序', ()
   ]);
   assert.deepEqual(collector.segments.at(-1), { kind: 'text', content: '最终段' });
 });
+
+test('successful compaction marks the exact tool boundary once while subsequent work starts a new segment', () => {
+  const collector = createRoomMessageSegments();
+  const toolImages = [{ id: 'screen', name: 'screen.png', mimeType: 'image/png', size: 8 }];
+  collector.toolCall('read_file', { path: 'old.txt' }); collector.toolResult('old result', true, toolImages);
+  collector.compact('compact-a', 'handoff', 42);
+  collector.compact('compact-a', 'handoff', 42);
+  collector.toolCall('read_file', { path: 'new.txt' }); collector.toolResult('new result', true);
+  assert.deepEqual(collector.segments.map(segment => segment.kind), ['tools', 'compaction', 'tools']);
+  assert.deepEqual(collector.segments[1], { kind: 'compaction', id: 'compact-a', summary: 'handoff', reasoningOffset: 42 });
+  assert.deepEqual(collector.segments[0].kind === 'tools' && collector.segments[0].tools[0].toolImages, toolImages);
+});

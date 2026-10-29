@@ -48,6 +48,7 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
     return s >= MIN_W && s <= MAX_W ? s : DEFAULT_W;
   });
   const [editingId, setEditingId] = useState<string | null>(null);
+  const editingIdRef = useRef<string | null>(null);
   const [draft, setDraft] = useState('');
   const [draftNote, setDraftNote] = useState('');
   const [hovering, setHovering] = useState(false);
@@ -55,6 +56,10 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
   const [executionError, setExecutionError] = useState('');
   const widthRef = useRef(width);
   const executionOwnerKey = `${observationScope ?? ''}:${observationOwnerId ?? ''}`;
+  const latestBoard = useRef({ board, onChange, ownerKey: executionOwnerKey });
+  latestBoard.current = { board, onChange, ownerKey: executionOwnerKey };
+  const deletionPending = useRef(false);
+  const [removingTaskId, setRemovingTaskId] = useState<string | null>(null);
   const [executionSurface, dispatchExecutionSurface] = useReducer(
     executionSurfaceReducer,
     executionOwnerKey,
@@ -85,13 +90,39 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
       revision: board?.revision ?? 0,
     } : null);
   const setStatus = (id: string, status: TaskStatus) => patch(tasks.map(t => t.id === id ? { ...t, status } : t));
-  const removeTask = (id: string) => patch(tasks.filter(t => t.id !== id));
-  const startEdit = (t: Task) => { setEditingId(t.id); setDraft(t.title); setDraftNote(t.note ?? ''); };
+  const cancelEdit = () => { editingIdRef.current = null; setEditingId(null); };
+  const removeTask = async (id: string) => {
+    if (deletionPending.current) return;
+    const snapshot = latestBoard.current;
+    const task = snapshot.board?.tasks.find(item => item.id === id);
+    if (!task) return;
+    deletionPending.current = true; setRemovingTaskId(id); cancelEdit();
+    try {
+      if (!await confirm({ title: translate('chat.taskboard.deleteTitle', { title: task.title }),
+        message: translate('chat.taskboard.deleteMessage'), confirmText: translate('common.delete'), danger: true })) return;
+      const current = latestBoard.current;
+      const target = current.board?.tasks.find(item => item.id === id);
+      if (current.ownerKey !== snapshot.ownerKey || !current.board || target?.title !== task.title) return;
+      const nextTasks = current.board.tasks.filter(item => item.id !== id);
+      current.onChange(nextTasks.length ? { ...current.board, tasks: nextTasks } : null);
+    } finally { deletionPending.current = false; setRemovingTaskId(null); }
+  };
+  const clearTasks = async () => {
+    if (deletionPending.current) return;
+    const ownerKey = latestBoard.current.ownerKey;
+    deletionPending.current = true; setRemovingTaskId('*'); cancelEdit();
+    try {
+      if (!await confirm({ title: translate('chat.taskboard.clearTitle'), message: translate('chat.taskboard.clearMessage'),
+        confirmText: translate('chat.taskboard.clear'), danger: true })) return;
+      if (latestBoard.current.ownerKey === ownerKey) latestBoard.current.onChange(null);
+    } finally { deletionPending.current = false; setRemovingTaskId(null); }
+  };
+  const startEdit = (t: Task) => { editingIdRef.current = t.id; setEditingId(t.id); setDraft(t.title); setDraftNote(t.note ?? ''); };
   const addTask = () => {
     const id = `u${Date.now().toString(36)}`;
     const title = translate('chat.taskboard.newTask');
     patch([...tasks, { id, title, status: 'todo' }]);
-    setEditingId(id); setDraft(title); setDraftNote('');
+    editingIdRef.current = id; setEditingId(id); setDraft(title); setDraftNote('');
   };
   const openExecution = (id: string) => {
     dispatchExecutionSurface({ type: 'open', ownerKey: executionOwnerKey, id });
@@ -125,12 +156,11 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
   };
   // 提交标题 + 备注（标题空则删该项）；备注空则清掉 note 字段
   const commitEdit = () => {
-    if (editingId) {
-      const title = draft.trim(), note = draftNote.trim();
-      if (title) patch(tasks.map(t => t.id === editingId ? { ...t, title, note: note || undefined } : t));
-      else removeTask(editingId);
-    }
-    setEditingId(null);
+    if (!editingId || editingIdRef.current !== editingId) return;
+    cancelEdit();
+    const title = draft.trim(), note = draftNote.trim();
+    if (title) patch(tasks.map(t => t.id === editingId ? { ...t, title, note: note || undefined } : t));
+    else void removeTask(editingId);
   };
 
   // ── 收起态：右缘凸出竖标签（悬浮，不占会话布局） ──
@@ -207,7 +237,9 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
             <span className={`execution-surface-shortcut__status${activeObservations.length ? ' execution-surface-shortcut__status--active' : ''}`} aria-hidden="true" />
           </button>
           <button onClick={addTask} className="taskboard-act" style={actionBtnStyle} title={translate('chat.taskboard.addTitle')}>{translate('chat.taskboard.add')}</button>
-          {total > 0 && <button onClick={async () => { if (await confirm({ title: translate('chat.taskboard.clearTitle'), message: translate('chat.taskboard.clearMessage'), confirmText: translate('chat.taskboard.clear'), danger: true })) onChange(null); }} className="taskboard-act taskboard-act--danger" style={dangerBtnStyle} title={translate('chat.taskboard.clearHint')}>🗑 {translate('chat.taskboard.clear')}</button>}
+          {total > 0 && <button disabled={removingTaskId !== null} onMouseDown={event => event.preventDefault()}
+            onClick={() => { void clearTasks(); }} className="taskboard-act taskboard-act--danger" style={dangerBtnStyle}
+            title={translate('chat.taskboard.clearHint')}>🗑 {translate('chat.taskboard.clear')}</button>}
         </div>
       </div>
 
@@ -236,9 +268,9 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
                     {editingId === t.id ? (
                       <div style={editWrapStyle} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) commitEdit(); }}>
                         <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} placeholder={translate('chat.taskboard.taskTitle')}
-                          onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditingId(null); }} style={titleInputStyle} />
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } if (e.key === 'Escape') cancelEdit(); }} style={titleInputStyle} />
                         <input value={draftNote} onChange={e => setDraftNote(e.target.value)} placeholder={translate('chat.taskboard.note')}
-                          onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') setEditingId(null); }} style={noteInputStyle} />
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } if (e.key === 'Escape') cancelEdit(); }} style={noteInputStyle} />
                       </div>
                     ) : (
                       <span onDoubleClick={() => startEdit(t)}
@@ -247,7 +279,8 @@ export default function TaskBoardDrawer({ board, onChange, expanded, onToggle, g
                         {t.note && <span style={{ fontSize: '11px', lineHeight: 1.3, color: 'var(--color-text-tertiary)', opacity: 0.85, wordBreak: 'break-word' }}>{t.note}</span>}
                       </span>
                     )}
-                    <button onClick={() => removeTask(t.id)} style={delBtnStyle} title={translate('chat.taskboard.deleteTask')}>×</button>
+                    <button disabled={removingTaskId !== null} onMouseDown={event => event.preventDefault()}
+                      onClick={() => { void removeTask(t.id); }} style={delBtnStyle} title={translate('chat.taskboard.deleteTask')}>×</button>
                   </div>
                 );
               })}

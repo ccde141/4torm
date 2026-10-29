@@ -207,12 +207,10 @@ export default function TidePage({ active = true, preselectTask, onClearPreselec
     setNavigationError('');
     live.current.openSession(agentId, sessionId);
   };
-  const handleDeleteSession = async () => {
-    const task = live.current.selectedTask;
-    if (!task) return;
-    const expected: TideSelection = { kind: 'task', agentId: task.agentId, taskId: task.id };
+  const handleDeleteSession = async (taskId: string, agentId: string) => {
+    const expected: TideSelection = { kind: 'task', agentId, taskId };
     try {
-      await deleteTideSession(task.id);
+      await deleteTideSession(taskId);
       await live.current.refreshTask(expected);
       await live.current.refresh();
       await live.current.refreshSessions();
@@ -225,9 +223,9 @@ export default function TidePage({ active = true, preselectTask, onClearPreselec
     <TidePageSidebar entities={entities} manualRuns={manualRuns}
       onAgent={handleAgent} onTask={handleTask} onCreate={handleCreate}
       onToggle={taskId => { void handleToggle(taskId); }}
-      onDelete={taskId => { void handleDelete(taskId); }}
+      onDelete={handleDelete}
       onRun={taskId => { void handleRunNow(taskId); }} onSession={handleViewSession} />
     <TidePageMain entities={entities} onViewSession={handleViewSession}
-      onDeleteSession={() => { void handleDeleteSession(); }} />
+      onDeleteSession={handleDeleteSession} />
   </div>;
 }

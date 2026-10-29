@@ -4,7 +4,7 @@
  * per-room 锁按 roomId 互斥，独立于对流和工位锁。
  */
 
-import type { ContextMessage, RoomData, RoomMessage } from './types';
+import type { ContextMessage, RoomData, RoomMessage, SeatContextMessage } from './types';
 import { roomFile, roomsDir, readJsonSafe, ensureDir, atomicWrite, removeStrict, genId, cycloneArchiveFile, dispatchFile } from './paths';
 import { loadWorkshop, saveWorkshop } from './workshop-store';
 import { loadSeat } from './seat-store';
@@ -14,11 +14,24 @@ import {
 } from './room-reasoning-store.js';
 import { tryAcquireRoomLock } from './room-lock.js';
 import { clearCycloneChairContext, rememberChairContextBoundary } from './chair-context.js';
+import { captureCycloneCompaction } from './conversation-transcript.js';
+import path from 'node:path';
 
 export { tryAcquireRoomLock, isRoomLocked } from './room-lock.js';
 
 export class RoomDeleteConflictError extends Error {}
 export class RoomSettingsConflictError extends Error {}
+
+const roomPersistenceQueues = new Map<string, Promise<unknown>>();
+
+async function serializeRoomPersistence<T>(file: string, operation: () => Promise<T>): Promise<T> {
+  const key = path.resolve(file);
+  const previous = roomPersistenceQueues.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  roomPersistenceQueues.set(key, current);
+  try { return await current; }
+  finally { if (roomPersistenceQueues.get(key) === current) roomPersistenceQueues.delete(key); }
+}
 
 async function runRoomSettingsMutation<T>(
   dataDir: string, workshopId: string, roomId: string, mutation: () => Promise<T>,
@@ -92,20 +105,29 @@ export async function createRoom(
 export async function loadRoom(
   dataDir: string, workshopId: string, roomId: string,
 ): Promise<RoomData | null> {
-  const room = await readJsonSafe<RoomData>(roomFile(dataDir, workshopId, roomId));
-  return room ? hydrateRoomReasoning(dataDir, workshopId, room) : null;
+  const file = roomFile(dataDir, workshopId, roomId);
+  return serializeRoomPersistence(file, async () => {
+    const room = await readJsonSafe<RoomData>(file);
+    return room ? hydrateRoomReasoning(dataDir, workshopId, room) : null;
+  });
 }
 
 /** 保存群聊（刷新 updatedAt） */
 export async function saveRoom(
   dataDir: string, workshopId: string, room: RoomData, signal?: AbortSignal,
 ): Promise<void> {
-  room.updatedAt = new Date().toISOString();
-  const externalized = await externalizeRoomReasoning(dataDir, workshopId, room);
-  await atomicWrite(roomFile(dataDir, workshopId, room.id), JSON.stringify(externalized.persisted, null, 2), signal);
-  // Sidecar cleanup follows the committed primary; its failure cannot imply rollback.
-  await cleanupRoomReasoning(dataDir, workshopId, room.id, externalized.activeFiles)
-    .catch(error => console.warn('[cyclone] committed room reasoning cleanup failed', error));
+  const file = path.resolve(roomFile(dataDir, workshopId, room.id));
+  // All files in this room share one save boundary; a previous cleanup must never
+  // remove a newer save's sidecar or its in-flight atomic replacement.
+  await serializeRoomPersistence(file, async () => {
+    signal?.throwIfAborted();
+    room.updatedAt = new Date().toISOString();
+    const externalized = await externalizeRoomReasoning(dataDir, workshopId, room);
+    await atomicWrite(file, JSON.stringify(externalized.persisted, null, 2), signal);
+    // Sidecar cleanup follows the committed primary; its failure cannot imply rollback.
+    await cleanupRoomReasoning(dataDir, workshopId, room.id, externalized.activeFiles)
+      .catch(error => console.warn('[cyclone] committed room reasoning cleanup failed', error));
+  });
 }
 
 function archiveName(scope: string, id: string, seq: number): string {
@@ -118,11 +140,17 @@ export async function resetRoomContext(
   workshopId: string,
   roomId: string,
   opts: { scope: 'public' | 'chair' | 'both'; publicSummary?: string; chairSummary?: string;
+    publicRetainedMessages?: RoomMessage[]; chairRetainedMessages?: SeatContextMessage[];
+    chairRetainedContext?: ContextMessage[];
     preparedArchivePath?: string; signal?: AbortSignal;
     compaction?: import('../shared/compaction/index.js').CompactionProgress },
 ): Promise<{ room: RoomData | null; archivePath?: string; archivedPublicCount?: number; archivedChairCount?: number }> {
   const room = await loadRoom(dataDir, workshopId, roomId);
   if (!room) return { room: null };
+  if (opts.publicSummary && opts.publicRetainedMessages === undefined) throw new Error('群聊压缩缺少原文保留计划');
+  if (opts.chairSummary && (opts.chairRetainedMessages === undefined || opts.chairRetainedContext === undefined)) {
+    throw new Error('会长压缩缺少原文保留计划');
+  }
 
   const state = room.compactState || { disabled: false, archiveSeq: 0 };
   const nextSeq = (state.archiveSeq || 0) + 1;
@@ -141,6 +169,7 @@ export async function resetRoomContext(
     roomMode: room.mode,
     scope: opts.scope,
     publicMessages: opts.scope === 'public' || opts.scope === 'both' ? originalPublicMessages : undefined,
+    publicExecutionDraft: opts.scope === 'public' || opts.scope === 'both' ? room.publicExecutionDraft : undefined,
     chairMessages: opts.scope === 'chair' || opts.scope === 'both' ? originalChairMessages : undefined,
     chairActiveContext: room.chairActiveContext,
     tokenUsage: room.tokenUsage || null,
@@ -150,10 +179,15 @@ export async function resetRoomContext(
   }, null, 2));
 
   if (opts.scope === 'public' || opts.scope === 'both') {
+    room.publicExecutionDraft = undefined;
     if (!opts.publicSummary) room.dispatchContextVersion = (room.dispatchContextVersion ?? 0) + 1;
     room.publicMessages = opts.publicSummary
-      ? [{ speaker: '系统', content: `以下是重置前的群聊摘要，请作为后续群聊上下文参考：\n\n${opts.publicSummary}`, timestamp: Date.now() }]
+      ? [{ speaker: '系统', compactionId: opts.compaction?.id,
+        content: `以下是重置前的群聊摘要，请作为后续群聊上下文参考：\n\n${opts.publicSummary}`, timestamp: Date.now() },
+        ...opts.publicRetainedMessages!]
       : [];
+    room.publicDisplayHistory = opts.publicSummary ? captureCycloneCompaction(room.publicDisplayHistory,
+      originalPublicMessages, room.publicMessages, room.publicMessages[0]) : undefined;
     room.tokenUsage = undefined;
     room.publicLatestTokenUsage = undefined;
     room.publicUsageIncomplete = undefined;
@@ -162,11 +196,15 @@ export async function resetRoomContext(
   }
   if (opts.scope === 'chair' || opts.scope === 'both') {
     room.chairMessages = opts.chairSummary
-      ? [{ role: 'system', content: `以下是重置前的会长私聊摘要，请作为后续会长上下文参考：\n\n${opts.chairSummary}` } as ContextMessage]
+      ? [{ role: 'system', compactionId: opts.compaction?.id,
+        content: `以下是重置前的会长私聊摘要，请作为后续会长上下文参考：\n\n${opts.chairSummary}` } as SeatContextMessage,
+        ...opts.chairRetainedMessages!]
       : [];
+    room.chairDisplayHistory = opts.chairSummary ? captureCycloneCompaction(room.chairDisplayHistory,
+      originalChairMessages, room.chairMessages, room.chairMessages[0]) : undefined;
     room.chairTokenUsage = undefined;
     if (opts.chairSummary) {
-      room.chairActiveContext = structuredClone(room.chairMessages);
+      room.chairActiveContext = structuredClone([room.chairMessages[0], ...opts.chairRetainedContext!]);
       rememberChairContextBoundary(room);
     } else clearCycloneChairContext(room);
   }

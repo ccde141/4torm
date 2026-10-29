@@ -1,5 +1,5 @@
 import BoundedText from '../../../engine/text-display/BoundedText';
-import { useId, useMemo, useState } from 'react';
+import { Fragment, useId, useMemo, useState } from 'react';
 import { toolOutputSummary } from '../../../engine/text-display/tool-output';
 import ReasoningBlock from '../../../components/chat/ReasoningBlock';
 import { renderTextWithCode } from '../../../engine/markdown';
@@ -13,16 +13,20 @@ import { isCompactionHistory } from '../../../components/common/compaction-histo
 import type { ToolImageRef, ToolMediaScope } from '../../../engine/tool-media';
 import ToolResultImages from '../../../components/common/ToolResultImages';
 import { useProcessFade } from '../../../components/chat/useProcessFade';
+import { convectionSegments, type ConvectionCompactionBoundary } from './convection-compaction-segments';
 
 export interface ConvectionToolStep {
   tool: string;
   args: Record<string, unknown>;
   result?: string;
   toolImages?: ToolImageRef[];
-  status: 'pending' | 'running' | 'done' | 'error';
+  status: 'pending' | 'running' | 'done' | 'error' | 'unresolved';
 }
 
 export interface ConvectionTurnMessage {
+  execution?: { status: 'running' | 'failed' | 'stopped'; message?: string };
+  compactions?: ConvectionCompactionBoundary[];
+  displayContent?: string;
   agentId?: string;
   speaker: string;
   content: string;
@@ -34,20 +38,33 @@ export interface ConvectionTurnMessage {
   reasoning?: string;
 }
 
-export default function ConvectionTurnCard({ message, agent, messageId, onEdit, onDelete, mediaScope }: {
+interface ConvectionTurnProps {
   message: ConvectionTurnMessage;
   agent?: Agent;
   messageId: string;
   onEdit: () => void;
   onDelete: () => void;
   mediaScope?: ToolMediaScope;
-}) {
+}
+
+export default function ConvectionTurnCard(props: ConvectionTurnProps) {
+  const segments = convectionSegments(props.message);
+  return <>{segments.map(({ message, boundary }, index) => <Fragment key={boundary?.id ?? 'current'}>
+    {(message.content.trim() || message.reasoning || message.toolCalls?.length || message.streaming || message.execution) &&
+      <ConvectionTurnBubble {...props} message={message} messageId={`${props.messageId}-${index}`}
+        editable={index === segments.length - 1} />}
+    {boundary && <CompactionHistory content={`[历史压缩记录]\n${boundary.summary}`} handoff />}
+  </Fragment>)}</>;
+}
+
+function ConvectionTurnBubble({ message, agent, messageId, onEdit, onDelete, mediaScope, editable }:
+  ConvectionTurnProps & { editable: boolean }) {
   const { t } = useLocale();
   const tools = message.toolCalls || [];
   const waiting = message.waitingInfo;
 
   if ((message.speaker === '系统' || message.speaker === 'system') && isCompactionHistory(message.content)) {
-    return <CompactionHistory content={message.content} />;
+    return <CompactionHistory content={message.content} handoff />;
   }
 
   return (
@@ -66,10 +83,14 @@ export default function ConvectionTurnCard({ message, agent, messageId, onEdit, 
         {message.content.trim() && <div className={`chat__content convection-turn__answer${message.reasoning || tools.length ? ' convection-turn__answer--separated' : ''}`}>
           {renderTextWithCode(message.content.trim(), messageId)}{message.streaming ? '▍' : ''}
         </div>}
+        {message.execution && message.execution.status !== 'running' && <div className="conv__waiting-hint" role="status">
+          {message.execution.status === 'failed' ? t('chat.delegate.failed') : t('chat.execution.cancelled')}
+          {message.execution.message && ` · ${message.execution.message}`}
+        </div>}
         {message.timestamp && <div className="chat__timestamp" title={formatTimestamp(message.timestamp, true)}>
           {formatTimestamp(message.timestamp)}
         </div>}
-        {!message.streaming && <div className="chat__bubble-actions">
+        {editable && !message.streaming && <div className="chat__bubble-actions">
           <button className="chat__msg-action-btn" title={t('common.edit')} aria-label={t('chat.editMessage')} onClick={onEdit}>✏</button>
           <button className="chat__msg-action-btn chat__msg-action-btn--danger" title={t('common.delete')}
             aria-label={t('chat.deleteMessage')} onClick={onDelete}>🗑</button>
@@ -121,12 +142,14 @@ function ConvectionTurnProcess({ tools, streaming, mediaScope }: {
 }
 
 function ConvectionToolRow({ tool, mediaScope }: { tool: ConvectionToolStep; mediaScope?: ToolMediaScope }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [expanded, setExpanded] = useState(tool.status === 'running' || tool.status === 'error');
   const running = tool.status === 'running' || tool.status === 'pending';
   const output = useMemo(() => toolOutputSummary(tool.result ?? '', true), [tool.result]);
   const resultSummary = output.lines > 1 ? t('convection.turn.outputLines', { count: output.lines }) : output.preview;
-  const state = running ? t('chat.tool.runningShort') : tool.status === 'error' ? t('chat.delegate.failed') : resultSummary || t('chat.tool.completed');
+  const state = running ? t('chat.tool.runningShort') : tool.status === 'unresolved'
+    ? (locale === 'en-US' ? 'Result unavailable' : '未收到结果')
+    : tool.status === 'error' ? t('chat.delegate.failed') : resultSummary || t('chat.tool.completed');
   return (
     <div className={`convection-turn__tool convection-turn__tool--${tool.status}`}>
       <button type="button" className="convection-turn__tool-trigger" aria-expanded={expanded}

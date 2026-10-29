@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   listMemory, createMemory, updateMemory, deleteMemory,
   type MemoryEntry, type MemoryCategory, type MemoryDraft,
@@ -6,6 +6,7 @@ import {
 import '../../styles/components/config-modal.css';
 import '../../styles/components/memory-panel.css';
 import { useLocale } from '../../i18n/LocaleContext';
+import { useConfirm } from '../common/ConfirmDialog';
 
 const CATEGORY_META: Record<MemoryCategory, { label: 'memory.feedback' | 'memory.fact' | 'memory.pitfall' | 'memory.reference'; color: string }> = {
   feedback: { label: 'memory.feedback', color: '#a78bfa' },
@@ -25,6 +26,8 @@ const EMPTY_DRAFT: MemoryDraft = { detail: '', category: 'fact', tags: [] };
 
 export default function MemoryPanel({ agentId, agentName }: Props) {
   const { t } = useLocale();
+  const confirm = useConfirm();
+  const removingRef = useRef(false);
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -72,10 +75,19 @@ export default function MemoryPanel({ agentId, agentName }: Props) {
   };
 
   const remove = async (slug: string) => {
-    setBusy(true);
-    try { await deleteMemory(agentId, slug); reload(); }
+    if (removingRef.current || busy) return;
+    const entry = entries.find(item => item.slug === slug);
+    if (!entry) return;
+    removingRef.current = true;
+    try {
+      if (!await confirm({ title: t('memory.deleteTitle', { name: entry.summary || entry.detail.slice(0, 80) }),
+        message: t('memory.deleteMessage', { agent: agentName }), confirmText: t('common.delete'), danger: true })) return;
+      setBusy(true);
+      await deleteMemory(agentId, slug);
+      reload();
+    }
     catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
+    finally { removingRef.current = false; setBusy(false); }
   };
 
   const parseTags = (v: string) => setDraft(d => ({ ...d, tags: v.split(/[,，]/).map(t => t.trim()).filter(Boolean) }));
@@ -139,7 +151,7 @@ export default function MemoryPanel({ agentId, agentName }: Props) {
                         </span>
                         <span className="mem-actions">
                           <button className="mem-icon-btn" title={t('common.edit')} aria-label={t('memory.editLabel')} onClick={() => startEdit(e)}>✎</button>
-                          <button className="mem-icon-btn mem-icon-btn--danger" title={t('common.delete')} aria-label={t('memory.deleteLabel')} onClick={() => remove(e.slug)}>🗑</button>
+                          <button className="mem-icon-btn mem-icon-btn--danger" disabled={busy} title={t('common.delete')} aria-label={t('memory.deleteLabel')} onClick={() => void remove(e.slug)}>🗑</button>
                         </span>
                       </div>
                       <p className="mem-detail">{e.detail}</p>

@@ -73,7 +73,7 @@ class ExternalSessionAdapter implements MonsoonExternalSessionPort {
 
 function externalMessage(message: MonsoonExternalMessage, role: 'user' | 'assistant'): MonsoonMessage {
   if (typeof message.timestamp !== 'string') throw new Error('追加季风消息缺少时间戳');
-  return { ...message, role, timestamp: message.timestamp,
+  return { ...message, role, ...(role === 'user' ? { origin: 'framework' as const } : {}), timestamp: message.timestamp,
     ...(message.nativeContext ? { nativeContext: persistMonsoonContext(message.nativeContext) } : {}) };
 }
 

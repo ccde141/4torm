@@ -12,6 +12,16 @@ export const CYCLONE_AGENT_CAPABILITY: FrameworkCapabilityDescriptor = {
 
 工位是本项目中的持续工作单元：绑定 Agent 提供模型、基础角色、工具、技能和通用记忆；工位保留自己的职责、私聊、项目记忆和事项记录。更换绑定 Agent 不会清空岗位积累。岗位经验和项目资料由工位写入本工位记忆，适合跨项目复用的经验才进入池中 Agent 的通用记忆；记忆不代替真实运行状态。
 
+协作图决定固定工位之间的联络与派发范围，画布位置只决定显示位置。协作组是图内的工位分组，同组成员默认互通；跨组或未分组工位需要单独关系：forward 允许 sourceSeatId → targetSeatId，both 允许双向。关系不会传递，甲能联系乙、乙能联系丙，不代表甲能直接联系丙。工位协作开关和可用工具仍独立生效。工作室主管不属于任何组，其项目内统筹不依赖工位连线。
+
+查看协作图用 read_collaboration_structure，input={workshopId,view:"seats"} 取得真实 seatId 与 groupId；view="groups" 查看分组和布局，view="relations" 查看定向关系。首次读取保存 revision，后续视图携带同一 revision；每个视图按自己的 nextCursor 读完，发生变化冲突则重新读取全部视图。mode="legacy-full-mesh" 表示尚未配置图、工位默认互通，空的关系列表不是互相隔离；mode="explicit" 才按分组和连线限制范围。
+
+设定协作组或连线用 update_collaboration_structure：填写 workshopId、expectedRevision、完整 groups 和完整 externalRelations。它是完整替换，修改一条关系也必须保留其他组和关系；删除组或线是从对应完整列表移除，不会删除工位。groups 每项填写 id、title、seatIds、position:{x,y}，已有项保留布局和 size；externalRelations 每项填写 id、sourceSeatId、targetSeatId、direction。省略 seatPositions 保留原工位位置，需要调整时提交完整位置表。首次保存会切换到显式结构；groups=[] 且 externalRelations=[] 会隔离不同工位。保存后回读结构，再用 read_collaboration_console 核对相关工位的协作开关。版本冲突不能用新版本号直接重放旧内容，要重新合并最新结构。
+
+例如需求与开发需要频繁互通，可以放入同一个交付组；独立核验工位放在另一个组，仅在开发与核验之间建立所需方向的关系。同组不要重复连线；一个工位只能归属一个协作组。移动成员时同步移除已变成同组的跨组关系；删除组后，其成员成为未分组工位，需要重新确认联络范围。
+
+创建协作工作室不会自动创建图中的协作组或关系。取得创建结果的真实 seatId 后，先读图，再按项目分工配置并回读，完成结构后才启动执行。新增工位同样不会自动入组或连线。协作组与群聊成员互相独立：建组不等于加入群聊，加入群聊也不授予固定工位间的联络关系。群聊内的工位向自身固定工位派发内容，或者由你告知后，固定工位才能获得核心信息；协作图不复制群聊记录。
+
 接续已有工作室时，先用 read_collaboration_console 查看项目统计、工位概况和近期事项；指定 seatId 再看该工位职责、继承能力与协作设置。按需用 read_collaboration_seat_memory 读取记忆索引，选中条目后携带返回的 revision 和 entryId 分段读取正文。这里是跨工位统筹入口，每次都要填写真实 workshopId，读取工位资料时还需 seatId；不会从上一次调用自动继承身份。首次使用某个 action 前，用 framework_guide({capability:"cyclone",action:"操作名"}) 核对字段。
 
 读取示例（ID 均取实际返回值）：先以 action=read_collaboration_console、input={workshopId} 找到工位；再以 action=read_collaboration_seat_memory、input={workshopId,seatId} 取索引；需要正文时仍用同一 action，input={workshopId,seatId,entryId,revision}。不要只传 seatId，也不要把索引中的标题猜成 entryId。需要执行细节时继续读取私聊、派发或运行记录，不把概况或记忆当作完成凭据。按返回游标续读；记录变化时重新定位，不拼接不同版本。
@@ -35,8 +45,8 @@ export const CYCLONE_AGENT_CAPABILITY: FrameworkCapabilityDescriptor = {
 历史消息改写和删除、实体删除、上下文重置及主动压缩由人类在界面操作，未向你开放。需要这些操作时向人类说明目标和影响，请人类执行；不要借其他工具绕过此边界。`,
   examples: [
     { scenario: '为长期协作建立固定工位和共享工作区',
-      actions: ['create_collaboration_group', 'read_collaboration_group'],
-      confirmation: '回读工位与成员；结构已创建不代表成员已经开始执行。' },
+      actions: ['create_collaboration_group', 'read_collaboration_structure', 'update_collaboration_structure', 'read_collaboration_structure'],
+      confirmation: '用返回的真实工位 ID 配置分组和定向关系，回读验证；工作室创建不等于协作图配置或成员已开始执行。' },
     { scenario: '建立带主管的工作室，并转达项目目标让主管持续跟进',
       actions: ['create_collaboration_group', 'read_collaboration_console', 'read_collaboration_supervisor',
         'start_collaboration_supervisor_chat', 'read_collaboration_thread'],

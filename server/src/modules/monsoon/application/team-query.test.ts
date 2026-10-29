@@ -38,3 +38,37 @@ test('team query context removes system and private reasoning fields', async () 
   const detail = await query.context('agent-a', 'session-a', 'member-a');
   assert.deepEqual(detail.messages, [{ role: 'assistant', content: 'answer' }]);
 });
+
+test('历史成员不挤占活动视图，解散页按版本续读且保留时间与上下文入口', async () => {
+  const members = Array.from({ length: 65 }, (_, i) => ({ id: `m${i}`, name: `成员${i}`, mission: '',
+    rolePrompt: '', taskContext: '', constraints: '', lifecycle: 'dismissed' as 'dismissed' | 'active',
+    recruitedAt: '2026-10-27T00:00:00Z', dismissedAt: '2026-10-28T00:00:00Z',
+    context: [{ role: 'assistant' as const, content: `交付${i}` }] }));
+  members.push({ ...members[0], id: 'active', lifecycle: 'active' });
+  const state = { revision: 1, members, reports: Array.from({ length: 80 }, (_, i) => ({ id: `r${i}`,
+    memberId: 'active', task: '', content: '', outcome: 'completed', acknowledged: false })) };
+  const query = new MonsoonTeamQuery({ recover: async () => state, read: async () => state });
+  const active = await query.summary('agent', 'session', { items: 1, textChars: 10_000 }, { view: 'active' });
+  assert.equal(active.members[0].id, 'active'); assert.equal(active.reports.length, 0);
+  assert.equal(active.dismissedCount, 65); assert.equal(active.activeCount, 1);
+  const history = await query.summary('agent', 'session', { items: 20, textChars: 10_000 }, { view: 'dismissed' });
+  assert.equal(history.members.length, 20); assert.equal(history.nextOffset, 20);
+  assert.equal(history.members[0].dismissedAt, members[0].dismissedAt);
+  members[0].mission = '很长的职责'.repeat(10_000);
+  const bounded = await query.summary('agent', 'session', { items: 20, textChars: 1_000 }, { view: 'dismissed' });
+  assert.ok(bounded.members.every(member => member.name.length > 0));
+  assert.equal(bounded.truncated, true);
+  const next = await query.summary('agent', 'session', { items: 20, textChars: 10_000 },
+    { view: 'dismissed', offset: history.nextOffset, revision: history.revision });
+  assert.equal(next.members[0].id, 'm20');
+  assert.equal((await query.context('agent', 'session', 'm20')).messages[0].content, '交付20');
+  state.revision++;
+  const whileBusy = await query.summary('agent', 'session', { items: 20, textChars: 10_000 },
+    { view: 'dismissed', cursor: history.nextCursor });
+  assert.equal(whileBusy.members[0].id, 'm20');
+  await assert.rejects(query.summary('agent', 'session', { items: 20, textChars: 10_000 },
+    { view: 'dismissed', offset: 40, revision: 1 }), /记录已变化/);
+  members[0].lifecycle = 'active';
+  await assert.rejects(query.summary('agent', 'session', { items: 20, textChars: 10_000 },
+    { view: 'dismissed', cursor: history.nextCursor }), /记录已变化/);
+});

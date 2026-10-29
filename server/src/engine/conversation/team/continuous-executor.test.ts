@@ -26,8 +26,8 @@ for (const compact of [false, true]) test(`team member keeps its own context and
   const permissions = { tools: [], skills: [], sandboxLevel: 'project' as const };
   const member = await store.create({ name: 'researcher', mission: 'TASK-42', rolePrompt: '',
     taskContext: '', constraints: '', permissions }, permissions);
-  member.context = compact ? [{ role: 'user', content: '此前任务'.repeat(1_000) },
-    { role: 'assistant', content: '此前结果'.repeat(1_000) }] : [];
+  member.context = compact ? [{ role: 'user', origin: 'framework', content: '此前任务'.repeat(10_000) },
+    { role: 'assistant', content: '近期结果'.repeat(8_000) }] : [];
   const parent: SessionRunnerOpts = { dataDir, agentId: 'agent', sessionId: 'session', model: 'local:model',
     temperature: 0, toolNames: [], toolMode: 'selected', skillIds: [], workspace: '.', sandboxLevel: 'project', native: true,
     maxTurns: 1, llmTransform: () => { throw new Error('member must not use the parent compaction port'); } };
@@ -36,7 +36,7 @@ for (const compact of [false, true]) test(`team member keeps its own context and
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
     const body = JSON.parse(String(init.body));
-    if (body.messages[0].content.includes('你负责把已发生的工作整理')) {
+    if (body.messages.at(-1).content.includes('你负责把已有会话整理')) {
       summaries++; t.mock.timers.tick(21 * 60_000); assert.equal(init.signal?.aborted, false);
       return stream('TASK-42：此前结果已记录，继续当前任务。');
     }
@@ -45,8 +45,10 @@ for (const compact of [false, true]) test(`team member keeps its own context and
     return stream('result', compact || calls === 212 ? 'stop' : 'length');
   });
   const execute = memberExecutor(parent);
+  const control = { inbox: async () => ({ messages: [], commit: async () => {} }),
+    report: async () => {}, observe: () => {} };
   const checkpoint = async (context: ContextMessage[]) => { snapshots.push(structuredClone(context)); };
-  await execute(member, 'TASK-42 first assignment', checkpoint, new AbortController().signal);
+  await execute(member, 'TASK-42 first assignment', checkpoint, new AbortController().signal, control);
   if (!compact) { assert.equal(calls, 212); return; }
   assert.ok(summaries > 0);
   assert.ok(snapshots.some(context => context.some(message => message.content.startsWith('[历史压缩记录]'))));
@@ -56,7 +58,7 @@ for (const compact of [false, true]) test(`team member keeps its own context and
   assert.equal(archived.memberId, member.id);
   assert.ok(archived.context.some((message: ContextMessage) => message.content.includes('此前任务')));
   member.context = snapshots.at(-1)!;
-  await execute(member, 'TASK-42 second assignment', checkpoint, new AbortController().signal);
+  await execute(member, 'TASK-42 second assignment', checkpoint, new AbortController().signal, control);
   assert.ok(requests.at(-1)!.some(message => message.content.includes('TASK-42：此前结果已记录')));
   assert.equal((await store.read()).members[0].context.length, 0, 'test callback must not mutate the parent or other team state');
 });

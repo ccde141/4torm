@@ -17,6 +17,8 @@ import type { CompactionProgress } from '../../shared/compaction/index.js';
 // ── 数据结构 ──────────────────────────────────────────────────
 
 export interface MeetingMessage {
+  compactionId?: string;
+  compactions?: MeetingTurnCompaction[];
   speaker: string;
   content: string;
   timestamp: number;
@@ -28,6 +30,18 @@ export interface MeetingMessage {
   streaming?: boolean;
   /** true=该轮无有效回复（模型空回复），前端以灰字显式呈现 */
   noReply?: boolean;
+}
+
+export interface MeetingTurnCompaction {
+  id: string;
+  summary: string;
+  toolOffset: number;
+  textOffset: number;
+  reasoningOffset: number;
+}
+
+export interface MeetingChairMessage extends ContextMessage {
+  compactionId?: string;
 }
 
 /** 会议参与者（节点维度，非 Agent 实体维度） */
@@ -52,8 +66,11 @@ export interface MeetingSessionData {
   topic: string;
   /** 公共消息历史 */
   publicMessages: MeetingMessage[];
+  /** Full display prefix; publicMessages remains the bounded model-active history. */
+  publicDisplayHistory?: MeetingMessage[];
+  publicDisplayContextCount?: number;
   /** 会长私聊历史 */
-  chairMessages: ContextMessage[];
+  chairMessages: MeetingChairMessage[];
   /** Exact private model context after compaction, independent of public meeting records. */
   chairActiveContext?: ContextMessage[];
   chairContextRawCount?: number;
@@ -70,7 +87,8 @@ export interface MeetingSessionData {
    */
   phase: 'opening' | 'discussion' | 'ending' | 'ended';
   /** 当前正在流式产出的消息（面板关了再开时 replay 用） */
-  streamingCurrent?: { speaker: string; content: string; reasoning?: string };
+  streamingCurrent?: { speaker: string; content: string; reasoning?: string;
+    toolCount?: number; toolCalls?: MeetingMessage['toolCalls']; compactions?: MeetingTurnCompaction[] };
   /** Provider-reported usage for every model call in this meeting activation. */
   usageRecorder: TokenUsageRecorder;
   compactionNotice?: string;

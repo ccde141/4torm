@@ -15,9 +15,10 @@ export function activeTideContext(messages: readonly TideMessage[]): ContextMess
       continue;
     }
     if (message.role === 'user' || message.role === 'assistant' || message.role === 'system') {
-      active.push({ role: message.role, content: message.content });
+      active.push({ role: message.role, content: message.content,
+        ...(message.origin ? { origin: message.origin } : {}) });
     } else if (message.role === 'tool-call' || message.role === 'tool-result') {
-      active.push({ role: 'user', content: `[已记录的 ${message.role}]\n${message.content}` });
+      active.push({ role: 'user', origin: 'framework', content: `[已记录的 ${message.role}]\n${message.content}` });
     }
   }
   return active;

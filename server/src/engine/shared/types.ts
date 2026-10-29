@@ -46,6 +46,8 @@ export interface ToolImageRef {
 export interface ContextMessage {
   role: ContextRole;
   content: string;
+  /** Context ownership only; never sent as a provider message field. */
+  origin?: 'human' | 'framework';
   /** 已解析的图片；工具图片仅在构造供应商请求时临时填入，不写回历史。 */
   images?: ProviderImage[];
   /** 工具返回的图片引用，与本条工具结果一起保存和压缩。 */

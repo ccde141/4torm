@@ -96,7 +96,6 @@ data/
 │   ├── servers.json
 │   └── media/                   # tool images; conversations store references
 ├── runtime/
-│   ├── compaction/               # completed summary fragments, bound to scope, model, and source
 │   └── execution-observations.json
 ├── providers.json
 ├── providers.template.json

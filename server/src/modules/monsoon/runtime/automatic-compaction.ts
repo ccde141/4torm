@@ -5,12 +5,14 @@ import type { ContextMessage } from '../../../engine/shared/types.js';
 import { loadAgent } from '../../../engine/shared/agent-loader.js';
 import { MonsoonContextPort, type MonsoonContextMarker } from '../application/context-port.js';
 import type { MonsoonEvent, MonsoonTurnSpec } from './turn-contract.js';
+import type { MonsoonExecutionPosition } from './execution-trace.js';
 
 type SummaryPorts = Pick<CompactionOptions, 'summarize' | 'resolveSummaryBudget'>;
 type CheckpointEvent = Extract<MonsoonEvent, { type: 'compaction-notice' | 'context-compacted'
   | 'compact-start' | 'compact-done' | 'compact-failed' }>;
 export function monsoonCompactionTransform(spec: MonsoonTurnSpec,
-  summaryPorts: SummaryPorts = {}): (llm: LLMCaller, emit: (event: CheckpointEvent) => void,
+  summaryPorts: SummaryPorts = {}, position?: () => MonsoonExecutionPosition | undefined):
+  (llm: LLMCaller, emit: (event: CheckpointEvent) => void,
     rebase: (messages: ContextMessage[]) => void) => LLMCaller {
   return (llm, emit, rebase) => {
     let pending: Promise<LLMCaller> | undefined;
@@ -31,7 +33,7 @@ export function monsoonCompactionTransform(spec: MonsoonTurnSpec,
         onNotice: notice => emit(notice),
         onProgress: progress => emit(progress),
         commit: async (plan, signal) => {
-          const saved = await port.commit(spec.agentId, spec.sessionId, revision, plan, 1, signal);
+          const saved = await port.commit(spec.agentId, spec.sessionId, revision, plan, 1, signal, position?.());
           revision = saved.revision;
           const marker = [...saved.messages].reverse().find(message => message.type === 'compact-marker'
             && message.contextExact === true && message.nativeContext && message.content === plan.summary

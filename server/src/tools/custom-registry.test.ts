@@ -149,7 +149,7 @@ test('内部收口、记忆与执行能力名称不可注册，旧冲突可诊�
     'seat_activity_read', 'seat_dispatch_read',
     'inspect_execution', 'wait_execution', 'terminate_execution',
     'team_start', 'team_create', 'team_dispatch', 'team_read', 'team_wait',
-    'team_ack', 'team_review', 'team_dismiss',
+    'team_ack', 'team_review', 'team_dismiss', 'team_message', 'team_stop', 'team_report',
     'envelope_add', 'envelope_remove', 'envelope_list',
     'find_operation_records', 'read_operation_record',
   ];

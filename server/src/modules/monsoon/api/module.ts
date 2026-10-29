@@ -89,10 +89,10 @@ function monsoonHandlers(
       getTeam: {
         parse: parseTeamLookup,
         invoke: async (context, input) => {
-          const lookup = input as { agentId: string; sessionId: string };
+          const lookup = input as ReturnType<typeof parseTeamLookup>;
           return teams.summary(lookup.agentId, lookup.sessionId, {
             items: context.budget.items ?? 40, textChars: context.budget.textChars ?? 12_000,
-          });
+          }, lookup);
         },
       },
       stopRun: {
@@ -135,7 +135,10 @@ function monsoonManifest(
       { id: 'getTeam', kind: 'query', permission: 'observe', audiences: [...methodAudiences],
         inputSchema: { type: 'object', additionalProperties: false,
           required: ['agentId', 'sessionId'],
-          properties: { agentId: { type: 'string' }, sessionId: { type: 'string' } } },
+          properties: { agentId: { type: 'string' }, sessionId: { type: 'string' },
+            view: { type: 'string', enum: ['all', 'active', 'dismissed'] },
+            offset: { type: 'integer', minimum: 0 }, revision: { type: 'integer', minimum: 0 },
+            cursor: { type: 'string', maxLength: 100 } } },
         output: { mode: 'inline', budget: {
           items: { default: 40, max: 100 }, textChars: { default: 12_000, max: 40_000 } } } },
       { id: 'stopRun', kind: 'command', permission: 'intervene', audiences: [...methodAudiences],
@@ -193,13 +196,24 @@ function parseCurrentRunLookup(value: unknown): { sessionId: string } {
   return { sessionId: identifier(record.sessionId) };
 }
 
-function parseTeamLookup(value: unknown): { agentId: string; sessionId: string } {
+function parseTeamLookup(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid lookup');
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).some(key => key !== 'agentId' && key !== 'sessionId')) {
+  if (Object.keys(record).some(key => !['agentId', 'sessionId', 'view', 'offset', 'revision', 'cursor'].includes(key))) {
     throw new Error('invalid lookup');
   }
-  return { agentId: teamIdentifier(record.agentId), sessionId: teamIdentifier(record.sessionId) };
+  if (record.view !== undefined && !['all', 'active', 'dismissed'].includes(String(record.view))) throw new Error('invalid view');
+  for (const key of ['offset', 'revision']) {
+    if (record[key] !== undefined && (!Number.isSafeInteger(record[key]) || Number(record[key]) < 0)) throw new Error('invalid pagination');
+  }
+  if (record.offset && record.revision === undefined) throw new Error('revision required');
+  if (record.cursor !== undefined && (typeof record.cursor !== 'string' || !/^[a-f0-9]{64}:\d{1,16}$/.test(record.cursor)
+    || record.offset !== undefined || record.revision !== undefined)) throw new Error('invalid cursor');
+  return { agentId: teamIdentifier(record.agentId), sessionId: teamIdentifier(record.sessionId),
+    ...(record.view === undefined ? {} : { view: record.view as 'all' | 'active' | 'dismissed' }),
+    ...(record.offset === undefined ? {} : { offset: record.offset as number }),
+    ...(record.cursor === undefined ? {} : { cursor: record.cursor as string }),
+    ...(record.revision === undefined ? {} : { revision: record.revision as number }) };
 }
 
 function identifier(value: unknown): string {

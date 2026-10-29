@@ -64,7 +64,7 @@ Enable **Automatic compaction** and configure the following:
 | Setting | How to use it |
 |---|---|
 | **Thresholds** | Set a threshold for each kind of conversation. Values use K tokens: enter `240` for 240,000 tokens. |
-| **Prefix to compact** | Choose how much older content to summarize. **2/3** summarizes roughly the older two-thirds and retains the most recent third unchanged. |
+| **Prefix to compact** | Choose how much older history to summarize. **2/3** selects roughly the older two-thirds; the recent original content described below is retained even when it falls within that proportion. |
 | **Compaction model** | Use the current conversation model or choose a fixed model. |
 | **Test model** | Check whether the selected model can generate a summary. |
 
@@ -72,19 +72,31 @@ Select **Save** to apply your changes without restarting. Once a threshold is re
 
 Meetings use the meeting assistant's model and compaction prompt. Tide tasks that append to a Monsoon conversation use the Monsoon threshold.
 
+### Retain Recent Original Content
+
+Compaction preserves complete recent conversation rounds:
+
+| Conversation type | Original content retained |
+|---|---|
+| Private chat | The latest four rounds |
+| Group discussion | The latest three rounds |
+| Fewer rounds than listed above | Approximately the latest 30K tokens |
+
+A round consists of one human message followed by the agents' replies and tool activity. Multiple agent replies in a group discussion belong to the same round. These rounds are counted separately from Tide task executions and its retained-round setting.
+
 ### Compact Manually
 
-In Monsoon, send `/compact` after the current reply finishes to summarize the conversation's history. For an independent Tide conversation, open its task details and select **Compact conversation**.
+After the current reply finishes, send `/compact` in the relevant conversation. For an independent Tide conversation, select **Compact conversation** in the task details.
 
-The original records are archived, and you can continue the conversation with the saved summary.
+The original records are archived. Automatic compaction can also occur while an agent is working through a task. After successful compaction, the agent continues the current task using the summary and retained original content.
 
 ### View Compaction Progress
 
-The interface shows compaction progress, including the current stage and completed fragments for long histories. Each automatic compaction job has a two-hour limit.
+During compaction, you can view its status or stop the operation.
 
-Select **Stop compaction** to stop the current operation. After stopping or a failure, you can start compaction again. When summarizing the same content again, completed fragments can be reused.
+The corresponding history is replaced only after the new summary is saved successfully. Stopping or failing before that point leaves the original content in place, and you can start compaction again.
 
-When compaction finishes, select the **History summary** divider in the conversation to expand the summary.
+After completion, select the **History summary** divider to read the summary. The original records from before compaction remain available to review.
 
 ## Modify or Delete an Agent
 

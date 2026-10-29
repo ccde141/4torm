@@ -1,5 +1,5 @@
 import { backendFetch } from '../../lib/backend-client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { McpImportPanel } from './McpImportPanel';
 import { McpServerForm } from './McpServerForm';
 import type { McpConfigPayload, McpServer } from './mcp-form';
@@ -7,6 +7,7 @@ import '../../styles/components/capability-management.css';
 import './McpPage.css';
 import './McpForm.css';
 import { useLocale } from '../../i18n/LocaleContext';
+import { useConfirm } from '../common/ConfirmDialog';
 
 async function requestJson<T>(url: string, options: RequestInit | undefined, fallback: (status: number) => string): Promise<T> {
   const response = await backendFetch(url, options);
@@ -35,6 +36,9 @@ const TRANSPORT_LABELS = {
 
 export function McpPage() {
   const { t } = useLocale();
+  const confirm = useConfirm();
+  const activeActions = useRef(new Set<string>());
+  const pendingDeletes = useRef(new Set<string>());
   const request = useCallback(<T,>(url: string, options?: RequestInit) => (
     requestJson<T>(url, options, status => t('mcp.error.request', { status }))
   ), [t]);
@@ -62,11 +66,28 @@ export function McpPage() {
   });
 
   const runServerAction = async (name: string, label: string, action: () => Promise<unknown>) => {
+    if (activeActions.current.has(name)) return;
+    activeActions.current.add(name);
     setPageError('');
     setBusyFor(name, label);
     try { await action(); await refresh(); }
     catch (error) { setPageError((error as Error).message); await refresh(); }
-    finally { clearBusy(name); }
+    finally { activeActions.current.delete(name); clearBusy(name); }
+  };
+
+  const removeServer = async (server: McpServer) => {
+    if (pendingDeletes.current.has(server.name) || activeActions.current.has(server.name)) return;
+    pendingDeletes.current.add(server.name);
+    try {
+      if (!(await confirm({
+        title: t('mcp.delete.title', { name: server.name }),
+        message: t('mcp.delete.message'),
+        confirmText: t('mcp.page.delete'), danger: true,
+      }))) return;
+      await runServerAction(server.name, t('mcp.page.deleting'), () => request('/api/mcp/remove', postOptions({ name: server.name })));
+    } finally {
+      pendingDeletes.current.delete(server.name);
+    }
   };
 
   const saveServer = async (payload: McpConfigPayload) => {
@@ -129,7 +150,7 @@ export function McpPage() {
                   <span className="mcp-toggle__slider" />
                 </label>
                 <button className="capability-button capability-button--secondary capability-button--compact mcp-btn" disabled={!!busy[server.name]} onClick={() => { setEditing(server); setFormMode('edit'); setImporting(false); }}>{t('mcp.page.edit')}</button>
-                <button className="capability-button capability-button--danger capability-button--compact mcp-btn" disabled={!!busy[server.name]} onClick={() => void runServerAction(server.name, t('mcp.page.deleting'), () => request('/api/mcp/remove', postOptions({ name: server.name })))}>{t('mcp.page.delete')}</button>
+                <button className="capability-button capability-button--danger capability-button--compact mcp-btn" disabled={!!busy[server.name]} onClick={() => void removeServer(server)}>{t('mcp.page.delete')}</button>
               </div>
             </article>
           ))}

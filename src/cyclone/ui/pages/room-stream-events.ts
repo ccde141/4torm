@@ -19,6 +19,7 @@ export interface FeedMsg {
   content: string;
   isHuman: boolean;
   isArchiveSummary?: boolean;
+  compactionId?: string;
   streaming?: boolean;
   phase?: string;
   reasoning?: string;
@@ -28,6 +29,7 @@ export interface FeedMsg {
   membershipAction?: 'joined' | 'left';
   tools: FeedTool[];
   segments?: RoomReplySegment[];
+  continued?: boolean;
 }
 
 export interface RoomEventState {
@@ -46,6 +48,17 @@ export function applyRoomEvent(ev: any, state: RoomEventState, locale: Locale = 
   if (feedback !== undefined) state.compactionNotice = feedback;
   const feed = state.roundFeed;
   switch (ev.type) {
+    case 'compact-done':
+      if (ev.operation === 'compact' && typeof ev.id === 'string' && typeof ev.summary === 'string' && ev.summary.trim()) {
+        updateSpeaker(feed, state.activeSpeaker, message => {
+          const segments = message.segments ??= [];
+          if (!segments.some(segment => segment.kind === 'compaction' && segment.id === ev.id)) {
+            segments.push({ kind: 'compaction', id: ev.id, summary: ev.summary,
+              reasoningOffset: message.reasoning?.length ?? 0 });
+          }
+        });
+      }
+      break;
     case 'model-request':
       state.modelUsage = applyModelRequest(state.modelUsage, ev.request);
       if (ev.request.purpose === 'conversation' && ev.request.usage) state.lastKnownTokenUsage = ev.request.usage;

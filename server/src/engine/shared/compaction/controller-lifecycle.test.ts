@@ -12,7 +12,11 @@ const options: CompactionOptions = { dataDir: '', area: 'monsoon', kind: 'conver
 function input() {
   const messages: ContextMessage[] = [{ role: 'system', content: 'static rules' },
     { role: 'user', content: 'a'.repeat(3_000) },
-    { role: 'assistant', content: 'b'.repeat(3_000) }];
+    { role: 'assistant', content: 'b'.repeat(3_000) },
+    ...[2, 3, 4, 5].flatMap(index => [
+      { role: 'user' as const, content: `direction ${index}` },
+      { role: 'assistant' as const, content: `recent work ${index}` },
+    ])];
   return { ...options, messages, mode: 'full' as const, reason: 'manual' as const,
     policy: defaultCompactionPolicy() };
 }

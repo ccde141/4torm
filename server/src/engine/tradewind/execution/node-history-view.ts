@@ -14,6 +14,7 @@ export interface NodeHistoryMessage {
   messageId?: string;
   reasoningContent?: string;
   toolSteps?: NodeHistoryToolStep[];
+  compaction?: { id: string; summary: string };
 }
 type StoredMessage = ContextMessage & { messageId?: string };
 

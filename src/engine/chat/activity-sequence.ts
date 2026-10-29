@@ -15,14 +15,57 @@ export function appendActivityTool(message: ChatMessage, index: number): ChatMes
 
 export function appendTeamActivity(message: ChatMessage, event: TeamActivity): ChatMessage {
   const sequence = message.activitySequence ?? [];
-  if (sequence.some(item => item.kind === 'team' && item.event.id === event.id)) return message;
-  return { ...message, activitySequence: [...sequence, { kind: 'team', event }] };
+  const key = teamActivityKey(event);
+  const index = sequence.findIndex(item => item.kind === 'team' && teamActivityKey(item.event) === key);
+  if (index < 0) return { ...message, activitySequence: [...sequence, { kind: 'team', event }] };
+  const previous = sequence[index];
+  if (previous.kind !== 'team') return message;
+  const retained = retainEarlierTimestamp(previous.event, event);
+  return retained === previous.event ? message : { ...message,
+    activitySequence: sequence.map((item, position) => position === index ? { kind: 'team', event: retained } : item) };
+}
+
+export function teamActivityKey(event: TeamActivity): string {
+  return event.reportId ? `report:${JSON.stringify([event.reportId, event.stage])}` : `event:${event.id}`;
+}
+
+function retainEarlierTimestamp(previous: TeamActivity, incoming: TeamActivity): TeamActivity {
+  const timestamp = Date.parse(incoming.timestamp);
+  const prior = Date.parse(previous.timestamp);
+  return Number.isFinite(timestamp) && (!Number.isFinite(prior) || timestamp < prior)
+    ? { ...previous, timestamp: incoming.timestamp } : previous;
+}
+
+/** Legacy duplicate notifications remain stored; only their visible projection is reconciled. */
+function reconcileTeamActivities(sequence: ChatActivity[]): ChatActivity[] {
+  const result: ChatActivity[] = [];
+  const positions = new Map<string, number>();
+  const compactions = new Set<string>();
+  for (const item of sequence) {
+    if (item.kind === 'compact') {
+      if (!compactions.has(item.markerId)) result.push(item);
+      compactions.add(item.markerId);
+      continue;
+    }
+    if (item.kind !== 'team') { result.push(item); continue; }
+    const key = teamActivityKey(item.event);
+    const position = positions.get(key);
+    if (position === undefined) {
+      positions.set(key, result.length);
+      result.push(item);
+    } else {
+      const previous = result[position];
+      if (previous.kind === 'team') result[position] = { kind: 'team',
+        event: retainEarlierTimestamp(previous.event, item.event) };
+    }
+  }
+  return result;
 }
 
 /** Reconcile a completed answer or interruption suffix without moving earlier text past tools. */
 export function activitySequence(message: ChatMessage): ChatActivity[] {
-  const sequence = message.activitySequence;
-  if (!sequence?.length) return [];
+  if (!message.activitySequence?.length) return [];
+  const sequence = reconcileTeamActivities(message.activitySequence);
   const parts = sequence.filter(item => item.kind === 'text').map(item => item.content);
   const answer = message.content.trim();
   const displayed = parts.join('\n\n').trim();

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useLocale } from '../../i18n/LocaleContext';
+import { useConfirm } from '../common/ConfirmDialog';
 import {
   customParameterText,
   defineCustomParameter,
@@ -20,6 +21,9 @@ export function ProviderCustomParametersForm({ provider, onRefresh }: {
   onRefresh: () => void;
 }) {
   const { t } = useLocale();
+  const confirm = useConfirm();
+  const removePending = useRef(false);
+  const [removing, setRemoving] = useState(false);
   const [path, setPath] = useState('');
   const [label, setLabel] = useState('');
   const [kind, setKind] = useState<ProviderCustomParameterKind>('string');
@@ -29,6 +33,7 @@ export function ProviderCustomParametersForm({ provider, onRefresh }: {
   const definitions = storedDefinitions.definitions;
 
   const addDefinition = async () => {
+    if (removePending.current) return;
     try {
       const definition = defineCustomParameter(definitions, {
         path,
@@ -51,6 +56,7 @@ export function ProviderCustomParametersForm({ provider, onRefresh }: {
   };
 
   const saveValue = async (definition: ProviderCustomParameterDefinition, text: string) => {
+    if (removePending.current) return;
     try {
       const customRequestParameters = setCustomParameterFromText(
         provider.customRequestParameters ?? {}, definition, text,
@@ -64,7 +70,16 @@ export function ProviderCustomParametersForm({ provider, onRefresh }: {
   };
 
   const removeDefinition = async (definition: ProviderCustomParameterDefinition) => {
+    if (removePending.current) return;
+    removePending.current = true;
     try {
+      if (!(await confirm({
+        title: t('model.provider.customRemoveTitle', { name: definition.label, path: definition.path }),
+        message: t('model.provider.customRemoveMessage', { provider: provider.label || t('model.provider.unnamed') }),
+        confirmText: t('model.provider.customRemove'), danger: true,
+      }))) return;
+      setRemoving(true);
+      setError('');
       await updateProvider(provider.id, {
         customParameterDefinitions: definitions.filter(item => item.id !== definition.id),
         customRequestParameters: removeCustomParameter(
@@ -75,6 +90,9 @@ export function ProviderCustomParametersForm({ provider, onRefresh }: {
       onRefresh();
     } catch (cause) {
       setError(errorMessage(cause, t('model.provider.customSaveFailed')));
+    } finally {
+      removePending.current = false;
+      setRemoving(false);
     }
   };
 
@@ -87,6 +105,7 @@ export function ProviderCustomParametersForm({ provider, onRefresh }: {
         key={`${definition.id}:${customParameterText(provider.customRequestParameters, definition)}`}
         definition={definition}
         initialValue={customParameterText(provider.customRequestParameters, definition)}
+        removing={removing}
         onSave={saveValue}
         onRemove={removeDefinition}
       />)}
@@ -103,9 +122,10 @@ export function ProviderCustomParametersForm({ provider, onRefresh }: {
   </section>;
 }
 
-function CustomParameterField({ definition, initialValue, onSave, onRemove }: {
+function CustomParameterField({ definition, initialValue, removing, onSave, onRemove }: {
   definition: ProviderCustomParameterDefinition;
   initialValue: string;
+  removing: boolean;
   onSave: (definition: ProviderCustomParameterDefinition, text: string) => void;
   onRemove: (definition: ProviderCustomParameterDefinition) => void;
 }) {
@@ -115,12 +135,12 @@ function CustomParameterField({ definition, initialValue, onSave, onRemove }: {
   return <div className="provider-custom-field">
     <label><span><strong>{definition.label}</strong><code>{definition.path}</code></span>
       {definition.kind === 'boolean'
-        ? <select value={value} onChange={event => { setValue(event.target.value); onSave(definition, event.target.value); }}><option value="">—</option><option value="true">true</option><option value="false">false</option></select>
+        ? <select disabled={removing} value={value} onChange={event => { setValue(event.target.value); onSave(definition, event.target.value); }}><option value="">—</option><option value="true">true</option><option value="false">false</option></select>
         : definition.kind === 'select'
-          ? <select value={value} onChange={event => { setValue(event.target.value); onSave(definition, event.target.value); }}><option value="">—</option>{definition.options?.map(option => <option key={option} value={option}>{option}</option>)}</select>
-          : <input type={definition.kind === 'number' ? 'number' : 'text'} value={value} onChange={event => setValue(event.target.value)} onBlur={save} placeholder={definition.kind === 'json' ? '{"key":"value"}' : ''} />}
+          ? <select disabled={removing} value={value} onChange={event => { setValue(event.target.value); onSave(definition, event.target.value); }}><option value="">—</option>{definition.options?.map(option => <option key={option} value={option}>{option}</option>)}</select>
+          : <input disabled={removing} type={definition.kind === 'number' ? 'number' : 'text'} value={value} onChange={event => setValue(event.target.value)} onBlur={save} placeholder={definition.kind === 'json' ? '{"key":"value"}' : ''} />}
     </label>
-    <button type="button" className="provider-custom-remove" onClick={() => onRemove(definition)} aria-label={t('model.provider.customRemove')}>×</button>
+    <button type="button" className="provider-custom-remove" disabled={removing} onMouseDown={event => event.preventDefault()} onClick={() => onRemove(definition)} aria-label={t('model.provider.customRemove')}>×</button>
   </div>;
 }
 

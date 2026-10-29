@@ -98,6 +98,17 @@
 .session-team .is-failed, .session-team .is-crashed { border-color: #f87171; }
 .session-team .is-aborted > span, .session-team .is-failed > span, .session-team .is-crashed > span { color: #f87171; }
 .session-team .is-dismissed { opacity: .6; border-style: dashed; }
+.session-team-pages { display: flex; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--color-border); }
+.session-team-pages button { padding: 8px 14px; border-radius: 9px; border: 1px solid var(--color-border); background: transparent; color: var(--color-text-secondary); }
+.session-team-pages button[aria-pressed=true] { background: var(--color-bg-tertiary); color: var(--color-text-primary); border-color: #94a3b888; }
+.session-team-history { padding: 20px; overflow-y: auto; min-height: 0; }
+.session-team-history > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.session-team-history-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; width: 100%; padding: 16px; margin-bottom: 10px; text-align: left; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-bg-tertiary); color: var(--color-text-primary); }
+.session-team-history-row > strong, .session-team-history-row > span { grid-column: 1 / -1; }
+.session-team-history-row > span { color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.session-team-history-row small { color: var(--color-text-secondary); }
+.session-team-history-row:hover, .session-team-history-row:focus-visible { border-color: #94a3b8; }
+.session-team-history-context { font-size: 12px; }
 .session-team-inspector { padding: 24px; overflow: auto; border-left: 1px solid var(--color-border); }
 .session-team-inspector h3 { margin: 0 0 10px; }
 .session-team-inspector h4 { margin: 24px 0 8px; font-size: 12px; color: var(--color-text-secondary); }

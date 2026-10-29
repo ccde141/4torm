@@ -23,6 +23,7 @@ import type { ToolRegistrationProposal } from '../shared/tool-registration';
 export type { ContextMessage };
 
 export interface SeatContextMessage extends ContextMessage {
+  compactionId?: string;
   kind?: 'dispatch-receipt';
   dispatchId?: string;
   /** Stable identity of the accepted private-chat input, shared with its live activity. */
@@ -78,6 +79,7 @@ export interface SeatData {
   historySeen?: { configurationId?: string; roomConfigurationId?: string; compactedAt?: string };
   /** 私聊会话历史（= 该工位的 contact 收件箱） */
   messages: SeatContextMessage[];
+  displayHistory?: import('./conversation-transcript.js').CycloneDisplayHistory<SeatContextMessage>;
   tokenUsage?: CycloneTokenUsage;
   modelUsage?: import('../shared/model-request-usage.js').ModelUsageProgress;
   compactState?: CycloneCompactState;
@@ -133,11 +135,16 @@ export interface WorkshopSummary {
 
 /** 群聊一条公共消息（发言者 = 工位 title 或「人类」） */
 export type RoomMessageSegment =
+  | { kind: 'compaction'; id: string; summary: string; reasoningOffset?: number }
   | { kind: 'text'; content: string }
-  | { kind: 'tools'; tools: Array<{ tool: string; args: Record<string, unknown>; result?: string; status: 'running' | 'success' | 'error' }> }
+  | { kind: 'tools'; tools: Array<{ tool: string; args: Record<string, unknown>; result?: string;
+      toolImages?: import('../shared/types.js').ToolImageRef[]; status: 'running' | 'success' | 'error' }> }
   | { kind: 'dispatch'; dispatchId: string };
 
 export interface RoomMessage {
+  executionStatus?: 'running' | 'failed' | 'stopped';
+  executionError?: string;
+  compactionId?: string;
   /** 稳定消息 ID；旧数据可缺省。 */
   id?: string;
   /** Agent 发言所属工位轮次，供异步派发卡锚定。 */
@@ -194,12 +201,16 @@ export interface RoomData {
   participantSeatIds: string[];
   /** 公共消息历史 */
   publicMessages: RoomMessage[];
+  publicDisplayHistory?: import('./conversation-transcript.js').CycloneDisplayHistory<RoomMessage>;
+  /** Received progress at a committed compaction boundary, separate from public delivery. */
+  publicExecutionDraft?: RoomMessage;
   /**
    * 会长私聊历史（对齐对流 SessionData：会长信息与群聊信息同文件、不同字段）。
    * 会长是本会议的场外参谋——纯文本、零工具，只读本 room 的会议快照。
    * 按 room 隔离，换会议不串台。
    */
   chairMessages?: SeatContextMessage[];
+  chairDisplayHistory?: import('./conversation-transcript.js').CycloneDisplayHistory<SeatContextMessage>;
   /** Exact compacted chair context; public and private source records are retained separately. */
   chairActiveContext?: ContextMessage[];
   chairContextRawCount?: number;

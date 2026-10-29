@@ -69,7 +69,8 @@ export async function chatChairWithinExecution(
     const { systemMessage } = await buildChairPrompt(dataDir, workshopId, room, w, agent);
 
     const previousPromptTokens = room.chairTokenUsage?.promptTokens;
-    room.chairMessages.push({ role: 'user', content: humanMessage, ...inputIdentity });
+    room.chairMessages.push({ role: 'user', content: humanMessage,
+      origin: inputIdentity?.dispatchId ? 'framework' : 'human', ...inputIdentity });
     room.chairCompactionNotice = undefined;
     room.chairCompaction = undefined;
     await saveRoom(dataDir, workshopId, room);

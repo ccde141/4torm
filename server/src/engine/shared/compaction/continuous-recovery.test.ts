@@ -19,13 +19,13 @@ for (const native of [true, false]) for (const size of [210_000, 990_000]) {
       const policy = defaultCompactionPolicy();
       await saveCompactionPolicy(dataDir, { ...policy, enabled: true });
       const history: ContextMessage[] = [{ role: 'system', content: 'preserve task identity' }];
-      for (let index = 0; index < 36; index++) history.push({
-        role: index % 2 ? 'assistant' : 'user', content: `record-${index}\n` + '原'.repeat(Math.floor(size / 36)),
+      for (let index = 0; index < 64; index++) history.push({
+        role: index % 2 ? 'assistant' : 'user', content: `record-${index}\n` + '原'.repeat(Math.floor(size / 64)),
       });
       history.push({ role: 'user', content: 'TASK-42: finish the original task' });
       let summaries = 0; let rejected = 0; let executions = 0;
       const llm = createCompactionCaller({ dataDir, model: 'fixture:model', kind: 'conversation',
-        area: 'monsoon', protectedPrefixCount: 1, resolveSummaryBudget: async () => 96_000,
+        area: 'monsoon', protectedPrefixCount: 1, resolveSummaryBudget: async () => 1_000_000,
         summarize: async () => { summaries++; return 'TASK-42 仍待完成，保留已确认事实'; },
         llm: { call: async messages => {
           if (estimateCompactionTokens(messages) > 180_000) {

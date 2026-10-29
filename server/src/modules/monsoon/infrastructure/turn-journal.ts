@@ -51,19 +51,21 @@ export class FileMonsoonTurnJournal {
     agentId: string,
     sessionId: string,
     messages: readonly MonsoonMessage[],
+    cleanup = true,
   ): Promise<PendingMonsoonRun[]> {
     const directory = this.directory(agentId, sessionId);
     const result: PendingMonsoonRun[] = [];
     for (const file of await journalFiles(directory)) {
       const parsed = await readJournal(file);
       if (isAbsorbed(messages, parsed.header.runId, parsed.events)) {
-        await fs.rm(file, { force: true });
+        if (cleanup) await fs.rm(file, { force: true });
         continue;
       }
       result.push({ runId: parsed.header.runId,
-        events: foldReplayText(parsed.events), truncated: parsed.truncated });
+        events: foldReplayText(restoreCommittedCompactions(parsed.header.runId, parsed.events, messages)),
+        truncated: parsed.truncated });
     }
-    await removeEmpty(directory);
+    if (cleanup) await removeEmpty(directory);
     return result;
   }
 
@@ -89,6 +91,29 @@ export class FileMonsoonTurnJournal {
     identifier(agentId); identifier(sessionId);
     return path.join(agentSessionsDir(this.dataDir, agentId), `${sessionId}.runs`);
   }
+}
+
+/** The session commit precedes its stream event; restore only that known crash window. */
+function restoreCommittedCompactions(runId: string, events: PendingMonsoonRun['events'],
+  messages: readonly MonsoonMessage[]): PendingMonsoonRun['events'] {
+  const assistantIds = new Set(messages.filter(message => message.role === 'assistant'
+    && (message.id === runId || message.inputRunId === runId)).map(message => message.id));
+  const recorded = new Set(events.filter(event => event.type === 'context-compacted')
+    .flatMap(event => record(event.marker) && typeof event.marker.id === 'string' ? [event.marker.id] : []));
+  const missing = messages.filter(message => message.type === 'compact-marker'
+    && record(message.execution) && assistantIds.has(String(message.execution.assistantId))
+    && Number.isSafeInteger(message.execution.eventOffset) && Number(message.execution.eventOffset) >= 0
+    && Number.isSafeInteger(message.committedRevision) && !recorded.has(message.id));
+  if (!missing.length) return events;
+  const restored = [...events];
+  const prefix = events.findIndex(event => event.type !== 'reply-accepted');
+  for (const marker of missing.sort((a, b) => Number((a.execution as Record<string, unknown>).eventOffset)
+    - Number((b.execution as Record<string, unknown>).eventOffset))) {
+    const offset = Number((marker.execution as Record<string, unknown>).eventOffset) + Math.max(0, prefix);
+    restored.splice(Math.min(offset, restored.length), 0,
+      { type: 'context-compacted', revision: marker.committedRevision, marker });
+  }
+  return restored;
 }
 
 async function journalFiles(directory: string): Promise<string[]> {

@@ -1,6 +1,6 @@
 /** 历史消息按引用跳过流式重渲；切会话时消息引用会更新。 */
 
-import { memo } from 'react';
+import { memo, type ReactNode } from 'react';
 import BoundedText from '../../engine/text-display/BoundedText';
 import StructuredMessage from './StructuredMessage';
 import ReasoningBlock from './ReasoningBlock';
@@ -73,6 +73,9 @@ function renderToolSteps(steps: ToolStep[], messageId: string, timestamp: string
 }
 
 export interface MessageItemProps {
+  userNotice?: ReactNode;
+  compactionMarkers?: ChatMessage[];
+  inlineCompaction?: boolean;
   msg: ChatMessage;
   agent: Agent | null;
   sessionId: string;
@@ -95,7 +98,7 @@ export interface MessageItemProps {
 function MessageItemInner({
   msg, agent, sessionId, isStreaming, compacting, isEditing, editContent, setEditContent,
   onSaveEdit, onCancelEdit, onStartEdit, onDeleteMessage, onAskReply,
-  askStatus, askStatusDetail, onAskCheck,
+  askStatus, askStatusDetail, onAskCheck, userNotice, compactionMarkers, inlineCompaction,
 }: MessageItemProps) {
   const { locale, t } = useLocale();
   const mediaScope: ToolMediaScope | undefined = agent?.id
@@ -121,10 +124,11 @@ function MessageItemInner({
   }
 
   if (msg.type === 'compact-marker') {
+    if (inlineCompaction) return null;
     return (
       <>
         <CompactionNotice message={msg.compactionNotice ?? ''} />
-        <CompactionHistory content={msg.content} />
+        <CompactionHistory content={msg.content} handoff />
       </>
     );
   }
@@ -179,9 +183,11 @@ function MessageItemInner({
       const lastTool = msg.toolSteps?.findLast(step => step.status === 'running')?.tool;
       return <>
         <CompactionNotice message={msg.compactionNotice ?? ''} />
-        <MonsoonActivitySequence message={msg} agent={agent} streaming={isStreaming}
-          reasoning={msg.reasoningContent && <ReasoningBlock reasoning={msg.reasoningContent}
-            breaks={msg.reasoningBreaks} isStreaming={isStreaming} preview />}
+        <MonsoonActivitySequence message={msg} agent={agent} streaming={isStreaming} compactionMarkers={compactionMarkers}
+          renderReasoning={(start, end, active) => msg.reasoningContent && end > start && <ReasoningBlock
+            reasoning={msg.reasoningContent.slice(start, end)}
+            breaks={msg.reasoningBreaks?.filter(offset => offset > start && offset < end).map(offset => offset - start)}
+            isStreaming={active} preview />}
           phase={isStreaming && !compacting && <LivePhase phase={msg.streamingPhase ?? 'llm-waiting'}
             elapsed={msg.phaseElapsed} tool={msg.streamingTool || lastTool}
             argumentChars={msg.streamingArgumentChars} notice={msg.streamingStatus} />}
@@ -288,6 +294,7 @@ function MessageItemInner({
           <MessageImages images={msg.images} agentId={msg.agentId} sessionId={sessionId} />
         )}
         {msg.content && <div className="md-bubble"><BoundedMessageText text={msg.content} id={msg.id} /></div>}
+        {msg.role === 'user' && userNotice}
         {msg.timestamp && <div className="chat__timestamp" title={formatTimestamp(msg.timestamp, true)}>{formatTimestamp(msg.timestamp)}</div>}
         <div className="chat__bubble-actions">
           <button className="chat__msg-action-btn" title={t('common.edit')} aria-label={t('chat.editMessage')} onClick={() => onStartEdit(msg)}>✏</button>
@@ -307,6 +314,7 @@ function areEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
   if (prev.isStreaming !== next.isStreaming) return false;
   if (prev.compacting !== next.compacting) return false;
   if (prev.isEditing !== next.isEditing) return false;
+  if (prev.userNotice !== next.userNotice) return false;
   if (prev.askStatus !== next.askStatus || prev.askStatusDetail !== next.askStatusDetail) return false;
   if (prev.agent?.id !== next.agent?.id || prev.agent?.name !== next.agent?.name) return false;
   if (prev.agent?.avatar?.version !== next.agent?.avatar?.version) return false;

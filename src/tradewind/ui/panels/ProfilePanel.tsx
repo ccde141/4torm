@@ -8,11 +8,12 @@
  * UI 只提供 relative 节拍设置。
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { WorkflowMode } from '../../types';
 import { deleteProfile, listProfiles, saveProfiles } from '../profile-client';
 import type { AutoProfile } from '../profile-client';
 import { useLocale } from '../../../i18n/LocaleContext';
+import { useConfirm } from '../../../components/common/ConfirmDialog';
 import './profile-panel.css';
 
 interface ProfilePanelProps {
@@ -37,10 +38,13 @@ function blankProfile(name = '新档案'): AutoProfile {
 
 export function ProfilePanel({ visible, workflowId, workflowName, onClose, onRun }: ProfilePanelProps) {
   const { t } = useLocale();
+  const confirm = useConfirm();
   const [profiles, setProfiles] = useState<AutoProfile[]>([]);
   const [editing, setEditing] = useState<AutoProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const deletionPending = useRef(false);
 
   const refresh = useCallback(async () => {
     if (!workflowId) return;
@@ -79,15 +83,20 @@ export function ProfilePanel({ visible, workflowId, workflowName, onClose, onRun
     }
   }, [profiles, persist, t]);
 
-  const remove = useCallback(async (id: string) => {
+  const remove = useCallback(async (profile: AutoProfile) => {
+    if (deletionPending.current) return;
+    deletionPending.current = true;
+    setDeleting(true);
     try {
-      await deleteProfile(workflowId, id, t('tradewind.profile.deleteFailed'));
-      setProfiles(prev => prev.filter(p => p.id !== id));
+      if (!await confirm({ title: t('tradewind.profile.deleteTitle', { name: profile.name }),
+        message: t('tradewind.profile.deleteMessage'), confirmText: t('common.delete'), danger: true })) return;
+      await deleteProfile(workflowId, profile.id, t('tradewind.profile.deleteFailed'));
+      setProfiles(prev => prev.filter(p => p.id !== profile.id));
       setError(null);
     } catch (cause) {
       setError((cause as Error).message || t('tradewind.profile.deleteFailed'));
-    }
-  }, [workflowId, t]);
+    } finally { deletionPending.current = false; setDeleting(false); }
+  }, [workflowId, t, confirm]);
 
   if (!visible) return null;
 
@@ -103,7 +112,7 @@ export function ProfilePanel({ visible, workflowId, workflowName, onClose, onRun
         {editing
           ? <ProfileForm draft={editing} onChange={setEditing} onSave={saveEdited} onCancel={() => setEditing(null)} />
           : <ProfileList
-              profiles={profiles} loading={loading}
+              profiles={profiles} loading={loading} deleting={deleting}
               onRun={onRun} onClose={onClose}
               onNew={() => setEditing(blankProfile(t('tradewind.profile.newName')))}
               onEdit={setEditing} onDelete={remove}
@@ -116,25 +125,27 @@ export function ProfilePanel({ visible, workflowId, workflowName, onClose, onRun
 interface ProfileListProps {
   profiles: AutoProfile[];
   loading: boolean;
+  deleting: boolean;
   onRun: (mode: WorkflowMode, profileId?: string) => void;
   onClose: () => void;
   onNew: () => void;
   onEdit: (p: AutoProfile) => void;
-  onDelete: (id: string) => void;
+  onDelete: (profile: AutoProfile) => Promise<void>;
 }
 
-function ProfileList({ profiles, loading, onRun, onClose, onNew, onEdit, onDelete }: ProfileListProps) {
+function ProfileList({ profiles, loading, deleting, onRun, onClose, onNew, onEdit, onDelete }: ProfileListProps) {
   const { t } = useLocale();
   return (
     <>
       <p className="tw-profile__hint">{t('tradewind.profile.runHint')}</p>
       <button
         className="tw-profile__single"
+        disabled={deleting}
         onClick={() => { onRun('auto', undefined); onClose(); }}
         title={t('tradewind.profile.singleTitle')}
       >{t('tradewind.profile.singleRun')}</button>
 
-      <button className="tw-profile__new" onClick={onNew}>{t('tradewind.profile.new')}</button>
+      <button className="tw-profile__new" disabled={deleting} onClick={onNew}>{t('tradewind.profile.new')}</button>
 
       {loading && <div className="tw-profile__hint">{t('common.loading')}</div>}
       {!loading && profiles.length === 0 && (
@@ -152,11 +163,12 @@ function ProfileList({ profiles, loading, onRun, onClose, onNew, onEdit, onDelet
           <div className="tw-profile__item-actions">
             <button
               className="tw-profile__item-run"
+              disabled={deleting}
               onClick={() => { onRun('auto', p.id); onClose(); }}
               title={t('tradewind.profile.runTitle')}
             >{t('tradewind.profile.run')}</button>
-            <button className="tw-profile__item-edit" onClick={() => onEdit(p)} title={t('common.edit')}>✎</button>
-            <button className="tw-profile__item-del" onClick={() => onDelete(p.id)} title={t('common.delete')}>✕</button>
+            <button className="tw-profile__item-edit" disabled={deleting} onClick={() => onEdit(p)} title={t('common.edit')}>✎</button>
+            <button className="tw-profile__item-del" disabled={deleting} onClick={() => void onDelete(p)} title={t('common.delete')}>✕</button>
           </div>
         </div>
       ))}

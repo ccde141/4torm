@@ -16,6 +16,8 @@ import {
   type TextureSize,
 } from '../../store/skin';
 import '../../styles/components/skin-custom.css';
+import { useConfirm } from '../common/ConfirmDialog';
+import { useLocale } from '../../i18n/LocaleContext';
 
 const SIZE_OPTIONS: Array<{ value: TextureSize; label: string }> = [
   { value: 'cover', label: '裁剪铺满' },
@@ -30,6 +32,9 @@ interface Props {
 }
 
 const SkinCustomTextureControl: React.FC<Props> = ({ config, onApply, onError }) => {
+  const confirm = useConfirm();
+  const { t } = useLocale();
+  const removingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const texture: SkinTextureConfig = config.texture ?? {
@@ -57,9 +62,15 @@ const SkinCustomTextureControl: React.FC<Props> = ({ config, onApply, onError })
     }
   };
 
-  const handleClear = () => {
-    onApply(clearCustomTexture());
-    if (fileInputRef.current) fileInputRef.current.value = '';
+  const handleClear = async () => {
+    if (uploading || removingRef.current) return;
+    removingRef.current = true;
+    try {
+      if (!await confirm({ title: t('skin.deleteImageTitle'), message: t('skin.deleteImageMessage'),
+        confirmText: t('common.delete'), danger: true })) return;
+      onApply(clearCustomTexture());
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } finally { removingRef.current = false; }
   };
 
   const handleSizeChange = (size: TextureSize) => {
@@ -100,7 +111,7 @@ const SkinCustomTextureControl: React.FC<Props> = ({ config, onApply, onError })
             <button
               type="button"
               className="skin-panel__action-btn skin-panel__action-btn--danger"
-              onClick={handleClear}
+              onClick={() => void handleClear()}
               disabled={uploading}
             >
               删除

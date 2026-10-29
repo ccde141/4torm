@@ -96,7 +96,7 @@ for (const native of [true, false]) test(`${native ? 'native' : 'text'} request 
   assert.deepEqual([...final.values()].map(request => request.state), ['completed', 'failed', 'completed']);
 });
 
-test('a failed summary request retries only its current fragment and resumes the original task', async t => {
+test('a silent failed summary request retries the same complete history and resumes the original task', async t => {
   const dataDir = await fixture(t);
   const policy = defaultCompactionPolicy();
   await saveCompactionPolicy(dataDir, { ...policy, enabled: true,
@@ -104,23 +104,26 @@ test('a failed summary request retries only its current fragment and resumes the
   const sources: string[] = []; let summaryCalls = 0; let failedSource: string | undefined;
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
     const body = JSON.parse(String(init.body));
-    if (body.messages[0].content.includes('你负责把已发生的工作整理')) {
-      const source = body.messages[1].content as string; sources.push(source);
-      if (++summaryCalls === 2) { failedSource = source; return new Response('{}', { status: 503 }); }
+    if (body.messages.at(-1).content.includes('你负责把已有会话整理')) {
+      const source = JSON.stringify(body.messages.slice(0, -1)); sources.push(source);
+      if (++summaryCalls === 1) { failedSource = source; return new Response('{}', { status: 503 }); }
       return stream('TASK-42：已记录旧事实，当前任务未完成。');
     }
     return stream('TASK-42 complete');
   });
   const messages: ContextMessage[] = [{ role: 'system', content: 'rules' },
     { role: 'user', content: '旧事实'.repeat(8_000) }, { role: 'assistant', content: '已核验结果'.repeat(8_000) },
+    ...[1, 2, 3].flatMap(index => [{ role: 'user' as const, content: `近期要求 ${index}` },
+      { role: 'assistant' as const, content: `近期结果 ${index}` }]),
     { role: 'user', content: 'TASK-42: continue original task' }];
   const result = await runReActLoopNative({ messages, toolDefs: [], onEvent: () => {},
     llm: createCompactionCaller({ dataDir, area: 'monsoon', kind: 'conversation', model: 'local:model',
-      scopeKey: 'fixture-task', protectedPrefixCount: 1, resolveSummaryBudget: async () => 16_000,
+      scopeKey: 'fixture-task', protectedPrefixCount: 1, resolveSummaryBudget: async () => 200_000,
       llm: { call: (context, _options, onChunk, signal) => callLLM({ dataDir,
         fullModelKey: 'local:model', messages: context, onChunk, signal }) } }) });
   assert.equal(result.termination.status, 'succeeded'); assert.equal(result.content, 'TASK-42 complete');
   assert.ok(failedSource); assert.equal(sources.filter(source => source === failedSource).length, 2);
-  assert.equal(sources.filter(source => source === sources[0]).length, 1);
+  assert.equal(sources.length, 2);
+  assert.ok(sources.every(source => source === sources[0]));
   assert.ok(messages.some(message => message.content.includes('TASK-42: continue original task')));
 });

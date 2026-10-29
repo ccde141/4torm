@@ -65,6 +65,27 @@ test('automatic compaction checkpoint revision reaches the final reply save', as
   assert.deepEqual(writes[1]?.messages.map(message => message.id), ['user-a', 'compact-a', 'run-a']);
 });
 
+test('a repeated old compaction cannot lower the final save revision or reorder the latest context', async () => {
+  const writes: ChatSession[] = [];
+  const marker = (id: string, content: string) => ({ id, role: 'system', content, timestamp: 'now',
+    type: 'compact-marker', contextExact: true, nativeContext: [{ role: 'system', content }] });
+  const first = marker('compact-first', '旧交接');
+  const request: typeof fetch = async () => new Response([
+    { type: 'context-compacted', revision: 9, marker: first },
+    { type: 'context-compacted', revision: 10, marker: marker('compact-second', '新交接') },
+    { type: 'context-compacted', revision: 9, marker: first },
+    { type: 'token', content: '继续完成' }, { type: 'done' },
+  ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(''));
+  await runStreamLoop({ session: { ...session, revision: 7 }, allMessages: [userMessage],
+    chatMessages: [{ role: 'user', content: '开始' }], agent, selectedModel: agent.model,
+    abortController: new AbortController(), request, setMessages: () => undefined,
+    saveSessionFn: async value => { writes.push(structuredClone(value));
+      return { ...value, revision: (value.revision ?? 0) + 1 }; },
+    refreshSessions: () => undefined, generateMessageIdFn: () => 'run-a' });
+  assert.equal(writes.at(-1)?.revision, 10);
+  assert.deepEqual(writes.at(-1)?.messages.map(message => message.id), ['user-a', 'compact-first', 'compact-second', 'run-a']);
+});
+
 test('a failed initial save neither starts nor probes a model run', async () => {
   let requests = 0;
   let saves = 0;

@@ -16,15 +16,16 @@ test('meeting prefix replacement retains the current round and its exact timesta
     { speaker: 'A', content: '旧回复', timestamp: 2 },
     { speaker: '人类', content: '正在讨论', timestamp: 3 },
     { speaker: 'A', content: '正在回答', timestamp: 4, streaming: true }];
-  assert.deepEqual(meetingContextBoundaries(old), [1, 3]);
+  assert.deepEqual(meetingContextBoundaries(old), [1, 2, 3, 4]);
   const next = replaceMeetingPrefix(old, 2, '先前共识', 10);
   assert.match(next[0].content, /先前共识/);
   assert.deepEqual(next.slice(1), old.slice(2));
   assert.equal(old.length, 4);
 });
 
-test('meeting compaction rejects a prefix that cuts a public round', () => {
+test('meeting compaction may split completed replies for budget retention but never a streaming reply', () => {
   const messages = [{ speaker: '人类', content: '议题', timestamp: 1 },
     { speaker: 'A', content: '回复', timestamp: 2 }];
-  assert.throws(() => replaceMeetingPrefix(messages, 1, '摘要'), /完整轮次/);
+  assert.deepEqual(replaceMeetingPrefix(messages, 1, '摘要').slice(1), messages.slice(1));
+  assert.throws(() => replaceMeetingPrefix([{ ...messages[0], streaming: true }, messages[1]], 1, '摘要'), /未完成发言/);
 });

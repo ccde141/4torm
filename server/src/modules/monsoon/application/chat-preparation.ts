@@ -7,6 +7,7 @@ import type { MonsoonTurn, MonsoonTurnSpec } from '../runtime/turn-contract.js';
 export interface MonsoonChatMessage {
   role: string;
   content: string;
+  origin?: ContextMessage['origin'];
   images?: ConversationImageRef[];
   reasoningContent?: string;
   reasoningEnvelope?: ProviderReasoningEnvelope;

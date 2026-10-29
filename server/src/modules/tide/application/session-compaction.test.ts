@@ -13,19 +13,23 @@ import { tideCompactionHandler } from '../api/compaction-method.js';
 import type { ModuleInvocationContext } from '../../../engine/collaboration/contracts.js';
 import { createModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
 
-test('human Tide full compaction archives originals and leaves only the summary in active model context', async t => {
+test('human Tide full compaction archives originals and retains the latest four complete human turns', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tide-full-compact-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const feature = createTideFeature({ dataDir: directory });
   const tasks = new FileTideTaskRepository(directory);
   const timestamp = new Date().toISOString();
+  const recent = Array.from({ length: 4 }, (_, index) => [
+    { id: `recent-user-${index}`, role: 'user', content: `最新要求${index}` },
+    { id: `recent-answer-${index}`, role: 'assistant', content: `最新回复${index}` },
+  ]).flat();
   await tasks.upsert({ id: 'task', name: '日报', agentId: 'agent-a', prompt: '日报', schedule: 'every 1h',
     enabled: false, repeatCount: -1, pushMode: 'accumulate', targetSessionId: 'session', windowN: 4,
     selfLoop: false, consecutiveErrors: 0, createdAt: timestamp });
   await writeTideSession(directory, { id: 'session', agentId: 'agent-a', agentName: 'A', title: '日报',
     model: 'test:model', systemPrompt: '', createdAt: timestamp, updatedAt: timestamp,
     messages: [{ id: 'u', role: 'user', content: '旧任务'.repeat(100) },
-      { id: 'a', role: 'assistant', content: '旧结果'.repeat(100) }] }, 'task', '日报');
+      { id: 'a', role: 'assistant', content: '旧结果'.repeat(100) }, ...recent] }, 'task', '日报');
   let summaryRequests = 0;
   const port = new TideSessionCompaction(directory, tasks, feature.scheduler, feature.changes, undefined,
     { resolveSummaryBudget: async () => 2_000, summarize: async () => {
@@ -49,7 +53,8 @@ test('human Tide full compaction archives originals and leaves only the summary 
   assert.equal((await feature.tasks.readSession('agent-a', 'session')).compaction?.type, 'compact-done');
   assert.deepEqual(saved.messages.slice(0, 2).map(message => message.content),
     ['旧任务'.repeat(100), '旧结果'.repeat(100)]);
-  assert.deepEqual(activeTideContext(saved.messages).map(message => message.content), ['[历史压缩记录]\n完整日报摘要']);
+  assert.deepEqual(activeTideContext(saved.messages).map(message => message.content),
+    ['[历史压缩记录]\n完整日报摘要', ...recent.map(message => message.content)]);
   const methods = feature.module.manifest.methods;
   const method = methods.find(item => item.id === 'compactSession');
   assert.deepEqual(method?.audiences, ['human', 'internal']);
@@ -119,7 +124,11 @@ test('cancelled manual Tide compaction preserves the original and releases the t
     model: 'test:model', systemPrompt: '', createdAt: timestamp, updatedAt: timestamp,
     tokenUsage: { promptTokens: 900, completionTokens: 100, totalTokens: 1_000 },
     messages: [{ id: 'u', role: 'user', content: '旧任务'.repeat(100) },
-      { id: 'a', role: 'assistant', content: '旧结果'.repeat(100) }] };
+      { id: 'a', role: 'assistant', content: '旧结果'.repeat(100) },
+      ...Array.from({ length: 4 }, (_, index) => [
+        { id: `recent-user-${index}`, role: 'user', content: `最新要求${index}` },
+        { id: `recent-answer-${index}`, role: 'assistant', content: `最新回复${index}` },
+      ]).flat()] };
   await writeTideSession(directory, original, 'task', '日报');
   const controller = new AbortController();
   const port = new TideSessionCompaction(directory, tasks, feature.scheduler, feature.changes, undefined,

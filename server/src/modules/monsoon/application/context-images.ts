@@ -24,6 +24,9 @@ export function readStoredMonsoonContext(value: unknown): StoredMonsoonContextMe
   const messages = value.map(item => {
     if (!record(item) || !['system', 'user', 'assistant', 'tool'].includes(String(item.role))
       || typeof item.content !== 'string') throw new Error('会话精确上下文消息无效');
+    if (item.origin !== undefined && !['human', 'framework'].includes(String(item.origin))) {
+      throw new Error('会话上下文消息来源无效');
+    }
     if (item.images !== undefined && !Array.isArray(item.images)) throw new Error('会话图片索引无效');
     return { ...structuredClone(item), ...(Array.isArray(item.images)
       ? { images: item.images.map(imageReference) } : {}) } as StoredMonsoonContextMessage;

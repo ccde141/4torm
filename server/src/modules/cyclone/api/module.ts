@@ -38,6 +38,8 @@ import type { CycloneAgentManagementService } from '../application/agent-managem
 import type { CycloneAgentBulletinService } from '../application/agent-bulletin-service.js';
 import type { CycloneAgentDispatchService } from '../application/agent-dispatch-service.js';
 import { cycloneAgentManagementHandlers, cycloneAgentManagementManifests } from './agent-management-methods.js';
+import type { CycloneAgentOrganizationService } from '../application/agent-organization-service.js';
+import { cycloneAgentOrganizationHandlers, cycloneAgentOrganizationManifests } from './agent-organization-methods.js';
 import { cycloneAgentBulletinHandlers, cycloneAgentBulletinManifests } from './agent-bulletin-methods.js';
 import { cycloneAgentDispatchHandlers, cycloneAgentDispatchManifests } from './agent-dispatch-methods.js';
 import type { CycloneConsoleService } from '../application/console-service.js';
@@ -71,6 +73,7 @@ export function createCycloneModule(dependencies: {
   agentRead?: CycloneAgentReadService;
   agentExecution?: CycloneAgentExecutionService;
   agentManagement?: CycloneAgentManagementService;
+  agentOrganization?: CycloneAgentOrganizationService;
   agentBulletin?: CycloneAgentBulletinService;
   agentDispatch?: CycloneAgentDispatchService;
   operations?: FeatureOperationHandler;
@@ -96,6 +99,7 @@ export function createCycloneModule(dependencies: {
         ...(dependencies.agentRead ? cycloneAgentReadManifests() : []),
         ...(dependencies.agentExecution ? cycloneAgentExecutionManifests() : []),
         ...(dependencies.agentManagement ? cycloneAgentManagementManifests() : []),
+        ...(dependencies.agentOrganization ? cycloneAgentOrganizationManifests() : []),
         ...(dependencies.agentBulletin ? cycloneAgentBulletinManifests() : []),
         ...(dependencies.agentDispatch ? cycloneAgentDispatchManifests() : []),
         ...(dependencies.console ? cycloneConsoleManifests() : []),
@@ -127,6 +131,7 @@ export function createCycloneModule(dependencies: {
       ...(dependencies.agentRead ? cycloneAgentReadHandlers(dependencies.agentRead) : {}),
       ...(dependencies.agentExecution ? cycloneAgentExecutionHandlers(dependencies.agentExecution) : {}),
       ...(dependencies.agentManagement ? cycloneAgentManagementHandlers(dependencies.agentManagement) : {}),
+      ...(dependencies.agentOrganization ? cycloneAgentOrganizationHandlers(dependencies.agentOrganization) : {}),
       ...(dependencies.agentBulletin ? cycloneAgentBulletinHandlers(dependencies.agentBulletin) : {}),
       ...(dependencies.agentDispatch ? cycloneAgentDispatchHandlers(dependencies.agentDispatch) : {}),
       ...(dependencies.console ? cycloneConsoleHandlers(dependencies.console) : {}),

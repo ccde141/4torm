@@ -173,7 +173,7 @@ export function buildSeatSystemPrompt(opts: {
     const roster = contactTargets.map(target => `- ${target.title}：${target.duty}`).join('\n');
     parts.push(`## 工位协作
 
-${seatCollaborationPolicy(seat).contact ? '可用 contact 向其他工位同步询问并等待回复。' : ''}${seatCollaborationPolicy(seat).dispatch ? '可用 dispatch 把完整、可独立完成的任务异步交办，派发后继续当前工作，不要原地等待。' : ''}当前协作工具只允许选择以下工位名称：
+${seatCollaborationPolicy(seat).contact ? '可用 contact 向其他工位同步询问并等待回复。' : ''}${seatCollaborationPolicy(seat).dispatch ? '可用 dispatch 把完整、可独立完成的任务异步交办，派发后继续当前工作，不要原地等待。' : ''}协作图按同组或定向关系确定可联络范围，群聊成员身份不改变固定工位的联络范围；连线不复制其他会话内容。当前协作工具只允许选择以下工位名称：
 
 ${roster}
 

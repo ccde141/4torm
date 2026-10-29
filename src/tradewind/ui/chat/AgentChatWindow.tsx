@@ -31,6 +31,7 @@ import {
 import { acceptsPanelEvent, panelReadUrl } from '../stream/panel-identity';
 import { latestProviderUsage, updateProviderUsage, type ProviderUsage, type ProviderUsageDisplay, type ProviderUsageDisplayEvent } from '../token-usage';
 import { mergeNodeUserMessage } from './node-message-identity';
+import { appendNodeCompaction, nodeCompactionMarker, nodeContinuationAnswer } from './node-compaction';
 import { compactionActivity, reduceCompactionActivity, type CompactionActivity } from '../../../components/common/compaction-activity';
 import { pendingCompaction, type CompactionEvent } from '../compaction-events';
 import type { ToolImageRef } from '../../../engine/tool-media';
@@ -112,6 +113,8 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
   const streamRef = useRef<{ id: string; content: string; reasoningContent: string } | null>(null);
   const streamFrameRef = useRef<number | null>(null);
   const roundIdRef = useRef<string | null>(null);
+  const compactedContentRef = useRef('');
+  const compactedIdsRef = useRef(new Set<string>());
   const statusRequestGateRef = useRef(createStatusRequestGate());
   const sealedRef = useRef(sealed);
   const panelEpochRef = useRef(0);
@@ -166,6 +169,8 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
     statusRequestGateRef.current.advanceEvent();
     streamRef.current = null;
     roundIdRef.current = null;
+    compactedContentRef.current = '';
+    compactedIdsRef.current.clear();
     // 硬重置会话视图：executionId 变化（循环换圈）时清空上一圈残留，
     // 随后 /snapshot 会拉到新圈全新 runner 的干净历史（仅 system prompt）。
     setMessages([]);
@@ -198,6 +203,7 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
           break;
 
         case 'round-start':
+          compactedContentRef.current = '';
           updateUsage({ type: 'start', operation: 'node' });
           roundIdRef.current = ev.runId;
           setRoundSource(ev.source);
@@ -213,6 +219,16 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
         case 'compact-done':
         case 'compact-failed':
           setCompaction(current => reduceCompactionActivity(current, ev));
+          if (ev.type === 'compact-done') {
+            const marker = nodeCompactionMarker(ev);
+            if (marker && !compactedIdsRef.current.has(marker.id)) {
+              compactedIdsRef.current.add(marker.id);
+              delegateBuffer.flush(); flushStreamFrame();
+              compactedContentRef.current += streamRef.current?.content ?? '';
+              streamRef.current = null;
+              setMessages(previous => appendNodeCompaction(previous, marker));
+            }
+          }
           break;
 
         case 'compaction-notice':
@@ -222,8 +238,13 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
         case 'context-compacted':
           delegateBuffer.flush();
           flushStreamFrame();
-          streamRef.current = null;
-          setMessages(projectNodeHistoryMessages(ev.messages, nextId));
+          for (const marker of projectNodeHistoryMessages(ev.messages, nextId).filter(message => message.type === 'compact-marker')) {
+            if (compactedIdsRef.current.has(marker.id)) continue;
+            compactedIdsRef.current.add(marker.id);
+            compactedContentRef.current += streamRef.current?.content ?? '';
+            streamRef.current = null;
+            setMessages(previous => appendNodeCompaction(previous, marker));
+          }
           break;
 
         case 'user-message': {
@@ -270,30 +291,35 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
           break;
         }
 
-        case 'tool-call':
+        case 'tool-call': {
           flushStreamFrame();
           setActivity('tool');
-          setMessages(prev => {
-            const placeholderId = streamRef.current?.id;
-            if (!placeholderId) return prev;
-            return appendToolStep(prev, placeholderId, ev.tool, ev.args || {});
-          });
+          if (!streamRef.current) {
+            const id = nextId();
+            streamRef.current = { id, content: '', reasoningContent: '' };
+            setMessages(previous => [...previous, { id, role: 'assistant', content: '', timestamp: new Date().toISOString() }]);
+          }
+          const placeholderId = streamRef.current.id;
+          setMessages(prev => appendToolStep(prev, placeholderId, ev.tool, ev.args || {}));
           break;
+        }
 
-        case 'tool-result':
+        case 'tool-result': {
           setActivity('waiting');
+          const placeholderId = streamRef.current?.id;
           setMessages(prev => {
             const before = ev.meta?.before;
-            const placeholderId = streamRef.current?.id;
             return placeholderId
               ? finishLatestToolStep(prev, placeholderId, ev.result, ev.ok, { before, toolImages: ev.toolImages })
               : prev;
           });
           break;
+        }
 
-        case 'delegate-start':
+        case 'delegate-start': {
           flushStreamFrame();
           setActivity('delegate');
+          const placeholderId = streamRef.current?.id;
           setMessages(prev => {
             const delMsg: ChatMessage = {
               id: nextId(), role: 'assistant', content: '',
@@ -302,16 +328,17 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
             };
             (delMsg as any)._delegateId = ev.delegateId;
             const msgs = [...prev];
-            const placeholderId = streamRef.current?.id;
             if (placeholderId) {
               const idx = msgs.findIndex(m => m.id === placeholderId);
-              msgs.splice(idx, 0, delMsg);
+              if (idx >= 0) msgs.splice(idx, 0, delMsg);
+              else msgs.push(delMsg);
             } else {
               msgs.push(delMsg);
             }
             return msgs;
           });
           break;
+        }
 
         case 'delegate-token':
           delegateBuffer.add(ev.delegateId, ev.content);
@@ -377,9 +404,10 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
           });
           break;
 
-        case 'contact-start':
+        case 'contact-start': {
           flushStreamFrame();
           setActivity('contact');
+          const placeholderId = streamRef.current?.id;
           setMessages(prev => {
             const contactMsg: ChatMessage = {
               id: nextId(), role: 'assistant', content: '',
@@ -387,16 +415,17 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
               toolCall: { toolName: 'contact', params: { target: ev.target }, status: 'pending' },
             };
             const msgs = [...prev];
-            const placeholderId = streamRef.current?.id;
             if (placeholderId) {
               const idx = msgs.findIndex(m => m.id === placeholderId);
-              msgs.splice(idx, 0, contactMsg);
+              if (idx >= 0) msgs.splice(idx, 0, contactMsg);
+              else msgs.push(contactMsg);
             } else {
               msgs.push(contactMsg);
             }
             return msgs;
           });
           break;
+        }
 
         case 'contact-done':
           setActivity('waiting');
@@ -412,16 +441,23 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
           });
           break;
 
-        case 'answer':
+        case 'answer': {
           delegateBuffer.flush();
           flushStreamFrame();
           setActivity('responding');
+          const content = nodeContinuationAnswer(ev.rawContent || ev.content, compactedContentRef.current);
+          const placeholderId = streamRef.current?.id;
+          if (!placeholderId && content.trim()) {
+            setMessages(previous => [...previous, { id: nextId(), role: 'assistant', content, timestamp: new Date().toISOString() }]);
+            break;
+          }
           setMessages(prev => prev.map(m =>
-            streamRef.current && m.id === streamRef.current.id
-              ? { ...m, content: ev.rawContent || ev.content }
+            m.id === placeholderId
+              ? { ...m, content }
               : m,
           ));
           break;
+        }
 
         case 'error':
           delegateBuffer.flush();
@@ -470,7 +506,12 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
     };
 
     // 渲染历史消息（snapshot.messages → ChatMessage[]）
-    const renderHistory = (msgs: NodeHistoryMessage[]) => setMessages(projectNodeHistoryMessages(msgs, nextId));
+    const renderHistory = (msgs: NodeHistoryMessage[]) => {
+      const projected = projectNodeHistoryMessages(msgs, nextId);
+      compactedContentRef.current = '';
+      compactedIdsRef.current = new Set(projected.filter(message => message.type === 'compact-marker').map(message => message.id));
+      setMessages(projected);
+    };
 
     const restoreSnapshot = (snap: NodeSnapshot<StreamEvent>) => {
       setCurrentInput({ scope: usageScope, value: snap.currentInput });
@@ -493,8 +534,8 @@ export function AgentChatWindow({ nodeId, nodeLabel, workflowId, executionId, on
       if (replay) {
         setStreaming(true);
         setActivity('waiting');
-        // user-message 已在 snapshot.messages；answer/done 后 assistant 也已提交。
-        for (const event of snap.roundLog) if (event.type !== 'user-message') applyEvent(event);
+        // Busy snapshots contain completed rounds; stable message IDs also reconcile older full snapshots.
+        for (const event of snap.roundLog) applyEvent(event);
       } else {
         setStreaming(false);
         setActivity('idle');

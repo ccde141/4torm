@@ -1,12 +1,11 @@
-import { backendFetch, backendUrl } from '../../lib/backend-client';
+import { backendUrl } from '../../lib/backend-client';
 import { memo, useState, useEffect, useRef, useCallback } from 'react';
 import { loadSkinConfig } from '../../store/skin';
-import { getAgents } from '../../store/agent';
-import { getAllSessions } from '../../store/chat';
 import SkinPanel from './SkinPanel';
 import { useLocale } from '../../i18n/LocaleContext';
 import '../../styles/components/header.css';
-import { listWorkflows } from '../../tradewind/ui/workflow-client';
+import { readHeaderSearch, type SearchResult, type SearchType } from './header-search';
+import { createLatestRequestGuard, type LatestRequest } from '../../lib/latest-request';
 
 interface HeaderProps {
   title: string;
@@ -14,25 +13,10 @@ interface HeaderProps {
   onNavigate?: (page: string, sessionId?: string) => void;
 }
 
-type SearchType = 'agent' | 'session' | 'cyclone' | 'tradewind' | 'tide' | 'convection';
-
-interface SearchResult {
-  type: SearchType;
-  id: string;
-  label: string;
-  sublabel: string;
-}
-
 // 各结果类型 → 落地页面 id（季风会话另走 deep-link，见 handleResultClick）
 const TYPE_PAGE: Record<SearchType, string> = {
   agent: 'agent', session: 'chat', cyclone: 'cyclone',
   tradewind: 'tradewind', tide: 'tide', convection: 'convection',
-};
-
-// 结果右侧徽标文案
-const TYPE_BADGE: Record<SearchType, string> = {
-  agent: 'Agent', session: '季风', cyclone: '工作室',
-  tradewind: '工作流', tide: '潮汐', convection: '会议室',
 };
 
 const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps) {
@@ -42,6 +26,10 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [showResults, setShowResults] = useState(false);
+  const [searchFailed, setSearchFailed] = useState(false);
+  const [searchPending, setSearchPending] = useState(false);
+  const requests = useRef(createLatestRequestGuard());
+  const controller = useRef<AbortController | null>(null);
   const searchRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -49,77 +37,44 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
     loadSkinConfig();
   }, []);
 
-  const doSearch = useCallback(async (q: string) => {
-    if (!q.trim()) {
-      setResults([]);
-      setShowResults(false);
-      return;
-    }
-    const lower = q.toLowerCase();
-    // 单个数据源失败不应拖垮整次搜索，故各 fetch 独立 try/catch（getJson 返回 null 时跳过）
-    const getJson = async (url: string): Promise<any> => {
-      try {
-        const res = await backendFetch(url);
-        if (!res.ok) return null;
-        return await res.json();
-      } catch { return null; }
-    };
-
-    const [agents, sessions, cyclones, tradewinds, tides, convections] = await Promise.all([
-      getAgents(),
-      getAllSessions(),
-      getJson('/api/cyclone/list'),
-      listWorkflows().catch(() => []),
-      getJson('/api/tide/tasks'),
-      getJson('/api/convection/list'),
-    ]);
-
-    const hit = (...fields: (string | undefined)[]) =>
-      fields.some(f => f && f.toLowerCase().includes(lower));
-
-    const agentResults: SearchResult[] = agents
-      .filter(a => hit(a.name, a.role, a.description))
-      .map(a => ({ type: 'agent', id: a.id, label: a.name, sublabel: a.role }));
-
-    const sessionResults: SearchResult[] = sessions
-      .filter(s => hit(s.title, s.agentName))
-      .map(s => ({ type: 'session', id: s.id, label: s.title, sublabel: s.agentName || '' }));
-
-    // 工作室（气旋）：列表为 WorkshopSummary[]，按标题匹配
-    const cycloneResults: SearchResult[] = (Array.isArray(cyclones) ? cyclones : [])
-      .filter((w: any) => hit(w.title))
-      .map((w: any) => ({ type: 'cyclone', id: w.id, label: w.title || '未命名工作室', sublabel: `${w.seatCount ?? 0} 工位 · ${w.roomCount ?? 0} 群聊` }));
-
-    const tradewindResults: SearchResult[] = (Array.isArray(tradewinds) ? tradewinds : [])
-      .filter((w: any) => hit(w.name))
-      .map((w: any) => ({ type: 'tradewind', id: w.workflowId, label: w.name || '未命名工作流', sublabel: `${w.nodeCount ?? 0} 节点` }));
-
-    // 潮汐：TideTask[]，按任务名 + prompt 匹配
-    const tideResults: SearchResult[] = (Array.isArray(tides) ? tides : [])
-      .filter((t: any) => hit(t.name, t.prompt))
-      .map((t: any) => ({ type: 'tide', id: t.id, label: t.name || '未命名任务', sublabel: t.schedule || '' }));
-
-    // 会议室（对流）：ConvectionSessionSummary[]，按标题 + 议题匹配
-    const convectionResults: SearchResult[] = (Array.isArray(convections) ? convections : [])
-      .filter((c: any) => hit(c.title, c.topic))
-      .map((c: any) => ({ type: 'convection', id: c.id, label: c.title || '未命名会议', sublabel: c.topic || '' }));
-
-    setResults([
-      ...agentResults, ...sessionResults, ...cycloneResults,
-      ...tradewindResults, ...tideResults, ...convectionResults,
-    ]);
-    setShowResults(true);
+  const invalidateSearch = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    requests.current.cancel();
+    controller.current?.abort();
+    controller.current = null;
   }, []);
 
-  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setQuery(val);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => doSearch(val), 200);
-  }, [doSearch]);
+  const doSearch = useCallback(async (q: string, request: LatestRequest) => {
+    if (!request.isCurrent()) return;
+    const current = new AbortController();
+    controller.current = current;
+    try {
+      const found = await readHeaderSearch(q, current.signal);
+      if (!request.isCurrent()) return;
+      setResults(found); setSearchFailed(false); setSearchPending(false); setShowResults(true);
+    } catch {
+      if (!request.isCurrent()) return;
+      setResults([]); setSearchFailed(true); setSearchPending(false); setShowResults(true);
+    } finally { if (controller.current === current) controller.current = null; }
+  }, []);
+
+  const scheduleSearch = useCallback((value: string) => {
+    invalidateSearch();
+    setResults([]); setShowResults(!!value.trim()); setSearchPending(!!value.trim()); setSearchFailed(false);
+    if (!value.trim()) return;
+    const request = requests.current.begin();
+    timerRef.current = setTimeout(() => void doSearch(value, request), 200);
+  }, [doSearch, invalidateSearch]);
+
+  const handleInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value;
+    setQuery(value); scheduleSearch(value);
+  }, [scheduleSearch]);
+
+  useEffect(() => invalidateSearch, [invalidateSearch]);
 
   const handleResultClick = useCallback((r: SearchResult) => {
-    setShowResults(false);
+    invalidateSearch(); setResults([]); setSearchPending(false); setShowResults(false);
     setQuery('');
     // 季风会话支持 deep-link 到具体会话；其余功能页暂只跳转到页面（不支持条目级定位）
     if (r.type === 'session') {
@@ -127,18 +82,17 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
     } else {
       onNavigate?.(TYPE_PAGE[r.type]);
     }
-  }, [onNavigate]);
+  }, [onNavigate, invalidateSearch]);
 
   useEffect(() => {
-    if (!showResults) return;
     const handler = (e: MouseEvent) => {
       if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setShowResults(false);
+        invalidateSearch(); setResults([]); setSearchPending(false); setShowResults(false);
       }
     };
     document.addEventListener('mousedown', handler, true);
     return () => document.removeEventListener('mousedown', handler, true);
-  }, [showResults]);
+  }, [invalidateSearch]);
 
   return (
     <header className="header">
@@ -147,7 +101,7 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
         {subtitle && <p className="header__subtitle">{subtitle}</p>}
       </div>
       <div className="header__actions">
-        <div className="header__search" ref={searchRef}>
+        <div className="header__search" ref={searchRef} aria-busy={searchPending}>
           <svg className="header__search-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8" />
             <path d="M21 21l-4.35-4.35" />
@@ -159,12 +113,14 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
             aria-label={t('header.searchLabel')}
             value={query}
             onChange={handleInputChange}
-            onFocus={() => results.length > 0 && setShowResults(true)}
+            onFocus={() => scheduleSearch(query)}
+            onKeyDown={event => { if (event.key === 'Escape') { invalidateSearch(); setResults([]); setSearchPending(false); setShowResults(false); } }}
           />
           {showResults && (
             <div className="header__search-dropdown">
               {results.length === 0 ? (
-                <div className="header__search-empty">{t('header.noResults')}</div>
+                <div className="header__search-empty" role="status">{t(searchPending ? 'header.searching'
+                  : searchFailed ? 'header.searchFailed' : 'header.noResults')}</div>
               ) : (
                 results.map(r => (
                   <button
@@ -186,10 +142,10 @@ const Header = memo(function Header({ title, subtitle, onNavigate }: HeaderProps
                       )}
                     </span>
                     <div className="header__search-item-text">
-                      <span className="header__search-item-label">{r.label}</span>
-                      <span className="header__search-item-sublabel">{r.sublabel}</span>
+                      <span className="header__search-item-label">{r.label || t(`header.untitled.${r.type}`)}</span>
+                      <span className="header__search-item-sublabel">{r.detail ? t(r.detail.key, r.detail.values) : r.sublabel}</span>
                     </div>
-                    <span className="header__search-item-type">{TYPE_BADGE[r.type]}</span>
+                    <span className="header__search-item-type">{t(`header.type.${r.type}`)}</span>
                   </button>
                 ))
               )}

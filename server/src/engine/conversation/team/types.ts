@@ -21,14 +21,34 @@ export interface MemberRun {
   runtimeId: string;
   task: string;
   status: 'running' | TeamOutcome;
+  startedAt?: string;
+  updatedAt?: string;
+  phase?: string;
+  tool?: string;
+  recentResult?: string;
+  stopReason?: string;
+}
+export interface TeamMessage {
+  id: string;
+  memberId: string;
+  runId: string;
+  direction: 'to-main' | 'to-member';
+  content: string;
+  createdAt: string;
+  status: 'queued' | 'included' | 'undelivered';
+  deliveredAt?: string;
 }
 export interface TeamMember extends MemberDefinition {
   id: string;
+  recruitedAt?: string;
+  dismissedAt?: string;
   lifecycle: 'active' | 'dismissed';
   context: ContextMessage[];
   run?: MemberRun;
 }
 export interface MemberReport {
+  createdAt?: string;
+  delivery?: { runId: string; includedAt?: string };
   requestId?: string;
   review?: { decision: 'accepted' | 'continue' | 'blocked'; reason: string };
   id: string;
@@ -44,6 +64,7 @@ export interface TeamState extends TeamOwner {
   revision: number;
   members: TeamMember[];
   reports: MemberReport[];
+  messages?: TeamMessage[];
 }
 
 export function teamError(code: string): Error {

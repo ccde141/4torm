@@ -15,6 +15,7 @@ import { loadSessionToolSets } from './session-tool-assembly.js';
 import type { ConversationEvent, SessionRunnerOpts } from './session-runner-contracts.js';
 import type { ToolRegistrationProposal } from '../shared/tool-registration.js';
 import type { TeamHandoff } from './team/handoff.js';
+import type { ConversationContextObservation } from './context-observation.js';
 
 interface SessionLoopInput {
   options: SessionRunnerOpts;
@@ -22,6 +23,7 @@ interface SessionLoopInput {
   messages: ContextMessage[];
   inputRuntime: ConversationInputRuntime | null;
   signal: AbortSignal;
+  observeContext?: ConversationContextObservation;
   emit(event: ConversationEvent): void;
   setPendingRegistration(proposal: ToolRegistrationProposal): void;
   suspend(state: {
@@ -48,12 +50,16 @@ export async function executeSessionLoop(
     generatedContextStart = next.length;
     input.inputRuntime?.rebase(next.length);
   });
+  let result: ReActLoopResult;
   try {
-    const result = input.options.native
+    result = input.options.native
       ? await executeNative(input, prepared)
       : await executeText(input, prepared);
-    return finishLoop(input, result, generatedContextStart);
-  } finally { prepared.close?.(); }
+  } finally {
+    prepared.close?.();
+    await input.observeContext?.update(input.messages, input.options.native ? prepared.toolDefs : []);
+  }
+  return finishLoop(input, result, generatedContextStart);
 }
 
 async function prepareLoop(input: SessionLoopInput,
@@ -62,11 +68,14 @@ async function prepareLoop(input: SessionLoopInput,
   const toolSets = await loadSessionToolSets(opts);
   const toolDefs = toolSets.runtime;
   const handoff = opts.extension?.createHandoff?.(input.emit);
-  const beforeFinish = handoff ? () => handoff.beforeFinish(
-    input.signal,
-    () => input.inputRuntime?.steering.hasPending() ?? false,
-    () => input.emit({ type: 'heartbeat', phase: 'tool-exec', elapsed: 0 }),
-  ) : undefined;
+  const beforeFinish = handoff || opts.internalInbox ? async () => {
+    const notices = await handoff?.beforeFinish(input.signal,
+      () => input.inputRuntime?.steering.hasPending() ?? false,
+      members => input.emit({ type: 'heartbeat', phase: 'team-waiting', elapsed: 0, members })) ?? [];
+    if (notices.length) input.inputRuntime?.recordContext();
+    const internal = !input.signal.aborted ? await opts.internalInbox?.(input.messages) : undefined;
+    return [...notices, ...(internal?.messages ?? [])];
+  } : undefined;
   const toolCaller = createSessionToolCaller({
     dataDir: opts.dataDir, agentId: opts.agentId, model: opts.model,
     toolMediaScope: opts.toolMediaScope,
@@ -80,7 +89,7 @@ async function prepareLoop(input: SessionLoopInput,
   });
   return {
     toolDefs, toolCaller, beforeFinish, close: () => handoff?.close(),
-    llm: createLlmCaller(input, handoff, rebase),
+    llm: createLlmCaller(input, handoff, rebase, toolDefs),
     enableTools: shouldAttachToolCaller(toolDefs, !!opts.interceptTool),
   };
 }
@@ -89,6 +98,7 @@ function createLlmCaller(
   input: SessionLoopInput,
   handoff: TeamHandoff | undefined,
   rebase: (next: ContextMessage[]) => void,
+  toolDefs: ToolDef[],
 ): LLMCaller {
   const opts = input.options;
   const base: LLMCaller = { call: (messages, _options, onChunk, signal, tools, onReasoning, onToolProgress) =>
@@ -97,19 +107,30 @@ function createLlmCaller(
   const caller = opts.llmTransform?.(base, input.emit, rebase) ?? base;
   return { async prepare(msgs, options, signal, tools) {
     if (!signal?.aborted && handoff) {
-      const notices = await handoff.notifications();
-      msgs.push(...notices.map(content => ({ role: 'user' as const, content })));
+      const notices = await handoff.notifications(msgs);
+      msgs.push(...notices.map(content => ({ role: 'user' as const, content, origin: 'framework' as const })));
+      if (notices.length) input.inputRuntime?.recordContext();
     }
+    const internal = !signal?.aborted ? await opts.internalInbox?.(msgs) : undefined;
+    if (internal) msgs.push(...internal.messages.map(content => ({ role: 'user' as const, content, origin: 'framework' as const })));
     await opts.checkpoint?.(msgs);
     await input.inputRuntime?.beforeModel();
     if (input.inputRuntime && signal?.aborted) throw new Error('Conversation aborted');
-    if (!signal?.aborted) handoff?.inContext();
+    if (!signal?.aborted) { await handoff?.inContext(input.inputRuntime?.owner.runId); await internal?.commit(); }
     await caller.prepare?.(msgs, options, signal, tools);
-  }, recover: caller.recover?.bind(caller), call: (...args) => caller.call(...args) };
+    await input.observeContext?.update(msgs, opts.native ? toolDefs : []);
+  }, recover: caller.recover?.bind(caller), async call(...args) {
+    const result = await caller.call(...args);
+    await input.observeContext?.update(args[0], opts.native ? toolDefs : [],
+      { role: 'assistant', content: result.content,
+        ...(result.toolCalls?.length ? { toolCalls: result.toolCalls } : {}) });
+    return result;
+  } };
 }
 
 function executeNative(input: SessionLoopInput, prepared: PreparedLoop): Promise<ReActLoopResult> {
   return runReActLoopNative({
+    retainBeforeFinish: !!input.observeContext || !!input.options.internalInbox,
     retainFinalContext: !!input.options.checkpoint,
     beforeFinish: prepared.beforeFinish,
     maxTurns: input.options.maxTurns,
@@ -118,7 +139,10 @@ function executeNative(input: SessionLoopInput, prepared: PreparedLoop): Promise
     llm: prepared.llm,
     tools: prepared.enableTools ? prepared.toolCaller : undefined,
     toolDefs: prepared.toolDefs,
-    onEvent: event => emitNativeEvent(input.emit, event),
+    onEvent: event => {
+      if (event.type === 'tool-progress' && event.tool && input.options.extension?.silentTools?.includes(event.tool)) return;
+      emitNativeEvent(input.emit, event);
+    },
     onToolError: error => error instanceof SuspendSignal
       ? { reason: 'ask', question: error.question, options: error.options } : null,
     signal: input.signal,
@@ -127,6 +151,8 @@ function executeNative(input: SessionLoopInput, prepared: PreparedLoop): Promise
 
 function executeText(input: SessionLoopInput, prepared: PreparedLoop): Promise<ReActLoopResult> {
   return runReActLoop({
+    retainBeforeFinish: !!input.observeContext || !!input.options.internalInbox,
+    retainFinalContext: !!input.options.checkpoint,
     beforeFinish: prepared.beforeFinish,
     maxTurns: input.options.maxTurns,
     steering: input.inputRuntime?.steering,

@@ -5,7 +5,8 @@ import { IMAGE_ACCEPT } from '../../engine/chat/image-attachments';
 import { useLocale } from '../../i18n/LocaleContext';
 import MessageItem from './MessageItem';
 import HumanInputList from './HumanInputList';
-import PendingHumanInput from './PendingHumanInput';
+import PendingHumanInput, { HumanInputRecovery } from './PendingHumanInput';
+import { pendingUserRecovery, unrepresentedHumanInputs, type HumanInputActivity } from './human-input-presentation';
 import ExecutionStatusBar from './ExecutionStatusBar';
 import { ImageDrafts } from './MessageImages';
 import TaskBoardDrawer, { RAIL_W } from './TaskBoardDrawer';
@@ -19,6 +20,7 @@ import type { useMonsoonImages } from './useMonsoonImages';
 import type { AskReplyFeedback } from './useAskReplyFeedback';
 import { decidePendingAskInputRoute, findLatestAnswerableAsk } from '../../engine/chat/pending-ask';
 import { historyWindow } from './history-window';
+import { executionCompactions } from '../../engine/chat/execution-segments';
 import { CompactionStatus } from '../common/CompactionStatus';
 import type { CompactionActivity } from '../common/compaction-activity';
 
@@ -56,6 +58,12 @@ export function MonsoonConversation(props: MonsoonConversationProps) {
   const historyAnchor = useRef<{ sessionId: string; height: number; top: number } | null>(null);
   const limit = historyState.sessionId === sessionId ? historyState.limit : HISTORY_BATCH;
   const history = historyWindow(props.messages, props.streaming, limit);
+  const compactions = executionCompactions(props.messages);
+  const inputRun = props.streaming ? props.messages.findLast(message => message.role === 'assistant' && message.inputRunId) : undefined;
+  const inputActivity: HumanInputActivity | undefined = inputRun?.inputRunId ? {
+    runId: inputRun.inputRunId, phase: inputRun.streamingPhase, ready: inputRun.inputReady === true,
+    closed: inputRun.inputClosed, compacting: props.compaction?.phase === 'running',
+  } : undefined;
   useLayoutEffect(() => {
     const anchor = historyAnchor.current;
     const container = props.scroll.containerRef.current;
@@ -110,25 +118,34 @@ export function MonsoonConversation(props: MonsoonConversationProps) {
               sessionId, height: container.scrollHeight, top: container.scrollTop };
             setHistoryState({ sessionId, limit: limit + HISTORY_BATCH });
           }}>{t('chat.page.loadOlder', { count: Math.min(history.hiddenCount, HISTORY_BATCH) })}</button>}
-        {history.messages.map(message => <Fragment key={message.id}>
-          <MessageItem msg={message} agent={props.agent} sessionId={sessionId}
-            askStatus={message.ask && !message.ask.answered
-              ? message.id === latestAsk?.id
-                ? props.askFeedback?.askId === message.id ? props.askFeedback.status : 'checking'
-                : 'expired'
-              : props.askFeedback?.askId === message.id ? props.askFeedback.status : undefined}
-            askStatusDetail={props.askFeedback?.askId === message.id ? props.askFeedback.detail : undefined}
-            onAskCheck={message.id === latestAsk?.id ? props.onAskCheck : undefined}
-            isStreaming={props.streaming && message === props.messages.at(-1)}
-            compacting={props.compaction?.phase === 'running' && message === props.messages.at(-1)}
-            isEditing={props.editor.editingMsgId === message.id} editContent={props.editor.editContent}
-            setEditContent={props.editor.setEditContent} onSaveEdit={props.editor.saveEdit}
-            onCancelEdit={props.editor.cancelEdit} onStartEdit={props.editor.startEdit}
-            onDeleteMessage={props.editor.deleteMessage} onAskReply={props.answer} />
-          <HumanInputList message={message} />
-        </Fragment>)}
-        {props.human.pending.map(entry => <PendingHumanInput key={entry.input.id} pending={entry}
-          busy={props.human.isWorking(entry.input.id)} english={locale === 'en-US'}
+        {history.messages.map(message => {
+          const pendingUser = pendingUserRecovery(message, props.human.pending, props.messages);
+          return <Fragment key={message.id}>
+            <MessageItem msg={message} agent={props.agent} sessionId={sessionId}
+              compactionMarkers={compactions.byAssistant.get(message.id)}
+              inlineCompaction={compactions.inlineMarkerIds.has(message.id)}
+              userNotice={pendingUser ? <HumanInputRecovery pending={pendingUser}
+                busy={props.human.isWorking(pendingUser.input.id)} english={locale === 'en-US'}
+                onCheck={() => { void props.human.check(pendingUser); }} /> : undefined}
+              askStatus={message.ask && !message.ask.answered
+                ? message.id === latestAsk?.id
+                  ? props.askFeedback?.askId === message.id ? props.askFeedback.status : 'checking'
+                  : 'expired'
+                : props.askFeedback?.askId === message.id ? props.askFeedback.status : undefined}
+              askStatusDetail={props.askFeedback?.askId === message.id ? props.askFeedback.detail : undefined}
+              onAskCheck={message.id === latestAsk?.id ? props.onAskCheck : undefined}
+              isStreaming={props.streaming && message === props.messages.at(-1)}
+              compacting={props.compaction?.phase === 'running' && message === props.messages.at(-1)}
+              isEditing={props.editor.editingMsgId === message.id} editContent={props.editor.editContent}
+              setEditContent={props.editor.setEditContent} onSaveEdit={props.editor.saveEdit}
+              onCancelEdit={props.editor.cancelEdit} onStartEdit={props.editor.startEdit}
+              onDeleteMessage={props.editor.deleteMessage} onAskReply={props.answer} />
+            <HumanInputList message={message} pending={props.human.pending}
+              isWorking={props.human.isWorking} onCheck={entry => { void props.human.check(entry); }} activity={inputActivity} />
+          </Fragment>;
+        })}
+        {unrepresentedHumanInputs(props.messages, props.human.pending).map(entry => <PendingHumanInput key={entry.input.id} pending={entry}
+          busy={props.human.isWorking(entry.input.id)} english={locale === 'en-US'} activity={inputActivity}
           onCheck={() => { void props.human.check(entry); }} />)}
         <div ref={props.scroll.endRef} />
       </div>

@@ -6,6 +6,17 @@ import type { LoadedAgent } from '../../../engine/shared/agent-loader.js';
 import { resolveNativeMode } from '../../../engine/shared/llm-bridge.js';
 import { SELF_LOOP_INSTRUCTION } from '../domain/self-loop.js';
 import { TIDE_META } from '../domain/meta.js';
+import type { TideCompactionContextBuilder } from '../application/session-compaction.js';
+
+/** Manual compaction uses the same automation role/tool context as scheduled execution. */
+export const buildTideCompactionContext: TideCompactionContextBuilder = async input => {
+  if (!input.agent) return { messages: [{ role: 'system', content: input.session.systemPrompt }] };
+  const built = await buildTideInputContext(input.dataDir, input.agent, input.session.id, {
+    userMessage: input.task.prompt ?? '', selfLoop: input.task.selfLoop, signal: input.signal,
+  });
+  return { messages: [{ role: 'system', content: built.systemPrompt }], tools: built.tools,
+    historyToolTransport: built.opts.native ? 'native' : 'text' };
+};
 
 /** Build the same static input for execution and read-only context estimates. */
 export async function buildTideInputContext(dataDir: string, agent: LoadedAgent, sessionId: string,

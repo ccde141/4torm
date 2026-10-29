@@ -29,14 +29,18 @@ async function externalizeMessage(
   }
   const messageId = message.id || genId('msg');
   message.id = messageId;
-  const target = roomReasoningFile(dataDir, workshopId, roomId, messageId);
   const reasoningHash = contentHash(message.reasoning);
-  if (message.reasoningRef !== messageId || message.reasoningHash !== reasoningHash) {
+  const unchanged = message.reasoningRef && message.reasoningHash === reasoningHash;
+  // Changed content gets an immutable version; a failed primary commit keeps its
+  // previous reference intact, including references written by older versions.
+  const reasoningRef = unchanged ? message.reasoningRef! : `${messageId}.${reasoningHash}`;
+  const target = roomReasoningFile(dataDir, workshopId, roomId, reasoningRef);
+  if (!unchanged) {
     await ensureDir(path.dirname(target));
     await atomicWrite(target, message.reasoning);
   }
   const persisted = {
-    ...message, reasoning: undefined, reasoningRef: messageId, reasoningHash,
+    ...message, reasoning: undefined, reasoningRef, reasoningHash,
   };
   return { message: persisted, activeFile: target };
 }
@@ -53,7 +57,18 @@ export async function externalizeRoomReasoning(
     messages.push(externalized.message);
     if (externalized.activeFile) activeFiles.add(externalized.activeFile);
   }
-  return { persisted: { ...room, publicMessages: messages }, activeFiles };
+  const displayMessages: RoomMessage[] = [];
+  for (const message of room.publicDisplayHistory?.messages ?? []) {
+    const externalized = await externalizeMessage(dataDir, workshopId, room.id, message);
+    displayMessages.push(externalized.message);
+    if (externalized.activeFile) activeFiles.add(externalized.activeFile);
+  }
+  const draft = room.publicExecutionDraft && await externalizeMessage(dataDir, workshopId, room.id, room.publicExecutionDraft);
+  if (draft?.activeFile) activeFiles.add(draft.activeFile);
+  return { persisted: { ...room, publicMessages: messages,
+    ...(draft ? { publicExecutionDraft: draft.message } : {}),
+    ...(room.publicDisplayHistory ? { publicDisplayHistory: { ...room.publicDisplayHistory,
+      messages: displayMessages } } : {}) }, activeFiles };
 }
 
 async function readReasoning(file: string): Promise<string | undefined> {
@@ -70,7 +85,7 @@ export async function hydrateRoomReasoning(
   workshopId: string,
   room: RoomData,
 ): Promise<RoomData> {
-  const publicMessages = await Promise.all(room.publicMessages.map(async message => {
+  const hydrate = async (message: RoomMessage) => {
     if (message.reasoning || !message.reasoningRef) return message;
     const reasoning = await readReasoning(
       roomReasoningFile(dataDir, workshopId, room.id, message.reasoningRef),
@@ -84,8 +99,13 @@ export async function hydrateRoomReasoning(
       return message;
     }
     return { ...message, reasoning };
-  }));
-  return { ...room, publicMessages };
+  };
+  const publicMessages = await Promise.all(room.publicMessages.map(hydrate));
+  const displayMessages = room.publicDisplayHistory && await Promise.all(room.publicDisplayHistory.messages.map(hydrate));
+  const draft = room.publicExecutionDraft && await hydrate(room.publicExecutionDraft);
+  return { ...room, publicMessages, ...(draft ? { publicExecutionDraft: draft } : {}), ...(room.publicDisplayHistory ? {
+    publicDisplayHistory: { ...room.publicDisplayHistory, messages: displayMessages! },
+  } : {}) };
 }
 
 export async function cleanupRoomReasoning(

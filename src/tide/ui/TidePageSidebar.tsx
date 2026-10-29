@@ -14,7 +14,7 @@ interface Props {
   onTask: (taskId: string) => void;
   onCreate: () => void;
   onToggle: (taskId: string) => void;
-  onDelete: (taskId: string) => void;
+  onDelete: (taskId: string) => Promise<void>;
   onRun: (taskId: string) => void;
   onSession: (sessionId: string) => void;
 }

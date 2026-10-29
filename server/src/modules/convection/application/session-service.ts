@@ -12,13 +12,14 @@ import {
   type ConvectionSessionSummary,
 } from '../infrastructure/session-store.js';
 import { prepareCompactionArchive } from '../../../engine/shared/compaction-archive.js';
-import { summarizeConvectionSession } from './manual-summary.js';
+import { summarizeConvectionSession, retainedConvectionMessages, type ConvectionSummary } from './manual-summary.js';
 import { clearConvectionChairContext } from '../execution/chair-context.js';
 import { runConvectionContextChange, type ConvectionCompactionSink } from './compaction-progress.js';
 import type { CompactionProgress } from '../../../engine/shared/compaction/contracts.js';
 import type { ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
 import { withConvectionModelUsage } from '../execution/model-usage.js';
 import { readConvectionCurrentInput, type ConvectionCurrentInput } from '../execution/current-input.js';
+import { convectionDisplayMessages, convectionChairDisplayMessages, editConvectionDisplay, retainConvectionDisplay } from './display-history.js';
 
 export interface CreateConvectionSessionInput {
   chairAgentId: string;
@@ -35,7 +36,7 @@ export interface ResetConvectionContextResult {
   summaryFailed: boolean;
 }
 
-type SummarizeSession = (session: ConvectionSessionData, signal?: AbortSignal) => Promise<string>;
+type SummarizeSession = (session: ConvectionSessionData, signal?: AbortSignal) => Promise<string | ConvectionSummary>;
 
 export class ConvectionSessionService {
   constructor(
@@ -59,7 +60,9 @@ export class ConvectionSessionService {
 
   async read(sessionId: string): Promise<ConvectionSessionData & ConvectionCurrentInput> {
     const session = await this.require(sessionId);
-    return { ...session, ...await readConvectionCurrentInput(this.dataDir, session) };
+    return { ...session, publicMessages: convectionDisplayMessages(session),
+      chairMessages: convectionChairDisplayMessages(session),
+      ...await readConvectionCurrentInput(this.dataDir, session) };
   }
 
   async require(sessionId: string): Promise<ConvectionSessionData> {
@@ -174,9 +177,8 @@ export class ConvectionSessionService {
   async editMessage(sessionId: string, index: number, content: string): Promise<void> {
     await this.withMutationLock(sessionId, async () => {
       const session = await this.require(sessionId);
-      const message = session.publicMessages[messageIndex(index)];
-      if (!message) throw messageNotFound(index);
-      message.content = typeof content === 'string' ? content : invalidInput('消息内容必须是字符串');
+      if (typeof content !== 'string') invalidInput('消息内容必须是字符串');
+      if (!editConvectionDisplay(session, messageIndex(index), content)) throw messageNotFound(index);
       clearConvectionChairContext(session);
       session.chairTokenUsage = undefined;
       await this.save(session);
@@ -187,8 +189,7 @@ export class ConvectionSessionService {
     await this.withMutationLock(sessionId, async () => {
       const session = await this.require(sessionId);
       const position = messageIndex(index);
-      if (!session.publicMessages[position]) throw messageNotFound(index);
-      session.publicMessages.splice(position, 1);
+      if (!editConvectionDisplay(session, position)) throw messageNotFound(index);
       clearConvectionChairContext(session);
       session.chairTokenUsage = undefined;
       await this.save(session);
@@ -235,6 +236,11 @@ export class ConvectionSessionService {
         publicMessages: session.publicMessages,
         chairMessages: session.chairMessages,
         chairActiveContext: session.chairActiveContext,
+        publicDisplayHistory: session.publicDisplayHistory,
+        publicDisplayContextCount: session.publicDisplayContextCount,
+        publicExecutionDraft: session.publicExecutionDraft,
+        chairDisplayHistory: session.chairDisplayHistory,
+        chairDisplayContextCount: session.chairDisplayContextCount,
       },
     });
     if (!archive.ok) throw archiveFailed(archive.error);
@@ -242,15 +248,23 @@ export class ConvectionSessionService {
     // retaining both active histories so another attempt cannot overwrite the archive.
     session.compactState = state;
     await this.save(session);
-    const summary = mode === 'summary' ? (await this.summarize(session, signal)).trim() : undefined;
+    const result = mode === 'summary' ? await this.summarize(session, signal) : undefined;
+    const summary = (typeof result === 'string' ? result : result?.summary)?.trim();
+    const retained = typeof result === 'string' ? retainedConvectionMessages(session.publicMessages)
+      : result?.retained ?? [];
     if (mode === 'summary' && !summary) throw new Error('会议压缩摘要为空，已保留原会话');
     signal?.throwIfAborted();
     if (completed) completed.updatedAt = Date.now();
     const next: ConvectionSessionData = { ...session, compactionProgress: completed };
     next.publicMessages = summary ? [{
-      speaker: '系统', content: `[会话归档摘要]\n\n${summary}`, timestamp: Date.now(),
-    }] : [];
-    if (mode === 'clean') next.chairMessages = [];
+      speaker: '系统', content: `[会话归档摘要]\n\n${summary}`, timestamp: Date.now(), compactionId: completed?.id,
+    }, ...retained] : [];
+    if (summary) retainConvectionDisplay(session, next, next.publicMessages[0]);
+    else { next.publicDisplayHistory = undefined; next.publicDisplayContextCount = undefined; }
+    next.publicExecutionDraft = undefined;
+    if (mode === 'clean') {
+      next.chairMessages = []; next.chairDisplayHistory = undefined; next.chairDisplayContextCount = undefined;
+    }
     clearConvectionChairContext(next);
     next.tokenUsage = undefined;
     next.publicLatestTokenUsage = undefined;

@@ -3,6 +3,8 @@ import type { SkinConfig } from '../../store/skin';
 import { DEFAULT_VIDEO, type VideoBackgroundParams } from '../../store/skin-video-config';
 import { replaceBackgroundVideo, removeBackgroundVideo, patchBackgroundVideo } from '../../store/skin-video-actions';
 import { backgroundVideoUrl } from '../../store/skin-video';
+import { useConfirm } from '../common/ConfirmDialog';
+import { useLocale } from '../../i18n/LocaleContext';
 
 interface Props { config: SkinConfig; onApply: (next: SkinConfig) => void }
 
@@ -59,11 +61,23 @@ function useVideoTransfer(onApply: Props['onApply']) {
 }
 
 export default function BackgroundVideoControl({ config, onApply }: Props) {
+  const confirm = useConfirm();
+  const { t } = useLocale();
+  const removingRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const { busy, uploadProgress, error, setError, run, upload, cancel } = useVideoTransfer(onApply);
   const video = config.texture?.video ?? DEFAULT_VIDEO;
   const url = backgroundVideoUrl(video.id);
+
+  async function remove(): Promise<void> {
+    if (busy || removingRef.current) return;
+    removingRef.current = true;
+    try {
+      if (await confirm({ title: t('skin.deleteVideoTitle'), message: t('skin.deleteVideoMessage'),
+        confirmText: t('common.delete'), danger: true })) await run(() => removeBackgroundVideo(onApply));
+    } finally { removingRef.current = false; }
+  }
 
   function onDrop(event: DragEvent<HTMLDivElement>): void {
     event.preventDefault(); setDragging(false);
@@ -90,7 +104,7 @@ export default function BackgroundVideoControl({ config, onApply }: Props) {
         {busy ? '处理中…' : url ? '更换视频' : '选择视频'}
       </button>
       {uploadProgress && <button className="skin-panel__config-btn" type="button" onClick={cancel}>取消上传</button>}
-      {url && <button className="skin-panel__config-btn" type="button" disabled={busy} onClick={() => void run(() => removeBackgroundVideo(onApply))}>移除</button>}
+      {url && <button className="skin-panel__config-btn" type="button" disabled={busy} onClick={() => void remove()}>移除</button>}
     </div>
     {url && <VideoSettings video={video} onPatch={patch => patchBackgroundVideo(patch, onApply)} />}
     {error && <div className="skin-panel__error" role="alert">{error}</div>}

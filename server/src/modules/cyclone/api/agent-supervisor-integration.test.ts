@@ -46,7 +46,7 @@ async function fixture(t: TestContext, native = true) {
     const request = JSON.parse(String(init?.body)) as Request;
     requests.push(request); return respond(request, init);
   });
-  const feature = createCycloneFeature({ dataDir, summarizer: { summarize: async () => '保留项目结论' } });
+  const feature = createCycloneFeature({ dataDir, summarizer: { summarize: async () => ({ summary: '保留项目结论', retainedIndexes: [] }) } });
   const router = new CollaborationRouter([feature.module]);
   feature.connectSupervisorRouter(router);
   let tools = ['framework_capability_cyclone'];

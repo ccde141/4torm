@@ -168,8 +168,11 @@ test('手工会议压缩摘要全量公共历史，保留独立会长私聊', as
   await service.resetContext(session.id, 'summary');
   assert.deepEqual(observed, ['最后一轮也压缩']);
   const current = await service.require(session.id);
-  assert.equal(current.publicMessages.length, 1);
+  assert.equal(current.publicMessages.length, 2);
   assert.match(current.publicMessages[0]?.content ?? '', /完整压缩摘要/);
+  const { recordId, ...retained } = current.publicMessages[1];
+  assert.equal(typeof recordId, 'string');
+  assert.deepEqual(retained, session.publicMessages[0]);
   assert.equal(current.chairMessages[0]?.content, '独立私聊');
   assert.equal(current.compactionProgress?.startedAt, now - 12_000);
   assert.equal(current.compactionProgress?.updatedAt, now);

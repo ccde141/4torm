@@ -80,8 +80,13 @@ test('新增 action 单项选择不扩展其他权限，旧超级工具在配置
   fixture.select([]);
   assert.deepEqual((await fixture.bridge()).definitions, []);
   for (const [capability, actions] of Object.entries(additions)) {
-    assert.equal(fixture.guide(await fixture.bridge(), capability).ok, false);
+    const disabled = await fixture.bridge();
+    assert.equal(fixture.guide(disabled, capability).ok, true);
+    const unavailable = fixture.guide(disabled, capability, undefined, 'tools');
+    assert.equal(unavailable.ok, false);
+    assert.match(unavailable.result, /该能力当前未开放/);
     for (const action of actions) {
+      assert.equal(fixture.guide(disabled, capability, action).ok, false);
       await assert.rejects(() => original.call(`framework_capability_${capability}`,
         { action, input: {} }), hasCode('CAPABILITY_DISABLED'));
     }
@@ -149,7 +154,7 @@ test('主管和工位履历支持单项授权，读取不开放主管改绑和�
   }
 });
 
-test('功能岛公开示例只引用可调用 action，选择性开启时不宣称缺少的操作已开放', async t => {
+test('功能岛二级示例引用真实公开操作，三级目录与执行按当前单项权限开放', async t => {
   const fixture = await createFixture(t);
   const bridge = await fixture.bridge();
   const bindings = fixture.router.listAgentTools();
@@ -165,9 +170,24 @@ test('功能岛公开示例只引用可调用 action，选择性开启时不宣�
     }
   }
   fixture.select(['read_collaboration_supervisor']);
-  const restricted = fixture.guide(await fixture.bridge(), 'cyclone');
-  assert.doesNotMatch(restricted.result, /### 使用示例/);
-  assert.doesNotMatch(restricted.result, /#### action: start_collaboration_supervisor_chat/);
+  const selected = await fixture.bridge();
+  const publicGuide = fixture.guide(selected, 'cyclone');
+  assert.equal(publicGuide.ok, true);
+  assert.match(publicGuide.result, /### 使用示例/);
+  assert.match(publicGuide.result, /start_collaboration_supervisor_chat/);
+  assert.doesNotMatch(publicGuide.result, /#### action:|input JSON Schema/);
+  const restricted = fixture.guide(selected, 'cyclone', undefined, 'tools');
+  assert.equal(restricted.ok, true);
+  assert.match(restricted.result, /- `read_collaboration_supervisor`/);
+  assert.doesNotMatch(restricted.result, /start_collaboration_supervisor_chat|### 使用示例|input JSON Schema/);
+  const denied = fixture.guide(selected, 'cyclone', 'start_collaboration_supervisor_chat');
+  assert.equal(denied.ok, false);
+  assert.match(denied.result, /FRAMEWORK_GUIDE_ACTION_UNAVAILABLE/);
+  await assert.rejects(() => selected.call('framework_capability_cyclone', {
+    action: 'start_collaboration_supervisor_chat', input: {},
+  }), /FRAMEWORK_CAPABILITY_ACTION_UNAVAILABLE/);
+  await assert.rejects(() => fixture.gateway.invokeTool('start_collaboration_supervisor_chat', {}, fixture.identity),
+    hasCode('CAPABILITY_DISABLED'));
 });
 
 async function createFixture(t: TestContext) {
@@ -192,9 +212,10 @@ async function createFixture(t: TestContext) {
     bridge: () => AgentCollaborationTools.load(identity, [], {
       list: id => gateway.tools(id), invoke: (name, input, id) => gateway.invokeTool(name, input, id),
     }),
-    guide: (bridge: AgentCollaborationTools, capability: string, action?: string) => executeFrameworkGuideTool({
+    guide: (bridge: AgentCollaborationTools, capability: string, action?: string, view?: 'guide' | 'tools') => executeFrameworkGuideTool({
       mainAgent: true, dataDir, agentId: identity.agentId, sessionId: identity.sessionId,
-      toolDefs: bridge.definitions, args: { capability, ...(action ? { action } : {}) },
+      toolDefs: bridge.definitions, guideCatalog: router.listAgentTools().map(binding => binding.definition),
+      args: { capability, ...(action ? { action } : {}), ...(view ? { view } : {}) },
     }),
   };
 }

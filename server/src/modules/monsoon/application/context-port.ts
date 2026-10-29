@@ -13,6 +13,8 @@ import { hydrateMonsoonContext, persistMonsoonContext, persistMonsoonMessageImag
 export type MonsoonContextMarker = {
   id: string; role: 'system'; content: string; timestamp: string;
   type: 'compact-marker'; contextExact: true; nativeContext: StoredMonsoonContextMessage[];
+  execution?: { assistantId: string; toolOffset: number; textOffset: number; reasoningOffset?: number; eventOffset: number };
+  committedRevision?: number;
 };
 
 /** Stable cross-island port: archive records and active model context have separate ownership. */
@@ -49,19 +51,28 @@ export class MonsoonContextPort {
   }
 
   async commit(agentId: string, sessionId: string, expectedRevision: number,
-    plan: CompactionCommit, protectedPrefixCount = 1, signal?: AbortSignal): Promise<MonsoonSession> {
+    plan: CompactionCommit, protectedPrefixCount = 1, signal?: AbortSignal,
+    position?: { runId: string; toolOffset: number; textOffset: number; reasoningOffset?: number; eventOffset: number }): Promise<MonsoonSession> {
     signal?.throwIfAborted();
     const current = await this.read(agentId, sessionId);
     if (!current) throw new Error('会话不存在');
+    let index = -1;
+    if (position) {
+      if ([position.toolOffset, position.textOffset, position.eventOffset]
+        .some(offset => !Number.isSafeInteger(offset) || offset < 0)) throw new Error('压缩执行位置无效');
+      if (position.reasoningOffset !== undefined && (!Number.isSafeInteger(position.reasoningOffset)
+        || position.reasoningOffset < 0)) throw new Error('压缩执行位置无效');
+      index = current.messages.findIndex(message => message.role === 'assistant'
+        && (message.id === position.runId || message.inputRunId === position.runId));
+      if (index < 0 || current.messages[index].runCommitted === true) throw new Error('压缩执行记录不存在或已结束');
+    }
     const marker: MonsoonContextMarker = { id: `msg-${randomUUID()}`, role: 'system',
       content: plan.summary, timestamp: new Date().toISOString(), type: 'compact-marker',
-      contextExact: true, nativeContext: persistMonsoonContext(plan.messages.slice(protectedPrefixCount)) };
-    let index = -1;
-    for (let cursor = current.messages.length - 1; cursor >= 0; cursor--) {
-      if (current.messages[cursor].runCommitted === false && current.messages[cursor].role === 'assistant') {
-        index = cursor; break;
-      }
-    }
+      contextExact: true, nativeContext: persistMonsoonContext(plan.messages.slice(protectedPrefixCount)),
+      committedRevision: expectedRevision + 1,
+      ...(position ? { execution: { assistantId: current.messages[index].id, toolOffset: position.toolOffset,
+        textOffset: position.textOffset, eventOffset: position.eventOffset,
+        ...(position.reasoningOffset !== undefined ? { reasoningOffset: position.reasoningOffset } : {}) } } : {}) };
     const messages = [...current.messages];
     messages.splice(index < 0 ? messages.length : index, 0, marker);
     return this.sessions.replace({ ...current, messages }, expectedRevision, 'content',

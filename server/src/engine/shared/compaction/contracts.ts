@@ -1,5 +1,6 @@
 import type { ContextMessage } from '../types.js';
 import type { LLMCaller } from '../react/native-loop.js';
+import type { ToolDef } from '../tool-defs-loader.js';
 
 export const COMPACTION_AREAS = [
   'monsoon', 'convection', 'cycloneConversation', 'cycloneMeeting',
@@ -8,14 +9,6 @@ export const COMPACTION_AREAS = [
 export type CompactionArea = typeof COMPACTION_AREAS[number];
 export type CompactionReason = 'threshold' | 'provider-overflow' | 'manual';
 export type CompactionMode = 'partial' | 'full';
-
-export interface CompactionStageProgress {
-  level: number;
-  index: number;
-  total: number;
-  completed: number;
-  resumed: boolean;
-}
 
 export interface CompactionProgress {
   type: 'compact-start' | 'compact-done' | 'compact-failed';
@@ -27,6 +20,8 @@ export interface CompactionProgress {
   message?: string;
   aborted?: boolean;
   summaryLength?: number;
+  /** Present only after a successful durable compaction, for display boundaries. */
+  summary?: string;
   archivedMessages?: number;
 }
 
@@ -60,9 +55,21 @@ export interface CompactionCommit {
 }
 export type CompactionPlan = CompactionCommit;
 
+/** Original request framing, supplied by the owning feature without changing stored history. */
+export interface CompactionRequestContext {
+  messages: ContextMessage[];
+  tools?: ToolDef[];
+  historyToolTransport?: 'native' | 'text';
+}
+
 export interface CompactionSummaryInput {
   model: string;
   prompt: string;
+  /** Ordered original framing and selected history; the summary instruction is appended last. */
+  messages: ContextMessage[];
+  tools?: ToolDef[];
+  historyToolTransport?: 'native' | 'text';
+  /** Text projection for validation and diagnostics, never a replacement for ordered messages. */
   text: string;
   /** Final summary text only; reasoning is never charged against this allowance. */
   maxContentTokens: number;
@@ -72,7 +79,7 @@ export interface CompactionSummaryInput {
   maxReasoningTokens?: number;
   /** Preserve limit completion through island adapters; it is not a provider failure. */
   onOutputLimited?: () => void;
-  /** Present only for the selected final stage, never for intermediate working fragments. */
+  /** Publishes the accepted complete summary; partial provider output is never published. */
   onChunk?: (text: string) => void;
   signal?: AbortSignal;
 }
@@ -85,11 +92,18 @@ export interface CompactionOptions {
   kind: 'conversation' | 'meeting';
   chairModel?: string;
   prompt?: string;
+  summaryContext?: CompactionRequestContext;
   scopeKey?: string;
   initialPromptTokens?: number;
   /** Estimate of the request associated with initialPromptTokens, before new human input is appended. */
   initialEstimateTokens?: number;
   protectedPrefixCount?: number;
+  /** Complete human-led turns retained verbatim; meetings use three and private sessions four. */
+  recentHumanTurns?: 3 | 4;
+  /** Available space for the handoff after protected prompts and recent complete turns. */
+  summaryTokenBudget?: number;
+  /** Tool schemas and other request framing outside the history array. */
+  requestOverheadTokens?: number;
   boundaries?: (messages: readonly ContextMessage[]) => readonly number[];
   archive?: (before: ContextMessage[], reason: CompactionReason) => Promise<void>;
   commit?: (plan: CompactionCommit, signal?: AbortSignal) => Promise<void>;
@@ -98,7 +112,6 @@ export interface CompactionOptions {
   onProgress?: (event: CompactionProgress) => void | Promise<void>;
   onCompacted?: (plan: CompactionCommit) => void | Promise<void>;
   onSummaryChunk?: (text: string) => void;
-  onStageProgress?: (stage: CompactionStageProgress) => void | Promise<void>;
   summarize?: (input: CompactionSummaryInput) => Promise<string>;
   resolveSummaryBudget?: (model: string) => Promise<number | undefined>;
 }

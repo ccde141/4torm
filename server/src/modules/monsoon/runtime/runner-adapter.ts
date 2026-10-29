@@ -8,6 +8,8 @@ import { buildMemoryToolDefs } from '../../../engine/shared/agent-memory.js';
 import { FRAMEWORK_TOOLS } from '../../../tools/framework/catalog.js';
 import type { MonsoonTurn, MonsoonTurnSpec } from './turn-contract.js';
 import { monsoonCompactionTransform } from './automatic-compaction.js';
+import { createMonsoonTeamDeliveryEvidence } from './team-delivery-evidence.js';
+import { MonsoonExecutionTrace } from './execution-trace.js';
 
 /** The only Monsoon dependency on the former shared runner. */
 export class MonsoonRunnerAdapter {
@@ -20,16 +22,19 @@ export class MonsoonRunnerAdapter {
   ) {}
 
   create(spec: MonsoonTurnSpec): MonsoonTurn {
-    const options = runnerOptions(spec);
-    const runner = new SessionRunner(options);
+    const trace = new MonsoonExecutionTrace();
+    const options = runnerOptions(spec, trace);
+    const runner = trace.wrap(new SessionRunner(options));
     this.options.set(runner, options);
     return runner;
   }
 
   async ready(turn: MonsoonTurn): Promise<void> {
     const options = this.options.get(turn);
-    if (!options) throw new Error('MONSOON_TURN_UNKNOWN');
-    const team = await this.teams.extension(options);
+    if (!options?.sessionId) throw new Error('MONSOON_TURN_UNKNOWN');
+    const team = await this.teams.extension(options, createMonsoonTeamDeliveryEvidence(
+      options.dataDir, options.agentId, options.sessionId,
+    ));
     const collaboration = await this.loadCollaboration({
       agentId: options.agentId, sessionId: options.sessionId,
     }, reservedNames());
@@ -37,6 +42,7 @@ export class MonsoonRunnerAdapter {
       definitions: [...team.definitions, ...collaboration.runtimeDefinitions],
       guideDefinitions: [...team.definitions, ...collaboration.definitions],
       createHandoff: team.createHandoff,
+      silentTools: team.silentTools,
       call: (name, args, signal) => collaboration.handles(name)
         ? collaboration.call(name, args, signal)
         : team.call(name, args, signal),
@@ -59,7 +65,7 @@ function reservedNames(): string[] {
   ].map(definition => definition.name);
 }
 
-function runnerOptions(spec: MonsoonTurnSpec): SessionRunnerOpts {
+function runnerOptions(spec: MonsoonTurnSpec, trace: MonsoonExecutionTrace): SessionRunnerOpts {
   return { ...spec, mainAgent: true, allowDelegate: false,
-    llmTransform: monsoonCompactionTransform(spec) };
+    llmTransform: monsoonCompactionTransform(spec, {}, () => trace.position()) };
 }

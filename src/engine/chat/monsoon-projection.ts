@@ -5,7 +5,7 @@ import { applyDelegateStreamEvent, finalizeStreamAnswer, isDelegateStreamEvent }
 import { applyInputEvent, type InputEvent } from './input-events';
 import type { MonsoonBrowserEvent } from './sse-events';
 import { appendToolStep, finishLatestToolStep } from './tool-step-events';
-import { clearCompactionNotices, compactionCheckpoint } from './compaction-events';
+import { appendCompactionActivity, clearCompactionNotices, compactionCheckpoint } from './compaction-events';
 import { appendActivityText, appendActivityTool, appendTeamActivity, parseTeamActivity } from './activity-sequence';
 
 export interface ProjectionEffect {
@@ -125,11 +125,14 @@ export class MonsoonMessageProjection {
     }
     if (event.type === 'context-compacted') {
       const { marker, revision } = compactionCheckpoint(event);
-      const current = this.current.filter(message => message.id !== marker.id);
-      const index = current.findIndex(message => message.id === this.assistantId);
-      current.splice(index < 0 ? current.length : index, 0, marker);
-      this.current = current;
-      return { flush: 'immediate', revision, usage: null };
+      const current = [...this.current];
+      const existing = current.some(message => message.id === marker.id);
+      if (!existing) {
+        const index = current.findIndex(message => message.id === this.assistantId);
+        current.splice(index < 0 ? current.length : index, 0, marker);
+      }
+      this.current = current.map(message => message.id === this.assistantId ? appendCompactionActivity(message, marker) : message);
+      return { flush: 'immediate', revision, ...(!existing ? { usage: null } : {}) };
     }
     if (event.type === 'answer') {
       this.current = finalizeStreamAnswer(this.current, this.assistantId,
@@ -146,7 +149,11 @@ export class MonsoonMessageProjection {
       return { flush: 'immediate' };
     }
     if (event.type === 'heartbeat') {
-      this.patch({ streamingPhase: event.phase === 'tool-exec' ? 'tool-exec' : 'llm-waiting',
+      this.patch({ streamingPhase: event.phase === 'team-waiting' ? 'team-waiting'
+        : event.phase === 'tool-exec' ? 'tool-exec' : 'llm-waiting',
+        ...(event.phase === 'team-waiting' ? { streamingTool: Array.isArray(event.members)
+          ? event.members.filter((value): value is string => typeof value === 'string').join('、') : undefined,
+          streamingStatus: undefined } : {}),
         phaseElapsed: Math.round(Number(event.elapsed ?? 0) / 1000) });
       return { flush: 'throttled' };
     }

@@ -13,6 +13,7 @@ import { AGENT_CONFIG_TABS, AGENT_CONFIG_TAB_LABELS, isAgentConfigTab,
   type AgentConfigTab } from './AgentConfigTabs';
 import { useLocale } from '../../i18n/LocaleContext';
 import { activityStatusLabel } from './agent-card-view';
+import { useConfirm } from '../common/ConfirmDialog';
 import '../../styles/components/agent-detail.css';
 
 interface Rect { left: number; top: number; width: number; height: number }
@@ -49,11 +50,12 @@ function focusWithin(dialog: HTMLElement, event: KeyboardEvent) {
 
 export default function AgentDetailDialog(props: Props) {
   const { t } = useLocale();
+  const confirm = useConfirm();
   const { agent, activity, origin, onClose, onSaveConfig, onDelete, onNavigate } = props;
   const [rect, setRect] = useState(origin);
   const [open, setOpen] = useState(false);
   const [closing, setClosing] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const deletingRef = useRef(false);
   const [section, setSection] = useState<'overview' | 'stats' | AgentConfigTab | 'memory'>('overview');
   const [configVisited, setConfigVisited] = useState(false);
   const [memoryVisited, setMemoryVisited] = useState(false);
@@ -84,6 +86,17 @@ export default function AgentDetailDialog(props: Props) {
       closeTimer.current = window.setTimeout(finishClose, 0);
     } else closeTimer.current = window.setTimeout(finishClose, 560);
   }, [agent.id, finishClose]);
+
+  const remove = async () => {
+    if (deletingRef.current) return;
+    deletingRef.current = true;
+    try {
+      if (!await confirm({ title: t('agent.deleteTitle', { name: agent.name }),
+        message: t('agent.deleteWarning'), confirmText: t('common.delete'), danger: true })) return;
+      onDelete();
+      close();
+    } finally { deletingRef.current = false; }
+  };
 
   useEffect(() => () => window.clearTimeout(closeTimer.current), []);
 
@@ -166,11 +179,7 @@ export default function AgentDetailDialog(props: Props) {
           </div>
         </div>
         <footer className="agent-detail__foot">
-          {confirmDelete ? <>
-            <span>{t('dashboard.detail.deleteConfirm')}</span>
-            <button type="button" className="agent-detail__danger" onClick={() => { onDelete(); close(); }}>{t('common.delete')}</button>
-            <button type="button" onClick={() => setConfirmDelete(false)}>{t('common.cancel')}</button>
-          </> : <button type="button" onClick={() => setConfirmDelete(true)}>{t('common.delete')}</button>}
+          <button type="button" className="agent-detail__danger" onClick={() => void remove()}>{t('common.delete')}</button>
         </footer>
       </div>
     </section>

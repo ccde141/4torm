@@ -18,6 +18,7 @@ async function fixture(t: test.TestContext) {
     { role: 'user', content: '第二轮' }, { role: 'assistant', content: '答二' },
     { role: 'user', content: '第三轮' }, { role: 'assistant', content: '答三' },
     { role: 'user', content: '第四轮' }, { role: 'assistant', content: '答四' },
+    { role: 'user', content: '第五轮' }, { role: 'assistant', content: '答五' },
   ];
   seat.tokenUsage = { promptTokens: 9_000, completionTokens: 20, totalTokens: 9_020 };
   await saveSeat(dataDir, workshop.id, seat);
@@ -38,13 +39,13 @@ test('摘要为空时拒绝写入，活动上下文和归档均保持不变', as
   await assert.rejects(fs.access(bak));
 });
 
-test('主动压缩归档全部完整历史，活动上下文仅保留摘要', async (t) => {
+test('主动压缩归档早期历史，活动上下文保留摘要及最近四轮完整记录', async (t) => {
   const { dataDir, workshop, seat, plan } = await fixture(t);
   const result = await applySeatCompaction(dataDir, workshop.id, seat, plan, '## Goal\n继续完成项目');
   const saved = await loadSeat(dataDir, workshop.id, seat.id);
 
-  assert.equal(result.archivedCount, 8);
-  assert.equal(saved?.messages.length, 1);
+  assert.equal(result.archivedCount, 2);
+  assert.equal(saved?.messages.length, 9);
   assert.match(saved?.messages[0].content || '', /滚动压缩摘要/);
   assert.match(saved?.messages[0].content || '', /继续完成项目/);
   assert.deepEqual(saved?.messages.slice(1), plan.keptMessages);
@@ -54,5 +55,5 @@ test('主动压缩归档全部完整历史，活动上下文仅保留摘要', as
   const archive = JSON.parse(await fs.readFile(result.archivePath, 'utf8'));
   assert.equal(archive.type, 'cyclone-seat-context-compact');
   assert.deepEqual(archive.messages, plan.archivedMessages);
-  assert.equal(archive.keptTurnCount, 0);
+  assert.equal(archive.keptTurnCount, 4);
 });

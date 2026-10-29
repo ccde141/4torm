@@ -74,7 +74,7 @@ export default function TideSessionView({ session, running = false, onClose, onC
         {messages.length === 0 && <div className="tide-session__empty"><TideIcon name="message" />{t('tide.session.empty')}</div>}
         {messages.map(message => {
           if (message.role === 'system' && (message.type === 'compact-marker' || isCompactionHistory(message.content))) {
-            return <CompactionHistory key={message.id} content={message.content} />;
+            return <CompactionHistory key={message.id} content={message.content} handoff />;
           }
           if (message.role === 'system') return <div key={message.id} className="chat__message chat__message--system">
             <div className="chat__avatar">S</div>

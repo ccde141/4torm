@@ -14,6 +14,7 @@ import type { SeasonSessionPort } from '../sessions/season-session-port.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import { tideGeneratedMediaContext } from './turn-context.js';
 import type { ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
+import { randomUUID } from 'node:crypto';
 
 
 export interface TideConversationResult {
@@ -82,12 +83,13 @@ export async function prepareConversation(dataDir: string, task: TideTask,
   const { opts, systemPrompt, rolePrompt } = await buildTideInputContext(dataDir, agent, resolved.sessionId,
     { userMessage: task.prompt, selfLoop: task.selfLoop, signal });
   const userMessage = tideUserMessage(task);
-  const turnInput: ContextMessage = { role: 'user', content: userMessage };
+  const turnInput: ContextMessage = { role: 'user', content: userMessage, origin: 'framework' };
   const messages = [
     { role: 'system', content: systemPrompt }, ...resolved.history,
     turnInput,
   ] as Parameters<SessionRunner['chat']>[1];
   const now = new Date().toISOString();
+  resolved.displayInput = { id: `msg-${randomUUID()}`, role: 'user', origin: 'framework', content: userMessage, timestamp: now };
   const compaction = new TideContextCompaction(dataDir, task, resolved,
     { ...(resolved.existing ?? { id: resolved.sessionId, agentId: agent.id, agentName: agent.name,
       title: `🌊 ${task.name}`, messages: [], model: agent.model, systemPrompt: rolePrompt,
@@ -113,6 +115,7 @@ async function chatConversation(
     ? usage => onUsage(usage, prepared.resolved) : undefined,
   () => prepared.runner.abort(), onModelRequest ? request => onModelRequest(request, prepared.resolved) : undefined);
   prepared.compaction.flushUsage = () => state.flush();
+  prepared.compaction.displaySnapshot = () => [prepared.resolved.displayInput!, ...state.displaySnapshot()];
   try {
     const result = await prepared.runner.chat(prepared.systemPrompt, prepared.messages, state.onEvent);
     await state.flush();

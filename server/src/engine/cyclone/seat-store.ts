@@ -6,11 +6,12 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { ContextMessage, SeatData, WorkshopData } from './types';
+import type { ContextMessage, SeatContextMessage, SeatData, WorkshopData } from './types';
 import { seatFile, seatsDir, readJsonSafe, ensureDir, atomicWrite, genId, cycloneArchiveFile, workshopBakDir } from './paths';
 import { loadWorkshop, saveWorkshop } from './workshop-store';
 import { frameworkError } from '../shared/framework-error.js';
 import { appendSeatConfigurationHistory, parseSeatHistory, type SeatHistorySource } from './seat-history.js';
+import { captureCycloneCompaction } from './conversation-transcript.js';
 
 /** 在工作室下新增工位（绑定 agent + 角色提示词），更新工作室 meta */
 async function addSeatUnlocked(
@@ -100,12 +101,13 @@ export async function resetSeatContext(
   dataDir: string,
   workshopId: string,
   seatId: string,
-  opts: { summary?: string; forcePending?: boolean; preparedArchivePath?: string; signal?: AbortSignal;
+  opts: { summary?: string; retainedMessages?: SeatContextMessage[]; forcePending?: boolean; preparedArchivePath?: string; signal?: AbortSignal;
     compaction?: import('../shared/compaction/index.js').CompactionProgress } = {},
 ): Promise<{ seat: SeatData | null; archivePath?: string; archivedCount?: number }> {
   const seat = await loadSeat(dataDir, workshopId, seatId);
   if (!seat) return { seat: null };
   if (seat.pending && !opts.forcePending) throw new Error('该工位存在挂起提问，请先回答或使用强制重置');
+  if (opts.summary && opts.retainedMessages === undefined) throw new Error('工位压缩缺少原文保留计划');
 
   const state = seat.compactState || { disabled: false, archiveSeq: 0 };
   const nextSeq = (state.archiveSeq || 0) + 1;
@@ -127,8 +129,11 @@ export async function resetSeatContext(
   }, null, 2));
 
   seat.messages = opts.summary
-    ? [{ role: 'system', content: `以下是重置前的工位私聊摘要，请作为后续上下文参考：\n\n${opts.summary}` }]
+    ? [{ role: 'system', content: `以下是重置前的工位私聊摘要，请作为后续上下文参考：\n\n${opts.summary}` },
+      ...opts.retainedMessages!]
     : [];
+  seat.displayHistory = opts.summary ? captureCycloneCompaction(seat.displayHistory, originalMessages, seat.messages,
+    { role: 'system', content: `[历史压缩记录]\n${opts.summary}`, compactionId: opts.compaction?.id }) : undefined;
   seat.pending = undefined;
   seat.tokenUsage = undefined;
   seat.compactState = { ...state, archiveSeq: nextSeq, lastCompactAt: new Date().toISOString() };

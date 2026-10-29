@@ -10,7 +10,7 @@ test('NodeRunner 文本路径转发独立 reasoning 事件', () => {
 });
 
 test('NodeRunner 快照保留已持久化的 reasoning', () => {
-  assert.match(source, /projectNodeHistory\(this\.messages/);
+  assert.match(source, /this\.display\.messages\(this\.messages\)/);
   const history = projectNodeHistory([{ role: 'assistant', content: 'Done', reasoningContent: 'Reasoning' }]);
   assert.equal(history[0].reasoningContent, 'Reasoning');
 });

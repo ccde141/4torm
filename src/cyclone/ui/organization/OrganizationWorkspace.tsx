@@ -17,6 +17,7 @@ import { deriveOrganizationSaveState } from './organization-save-state';
 import { mergeActivityPairs, mergeExternalRunningSeatStatuses } from './organization-external-status';
 import { useOrganizationExternalActivity } from './useOrganizationExternalActivity';
 import { useOrganizationSeatReconciliation } from './useOrganizationSeatReconciliation';
+import { synchronizeOrganizationDraft } from './organization-sync';
 
 interface Props {
   workshopId: string;
@@ -49,18 +50,21 @@ export function OrganizationWorkspace(props: Props) {
   const [pendingOrganizationState, setPendingOrganizationState] = useState<PendingOrganizationState | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [remoteConflict, setRemoteConflict] = useState(false);
   const [runtimeTick, forceRuntimeTick] = useState(0);
   const [completedSignals, setCompletedSignals] = useState<Record<string, number>>({});
   const [contactReturnSignals, setContactReturnSignals] = useState<Record<string, number>>({});
   const requestGuard = useRef(createLatestRequestGuard());
   const selectedWorkshopRef = useRef(props.workshopId);
   const savedDraftRef = useRef(savedDraft);
+  const draftRef = useRef(draft);
   const savingRef = useRef(saving);
   const deferredChangeRef = useRef(false);
   const subscribedWorkshopRef = useRef<string | null>(null);
   const tRef = useRef(t);
   selectedWorkshopRef.current = props.workshopId;
   savedDraftRef.current = savedDraft;
+  draftRef.current = draft;
   savingRef.current = saving;
   tRef.current = t;
   const statusesRef = useRef(new Map<string, CycloneDispatch['status']>());
@@ -101,7 +105,7 @@ export function OrganizationWorkspace(props: Props) {
     savedDraftRef.current = null;
     savingRef.current = false;
     setDraft(null); setSavedDraft(null); setPendingOrganizationState(null);
-    setSaving(false); setError('');
+    setSaving(false); setError(''); setRemoteConflict(false);
     void reload(controller.signal);
     return () => { controller.abort(); guard.cancel(); };
   }, [reload]);
@@ -112,8 +116,11 @@ export function OrganizationWorkspace(props: Props) {
       || !pendingOrganizationState.request.isCurrent()) return;
     const authoritative = createEditableOrganization(pendingOrganizationState.state, props.seats);
     const previousSaved = savedDraftRef.current;
+    const synchronized = synchronizeOrganizationDraft(draftRef.current, previousSaved, authoritative, props.seats);
+    setRemoteConflict(synchronized.conflict);
+    setError(synchronized.conflict ? tRef.current('cyclone.org.remoteConflict') : '');
     savedDraftRef.current = authoritative;
-    setDraft(current => !current || current === previousSaved ? authoritative : current);
+    setDraft(current => synchronizeOrganizationDraft(current, previousSaved, authoritative, props.seats).draft);
     setSavedDraft(authoritative);
     setPendingOrganizationState(null);
   }, [pendingOrganizationState, props.seats, props.summaryReady, props.workshopId]);
@@ -239,6 +246,12 @@ export function OrganizationWorkspace(props: Props) {
   const saveState = draft && savedDraft
     ? deriveOrganizationSaveState(draft, savedDraft, saving || reconcilingSeats.blocked)
     : 'saved';
+  const discardConflict = async () => {
+    if (!await confirm({ title: t('cyclone.org.discardTitle'),
+      message: t('cyclone.org.discardMessage'), confirmText: t('cyclone.org.retrySync') })) return;
+    if (selectedWorkshopRef.current !== props.workshopId) return;
+    setDraft(savedDraftRef.current); setRemoteConflict(false); setError('');
+  };
   return <section className="cyclone-org-workspace">
     {props.panel === 'bulletin' ? <BulletinBoard workshopId={props.workshopId} title={props.title}
       entries={props.bulletin} onSaved={props.onBulletinSaved} onRenamed={props.onRenamed} />
@@ -247,8 +260,9 @@ export function OrganizationWorkspace(props: Props) {
         activeContactPairs={activeContactPairs} activeDispatchPairs={activeDispatchPairs}
         contactReturnSignals={contactReturnSignals}
         saving={saving || reconcilingSeats.blocked} saveState={saveState} error={error}
-        onRetrySync={reconcilingSeats.failed ? reconcilingSeats.retry : undefined}
-        onChange={setDraft} onSave={() => void save()}
+        onRetrySync={reconcilingSeats.failed ? reconcilingSeats.retry
+          : remoteConflict ? () => void discardConflict() : undefined}
+        onChange={next => { if (!remoteConflict) setError(''); setDraft(next); }} onSave={() => void save()}
         onOpenSeat={props.onOpenSeat} onError={setError} />
         : <div className="cyclone-org-workspace__loading">{error || t('cyclone.org.loading')}</div>}
   </section>;

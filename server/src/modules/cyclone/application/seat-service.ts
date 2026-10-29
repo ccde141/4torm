@@ -2,6 +2,7 @@ import { withCycloneSummaryUsage } from './summary-model-usage.js';
 import { loadAgent } from '../../../engine/shared/agent-loader.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
 import { deleteContextMessage, editContextMessage } from '../../../engine/cyclone/message-mutations.js';
+import { alignCycloneTranscript } from '../../../engine/cyclone/conversation-transcript.js';
 import { deleteSeatFromWorkshop } from '../../../engine/cyclone/seat-lifecycle.js';
 import { loadRoom, RoomSettingsConflictError, tryAcquireRoomLock } from '../../../engine/cyclone/room-store.js';
 import { loadWorkshop } from '../../../engine/cyclone/workshop-store.js';
@@ -16,6 +17,7 @@ import {
 import type { CycloneExecutionPort } from '../domain/operation-snapshot.js';
 import {
   toCycloneSummaryMessages,
+  retainedCycloneMessages,
   type CycloneContextSummarizer,
 } from '../domain/context-summary.js';
 import type { CycloneChangeFeed } from './change-feed.js';
@@ -84,12 +86,14 @@ export class CycloneSeatService {
       if (seat.pending) throw seatError(
         'CYCLONE_SEAT_PENDING', 'conflict', '该工位存在挂起提问，请先完成回答再修改历史',
       );
+      const before = [...seat.messages];
       const changed = content === undefined
         ? deleteContextMessage(seat.messages, index)
         : editContextMessage(seat.messages, index, content);
       if (!changed) throw seatError(
         'CYCLONE_SEAT_MESSAGE_INVALID', 'validation', '消息索引越界或内容无效',
       );
+      alignCycloneTranscript(seat.displayHistory, before, seat.messages);
       await saveSeat(this.dataDir, workshopId, seat);
       this.changes?.publish(workshopId, 'activity', seatId);
       return { ok: true };
@@ -115,12 +119,13 @@ export class CycloneSeatService {
           const archivePath = options.mode === 'summary' ? await archiveCycloneCompaction(
             this.dataDir, workshopId, `seat-${seatId}`, { type: 'cyclone-seat-context-compact',
               seatId, messages: seat.messages, pending: seat.pending, tokenUsage: seat.tokenUsage }) : undefined;
-          const summary = options.mode === 'summary' ? await withCycloneSummaryUsage({
+          const compacted = options.mode === 'summary' ? await withCycloneSummaryUsage({
             get: () => seat.modelUsage, set: value => { seat.modelUsage = value; },
             persist: () => saveSeat(this.dataDir, workshopId, seat),
             emit: () => this.changes?.publish(workshopId, 'activity', seatId),
           }, () => this.summarizer.summarize({
             agentId: seat.agentId, signal, subject: `工位「${seat.title}」私聊`,
+            target: { workshopId, kind: 'seat', id: seatId },
             messages: toCycloneSummaryMessages(seat.messages || []),
             onNotice: async notice => {
               seat.compactionNotice = notice;
@@ -128,10 +133,12 @@ export class CycloneSeatService {
               this.changes?.publish(workshopId, 'activity', seatId);
             },
           })) : undefined;
+          const summary = compacted?.summary;
           if (options.mode === 'summary' && !summary?.trim()) throw new Error('压缩摘要为空，原会话保留');
           signal?.throwIfAborted();
           const result = await resetSeatContext(this.dataDir, workshopId, seatId, {
-            summary, forcePending: options.forcePending, preparedArchivePath: archivePath, signal,
+            summary, retainedMessages: compacted ? retainedCycloneMessages(seat.messages, compacted) : undefined,
+            forcePending: options.forcePending, preparedArchivePath: archivePath, signal,
             compaction: finishCycloneCompaction(started),
           });
           this.changes?.publish(workshopId, 'activity', seatId);

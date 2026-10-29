@@ -33,9 +33,10 @@ export function serializeCompactionMessages(messages: readonly ContextMessage[])
     const tools = message.toolCalls?.map(call =>
       `工具调用 ${call.id} ${call.name}: ${call.arguments}`).join('\n');
     const result = message.toolCallId ? ` 工具结果 ${message.toolCallId}` : '';
+    const origin = message.origin === 'human' ? ' 人类输入' : message.origin === 'framework' ? ' 框架消息' : '';
     const images = [...(message.images ?? []), ...(message.toolImages ?? [])]
       .map(image => `附件 ${image.id} ${image.name}`).join('\n');
-    return `[${message.role}${result}]\n${message.content}`
+    return `[${message.role}${origin}${result}]\n${message.content}`
       + (tools ? `\n${tools}` : '') + (images ? `\n${images}` : '');
   }).join('\n\n');
 }

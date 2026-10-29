@@ -30,5 +30,20 @@ test('Tide keeps generated MCP media context and ordered display references', ()
   assert.deepEqual(state.snapshot().toolContext, nativeContext);
   assert.deepEqual(state.snapshot().toolCalls[0].toolImages, toolImages);
   assert.deepEqual(JSON.parse(state.snapshot().intermediate[1].content).toolImages, toolImages);
+  assert.deepEqual(state.snapshot().intermediate[1].toolImages, toolImages);
   assert.notEqual(state.snapshot().toolContext, nativeContext);
+});
+
+test('display snapshots finish prior response bubbles once without duplicating the final answer', () => {
+  const state = createTideEventState();
+  state.onEvent({ type: 'token', content: '先检查资料。' });
+  state.onEvent({ type: 'tool-call', tool: 'read', args: {} });
+  state.onEvent({ type: 'tool-result', tool: 'read', result: 'evidence', ok: true });
+  state.onEvent({ type: 'token', content: '这段交接前的回复。' });
+  const first = state.displaySnapshot().map(message => message.id);
+  assert.deepEqual(state.displaySnapshot().map(message => message.id), first);
+  state.onEvent({ type: 'token', content: '最终答复。' });
+  state.onEvent({ type: 'answer', content: '最终答复。', rawContent: '最终答复。' });
+  assert.deepEqual(state.snapshot().intermediate.map(message => message.role), ['assistant', 'tool-call', 'tool-result', 'assistant']);
+  assert.ok(!state.snapshot().intermediate.some(message => message.content === '最终答复。'));
 });

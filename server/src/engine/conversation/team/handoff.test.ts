@@ -22,7 +22,7 @@ test('dispatch, received, context and acknowledgement form one trace without rep
   await runtime.wait();
   await handoff.notifications();
   assert.deepEqual(events.map(event => event.stage), ['dispatched', 'reported']);
-  handoff.inContext(); handoff.inContext();
+  await Promise.all([handoff.inContext('main-one'), handoff.inContext('main-one')]);
   const report = (await store.read()).reports[0];
   await runtime.acknowledge([report.id]); await runtime.acknowledge([report.id]);
   await runtime.dispatch(member.id, 'Inspect', policy, 'request-one');
@@ -35,7 +35,7 @@ test('dispatch, received, context and acknowledgement form one trace without rep
   assert.equal(events.length, 4);
 });
 
-test('收尾等待真实回报，一轮只投递一次，未确认回报下轮仍能接收', async () => {
+test('收尾等待真实回报，持久送达后未确认回报下轮不再重投', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'team-handoff-'));
   try {
     const store = new TeamStore(dir, { agentId: 'a', sessionId: 's' });
@@ -54,8 +54,9 @@ test('收尾等待真实回报，一轮只投递一次，未确认回报下轮�
     assert.match((await pending)[0], /real result/);
     await runtime.wait();
     assert.deepEqual(await handoff.beforeFinish(), []);
+    await handoff.inContext('main-one');
     assert.equal((await store.read()).reports[0].acknowledged, false);
-    assert.equal((await createTeamHandoff(runtime).notifications()).length, 1);
+    assert.deepEqual(await createTeamHandoff(runtime).notifications(), []);
     await store.acknowledge([(await store.read()).reports[0].id]);
     assert.deepEqual(await createTeamHandoff(runtime).notifications(), []);
   } finally { await rm(dir, { recursive: true, force: true }); }

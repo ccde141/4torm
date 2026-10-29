@@ -10,6 +10,8 @@ import { withSeatContinuity } from './seat-continuity.js';
 import type { SeatData } from './types.js';
 import type { CompactionProgress } from '../shared/compaction/index.js';
 import { finishCycloneCompaction } from './compaction-progress.js';
+import { captureCycloneCompaction } from './conversation-transcript.js';
+import { seatDisplayReasoning } from './seat-reasoning.js';
 
 interface ConversationCallerOptions {
   dataDir: string;
@@ -21,6 +23,7 @@ interface ConversationCallerOptions {
   onNotice?: (notice: CompactionNotice) => void;
   onProgress?: (progress: CompactionProgress) => void;
   onCompacted?: (plan: CompactionCommit) => void;
+  displayReasoning?: () => string;
 }
 
 /** Chat, Ask-resume, contact and queued dispatch all pass this model boundary. */
@@ -38,6 +41,9 @@ export function createSeatCompactionCaller(options: ConversationCallerOptions): 
       { type: 'cyclone-seat-context-compact', seatId: seat.id, reason, messages: before.slice(1) }).then(() => undefined),
     commit: async (plan, signal) => {
       const next: SeatData = { ...seat, messages: plan.messages.slice(1), tokenUsage: undefined,
+        displayHistory: captureCycloneCompaction<SeatData['messages'][number]>(seat.displayHistory,
+          seatDisplayReasoning(messages.slice(1), options.displayReasoning?.()), plan.messages.slice(1),
+          { role: 'system', content: `[历史压缩记录]\n${plan.summary}`, compactionId: seat.compaction?.id }),
         compaction: seat.compaction ? finishCycloneCompaction(seat.compaction) : undefined,
         compactState: { disabled: false, archiveSeq: (seat.compactState?.archiveSeq ?? 0) + 1,
           lastCompactAt: new Date().toISOString() } };

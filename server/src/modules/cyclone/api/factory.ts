@@ -29,6 +29,7 @@ import { CyclonePrivateChatActivity } from '../application/private-chat-activity
 import { CycloneAgentReadService } from '../application/agent-read-service.js';
 import { CycloneAgentExecutionService } from '../application/agent-execution.js';
 import { CycloneAgentManagementService } from '../application/agent-management-service.js';
+import { CycloneAgentOrganizationService } from '../application/agent-organization-service.js';
 import { CycloneAgentBulletinService } from '../application/agent-bulletin-service.js';
 import { CycloneAgentDispatchService } from '../application/agent-dispatch-service.js';
 import type { CycloneRoomIntroductionPort } from '../application/room-introduction.js';
@@ -120,6 +121,7 @@ export function createCycloneFeature(options: CycloneFeatureOptions): CycloneFea
   const agentManagement = new CycloneAgentManagementService(
     options.dataDir, workshops, rooms, changes,
   );
+  const agentOrganization = new CycloneAgentOrganizationService(workshops);
   const agentBulletin = new CycloneAgentBulletinService(options.dataDir, workshops);
   const agentDispatch = new CycloneAgentDispatchService(dispatches);
   const runs = new CycloneRunRepository(options.dataDir);
@@ -184,6 +186,7 @@ export function createCycloneFeature(options: CycloneFeatureOptions): CycloneFea
       agentRead,
       agentExecution,
       agentManagement,
+      agentOrganization,
       agentBulletin,
       agentDispatch,
       console,

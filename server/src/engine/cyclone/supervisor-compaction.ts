@@ -5,10 +5,14 @@ import type { LLMCaller } from '../shared/react/native-loop.js';
 import type { ContextMessage } from '../shared/types.js';
 import { finishCycloneCompaction } from './compaction-progress.js';
 import { archiveSupervisorContext, mutateSupervisor, type SupervisorData } from './supervisor-store.js';
+import { captureCycloneCompaction } from './conversation-transcript.js';
+import { seatDisplayReasoning } from './seat-reasoning.js';
+import type { CompactionCommit } from '../shared/compaction/index.js';
 
 export function createSupervisorCompactionCaller(options: {
   dataDir: string; workshopId: string; supervisor: SupervisorData; agent: LoadedAgent;
   messages: ContextMessage[]; llm: LLMCaller; onEvent(event: unknown): void;
+  displayReasoning?: () => string; onCompacted?: (plan: CompactionCommit) => void;
 }): LLMCaller {
   const { dataDir, workshopId, supervisor, agent, messages, onEvent } = options;
   const measured: LLMCaller = { call: async (...args) => {
@@ -30,6 +34,9 @@ export function createSupervisorCompactionCaller(options: {
       { type: 'cyclone-supervisor-context-compact', reason, messages: before.slice(1) }).then(() => undefined),
     commit: async (plan, signal) => {
       await mutateSupervisor(dataDir, workshopId, current => {
+        current.displayHistory = captureCycloneCompaction<SupervisorData['messages'][number]>(current.displayHistory,
+          seatDisplayReasoning(messages.slice(1), options.displayReasoning?.()), plan.messages.slice(1),
+          { role: 'system', content: `[历史压缩记录]\n${plan.summary}`, compactionId: current.compaction?.id });
         current.messages = plan.messages.slice(1);
         current.tokenUsage = undefined;
         current.compaction = current.compaction ? finishCycloneCompaction(current.compaction) : undefined;
@@ -46,6 +53,7 @@ export function createSupervisorCompactionCaller(options: {
       await mutateSupervisor(dataDir, workshopId, current => { current.compaction = progress; });
       onEvent(progress);
     },
+    onCompacted: options.onCompacted,
   });
   return trackModelUsage(caller, { get: () => supervisor.modelUsage, set: value => { supervisor.modelUsage = value; },
     persist: () => mutateSupervisor(dataDir, workshopId, current => { current.modelUsage = supervisor.modelUsage; }) });

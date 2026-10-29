@@ -5,19 +5,33 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { compactMessages } from '../../shared/compaction/index.js';
-import { nodeCompactionOptions } from './node-context-compaction.js';
+import { compactNodeManually, nodeCompactionOptions } from './node-context-compaction.js';
 import type { ContextMessage } from '../../shared/types.js';
 import { atomicWriteFile } from '../../shared/atomic-io.js';
 import { NodeRunner, type NodeRunnerEvent } from './node-runner.js';
 import { defaultCompactionPolicy, saveCompactionPolicy } from '../../shared/compaction/policy.js';
 
 function history(): ContextMessage[] {
-  return [{ role: 'system', content: 'static' },
-    { role: 'user', content: '旧任务'.repeat(200) }, { role: 'assistant', content: '旧结果'.repeat(200) },
-    { role: 'user', content: '最近任务' }, { role: 'assistant', content: '最近结果' }];
+  return [{ role: 'system', content: 'static' }, ...Array.from({ length: 5 }, (_, index) => [
+    { role: 'user' as const, content: `任务${index}`.repeat(200) },
+    { role: 'assistant' as const, content: `结果${index}`.repeat(200) },
+  ]).flat()];
 }
 
-test('manual node compaction archives all history, keeping only static instructions and summary', async t => {
+test('short node history reports no earlier compactable work without a model call or write', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-short-compact-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const messages: ContextMessage[] = [{ role: 'system', content: 'Rules' },
+    { role: 'user', content: 'Current task' }, { role: 'assistant', content: 'Current progress' }];
+  const before = structuredClone(messages);
+  await assert.rejects(compactNodeManually({ dataDir: directory, model: 'missing:model',
+    scopeKey: directory, archiveDir: path.join(directory, 'bak'), messages,
+    persist: async () => { assert.fail('protected recent history must not be written'); }, emit: () => undefined }), /暂无更早/);
+  assert.deepEqual(messages, before);
+  assert.deepEqual(await fs.readdir(directory), []);
+});
+
+test('manual node compaction archives history and retains the latest four complete turns', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tw-full-compact-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const messages = history();
@@ -29,8 +43,9 @@ test('manual node compaction archives all history, keeping only static instructi
   await compactMessages({ ...options, messages, mode: 'full', reason: 'manual',
     resolveSummaryBudget: async () => 10_000,
     summarize: async () => '工作结果摘要' });
-  assert.equal(messages.length, 2);
+  assert.equal(messages.length, 10);
   assert.equal(messages[0].content, 'static');
+  assert.deepEqual(messages.slice(2), original.slice(3));
   assert.deepEqual(durable, messages);
   const files = await fs.readdir(path.join(directory, 'bak'));
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(directory, 'bak', files[0]), 'utf8')), original);
@@ -111,7 +126,8 @@ test('cancelled node summary keeps both original disk and live context; late can
       assert.equal((events.at(-1) as { aborted?: boolean }).aborted, true);
     } else {
       await run;
-      assert.equal(messages.length, 2);
+      assert.equal(messages.length, 10);
+      assert.deepEqual(messages.slice(2), original.slice(3));
       assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), messages);
       assert.equal(events.at(-1)?.type, 'compact-done');
     }
@@ -128,7 +144,7 @@ test('a real node manual compaction preserves originals and treats a wrapped pro
     nodeId: 'node', agentId: 'agent', model: 'p:model', temperature: 0,
     toolNames: [], skillIds: [], workspace: directory, sandboxLevel: 'project',
     systemPrompt: '职责', signal: new AbortController().signal, persistDir: path.join(directory, 'node') });
-  runner.appendSystemMessage('原始工作记录'.repeat(500));
+  for (let index = 0; index < 25; index++) runner.appendSystemMessage(`记录${index}\n${'原'.repeat(2_000)}`);
   await runner.flush();
   const original = structuredClone(runner.getMessages());
   let started!: () => void, release!: () => void, finished!: () => void;
@@ -210,7 +226,7 @@ test('automatic and manual node compaction preserve meeting facts appended durin
       nodeId: 'node', agentId: 'agent', model: 'p:model', temperature: 0, native,
       toolNames: [], skillIds: [], workspace: dataDir, sandboxLevel: 'project',
       systemPrompt: '职责', signal: new AbortController().signal, persistDir });
-    runner.appendSystemMessage('已完成的旧工作'.repeat(1_000));
+    for (let index = 0; index < 25; index++) runner.appendSystemMessage(`旧工作${index}\n${'原'.repeat(2_000)}`);
     runner.appendSystemMessage('最近的已有记录');
     await runner.flush();
     let started!: () => void, release!: () => void, finished!: () => void;
@@ -229,7 +245,7 @@ test('automatic and manual node compaction preserve meeting facts appended durin
     };
     globalThis.fetch = async (_url, init) => {
       const request = JSON.parse(String(init?.body)) as { messages: ContextMessage[] };
-      const summary = request.messages.some(message => message.content.includes('[归档资料 JSON]'));
+      const summary = request.messages.at(-1)?.content.includes('你负责把已有会话整理');
       if (summary) { started(); await releaseSummary; replaceCompacted = true; }
       else requests.push(request.messages);
       return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: summary ? '旧工作已完成' : '已核验' },

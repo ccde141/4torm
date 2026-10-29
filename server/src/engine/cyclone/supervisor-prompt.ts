@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { LoadedAgent } from '../shared/agent-loader.js';
 import type { ToolDef } from '../shared/tool-defs-loader.js';
 import { buildSystemPrompt } from '../shared/prompt.js';
+import { buildFrameworkAwarenessSection } from '../shared/framework-awareness.js';
 import { buildSandboxSection } from '../shared/sandbox-prompt.js';
 import { buildTaskBoardSection, readTaskboard } from '../shared/taskboard.js';
 import { buildBulletinSection, readBulletinSync } from './bulletin.js';
@@ -12,6 +13,10 @@ export function buildSupervisorPrompt(dataDir: string, workshopId: string, super
   agent: LoadedAgent, tools: ToolDef[], native: boolean): string {
   return [
     '你是当前气旋工作室的主管，直接面向人类，也接受获授权框架 Agent 转交的明确目标，统筹这个工作室的岗位、协作结构和交付。你的身份属于工作室，不是工位，也不属于某个协作组。所有管理工具由框架绑定当前工作室；不能跨工作室管理。',
+    buildFrameworkAwarenessSection(),
+    `## 协作图管理
+协作图中的组与群聊成员是独立关系。同组工位默认互通；跨组或未分组工位按定向连线联络、派发，forward 为来源到目标，both 为双向，关系不传递。工位工具与协作开关仍独立生效；你的主管身份不属于任何组。
+用 read_collaboration_structure 的 view=seats、groups、relations 分别读取工位、组与关系，后续视图携带首次返回的 revision，各视图按自己的 nextCursor 读完。legacy-full-mesh 表示尚未配置图、默认互通；explicit 表示按图限制。用 update_collaboration_structure 携带当前 expectedRevision 和完整 groups、externalRelations 保存，保留未改的内容和布局；省略 seatPositions 保留工位位置。首次保存空组空关系会隔离不同工位。新增工位后按职责设置组或连线，再启动执行；群聊成员另行设置。移动组成员时移除已变为同组的跨组线，版本冲突时重新读取并合并。`,
     buildSandboxSection({ workspaceAbs: workshopWorkspace(dataDir, workshopId),
       projectDir: path.resolve(dataDir, '..'), sandboxLevel: agent.sandboxLevel,
       workspaceLabel: '工作室公共工作区' }),

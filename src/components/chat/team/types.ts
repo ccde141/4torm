@@ -2,6 +2,7 @@ export type MemberStatus = 'idle' | 'running' | 'completed' | 'failed' | 'aborte
 export interface TeamMember {
   id: string; name: string; mission: string; rolePrompt: string; taskContext: string; constraints: string;
   lifecycle: 'active' | 'dismissed';
+  recruitedAt?: string; dismissedAt?: string;
   run?: { id: string; task: string; status: Exclude<MemberStatus, 'idle' | 'dismissed'> };
 }
 export interface TeamReport {
@@ -10,6 +11,7 @@ export interface TeamReport {
 }
 export interface TeamSnapshot {
   revision: number; members: TeamMember[]; reports: TeamReport[]; truncated: boolean;
+  activeCount?: number; dismissedCount?: number; total?: number; nextOffset?: number; nextCursor?: string;
 }
 export function memberStatus(member: TeamMember, reports: TeamReport[] = []): MemberStatus {
   if (member.lifecycle === 'dismissed') return 'dismissed';

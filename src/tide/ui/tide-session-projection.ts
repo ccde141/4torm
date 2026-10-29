@@ -1,21 +1,58 @@
 import type { TideSession } from '../../api/tide';
+import type { ToolImageRef } from '../../engine/tool-media';
 
 type VisibleMessage = TideSession['messages'][number];
 type ContextEntry = NonNullable<VisibleMessage['nativeContext']>[number];
 
-/** The newest exact marker describes model-active history; raw originals remain archived. */
+/** Display follows durable raw records; native snapshots only fill holes in older sessions. */
 export function visibleTideMessages(session: TideSession): TideSession['messages'] {
-  const index = session.messages.findLastIndex(message => message.type === 'compact-marker');
-  if (index < 0) return session.messages.filter(message => message.role !== 'system');
-  const marker = session.messages[index];
+  const raw = session.messages.filter(message => message.role !== 'system' && message.type !== 'compact-marker');
+  const rawKeys = new Set(raw.map(message => visibleKey(withToolImages(message))));
+  const restored = new Set<string>();
+  const ids = new Set<string>();
+  const visible: VisibleMessage[] = [];
   const tools = new Map<string, string>();
-  const compacted = (marker.nativeContext ?? [{ role: 'system', content: marker.content }])
-    .flatMap((message, offset) => {
-      const entries = projectEntry(message, `${marker.id}-${offset}`, marker.timestamp, tools);
-      return offset === 0 && message.role === 'system'
-        ? entries.map(entry => ({ ...entry, type: 'compact-marker' as const })) : entries;
-    });
-  return [...compacted, ...session.messages.slice(index + 1).filter(message => message.role !== 'system')];
+  for (const message of session.messages) {
+    if (ids.has(message.id)) continue;
+    ids.add(message.id);
+    if (message.type !== 'compact-marker') {
+      if (message.role !== 'system') visible.push(withToolImages(message));
+      continue;
+    }
+    if (!message.contextOnly && message.content.trim() !== '[历史压缩记录]') visible.push(message);
+    for (const [offset, entry] of (message.nativeContext ?? []).entries()) {
+      for (const projected of projectEntry(entry, `${message.id}-${offset}`, message.timestamp, tools)) {
+        if (projected.role === 'system') continue;
+        const key = visibleKey(projected);
+        if (rawKeys.has(key) || restored.has(key)) continue;
+        restored.add(key); visible.push(projected);
+      }
+    }
+  }
+  return visible;
+}
+
+function withToolImages(message: VisibleMessage): VisibleMessage {
+  if (message.toolImages?.length || message.role !== 'tool-result') return message;
+  try {
+    const value: unknown = JSON.parse(message.content);
+    if (!value || typeof value !== 'object' || !('toolImages' in value) || !Array.isArray(value.toolImages)) return message;
+    const toolImages = value.toolImages.filter((image): image is ToolImageRef => !!image && typeof image === 'object'
+      && 'id' in image && typeof image.id === 'string' && 'name' in image && typeof image.name === 'string'
+      && 'mimeType' in image && typeof image.mimeType === 'string' && 'size' in image && typeof image.size === 'number');
+    return toolImages.length ? { ...message, toolImages } : message;
+  } catch { return message; }
+}
+
+function visibleKey(message: VisibleMessage): string {
+  if (message.role === 'tool-call' || message.role === 'tool-result') {
+    try {
+      const value = JSON.parse(message.content) as Record<string, unknown>;
+      return JSON.stringify([message.role, value.tool, value.args, value.result, value.ok !== false,
+        message.toolImages?.map(image => image.id) ?? []]);
+    } catch { /* Legacy plain tool output keeps its exact text identity. */ }
+  }
+  return JSON.stringify([message.role, message.content]);
 }
 
 /** Reuse the existing tool-card data contract instead of hiding native calls in an empty assistant bubble. */

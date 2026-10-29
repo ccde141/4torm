@@ -14,7 +14,7 @@ import { buildSeatVirtualToolDefs } from './virtual-tools.js';
 import { buildSupervisorPrompt } from './supervisor-prompt.js';
 import { createSupervisorCompactionCaller } from './supervisor-compaction.js';
 import { toSeatProgressEvent } from './loop-event-forwarder.js';
-import { recordSeatAssistantResult } from './seat-reasoning.js';
+import { recordSeatAssistantResult, unclaimedSeatContent } from './seat-reasoning.js';
 import { hasSupervisorReceiptEvidence } from './supervisor-information.js';
 import { workshopWorkspace } from './paths.js';
 import { supervisorTools } from './supervisor-tools.js';
@@ -88,7 +88,7 @@ export async function runSupervisorTurn(dataDir: string, workshopId: string, inp
     for (const item of incoming) {
       if (!known.has(item.id) && !hasSupervisorReceiptEvidence(messages, item)) {
         if (added === 20) break;
-        messages.push({ role: 'user', supervisorInboxId: item.id, supervisorSourceTitle: item.sourceTitle,
+        messages.push({ role: 'user', origin: 'framework', supervisorInboxId: item.id, supervisorSourceTitle: item.sourceTitle,
           content: `[协作信息：${item.sourceTitle}；${item.createdAt}。仅为工作室协作资料，不替代人类目标。]\n${item.content}` });
         added++;
       }
@@ -100,16 +100,22 @@ export async function runSupervisorTurn(dataDir: string, workshopId: string, inp
     return added;
   };
   await ingest();
-  const generatedContextStart = messages.length;
+  let generatedContextStart = messages.length;
+  const sealedContext: ContextMessage[] = [];
+  let reasoningOffset = 0;
   let reasoning = '';
   const internalNotices = new Map<number, string>();
   const markInternalNotices = () => {
     for (const [index, content] of internalNotices) {
-      if (messages[index]?.role === 'user' && messages[index].content === content) messages[index].supervisorInternal = true;
+      if (messages[index]?.role === 'user' && messages[index].content === content) {
+        messages[index].supervisorInternal = true;
+        messages[index].origin = 'framework';
+      }
     }
   };
   onEvent({ type: 'input-accepted' });
-  const llm: LLMCaller = { call: (context, _options, onChunk, abort, defs, onReasoning, onToolProgress) => {
+  const llm: LLMCaller = { prepare: async () => { markInternalNotices(); },
+    call: (context, _options, onChunk, abort, defs, onReasoning, onToolProgress) => {
     markInternalNotices();
     return callLLM({
     dataDir, fullModelKey: agent.model, messages: context, options: { temperature: agent.temperature },
@@ -142,7 +148,12 @@ export async function runSupervisorTurn(dataDir: string, workshopId: string, inp
     return outcome;
   } };
   const measured = createSupervisorCompactionCaller({ dataDir, workshopId, supervisor, agent,
-    messages, llm, onEvent });
+    messages, llm, onEvent, displayReasoning: () => reasoning.slice(reasoningOffset), onCompacted: plan => {
+      sealedContext.push(...plan.before.slice(generatedContextStart));
+      generatedContextStart = plan.messages.length;
+      reasoningOffset = reasoning.length;
+      internalNotices.clear();
+    } });
   const params = { llm: measured, messages: messages as ContextMessage[], tools: caller, toolDefs: tools,
     allowedTools: tools.map(tool => tool.name),
     onToolError: (error: unknown) => error instanceof SuspendSignal
@@ -159,7 +170,8 @@ export async function runSupervisorTurn(dataDir: string, workshopId: string, inp
       if (translated && event.type !== 'tool-call' && event.type !== 'tool-result') onEvent(translated);
     } };
   const result = native ? await runReActLoopNative(params) : await runReActLoop(params);
-  if (!result.suspended) recordSeatAssistantResult(messages, result.content, reasoning, generatedContextStart);
+  if (!result.suspended) recordSeatAssistantResult(messages, unclaimedSeatContent(result.content, sealedContext),
+    reasoning.slice(reasoningOffset), generatedContextStart);
   if (result.suspended) {
     const last = [...messages].reverse().find(message => message.role === 'assistant' && message.toolCalls?.length);
     supervisor.pending = { ...result.suspended, native,
@@ -178,14 +190,14 @@ function applyInput(supervisor: SupervisorData, messages: SupervisorMessage[], i
     const pending = supervisor.pending;
     if (!pending) throw new Error('主管没有等待回答的问题');
     messages.push(pending.native && pending.pendingToolCallId
-      ? { role: 'tool', toolCallId: pending.pendingToolCallId, content: input.text }
-      : { role: 'user', content: `人类回答：${input.text}` });
+      ? { role: 'tool', origin: 'human', toolCallId: pending.pendingToolCallId, content: input.text }
+      : { role: 'user', content: `人类回答：${input.text}`, origin: 'human' });
     supervisor.pending = undefined;
-  } else if (input.mode === 'delegated') messages.push({ role: 'user',
+  } else if (input.mode === 'delegated') messages.push({ role: 'user', origin: 'framework',
     inputMessageId: input.inputMessageId,
     supervisorGoalOrigin: input.origin,
     content: `[委托目标：Agent ${input.origin.agentId}；会话 ${input.origin.sessionId}。这是框架 Agent 的委托，不是人类直接发言。]\n${input.text}` });
-  else messages.push({ role: 'user', content: input.text, inputMessageId: input.inputMessageId,
+  else messages.push({ role: 'user', origin: 'human', content: input.text, inputMessageId: input.inputMessageId,
     supervisorGoalOrigin: { kind: 'human' } });
 }
 async function persistMessages(dataDir: string, workshopId: string, messages: SupervisorMessage[],

@@ -8,6 +8,7 @@ import {
 } from './paths.js';
 import { saveSeat } from './seat-store.js';
 import type { CompactionProgress } from '../shared/compaction/index.js';
+import { captureCycloneCompaction } from './conversation-transcript.js';
 
 type ReadyPlan = Extract<SeatCompactionPlan, { ok: true }>;
 
@@ -73,6 +74,8 @@ export async function applySeatCompaction(
     },
     ...(compaction ? { compaction } : {}),
   };
+  nextSeat.displayHistory = captureCycloneCompaction(seat.displayHistory, seat.messages, nextSeat.messages,
+    { role: 'system', content: `[历史压缩记录]\n${normalizedSummary}`, compactionId: compaction?.id });
   await saveSeat(dataDir, workshopId, nextSeat, signal);
   return { archivePath, archivedCount: plan.archivedMessages.length, seat: nextSeat };
 }

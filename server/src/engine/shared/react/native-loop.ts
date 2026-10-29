@@ -102,6 +102,8 @@ export type ReActStreamEvent = ModelRequestUsageEvent
 export interface ReActLoopParams {
   /** Optional owner-managed handoff at a natural finish boundary; never acknowledges work. */
   beforeFinish?: () => Promise<readonly string[]>;
+  /** Retain a completed reply before an owner waits for correspondence. Opt-in only. */
+  retainBeforeFinish?: boolean;
   retainFinalContext?: boolean;
   /** Opt-in human input at safe boundaries. Existing callers retain their execution semantics. */
   steering?: ReActSteering;
@@ -331,6 +333,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       }
 
       if (content.trim()) {
+        if (params.retainBeforeFinish) msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
         if (params.beforeFinish) {
           const notices = await params.beforeFinish();
           if (signal?.aborted) {
@@ -339,13 +342,13 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
               turns: turn + 1, usage: latestUsage, termination: abortedTermination() };
           }
           if (notices.length || params.steering?.hasPending()) {
-            msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
-            msgs.push(...notices.map(content => ({ role: 'user' as const, content })));
+            if (!params.retainBeforeFinish) msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
+            msgs.push(...notices.map(content => ({ role: 'user' as const, origin: 'framework' as const, content })));
             continue;
           }
         }
         const answer = completeAnswer(answerParts, content);
-        if (params.steering || params.retainFinalContext) msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
+        if (!params.retainBeforeFinish && (params.steering || params.retainFinalContext)) msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
         return {
           content: answer, rawContent: answer, toolCalls: allToolCalls, turns: turn + 1,
           usage: latestUsage, termination: succeededTermination(),

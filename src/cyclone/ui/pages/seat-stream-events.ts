@@ -36,6 +36,13 @@ export function applySeatEvent(ev: any, live: Live, locale: Locale = 'zh-CN'): v
   const feedback = compactionFeedbackEvent(ev);
   if (feedback !== undefined) live.compactionNotice = feedback;
   switch (ev.type) {
+    case 'compact-done':
+      if (ev.operation === 'compact' && typeof ev.id === 'string' && typeof ev.summary === 'string' && ev.summary.trim()
+        && !live.segments.some(segment => segment.compaction?.id === ev.id)) {
+        live.segments.push({ content: '', blocks: [], compaction: { id: ev.id, summary: ev.summary,
+          reasoningOffset: live.reasoning?.length ?? 0 } });
+      }
+      break;
     case 'model-request':
       live.modelUsage = applyModelRequest(live.modelUsage, ev.request);
       if (ev.request.purpose === 'conversation' && ev.request.usage) live.lastKnownTokenUsage = ev.request.usage;

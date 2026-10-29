@@ -2,6 +2,26 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { formatSchedule } from './tide-styles';
+import { resolveMessage } from '../../i18n/locale';
+
+test('潮汐两类删除说明准确区分归档和季风会话的归属', () => {
+  for (const locale of ['zh-CN', 'en-US'] as const) {
+    const name = '客户 <A> {task}';
+    assert.ok(resolveMessage(locale, 'tide.task.deleteTitle', { name }).includes(name));
+    assert.ok(resolveMessage(locale, 'tide.detail.deleteSessionTitle', { name }).includes(name));
+    const task = resolveMessage(locale, 'tide.task.deleteMessage');
+    const session = resolveMessage(locale, 'tide.detail.deleteSessionMessage');
+    if (locale === 'zh-CN') {
+      assert.match(task, /潮汐会话及归档、运行记录和运行状态/);
+      assert.match(task, /季风会话保留/);
+      assert.match(session, /任务、会话归档和运行历史保留/);
+    } else {
+      assert.match(task, /Tide conversations and archives, run records, and run state/);
+      assert.match(task, /Monsoon conversations are kept/);
+      assert.match(session, /task, conversation archives, and run history are kept/);
+    }
+  }
+});
 
 test('tide task cards localize chrome without changing task payloads', () => {
   const source = fs.readFileSync('src/tide/ui/TideTaskItem.tsx', 'utf8');

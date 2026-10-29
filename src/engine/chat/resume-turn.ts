@@ -162,7 +162,7 @@ async function consumeReply(
       throw new Error(detail);
     }
     const effect = state.projection.apply(event);
-    if (effect.revision !== undefined) state.session.revision = effect.revision;
+    if (effect.revision !== undefined) state.session.revision = Math.max(state.session.revision ?? 0, effect.revision);
     state.messages = state.projection.messages;
     if (Object.hasOwn(effect, 'taskboard')) ports.applyTaskboard(effect.taskboard ?? null);
     if (Object.hasOwn(effect, 'usage')) {
@@ -170,7 +170,7 @@ async function consumeReply(
       else delete state.session.tokenUsage;
       ports.refreshSessions(input.agent);
     }
-    if (event.type === 'model-request') ports.refreshSessions(input.agent);
+    if (event.type === 'model-request' || event.type === 'current-input') ports.refreshSessions(input.agent);
     if (effect.flush) state.flusher.update(state.messages, effect.flush === 'immediate');
   }
   if (!state.accepted) throw new Error('未收到季风回复接收确认');

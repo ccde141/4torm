@@ -9,7 +9,7 @@ export function recordSeatAssistantResult(
   if (!content || content.startsWith('[中止]') || content.startsWith('[错误]')) return;
 
   const generatedMessages = messages.slice(generatedContextStart);
-  const finalContent = unclaimedContent(content, generatedMessages);
+  const finalContent = unclaimedSeatContent(content, generatedMessages);
   if (!finalContent && !reasoning) return;
 
   let target = messages[messages.length - 1];
@@ -30,7 +30,7 @@ export function recordSeatAssistantResult(
   if (remainingReasoning) target.reasoningContent = remainingReasoning;
 }
 
-function unclaimedContent(content: string, messages: SeatContextMessage[]): string {
+export function unclaimedSeatContent(content: string, messages: SeatContextMessage[]): string {
   const claimed = messages
     .filter(message => message.role === 'assistant' && message.content.trim())
     .map(message => message.content)
@@ -39,4 +39,11 @@ function unclaimedContent(content: string, messages: SeatContextMessage[]): stri
   if (content === claimed) return '';
   const prefix = `${claimed}\n\n`;
   return content.startsWith(prefix) ? content.slice(prefix.length) : content;
+}
+
+/** Seal this segment's visible thought without changing provider reasoning fields. */
+export function seatDisplayReasoning(messages: SeatContextMessage[], reasoning?: string): SeatContextMessage[] {
+  if (!reasoning) return messages;
+  const last = messages.length - 1 - [...messages].reverse().findIndex(message => message.role === 'assistant');
+  return messages.map((message, index) => index === last ? { ...message, reasoning } : message);
 }

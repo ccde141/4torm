@@ -30,6 +30,7 @@ export interface DisplayMessage {
   kind?: 'dispatch-receipt' | 'supervisor-information';
   dispatchId?: string;
   inputMessageId?: string;
+  compactionId?: string;
   sourceTitle?: string;
   /** 文本气泡内容（已剥工具调用标签） */
   content: string;
@@ -40,6 +41,7 @@ export interface DisplayMessage {
 }
 
 interface StoredMsg {
+  compactionId?: string;
   role: string;
   content: string;
   toolCalls?: Array<{ id: string; name: string; arguments: string }>;
@@ -158,7 +160,8 @@ export function contextToDisplay(stored: StoredMsg[], askFallback = '需要你�
         continue;
       }
       if (isCompactionHistory(text)) {
-        out.push({ id: `d${seq++}`, sourceIndex, role: 'system', content: text });
+        out.push({ id: m.compactionId || `d${seq++}`, sourceIndex, role: 'system', content: text,
+          ...(m.compactionId ? { compactionId: m.compactionId } : {}) });
       }
       continue;
     }

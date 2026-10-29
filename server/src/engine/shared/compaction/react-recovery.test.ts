@@ -14,7 +14,10 @@ function messages(): ContextMessage[] {
   return [{ role: 'system', content: 'static rules' },
     { role: 'user', content: 'old question'.repeat(500) },
     { role: 'assistant', content: 'old answer'.repeat(500) },
-    { role: 'user', content: 'do current task' }];
+    ...[2, 3, 4].flatMap(index => [
+      { role: 'user' as const, content: `direction ${index}` },
+      { role: 'assistant' as const, content: `recent work ${index}` },
+    ]), { role: 'user', content: 'do current task' }];
 }
 const overflow = () => providerHttpError(400, '{"error":{"code":"context_length_exceeded"}}');
 async function fixture(run: (dataDir: string) => Promise<void>): Promise<void> {

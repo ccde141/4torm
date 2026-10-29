@@ -5,11 +5,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { defaultCompactionPolicy, loadCompactionPolicy, parseCompactionPolicy, saveCompactionPolicy } from './policy.js';
 import { splitCompactionMessages } from './split.js';
-import { serializeCompactionMessages } from './estimate.js';
 import type { ContextMessage } from '../types.js';
 import { formatTextToolCall, formatTextToolResult } from '../text-tool-protocol.js';
 
-test('policy observes hot updates; corrupt configuration is never mistaken for a disabled setting', async () => {
+test('policy observes hot updates and rejects corrupt configuration', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-compact-policy-'));
   try {
     const initial = await loadCompactionPolicy(dir);
@@ -24,72 +23,69 @@ test('policy observes hot updates; corrupt configuration is never mistaken for a
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
-test('partial compaction follows token weight rather than number of turns and keeps latest request', () => {
-  const messages: ContextMessage[] = [
-    { role: 'system', content: 'base' },
-    { role: 'user', content: 'large '.repeat(1_000) },
-    { role: 'assistant', content: 'done' },
-    { role: 'user', content: 'small' }, { role: 'assistant', content: 'done' },
-    { role: 'user', content: 'latest' },
-  ];
-  const plan = splitCompactionMessages(messages, { mode: 'partial', prefixRatio: 2 / 3 });
-  assert.equal(plan?.prefix.length, 2);
-  assert.deepEqual(plan?.protected, [messages[0]]);
-  assert.equal(plan?.tail.at(-1)?.content, 'latest');
+function history(): ContextMessage[] {
+  return [{ role: 'system', content: 'base' }, ...Array.from({ length: 10 }, (_, index) => [
+    { role: 'user' as const, origin: 'human' as const, content: `Direction ${index}` },
+    { role: 'assistant' as const, content: 'work'.repeat(index === 0 ? 500 : 50) },
+  ]).flat()];
+}
+
+test('automatic prefix ratio remains token weighted and recent complete turns take priority', () => {
+  const messages = history();
+  const narrow = splitCompactionMessages(messages, { mode: 'partial', prefixRatio: 0.1 });
+  const wide = splitCompactionMessages(messages, { mode: 'partial', prefixRatio: 0.9 });
+  assert.ok(narrow && wide);
+  assert.ok(narrow.prefix.length < wide.prefix.length);
+  assert.deepEqual(wide.tail, messages.slice(13), 'the four latest human rounds remain intact');
+  assert.deepEqual(wide.protected, [messages[0]]);
 });
 
-test('a native assistant tool call and all results stay together, including unfinished calls', () => {
-  const messages: ContextMessage[] = [
-    { role: 'system', content: 'base' }, { role: 'user', content: 'earlier' },
-    { role: 'assistant', content: 'done' }, { role: 'user', content: 'working' },
+test('native calls retain all tool results even when the thirty-thousand-token edge falls inside the group', () => {
+  const messages: ContextMessage[] = [{ role: 'system', content: 'base' },
+    { role: 'assistant', content: '旧'.repeat(40_000) },
     { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'file', arguments: '{}' },
       { id: 'b', name: 'file', arguments: '{}' }] },
-    { role: 'tool', content: 'ok', toolCallId: 'a' },
-  ];
-  const plan = splitCompactionMessages(messages, { mode: 'full', prefixRatio: 2 / 3 });
-  assert.deepEqual(plan?.prefix, messages.slice(1, 3));
-  assert.deepEqual(plan?.tail, messages.slice(3));
-  messages.push({ role: 'tool', content: 'ok', toolCallId: 'b' });
-  const full = splitCompactionMessages(messages, { mode: 'full', prefixRatio: 2 / 3 });
-  assert.equal(full?.tail.length, 0);
-  assert.match(serializeCompactionMessages(full!.prefix), /工具调用 b file/);
-  assert.match(serializeCompactionMessages(full!.prefix), /工具结果 a/);
+    { role: 'tool', content: '近'.repeat(30_000), toolCallId: 'a' }];
+  let plan = splitCompactionMessages(messages, { mode: 'full', prefixRatio: 2 / 3 });
+  assert.deepEqual(plan?.prefix, [messages[1]]);
+  assert.deepEqual(plan?.tail, messages.slice(2));
+  messages.push({ role: 'tool', content: 'done', toolCallId: 'b' });
+  plan = splitCompactionMessages(messages, { mode: 'full', prefixRatio: 2 / 3 });
+  assert.deepEqual(plan?.tail, messages.slice(2));
 });
 
-test('meeting boundaries preserve round units; previous summary is compactable when only static prefix protected', () => {
-  const messages: ContextMessage[] = [
-    { role: 'system', content: 'base' }, { role: 'system', content: 'old summary' },
-    { role: 'user', content: 'round1' }, { role: 'assistant', content: 'position1' },
-    { role: 'assistant', content: 'position2' }, { role: 'user', content: 'round2' },
-  ];
-  const plan = splitCompactionMessages(messages, { mode: 'partial', prefixRatio: 2 / 3,
-    protectedPrefixCount: 1, boundaries: () => [5, 6] });
-  assert.deepEqual(plan?.prefix, messages.slice(1, 5));
-  assert.deepEqual(plan?.tail, [messages[5]]);
-  assert.equal(defaultCompactionPolicy().version, 1);
+test('explicit meeting boundaries still protect incomplete records and allow previous summaries to update', () => {
+  const messages = history();
+  messages.splice(1, 0, { role: 'system', content: 'old summary' });
+  const plan = splitCompactionMessages(messages, { mode: 'full', prefixRatio: 2 / 3,
+    protectedPrefixCount: 1, recentHumanTurns: 3, boundaries: () => [4, 8, 12, 16, 20] });
+  assert.ok(plan);
+  assert.equal(plan.prefix[0].content, 'old summary');
+  assert.equal(plan.protected.length + plan.prefix.length, 16);
+  assert.deepEqual(plan.tail, messages.slice(16));
 });
 
-test('text tool results and continuation instructions are not new human turns', () => {
-  const messages: ContextMessage[] = [
-    { role: 'system', content: 'base' }, { role: 'user', content: 'earlier' },
-    { role: 'assistant', content: 'done' }, { role: 'user', content: 'working' },
+test('text tool protocol and continuation frames do not create artificial human turns', () => {
+  const messages: ContextMessage[] = [{ role: 'system', content: 'base' },
+    { role: 'user', content: 'one real human task', origin: 'human' },
     { role: 'assistant', content: formatTextToolCall('read', {}) },
-    { role: 'user', content: formatTextToolResult('read', 'result', true) },
+    { role: 'user', content: formatTextToolResult('read', '旧'.repeat(40_000), true) },
+    { role: 'assistant', content: formatTextToolCall('read', {}) },
+    { role: 'user', content: formatTextToolResult('read', '近'.repeat(30_000), true) },
     { role: 'assistant', content: 'partial answer' },
-    { role: 'user', content: '[System: continuation] continue' },
-  ];
+    { role: 'user', content: '[System: continuation] continue' }];
   const plan = splitCompactionMessages(messages, { mode: 'partial', prefixRatio: 2 / 3 });
-  assert.equal(plan?.prefix.at(-1)?.content, formatTextToolResult('read', 'result', true));
-  assert.deepEqual(plan?.tail, messages.slice(6));
+  assert.equal(plan?.prefix.at(-1)?.content, messages[3].content);
+  assert.deepEqual(plan?.tail, messages.slice(4));
 });
 
-test('completed earlier tool groups can compact inside a single long ReAct turn', () => {
+test('a long single ReAct turn can summarize completed older work without truncating recent tool output', () => {
   const call = (id: string): ContextMessage => ({ role: 'assistant', content: '',
     toolCalls: [{ id, name: 'read', arguments: '{}' }] });
   const messages: ContextMessage[] = [{ role: 'system', content: 'base' },
     { role: 'user', content: 'analyze source' }, call('first'),
-    { role: 'tool', content: 'older result'.repeat(500), toolCallId: 'first' }, call('second'),
-    { role: 'tool', content: 'latest result', toolCallId: 'second' }];
+    { role: 'tool', content: '旧'.repeat(40_000), toolCallId: 'first' }, call('second'),
+    { role: 'tool', content: '近'.repeat(30_000), toolCallId: 'second' }];
   const plan = splitCompactionMessages(messages, { mode: 'partial', prefixRatio: 2 / 3 });
   assert.equal(plan?.prefix.at(-1)?.toolCallId, 'first');
   assert.deepEqual(plan?.tail, messages.slice(4));

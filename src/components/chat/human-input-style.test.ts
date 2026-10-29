@@ -18,8 +18,8 @@ test('human steering is a separate timeline entry instead of an attachment to th
   const styles = fs.readFileSync('src/styles/components/chat.css', 'utf8');
   const inputListStyles = styles.match(/\.chat__human-inputs\s*\{([^}]*)\}/)?.[1] ?? '';
 
-  assert.match(page, /<Fragment key=\{message\.id\}>[\s\S]*?<MessageItem[\s\S]*?<HumanInputList message=\{message\} \/>[\s\S]*?<\/Fragment>/);
-  assert.doesNotMatch(page, /<div key=\{message\.id\}>[\s\S]*?<HumanInputList message=\{message\} \/>[\s\S]*?<\/div>/);
+  assert.match(page, /<Fragment key=\{message\.id\}>[\s\S]*?<MessageItem[\s\S]*?<HumanInputList message=\{message\}[\s\S]*?\/>[\s\S]*?<\/Fragment>/);
+  assert.doesNotMatch(page, /<div key=\{message\.id\}>[\s\S]*?<HumanInputList message=\{message\}[\s\S]*?\/>[\s\S]*?<\/div>/);
   assert.doesNotMatch(inputListStyles, /margin-top:\s*calc\([^;]*-1/);
 });
 

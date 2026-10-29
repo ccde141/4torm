@@ -1,16 +1,44 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { getTools, saveTools, CATEGORY_LABELS, buildToolsPrompt } from '../../store/tools';
 import type { ToolDef } from '../../store/tools';
 import { useLocale } from '../../i18n/LocaleContext';
 import type { Locale } from '../../i18n/locale';
 import { useActiveCapabilityList } from '../capabilities/useActiveCapabilityList';
+import { canEditCatalogTool } from '../capabilities/tool-catalog-groups';
+import ToolCatalogGroups from './ToolCatalogGroups';
+import { useConfirm } from '../common/ConfirmDialog';
 import '../../styles/components/capability-management.css';
 
 export default function ToolsPage({ active }: { active: boolean }) {
   const { t } = useLocale();
+  const confirm = useConfirm();
   const { items: tools, loadError, refresh } = useActiveCapabilityList(active, getTools);
   const [adding, setAdding] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
+  const [deletingName, setDeletingName] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState('');
+  const deletePending = useRef(false);
+
+  const removeTool = async (tool: ToolDef) => {
+    if (deletePending.current) return;
+    deletePending.current = true;
+    try {
+      if (!(await confirm({
+        title: t('tools.delete.title', { name: tool.name }),
+        message: t('tools.delete.message'),
+        confirmText: t('tools.card.delete'), danger: true,
+      }))) return;
+      setDeletingName(tool.name);
+      setDeleteError('');
+      await saveTools(tools.filter(item => item.name !== tool.name));
+      await refresh();
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : t('tools.delete.failed'));
+    } finally {
+      deletePending.current = false;
+      setDeletingName(null);
+    }
+  };
 
   return (
     <div className="capability-page" style={{ height: '100%', overflowY: 'auto' }}>
@@ -25,78 +53,69 @@ export default function ToolsPage({ active }: { active: boolean }) {
           <button className="capability-button capability-button--secondary" onClick={() => void refresh().catch(() => undefined)}>
             {t('tools.page.refresh')}
           </button>
-          {!adding && (
-            <button className="capability-button capability-button--primary" onClick={() => setAdding(true)}>
-              {t('tools.page.register')}
-            </button>
-          )}
         </div>
       </div>
 
-      {loadError && <div className="capability-alert" role="alert">{loadError.message}</div>}
+      {(deleteError || loadError) && <div className="capability-alert" role="alert">{deleteError || loadError?.message}</div>}
 
-      {adding && (
+      <ToolCatalogGroups tools={tools} customAction={!adding && (
+        <button className="capability-button capability-button--primary" disabled={deletingName !== null} onClick={() => setAdding(true)}>
+          {t('tools.page.register')}
+        </button>
+      )} customForm={adding && (
         <ToolForm
           onSave={async (tool) => { await saveTools([...tools, { ...tool, source: 'custom', readonly: false }]); setAdding(false); await refresh(); }}
           onCancel={() => setAdding(false)}
         />
-      )}
-
-      {tools.length === 0 && !adding && (
-        <div className="capability-empty">
-          <p style={{ fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>{t('tools.page.empty')}</p>
-          <p style={{ fontSize: 'var(--text-xs)' }}>{t('tools.page.emptyHint')}</p>
-        </div>
-      )}
-
-      <div className="capability-list" style={{ marginTop: adding ? 'var(--space-4)' : 0 }}>
-        {tools.map(t => (
+      )} renderTool={tool => (
           // 编辑时在原位用表单替换卡片，避免表单跳到页面顶部、看起来「没反应」
-          t.name === editingName && !t.readonly ? (
+          tool.name === editingName && canEditCatalogTool(tool) ? (
             <ToolForm
-              key={t.name}
-              initial={t}
+              key={tool.name}
+              initial={tool}
               onSave={async (tool) => { await saveTools(tools.map(x => x.name === editingName ? { ...tool, source: 'custom', readonly: false } : x)); setEditingName(null); await refresh(); }}
               onCancel={() => setEditingName(null)}
             />
           ) : (
-            <ToolCard key={t.name} tool={t} onEdit={() => setEditingName(t.name)} onDelete={async () => {
-              await saveTools(tools.filter(x => x.name !== t.name));
-              await refresh();
-            }} />
+            <ToolCard key={tool.name} tool={tool} disabled={deletingName !== null} deleting={deletingName === tool.name}
+              onEdit={() => setEditingName(tool.name)} onDelete={() => void removeTool(tool)} />
           )
-        ))}
-      </div>
+        )} />
     </div>
   );
 }
 
-function ToolCard({ tool, onEdit, onDelete }: { tool: ToolDef; onEdit: () => void; onDelete: () => void }) {
+function ToolCard({ tool, disabled, deleting, onEdit, onDelete }: {
+  tool: ToolDef; disabled: boolean; deleting: boolean; onEdit: () => void; onDelete: () => void;
+}) {
   const { t } = useLocale();
   const category = t(`tools.category.${tool.category}` as 'tools.category.io');
   return (
     <div className="capability-panel capability-record">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-2)' }}>
-        <div>
+      <div className="tools-catalog__tool-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-2)' }}>
+        <div className="tools-catalog__tool-heading">
           <span style={{ fontSize: 'var(--text-base)', fontWeight: 'var(--font-semibold)', fontFamily: 'var(--font-mono)' }}>{tool.name}</span>
           <span className="capability-badge" style={{ marginLeft: 'var(--space-2)' }}>{category}</span>
-          {tool.readonly && <span className="capability-badge" style={{ marginLeft: 'var(--space-1)' }}>{t('tools.card.readonly')}</span>}
+          {!canEditCatalogTool(tool) && <span className="capability-badge" style={{ marginLeft: 'var(--space-1)' }}>{t('tools.card.readonly')}</span>}
           {tool.dangerous && <span className="capability-badge capability-badge--warning" style={{ marginLeft: 'var(--space-1)' }}>{t('tools.card.dangerous')}</span>}
           <span style={{ marginLeft: 'var(--space-1)', color: tool.executionMode === 'detachable' ? 'var(--color-accent)' : 'var(--color-text-tertiary)', fontSize: 'var(--text-xs)' }}>
             {tool.executionMode === 'detachable' ? t('tools.card.detachable') : t('tools.card.sync')}
           </span>
         </div>
-        {!tool.readonly && (
+        {canEditCatalogTool(tool) && (
           <div className="capability-actions">
-            <button className="capability-button capability-button--secondary capability-button--compact" onClick={onEdit}>{t('tools.card.edit')}</button>
-            <button className="capability-button capability-button--danger capability-button--compact" onClick={onDelete}>{t('tools.card.delete')}</button>
+            <button className="capability-button capability-button--secondary capability-button--compact" disabled={disabled} onClick={onEdit}>{t('tools.card.edit')}</button>
+            <button className="capability-button capability-button--danger capability-button--compact" disabled={disabled} onClick={onDelete}>{t(deleting ? 'tools.delete.pending' : 'tools.card.delete')}</button>
           </div>
         )}
       </div>
       <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-2)' }}>{tool.description}</div>
-      <pre className="capability-code">
+      <details className="tools-catalog__schema">
+        <summary>{t('tools.card.parameters')}</summary>
+        <pre className="capability-code">
         {JSON.stringify(tool.parameters, null, 2)}
-      </pre>
+        </pre>
+      </details>
     </div>
   );
 }

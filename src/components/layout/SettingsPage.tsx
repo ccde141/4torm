@@ -1,16 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { addProvider, fetchProviderCatalog, getAllModels, getProviders, providerSelectionPatch, removeProvider, updateProvider } from '../../llm';
 import type { ProviderCatalog, ProviderEntry, ProviderPresetDescriptor } from '../../llm';
 import { useLocale } from '../../i18n/LocaleContext';
 import { ProviderCard } from './ProviderCard';
 import { ProviderNavigator } from './ProviderNavigator';
 import { selectionAfterProviderRemoval } from './provider-workspace-state';
+import { useConfirm } from '../common/ConfirmDialog';
 import '../../styles/components/capability-management.css';
 import './ProviderWorkspace.css';
 import './ProviderControls.css';
 
 export default function SettingsPage() {
   const { t } = useLocale();
+  const confirm = useConfirm();
+  const removePending = useRef(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState('');
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [allModels, setAllModels] = useState<{ key: string; label: string }[]>([]);
   const [showPresets, setShowPresets] = useState(false);
@@ -34,9 +39,27 @@ export default function SettingsPage() {
     setShowPresets(false); setSelectedId(entry.id); refresh(); flagNew(entry.id);
   };
   const remove = async (id: string) => {
-    await removeProvider(id);
-    setSelectedId(current => selectionAfterProviderRemoval(providers, current, id));
-    refresh();
+    const provider = providers.find(item => item.id === id);
+    if (!provider || removePending.current) return;
+    removePending.current = true;
+    try {
+      if (!(await confirm({
+        title: t('model.provider.deleteTitle', { name: provider.label || t('model.provider.unnamed') }),
+        message: t('model.provider.deleteMessage'),
+        confirmText: t('model.provider.delete'), danger: true,
+      }))) return;
+      setRemovingId(id);
+      setRemoveError('');
+      await removeProvider(id);
+      setProviders(current => current.filter(item => item.id !== id));
+      setSelectedId(current => selectionAfterProviderRemoval(providers, current, id));
+      setAllModels(await getAllModels());
+    } catch (error) {
+      setRemoveError(error instanceof Error ? error.message : t('model.provider.deleteFailed'));
+    } finally {
+      removePending.current = false;
+      setRemovingId(null);
+    }
   };
   const change = async (id: string, field: keyof ProviderEntry, value: string) => {
     await updateProvider(id, { [field]: value }); refresh();
@@ -58,11 +81,12 @@ export default function SettingsPage() {
         </div>
       </div>
       {providers.length === 0 && <div style={emptyStyle}>{t('model.settings.empty')}</div>}
+      {removeError && <div className="capability-alert" role="alert">{removeError}</div>}
       {selectedProvider && <div className="model-provider-workspace">
         <ProviderNavigator providers={providers} catalog={catalog} selectedId={selectedProvider.id} onSelect={setSelectedId} />
         <main className="model-provider-detail">
           <ProviderCard key={selectedProvider.id} provider={selectedProvider} catalog={catalog}
-            highlight={selectedProvider.id === highlightId} onChange={change} onRemove={remove} onRefresh={refresh} />
+            highlight={selectedProvider.id === highlightId} removing={removingId !== null} onChange={change} onRemove={remove} onRefresh={refresh} />
         </main>
       </div>}
       {allModels.length > 0 && (

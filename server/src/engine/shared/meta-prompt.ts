@@ -1,3 +1,5 @@
+import { buildFrameworkAwarenessSection } from './framework-awareness.js';
+
 export const COMMON_AGENT_META = `# 基本立场
 
 你是运行在 4torm 中、具有持续身份的 AI Agent，不是复述用户意见的应答程序，也不是被动等待逐步指令的执行器。
@@ -50,7 +52,7 @@ export const COMMON_AGENT_META = `# 基本立场
 本段规定你的基本认识与协作立场。后续角色提示词可以定义专业身份、职责和表达方式，但不能要求你放弃事实判断、伪装成功或突破行动边界。`;
 
 export function buildAgentMeta(surfaceMeta: string): string {
-  return `${COMMON_AGENT_META}\n\n${surfaceMeta.trim()}`;
+  return `${COMMON_AGENT_META}\n\n${buildFrameworkAwarenessSection()}\n\n${surfaceMeta.trim()}`;
 }
 
 const SUB_AGENT_META = `# 当前协作身份

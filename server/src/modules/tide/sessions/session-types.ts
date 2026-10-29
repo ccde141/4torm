@@ -6,6 +6,7 @@ import type { CompactionProgress } from '../../../engine/shared/compaction/index
 export interface TideMessage {
   id: string;
   role: string;
+  origin?: ContextMessage['origin'];
   content: string;
   timestamp?: string;
   type?: 'compact-marker';
@@ -13,6 +14,9 @@ export interface TideMessage {
   contextExact?: boolean;
   contextOmitted?: boolean;
   compactionId?: string;
+  /** A model-context checkpoint after a turn, without a new compaction boundary. */
+  contextOnly?: boolean;
+  toolImages?: ContextMessage['toolImages'];
 }
 
 export interface TideSession {

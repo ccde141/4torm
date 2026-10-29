@@ -68,7 +68,7 @@ test('a real automatic compaction rebases current turn media before rolling rete
   await saveCompactionPolicy(dataDir, policy);
   const task = { ...tideTask(), windowN: 2 };
   const first = await saveTurn(dataDir, task, await resolveTarget(dataDir, task), 'A', 'p:m', '',
-    'old input '.repeat(500), 'old result '.repeat(500));
+    'old input '.repeat(500), 'old result '.repeat(14_000));
   Object.assign(task, first);
   const resolved = await resolveTarget(dataDir, task);
   const input: ContextMessage = { role: 'user', content: 'current input' };
@@ -80,7 +80,8 @@ test('a real automatic compaction rebases current turn media before rolling rete
     { summarize: async () => 'old summary', resolveSummaryBudget: async () => 100_000 });
   await callPreparedModel(compactor.transform({ call: async () => ({ content: 'current answer', finishReason: 'stop' }) }),
     messages, new AbortController().signal, {});
-  assert.ok(messages.length < 6);
+  assert.ok(messages.some(message => message.content === '[历史压缩记录]\nold summary'));
+  assert.ok(!messages.some(message => message.content.includes('old input')));
   messages.push({ role: 'assistant', content: 'current answer' });
   await compactor.checkpoint(messages);
   resolved.turnContext = tideGeneratedMediaContext(messages, input);
@@ -113,6 +114,10 @@ function sessionFixture(task: TideTask): TideSession {
     updatedAt: new Date().toISOString(), messages: [
       { id: 'u1', role: 'user', content: 'First completed request '.repeat(300) },
       { id: 'a1', role: 'assistant', content: 'Verified result '.repeat(300) },
+      ...Array.from({ length: 4 }, (_, index) => [
+        { id: `recent-user-${index}`, role: 'user', content: `Recent request ${index}` },
+        { id: `recent-answer-${index}`, role: 'assistant', content: `Recent answer ${index}` },
+      ]).flat(),
     ] };
 }
 

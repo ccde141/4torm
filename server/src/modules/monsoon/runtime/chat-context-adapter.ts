@@ -7,6 +7,7 @@ import { loadAgent } from '../../../engine/shared/agent-loader.js';
 import { loadAgentToolDefs } from '../../../engine/shared/tool-defs-loader.js';
 import { resolveNativeMode } from '../../../engine/shared/llm-bridge.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
+import { contextOrigin } from '../../../engine/shared/context-origin.js';
 import { readToolImageRefs } from '../../../engine/shared/tool-media-store.js';
 import type {
   MonsoonChatMessage, MonsoonChatPorts, MonsoonContextRequest, MonsoonPreparedContext,
@@ -90,6 +91,8 @@ async function resolveMessage(
   return {
     role: message.role as ContextMessage['role'],
     content: appendMissingAttachments(message.content, resolved?.missing ?? []),
+    ...(message.origin ? { origin: message.origin } : message.role === 'user'
+      ? { origin: contextOrigin({ role: 'user', content: message.content }) } : {}),
     ...(resolved?.images.length ? { images: resolved.images } : {}),
     ...(message.toolCalls ? { toolCalls: message.toolCalls } : {}),
     ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),

@@ -2,7 +2,7 @@
  * 潮汐 — TaskItem 子组件
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import type { TideTask, TideRunRecord } from '../../api/tide';
 import { tideRunIdentity } from './tide-run-identity';
 import type { CollaborationProbeItem } from '../../api/collaboration';
@@ -10,6 +10,7 @@ import { itemStyle, actionBtnStyle, formatRelative, formatSchedule } from './tid
 import { resolveTideRuntime, visibleTideNextRun, type TideRuntimeKind } from './tide-runtime';
 import { useLocale } from '../../i18n/LocaleContext';
 import type { MessageKey } from '../../i18n/locale';
+import { useConfirm } from '../../components/common/ConfirmDialog';
 
 interface TaskItemProps {
   task: TideTask;
@@ -19,7 +20,7 @@ interface TaskItemProps {
   probe?: CollaborationProbeItem;
   runs: TideRunRecord[];
   onToggle: () => void;
-  onDelete: () => void;
+  onDelete: () => Promise<void> | void;
   onRunNow: () => void;
   onExpand: () => void;
 }
@@ -40,20 +41,22 @@ const STATUS_COLORS: Record<TideRuntimeKind, string> = {
 
 export default function TaskItem({ task, expanded, selected, optimisticRun, probe, runs, onToggle, onDelete, onRunNow, onExpand }: TaskItemProps) {
   const { t, locale } = useLocale();
+  const confirm = useConfirm();
   const [hovered, setHovered] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const deleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // 超时自动取消确认态
-  useEffect(() => {
-    if (confirmingDelete) {
-      deleteTimer.current = setTimeout(() => setConfirmingDelete(false), 3000);
-      return () => { if (deleteTimer.current) clearTimeout(deleteTimer.current); };
-    }
-  }, [confirmingDelete]);
+  const [deleting, setDeleting] = useState(false);
+  const deletionPending = useRef(false);
   const runtime = resolveTideRuntime(task, probe, Boolean(optimisticRun));
   const statusLabel = t(STATUS_KEYS[runtime.kind]);
   const statusColor = STATUS_COLORS[runtime.kind];
+  const remove = async () => {
+    if (deletionPending.current || runtime.active) return;
+    deletionPending.current = true;
+    setDeleting(true);
+    try {
+      if (await confirm({ title: t('tide.task.deleteTitle', { name: task.name }),
+        message: t('tide.task.deleteMessage'), confirmText: t('common.delete'), danger: true })) await onDelete();
+    } finally { deletionPending.current = false; setDeleting(false); }
+  };
 
   const cardStyle: React.CSSProperties = {
     ...itemStyle,
@@ -92,21 +95,14 @@ export default function TaskItem({ task, expanded, selected, optimisticRun, prob
       )}
 
       <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }} onClick={e => e.stopPropagation()}>
-        <button onClick={onToggle} style={actionBtnStyle}>
+        <button onClick={onToggle} disabled={deleting} style={actionBtnStyle}>
           {task.enabled ? t('tide.task.pause') : t('tide.task.enable')}
         </button>
-        <button onClick={onRunNow} disabled={runtime.active} style={actionBtnStyle}>
+        <button onClick={onRunNow} disabled={runtime.active || deleting} style={actionBtnStyle}>
           {runtime.active ? t('tide.task.running') : t('tide.task.runNow')}
         </button>
-        {confirmingDelete ? (
-          <button onClick={() => { setConfirmingDelete(false); onDelete(); }} style={{ ...actionBtnStyle, color: '#fff', background: '#ef4444', borderColor: '#ef4444' }}>
-            {t('tide.task.confirmDelete')}
-          </button>
-        ) : (
-          <button onClick={() => setConfirmingDelete(true)} style={{ ...actionBtnStyle, color: '#ef4444' }}>
-            {t('tide.task.delete')}
-          </button>
-        )}
+        <button onClick={() => void remove()} disabled={deleting || runtime.active}
+          style={{ ...actionBtnStyle, color: '#ef4444' }}>{t('tide.task.delete')}</button>
       </div>
 
       {expanded && runs.length > 0 && (

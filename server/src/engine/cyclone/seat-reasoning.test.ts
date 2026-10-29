@@ -1,7 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { recordSeatAssistantResult } from './seat-reasoning.js';
+import { recordSeatAssistantResult, seatDisplayReasoning, unclaimedSeatContent } from './seat-reasoning.js';
 import type { SeatContextMessage } from './types.js';
+
+test('compaction seals only its own display thought and the continuation claims only its new answer', () => {
+  const before: SeatContextMessage[] = [{ role: 'assistant', content: 'Before compaction',
+    reasoningContent: 'old native thought', toolCalls: [{ id: 'read', name: 'read_file', arguments: '{}' }] },
+    { role: 'tool', content: 'evidence', toolCallId: 'read' }];
+  const display = seatDisplayReasoning(before, 'old visible thought');
+  assert.equal(display[0].reasoning, 'old visible thought');
+  assert.equal(before[0].reasoning, undefined);
+  assert.equal(display[0].reasoningContent, 'old native thought');
+  const context: SeatContextMessage[] = [{ role: 'system', content: 'summary' }];
+  recordSeatAssistantResult(context, unclaimedSeatContent('Before compaction\n\nNew answer', before), 'new thought', 1);
+  assert.deepEqual(context[1], { role: 'assistant', content: 'New answer', reasoning: 'new thought', reasoningContent: 'new thought' });
+});
 
 test('工位将本轮多段思考绑定到最终回复', () => {
   const messages = [{ role: 'user' as const, content: '开始' }];

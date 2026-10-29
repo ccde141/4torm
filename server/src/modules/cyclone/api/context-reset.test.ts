@@ -22,7 +22,7 @@ test('中心重置只接收意图并由应用服务生成对应范围摘要', as
   const calls: Array<{ agentId: string; subject: string }> = [];
   const summarizer = { summarize: async (input: { agentId: string; subject: string }) => {
     calls.push(input);
-    return `摘要:${input.subject}`;
+    return { summary: `摘要:${input.subject}`, retainedIndexes: [] };
   } };
   const feature = createCycloneFeature({ dataDir, summarizer } as never);
   const router = new CollaborationRouter([feature.module]);
@@ -73,7 +73,7 @@ test('工位、公共会议与会长摘要返回后取消均保留原文，重�
     const controller = new AbortController();
     const feature = createCycloneFeature({ dataDir, summarizer: { summarize: async () => {
       controller.abort(new Error('用户停止'));
-      return '不应保存的摘要'; // Simulate a model transport that ignores cancellation.
+      return { summary: '不应保存的摘要', retainedIndexes: [] }; // Simulate a model transport that ignores cancellation.
     } } } as never);
     const router = new CollaborationRouter([feature.module]);
     const workshop = await feature.workshops.create({ title: '隔离测试', chairAgentId: 'chair-a' });
@@ -92,7 +92,7 @@ test('工位、公共会议与会长摘要返回后取消均保留原文，重�
       : { workshopId: workshop.id, roomId: room.id, ...(target === 'room' ? { scope: 'both' } : {}) };
     await assert.rejects(router.invoke({ feature: 'cyclone', method, input },
       { ...context, signal: controller.signal }), /用户停止/);
-    const fresh = createCycloneFeature({ dataDir, summarizer: { summarize: async () => '新摘要' } } as never);
+    const fresh = createCycloneFeature({ dataDir, summarizer: { summarize: async () => ({ summary: '新摘要', retainedIndexes: [] }) } } as never);
     const savedSeat = await fresh.seats.require(workshop.id, seat.id);
     const savedRoom = await fresh.rooms.require(workshop.id, room.id);
     assert.deepEqual(savedSeat.messages, originalSeat.messages);

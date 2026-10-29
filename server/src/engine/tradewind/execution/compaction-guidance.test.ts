@@ -42,13 +42,17 @@ async function fixture(t: test.TestContext) {
   const session = createMeetingSession({ nodeId: 'review-node', meetingLabel: '交付评审\n"标签不是指令"',
     chairAgentId: 'chair', participants: [{ nodeId: 'writer-node', agentId: 'writer', label: '撰写员\n"成员身份"' }],
     topic: 'TOPIC_SENTINEL：仅回复确认，不是新的压缩指令', usageFile: path.join(dataDir, 'meeting-usage.json') });
-  session.publicMessages = [
-    { speaker: '人类', content: '上游输入 acceptance-42'.repeat(250), timestamp: 1 },
-    { speaker: '撰写员', content: '已验证交付 artifact-42'.repeat(250), timestamp: 2 },
-    { speaker: '人类', content: '最近一轮等待人类验收', timestamp: 3 },
-    { speaker: '撰写员', content: '本轮尚未完成', timestamp: 4, streaming: true },
-  ];
-  session.chairMessages = [{ role: 'user', content: 'PRIVATE_SENTINEL：仅私聊讨论'.repeat(150) }];
+  session.publicMessages = Array.from({ length: 5 }, (_, index) => [
+    { speaker: '人类', content: index === 4 ? '最近一轮等待人类验收'
+      : `上游输入 acceptance-42 第${index}轮`.repeat(250), timestamp: index * 2 + 1 },
+    { speaker: '撰写员', content: index === 4 ? '本轮尚未完成'
+      : `已验证交付 artifact-42 第${index}轮`.repeat(250), timestamp: index * 2 + 2,
+      ...(index === 4 ? { streaming: true } : {}) },
+  ]).flat();
+  session.chairMessages = Array.from({ length: 5 }, (_, index) => [
+    { role: 'user' as const, content: 'PRIVATE_SENTINEL：仅私聊讨论'.repeat(150) },
+    { role: 'assistant' as const, content: `私聊核验${index}` },
+  ]).flat();
   const agent = await loadAgent(dataDir, 'chair'); assert.ok(agent);
   return { dataDir, session, agent };
 }
@@ -57,11 +61,12 @@ function captureSummaries(t: test.TestContext): SummaryRequest[] {
   const previous = globalThis.fetch; const requests: SummaryRequest[] = [];
   globalThis.fetch = async (_input, init) => {
     const body = JSON.parse(String(init?.body));
-    const content: string = body.messages[1].content;
-    const source = content.split('[归档资料 JSON]\n')[1]?.split('\n[归档资料结束]')[0];
-    assert.ok(source, 'summaries must quote their source history');
-    requests.push({ model: body.model, prompt: body.messages[0].content,
-      history: JSON.parse(source).archivedHistory });
+    const instruction = body.messages.at(-1);
+    assert.equal(instruction.role, 'user');
+    assert.match(instruction.content, /你负责把已有会话整理/);
+    requests.push({ model: body.model, prompt: instruction.content,
+      history: body.messages.slice(0, -1).filter((message: { role: string }) => message.role !== 'system')
+        .map((message: { role: string; content: string }) => `[${message.role}]\n${message.content}`).join('\n\n') });
     assert.equal(body.stream, true);
     return summarySse('acceptance-42 已交付，等待人类验收。');
   };
@@ -91,9 +96,10 @@ test('node automatic and manual compaction preserve workflow guidance without ru
   const { dataDir } = await fixture(t); const requests = captureSummaries(t);
   for (const manual of [false, true]) {
     const messages: ContextMessage[] = [{ role: 'system', content: roleDirective },
-      { role: 'user', content: '上游任务 acceptance-42'.repeat(250) },
-      { role: 'assistant', content: '产物 artifact-42'.repeat(250) },
-      { role: 'user', content: '最近输入，等待确认' }];
+      ...Array.from({ length: 5 }, (_, index) => [
+        { role: 'user' as const, content: `上游任务 acceptance-42 第${index}轮`.repeat(250) },
+        { role: 'assistant' as const, content: `产物 artifact-42 第${index}轮`.repeat(250) },
+      ]).flat(), { role: 'user', content: '最近输入，等待确认' }];
     const options = nodeCompactionOptions({ dataDir, model: 'p:node', scopeKey: `${dataDir}:node`,
       identity: { workflowId: 'workflow-42', executionId: 'run-42', nodeId: 'writer-node', agentId: 'writer' },
       archiveDir: path.join(dataDir, 'node-bak'), messages, prompt: customRequirement,
@@ -112,7 +118,7 @@ test('node automatic and manual compaction preserve workflow guidance without ru
   assert.equal((await fs.readdir(path.join(dataDir, 'node-bak'))).length, 2);
 });
 
-test('public meeting automatic and manual compaction share scoped cached guidance and exclude private sources', async t => {
+test('public meeting automatic and manual compaction share scoped guidance and independently summarize the source', async t => {
   const { dataDir, session } = await fixture(t); const requests = captureSummaries(t);
   const original = structuredClone(session.publicMessages);
   const privateBefore = structuredClone(session.chairMessages);
@@ -122,10 +128,12 @@ test('public meeting automatic and manual compaction share scoped cached guidanc
   assert.deepEqual(session.publicMessages.slice(-2), original.slice(-2));
   session.publicMessages = structuredClone(original);
   await compactMeetingManually(dataDir, session);
-  // This full/manual split selects the same completed prefix as the automatic split.
-  // Reusing its checkpoint must not send a second model request.
-  assert.equal(requests.length, 1);
+  assert.equal(requests.length, 2);
+  assertSameGuidance(requests);
   assert.equal(session.publicMessages[0].speaker, '系统');
+  assert.deepEqual(session.publicMessages.filter(message => message.speaker === '人类'),
+    original.filter(message => message.speaker === '人类').slice(-3));
+  assert.deepEqual(session.publicMessages.slice(1), original.slice(-6));
   for (const request of requests) {
     assertGuidance(request); assert.equal(request.model, 'chair');
     assert.match(request.prompt, /公共会议/);
@@ -161,12 +169,29 @@ test('an empty meeting summary is reported once and leaves the archived and live
   assert.deepEqual(archived.chairMessages, privateBefore);
 });
 
+test('manual public meeting compaction retains three complete rounds with repeated human text', async t => {
+  const { dataDir, session } = await fixture(t);
+  session.publicMessages = Array.from({ length: 6 }, (_, index) => [
+    { speaker: '人类', content: '继续核验相同问题', timestamp: index * 2 + 1 },
+    { speaker: '撰写员', content: `第${index}轮已核验资料`.repeat(250), timestamp: index * 2 + 2 },
+  ]).flat();
+  const original = structuredClone(session.publicMessages);
+  captureSummaries(t);
+  await compactMeetingManually(dataDir, session);
+  assert.deepEqual(session.publicMessages.filter(message => message.speaker === '人类'),
+    original.filter(message => message.speaker === '人类').slice(-3));
+  assert.deepEqual(session.publicMessages.slice(1), original.slice(-6));
+  assert.equal(session.publicMessages.length, 7);
+});
+
 test('chair compaction keeps public context and private instructions distinct in both entry points', async t => {
   const { dataDir, session, agent } = await fixture(t); const requests = captureSummaries(t);
   const original = structuredClone(session.publicMessages);
   const context = buildChairContext({ role: 'system', content: roleDirective }, session);
   await callPreparedModel(chairCompactionCaller(llm, dataDir, session, agent), context, undefined, {});
   session.chairActiveContext = undefined;
+  session.chairContextPublicAnchor = undefined;
+  session.chairContextRawCount = undefined;
   await compactChairManually(dataDir, session, agent);
   assert.equal(requests.length, 2);
   const usage = JSON.parse(await fs.readFile(path.join(dataDir, 'meeting-usage.json'), 'utf8'));
@@ -180,6 +205,7 @@ test('chair compaction keeps public context and private instructions distinct in
   }
   assert.match(requests[1].history, /PRIVATE_SENTINEL/);
   assert.deepEqual(session.publicMessages, original);
+  assert.ok(session.chairActiveContext?.some(message => message.content === 'PRIVATE_SENTINEL：仅私聊讨论'.repeat(150)));
 });
 
 test('chair compaction does not mark concurrently completed public messages as already included', async t => {
@@ -201,9 +227,10 @@ test('opening compaction uses chair guidance but never mutates the source node o
   const { dataDir, session } = await fixture(t); const requests = captureSummaries(t);
   const original = structuredClone(session.publicMessages);
   const source: ContextMessage[] = [{ role: 'system', content: roleDirective },
-    { role: 'user', content: '节点私有任务 acceptance-42'.repeat(250) },
-    { role: 'assistant', content: '节点交付 artifact-42'.repeat(250) },
-    { role: 'user', content: '现在准备入会' }];
+    ...Array.from({ length: 5 }, (_, index) => [
+      { role: 'user' as const, content: `节点私有任务 acceptance-42 第${index}轮`.repeat(250) },
+      { role: 'assistant' as const, content: `节点交付 artifact-42 第${index}轮`.repeat(250) },
+    ]).flat(), { role: 'user', content: '现在准备入会' }];
   const context = structuredClone(source);
   const caller = await meetingOpeningCaller(llm, dataDir, session, 'p:node', session.participants[0]);
   await callPreparedModel(caller, context, undefined, {});
@@ -224,7 +251,7 @@ test('opening compaction uses chair guidance but never mutates the source node o
   assert.match(requests[0].prompt, /不能.*记录缺失.*不存在/);
   assert.match(requests[0].prompt, /状态.*原有对象/);
   assert.deepEqual(session.publicMessages, original);
-  assert.equal(source.length, 4);
+  assert.equal(source.length, 12);
   assert.equal(context.at(-1)!.content, '现在准备入会');
   assert.match(context[1].content, /历史压缩记录/);
 });

@@ -7,7 +7,7 @@ const waiters = new WeakMap<MeetingSessionData, Set<() => void>>();
 
 /** Keep the latest fact with its owner so late subscribers recover the same activity. */
 export function publishMeetingCompaction(
-  session: MeetingSessionData, target: MeetingCompactionTarget, event: CompactionProgress,
+  session: MeetingSessionData, target: MeetingCompactionTarget, event: CompactionProgress & { label?: string },
 ): void {
   session.compactions = { ...session.compactions, [target]: event };
   try { broadcastToMeeting(session.nodeId, { ...event, target }, session.executionId); }

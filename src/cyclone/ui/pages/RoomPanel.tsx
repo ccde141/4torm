@@ -28,6 +28,7 @@ import type { CycloneDispatch } from './dispatch-timeline';
 import type { DispatchAction } from './useWorkshopDispatches';
 import { useRoomStatus } from './useRoomStatus';
 import { useRoomDispatchFeedback } from './useRoomDispatchFeedback';
+import { settleRoomRun } from './settle-room-run';
 import { findRoomMessageIndex, snapshotRoomMessage,
   type ExpectedRoomMessage } from './room-message-identity';
 import '../../../styles/components/convection.css';
@@ -66,6 +67,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
   const [, forceTick] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const settlingRunId = useRef('');
+  const dispatchTextRef = useRef<(text: string) => Promise<void>>(async () => {});
   // 写穿草稿：每次改动同步进注册表，组件卸载/重挂不丢
   const setInput = useCallback((v: string | ((p: string) => string)) => {
     setInputRaw(prev => {
@@ -80,6 +82,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
   const runner = runners.getRunner(roomId);
   const externalActivity = externalRoom.activity?.operationId === `room:${workshopId}:${roomId}`
     ? externalRoom.activity : null;
+  const clearExternalRoom = externalRoom.clearIfSettled;
   const externalFact = externalRoom.fact?.operationId === `room:${workshopId}:${roomId}`
     ? externalRoom.fact : null;
   const streaming = !!runner?.streaming || (!!externalActivity?.running && !externalRoom.error);
@@ -127,27 +130,32 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
   }, [roomId, runners]);
 
   // runner 结束后：reload 落库历史（publicMessages），再清出 runner 释放 roundFeed，避免双源重影
-  const doneRoomId = runner?.done ? roomId : null;
+  const doneRunner = runner?.done ? runner : null;
+  const doneRoomId = doneRunner ? roomId : null;
   useEffect(() => {
-    if (!doneRoomId) return;
-    const wasStopped = !!runners.getRunner(doneRoomId)?.userStopped;
-    (async () => {
-      await reload(true);
-      runners.clearIfDone(doneRoomId);
-      if (wasStopped) {
-        // 用户「停止」：不续发，排队项 + 当前草稿合并退回输入框
-        const items = runners.takeAllQueued(doneRoomId);
-        if (items.length) {
-          const merged = [...items, runners.getDraft(doneRoomId)].filter(s => s.trim()).join('\n');
-          setInput(merged);
-        }
-      } else {
-        const next = runners.dequeue(doneRoomId);
-        if (next != null) dispatchText(next);  // 自然结束：逐条出队续发
-      }
-      forceTick(t => t + 1);
-    })();
-  }, [doneRoomId, reload, runners]);
+    if (!doneRoomId || !doneRunner) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = async () => {
+      const result = await settleRoomRun(doneRunner, {
+        reload: () => reload(true), current: () => cancelled ? undefined : runners.getRunner(doneRoomId),
+        finish: () => {
+          runners.clearIfDone(doneRoomId);
+          if (doneRunner.userStopped) {
+            const items = runners.takeAllQueued(doneRoomId);
+            if (items.length) setInput([...items, runners.getDraft(doneRoomId)].filter(s => s.trim()).join('\n'));
+          } else {
+            const next = runners.dequeue(doneRoomId);
+            if (next != null) void dispatchTextRef.current(next);
+          }
+          forceTick(t => t + 1);
+        },
+      });
+      if (result === 'retry' && !cancelled) timer = setTimeout(() => void settle(), 1_500);
+    };
+    void settle();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [doneRunner, doneRoomId, reload, runners, setInput]);
 
   useEffect(() => {
     if (!active || !externalActivity || externalActivity.running
@@ -156,11 +164,12 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
     settlingRunId.current = runId;
     void reload(true).then(loaded => {
       if (!loaded) return;
-      externalRoom.clearIfSettled(runId);
+      clearExternalRoom(runId);
+      if (runners.getRunner(roomId)) return;
       const next = runners.dequeue(roomId);
-      if (next != null) void dispatchText(next);
+      if (next != null) void dispatchTextRef.current(next);
     }).finally(() => { if (settlingRunId.current === runId) settlingRunId.current = ''; });
-  }, [active, externalActivity, externalRoom.clearIfSettled, reload, roomId, runners]);
+  }, [active, externalActivity, clearExternalRoom, reload, roomId, runners]);
 
   // ── 房间写操作 ──
   async function runAction(action: () => Promise<unknown>, fallback: string): Promise<boolean> {
@@ -239,6 +248,7 @@ export default function RoomPanel({ workshopId, roomId, seats, runners, dispatch
     // 流式运行态托管给注册表：切走房间不掐流、后台续跑、切回读 roundFeed 恢复
     runners.startRound(workshopId, roomId, text);
   }
+  dispatchTextRef.current = dispatchText;
 
   function speak() {
     if (contextBusy) return;

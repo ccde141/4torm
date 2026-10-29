@@ -3,19 +3,30 @@ import { loadAgent } from '../../../engine/shared/agent-loader.js';
 import { prepareCompaction } from './compaction.js';
 import { compactMessages, type CompactionNotice,
   type CompactionProgress } from '../../../engine/shared/compaction/index.js';
-import { projectMonsoonContext } from './active-context.js';
 import { MonsoonContextPort } from './context-port.js';
 import { acquireMonsoonSessionLease } from '../runtime/session-lease-adapter.js';
 import type { FileMonsoonSessionRepository } from '../infrastructure/session-repository.js';
 import type { ModelRequestUsageEvent } from '../../../engine/shared/model-request-usage.js';
 import { withMonsoonCompactionUsage } from './compaction-usage.js';
+import type { CompactionRequestContext } from '../../../engine/shared/compaction/contracts.js';
+import type { ContextMessage } from '../../../engine/shared/types.js';
+import type { LoadedAgent } from '../../../engine/shared/agent-loader.js';
+import type { MonsoonSession } from '../domain/session.js';
 
 export type MonsoonCompactionSummarizer = (input: {
   dataDir: string; model: string; dialogText: string; signal: AbortSignal;
   onChunk: (content: string) => void;
   onOutputLimited?: () => void;
   prompt?: string; maxOutputTokens?: number; maxContentTokens?: number; maxReasoningTokens?: number;
+  messages: ContextMessage[];
+  tools?: CompactionRequestContext['tools'];
+  historyToolTransport?: CompactionRequestContext['historyToolTransport'];
 }) => Promise<string>;
+
+export type MonsoonCompactionContextBuilder = (input: {
+  dataDir: string; session: MonsoonSession; agent: LoadedAgent | null;
+  model: string; messages: ContextMessage[];
+}) => Promise<CompactionRequestContext>;
 
 export interface PreparedMonsoonCompaction {
   compressedCount: number;
@@ -34,6 +45,7 @@ export class MonsoonCompactionService {
     private readonly sessions: FileMonsoonSessionRepository,
     private readonly summarize: MonsoonCompactionSummarizer,
     private readonly resolveSummaryBudget?: (model: string) => Promise<number | undefined>,
+    private readonly buildContext?: MonsoonCompactionContextBuilder,
   ) {}
 
   async prepare(input: { agentId: string; sessionId: string; model?: string }): Promise<PreparedMonsoonCompaction> {
@@ -65,14 +77,20 @@ export class MonsoonCompactionService {
       run: async ({ signal, onChunk, onNotice, onProgress, onModelRequest }) => {
         try {
           let saved = session;
+          const messages = await port.modelContext(session);
+          const summaryContext = this.buildContext ? await this.buildContext({
+            dataDir: this.dataDir, session, agent, model, messages,
+          }) : { messages: [{ role: 'system' as const, content: session.systemPrompt }] };
           const plan = await withMonsoonCompactionUsage(this.sessions, { agentId: session.agentId, sessionId: session.id },
             () => compactMessages({ dataDir: this.dataDir, area: 'monsoon', model,
             kind: 'conversation', prompt: agent?.compactionPrompt, protectedPrefixCount: 0,
-            scopeKey: `monsoon:${session.id}`, messages: projectMonsoonContext(session),
+            scopeKey: `monsoon:${session.id}`, messages,
+            summaryContext,
             mode: 'full', reason: 'manual', signal, onNotice, onProgress, onSummaryChunk: onChunk,
             resolveSummaryBudget: this.resolveSummaryBudget,
             archive: (before, reason) => port.archive(session.agentId, session.id, before, reason),
             summarize: request => this.summarize({ dataDir: this.dataDir, model: request.model,
+              messages: request.messages, tools: request.tools, historyToolTransport: request.historyToolTransport,
               dialogText: request.text, prompt: request.prompt, maxOutputTokens: request.maxOutputTokens,
               maxContentTokens: request.maxContentTokens,
               maxReasoningTokens: request.maxReasoningTokens,
@@ -81,9 +99,11 @@ export class MonsoonCompactionService {
             commit: async (commit, commitSignal) => { saved = await port.commit(session.agentId, session.id,
               prepared.expectedRevision, commit, 0, commitSignal); },
           }), onModelRequest);
-          if (!plan) throw new Error('没有可压缩的对话内容');
-          const marker = saved.messages[saved.messages.length - 1]!;
-          return { markerId: marker.id, markerIdx: saved.messages.length - 1 };
+          if (!plan) throw new Error('近期原文均受保护，没有更早历史可供压缩');
+          const marker = [...saved.messages].reverse().find(message => message.type === 'compact-marker'
+            && message.content === plan.summary && !session.messages.some(old => old.id === message.id));
+          if (!marker) throw new Error('压缩记录未写入会话');
+          return { markerId: marker.id, markerIdx: saved.messages.findIndex(message => message.id === marker.id) };
         } finally { release(); }
       } };
   }

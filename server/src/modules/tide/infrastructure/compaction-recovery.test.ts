@@ -22,7 +22,11 @@ async function fixture(t: test.TestContext) {
   const session = { id: 'session', agentId: 'agent', agentName: 'A', title: '日报', model: 'p:model',
     systemPrompt: '', createdAt: timestamp, updatedAt: timestamp,
     messages: [{ id: 'user', role: 'user', content: '原始任务'.repeat(1000) },
-      { id: 'assistant', role: 'assistant', content: '原始结果'.repeat(1000) }] };
+      { id: 'assistant', role: 'assistant', content: '原始结果'.repeat(1000) },
+      ...Array.from({ length: 4 }, (_, index) => [
+        { id: `recent-user-${index}`, role: 'user', content: `最近要求${index}` },
+        { id: `recent-answer-${index}`, role: 'assistant', content: `最近回复${index}` },
+      ]).flat()] };
   await writeTideSession(directory, session, task.id, task.name);
   await new FileTideTaskRepository(directory).upsert(task);
   const repository = new FileTideRunStateRepository(directory);

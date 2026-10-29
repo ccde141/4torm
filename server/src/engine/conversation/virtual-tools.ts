@@ -88,12 +88,13 @@ export function buildVirtualToolDefs(
     });
     defs.push({
       name: 'framework_guide',
-      description: '按需读取一项当前可用框架能力的完整使用协议和工具字段。先从主提示词的能力路由卡选择 capability；能力已关闭时会明确拒绝。',
+      description: '按功能区读取工作指南。默认只返回该区说明和协作示例，未开启执行权限也可读取；view=tools 查询当前获准操作，action 展开单项字段。读取指南不会启动任务或开启执行权限。',
       parameters: {
         type: 'object',
         properties: {
-          capability: { type: 'string', description: '能力路由卡中的 ID，例如 team、tradewind、tide' },
-          action: { type: 'string', description: '分层能力指南中的操作名；先只传 capability 查操作目录' },
+          capability: { type: 'string', description: '功能区或本会话能力标识，例如 convection、tradewind、cyclone、tide、team' },
+          view: { type: 'string', enum: ['guide', 'tools'], description: 'guide（默认）读取二级工作指南；tools 查询当前权限允许的操作目录或工具定义。' },
+          action: { type: 'string', description: '三级单项操作名；未填view时自动使用tools，只展开该项获准操作的字段。' },
         },
         required: ['capability'],
       },

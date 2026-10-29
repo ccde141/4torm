@@ -17,10 +17,9 @@ import { useContactActivity } from './ContactActivityScope';
 import type { ToolMediaScope } from '../../../engine/tool-media';
 import ToolResultImages from '../../../components/common/ToolResultImages';
 import { useProcessFade } from '../../../components/chat/useProcessFade';
+import { compactedRoomTurns } from './compacted-turns';
 
-export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEditContent,
-  onStartEdit, onSaveEdit, onCancelEdit, onDelete, dispatches, highlightedId,
-  onDispatchAction, onOpenSeat, mediaScope }: {
+export default function RoomFeedRow(props: {
   m: FeedMsg; idx: number; prefix: string; editing: boolean; editContent: string;
   onEditContent: (value: string) => void; onStartEdit: () => void; onSaveEdit: () => void;
   onCancelEdit: () => void; onDelete: () => void;
@@ -29,6 +28,8 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
   onOpenSeat: (seatId: string) => void;
   mediaScope?: ToolMediaScope;
 }) {
+  const { m, idx, prefix, editing, editContent, onEditContent, onStartEdit, onSaveEdit, onCancelEdit,
+    onDelete, dispatches, highlightedId, onDispatchAction, onOpenSeat, mediaScope } = props;
   const { t } = useLocale();
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const speakerLabel = m.speaker === '系统' ? t('cyclone.roomFeed.system')
@@ -72,13 +73,19 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
       </div>
     );
   }
+  const parts = compactedRoomTurns(m);
+  if (parts.length > 1) return <>{parts.map(part => <div key={part.message.key} style={{ display: 'contents' }}>
+    {part.boundary && <CompactionHistory content={part.boundary.summary} handoff />}
+    {(part.message.segments?.length || part.message.reasoning || part.message.content || part.message.streaming)
+      ? <RoomFeedRow {...props} m={part.message} /> : null}
+  </div>)}</>;
   const actions = m.sourceIndex === undefined ? null : (
     <div className="chat__bubble-actions">
       <button className="chat__msg-action-btn" title={t('common.edit')} aria-label={t('chat.editMessage')} onClick={onStartEdit}>✏</button>
       <button className="chat__msg-action-btn chat__msg-action-btn--danger" title={t('common.delete')} aria-label={t('chat.deleteMessage')} onClick={onDelete}>🗑</button>
     </div>
   );
-  if (m.isArchiveSummary) return <CompactionHistory content={m.content}>{actions}</CompactionHistory>;
+  if (m.isArchiveSummary) return <CompactionHistory content={m.content} handoff={!!m.compactionId}>{actions}</CompactionHistory>;
   if (m.isHuman) {
     return (
       <div className="chat__message chat__message--user">
@@ -97,6 +104,7 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
         {m.reasoning && <ReasoningBlock reasoning={m.reasoning} isStreaming={!!m.streaming} preview />}
         <CycloneTurnWorklog segments={workSegments} dispatches={dispatches}
           streaming={!!m.streaming}
+          continued={m.continued}
           mediaScope={mediaScope}
           highlightedId={highlightedId} onDispatchAction={onDispatchAction} onOpenSeat={onOpenSeat}
           idPrefix={`room-${prefix}w-${idx}`} />
@@ -110,7 +118,7 @@ export default function RoomFeedRow({ m, idx, prefix, editing, editContent, onEd
   );
 }
 
-function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAction, onOpenSeat, idPrefix, mediaScope, streaming }: {
+function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAction, onOpenSeat, idPrefix, mediaScope, streaming, continued }: {
   segments: RoomReplySegment[];
   dispatches: CycloneDispatch[];
   highlightedId: string | null;
@@ -119,6 +127,7 @@ function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAct
   idPrefix: string;
   mediaScope?: ToolMediaScope;
   streaming: boolean;
+  continued?: boolean;
 }) {
   const { t, locale } = useLocale();
   const id = useId();
@@ -143,7 +152,7 @@ function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAct
   const failed = tools.filter(tool => tool.status === 'error').length;
   const running = streaming || tools.some(tool => tool.status === 'running');
   if (!segments.length) return null;
-  const state = failed ? t('cyclone.activity.failed', { count: failed })
+  const state = continued ? (locale === 'en-US' ? 'Continued' : '已接续') : failed ? t('cyclone.activity.failed', { count: failed })
     : running ? t('cyclone.activity.running') : t('cyclone.activity.completed');
   return (
     <section className="cyclone-room-turn__worklog">
@@ -178,6 +187,7 @@ function CycloneTurnWorklog({ segments, dispatches, highlightedId, onDispatchAct
           if (segment.kind === 'tools') return segment.tools.map((tool, toolIndex) => (
             <CycloneTurnToolItem key={`${segmentIndex}-${toolIndex}`} tool={tool} mediaScope={mediaScope} />
           ));
+          if (segment.kind === 'compaction') return null;
           const item = dispatches.find(dispatch => dispatch.id === segment.dispatchId);
           return item ? <DispatchCard key={segment.dispatchId} item={item}
             highlighted={highlightedId === item.id}

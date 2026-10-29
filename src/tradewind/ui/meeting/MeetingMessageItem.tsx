@@ -8,10 +8,12 @@ import { CompactedHistory } from '../CompactedHistory';
 import { isCompactedHistory } from '../compaction-events';
 import type { ToolMediaScope } from '../../../engine/tool-media';
 import ToolResultImages from '../../../components/common/ToolResultImages';
+import { splitMeetingCompactions } from './meeting-compaction';
 
 interface Props {
   msg: MeetingMessage;
   mediaScope?: ToolMediaScope;
+  continued?: boolean;
 }
 
 function getFileEdit(step: ToolStep): { path: string; before: string; after: string } | null {
@@ -99,9 +101,9 @@ const ToolBubble = memo(function ToolBubble({ step, mediaScope }: { step: ToolSt
   );
 });
 
-export const MeetingMessageItem = memo(function MeetingMessageItem({ msg, mediaScope }: Props) {
-  const { t } = useLocale();
-  if (msg.speaker === '系统' && isCompactedHistory(msg.content)) return <CompactedHistory content={msg.content} />;
+export const MeetingMessageItem = memo(function MeetingMessageItem({ msg, mediaScope, continued }: Props) {
+  const { t, locale } = useLocale();
+  if (msg.speaker === '系统' && isCompactedHistory(msg.content)) return <CompactedHistory content={msg.content} handoff={!!msg.compactionId} />;
   if (msg.speaker === '人类') {
     return (
       <div className="tw-meeting-msg tw-meeting-msg--user">
@@ -119,12 +121,18 @@ export const MeetingMessageItem = memo(function MeetingMessageItem({ msg, mediaS
       </div>
     );
   }
+  const parts = splitMeetingCompactions(msg);
+  if (parts.length > 1) return <>{parts.map((part, index) => <div key={part.boundary?.id ?? index} style={{ display: 'contents' }}>
+    {part.boundary && <CompactedHistory content={part.boundary.summary} handoff />}
+    {(part.message.content || part.message.reasoning || part.message.toolCalls?.length || part.message.streaming)
+      ? <MeetingMessageItem msg={part.message} mediaScope={mediaScope} continued={part.continued} /> : null}
+  </div>)}</>;
 
   const content = msg.content.trim();
   const tools = msg.toolCalls || [];
   return (
     <div className="tw-meeting-msg">
-      <span className="tw-meeting-msg__speaker">{msg.speaker}</span>
+      <span className="tw-meeting-msg__speaker">{msg.speaker}{continued && ` · ${locale === 'en-US' ? 'Continued' : '已接续'}`}</span>
       {msg.reasoning && <ThinkBlock content={msg.reasoning} streaming={msg.streaming} />}
       {tools.map((step, index) => <ToolBubble key={index} step={step} mediaScope={mediaScope} />)}
       {content && (

@@ -11,7 +11,7 @@ import { SessionRunner, type SessionRunnerOpts } from '../session-runner.js';
 test('team tools use real member SessionRunner, preserve context and adopt a changed provider model', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'team-integration-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const requests: Array<{ model: string; messages: Array<{ role: string; content: string }>; tools?: unknown[] }> = [];
+  const requests: Array<{ model: string; messages: Array<{ role: string; content: string }>; tools?: Array<{ function: { name: string } }> }> = [];
   const errors: unknown[] = [];
   const server = http.createServer(async (request, response) => {
     try {
@@ -60,7 +60,7 @@ test('team tools use real member SessionRunner, preserve context and adopt a cha
   assert.ok(requests[1].messages.some(message => message.content === 'result-1'));
   assert.equal(requests[1].messages.at(-1)?.content, 'Second assignment');
   assert.equal(requests[1].messages.filter(message => message.role === 'system').length, 1);
-  assert.equal(requests[1].tools?.length ?? 0, 0);
+  assert.deepEqual(requests[1].tools?.map(tool => tool.function.name), ['team_report']);
   assert.deepEqual(errors, []);
   const saved = await new TeamStore(root, { agentId: 'a', sessionId: 's' }).read();
   assert.equal(saved.members[0].context.at(-1)?.content, 'result-2');

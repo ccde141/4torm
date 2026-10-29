@@ -58,12 +58,13 @@ export interface MonsoonTeamActivityEvent {
 }
 
 export type MonsoonEvent = MonsoonInputEvent | CompactionProgress | MonsoonTeamActivityEvent | ModelRequestUsageEvent
+  | { type: 'current-input'; estimate: import('../../../engine/shared/model-request-usage.js').CurrentInputEstimate }
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
   | { type: 'notice'; message: string }
   | { type: 'compaction-notice'; message: string }
   | { type: 'context-compacted'; revision: number; marker: MonsoonContextMarker }
-  | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
+  | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec' | 'team-waiting'; elapsed: number; members?: string[] }
   | ({ type: 'tool-progress' } & ToolPreparationProgress)
   | { type: 'tool-call'; tool: string; args: Record<string, unknown> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown;
@@ -81,6 +82,7 @@ export type MonsoonEvent = MonsoonInputEvent | CompactionProgress | MonsoonTeamA
   | { type: 'done' };
 
 export interface MonsoonTurn {
+  getCurrentInput?(): Promise<import('../../../engine/shared/model-request-usage.js').CurrentInputEstimate> | undefined;
   isBusy(): boolean;
   isSuspended(): boolean;
   getAgentId(): string;

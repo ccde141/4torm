@@ -81,8 +81,32 @@ test('压缩后的历史分界线与最近内容仍可见，空会话提供反�
   ]));
   assert.match(html, /compaction-history__divider/);
   assert.match(html, /最近原始回复/);
-  assert.doesNotMatch(html, /已归档的旧消息/);
+  assert.match(html, /已归档的旧消息/);
   const empty = render(session([]));
   assert.match(empty, /暂无会话消息/);
   assert.match(empty, /<button class="tide-session__button" disabled="">/);
+});
+
+test('successive compactions keep separate assistant bubbles and readable handoff buttons', () => {
+  const html = render(session([
+    { id: 'before', role: 'assistant', content: 'FIRST_PROCESS' },
+    { id: 'compact-a', role: 'system', type: 'compact-marker', content: 'FIRST_HANDOFF' },
+    { id: 'middle', role: 'assistant', content: 'SECOND_PROCESS' },
+    { id: 'compact-b', role: 'system', type: 'compact-marker', content: 'SECOND_HANDOFF' },
+    { id: 'after', role: 'assistant', content: 'THIRD_PROCESS' },
+  ]));
+  assert.equal((html.match(/compaction-history__divider/g) ?? []).length, 2);
+  assert.equal((html.match(/上下文已压缩/g) ?? []).length, 2);
+  assert.ok(html.indexOf('FIRST_PROCESS') < html.indexOf('compaction-history__divider'));
+  assert.ok(html.indexOf('SECOND_PROCESS') > html.indexOf('compaction-history__divider'));
+  assert.ok(html.indexOf('THIRD_PROCESS') > html.lastIndexOf('compaction-history__divider'));
+  assert.doesNotMatch(html, /FIRST_HANDOFF|SECOND_HANDOFF/);
+});
+
+test('failed compaction keeps the received process visible without inventing a successful divider', () => {
+  const html = render({ ...session([{ id: 'received', role: 'assistant', content: 'RECEIVED_PROCESS' }]),
+    compaction: { type: 'compact-failed', id: 'failure', operation: 'compact', startedAt: 1,
+      updatedAt: 2, reason: 'threshold', message: 'Compression interrupted', aborted: true } });
+  assert.match(html, /RECEIVED_PROCESS/);
+  assert.doesNotMatch(html, /compaction-history__divider/);
 });

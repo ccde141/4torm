@@ -25,6 +25,7 @@ type ToolEvent = DelegateToolEvent
 
 export interface SessionToolExtension {
   definitions: ToolDef[];
+  silentTools?: readonly string[];
   guideDefinitions?: ToolDef[];
   call(
     name: string, args: ToolArgs, signal?: AbortSignal,
@@ -108,15 +109,16 @@ function matching(
 async function executeExtension(
   input: SessionToolDispatcherInput, tool: string, args: ToolArgs,
 ): Promise<string> {
-  input.emit({ type: 'tool-call', tool, args });
+  const silent = input.extension?.silentTools?.includes(tool);
+  if (!silent) input.emit({ type: 'tool-call', tool, args });
   try {
     const output = await input.extension!.call(tool, args, input.signal);
     const result = typeof output === 'string' ? output : output.result;
     const meta = typeof output === 'string' ? undefined : output.meta;
-    input.emit({ type: 'tool-result', tool, result, ok: true, ...(meta ? { meta } : {}) });
+    if (!silent) input.emit({ type: 'tool-result', tool, result, ok: true, ...(meta ? { meta } : {}) });
     return result;
   } catch (error) {
-    input.emit({ type: 'tool-result', tool, result: message(error), ok: false });
+    if (!silent) input.emit({ type: 'tool-result', tool, result: message(error), ok: false });
     throw error;
   }
 }

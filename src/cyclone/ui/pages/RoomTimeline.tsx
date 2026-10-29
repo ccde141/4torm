@@ -24,8 +24,10 @@ export default function RoomTimeline({ history, roundFeed, dispatches, highlight
   onOpenSeat: (seatId: string) => void;
   mediaScope?: ToolMediaScope;
 }) {
+  const liveTurns = new Set((roundFeed ?? []).flatMap(message => message.turnId ? [message.turnId] : []));
   const messages: TimelineEntry[] = [
-    ...history.map((message, index) => ({ key: message.key, turnId: message.turnId, message, index, prefix: 'h' as const })),
+    ...history.filter(message => !message.turnId || !liveTurns.has(message.turnId))
+      .map((message, index) => ({ key: message.key, turnId: message.turnId, message, index, prefix: 'h' as const })),
     ...(roundFeed || []).map((message, index) => ({ key: message.key, turnId: message.turnId, message, index, prefix: 'r' as const })),
   ];
   const linkedDispatches = new Set(messages.flatMap(item => (

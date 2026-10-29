@@ -8,6 +8,8 @@ import { registerMonsoonSessions } from './sessions.js';
 import { createMonsoonFeature } from './factory.js';
 import { CollaborationRouter } from '../../../engine/collaboration/router.js';
 import { installFrameworkErrorHandler } from '../../../routes/error-handler.js';
+import { monsoonSessionHandlers } from './session-methods.js';
+import type { CollaborationContext } from '../../../engine/collaboration/contracts.js';
 
 function session() {
   return {
@@ -130,4 +132,57 @@ test('read metadata uses the existing session gate and cannot replace messages o
   assert.equal(completed.statusCode, 200);
   assert.equal(completed.json().lastReadAt, lastReadAt);
   assert.equal((await app.inject({ method: 'PUT', url: '/sessions/agent-a/session-a', payload })).statusCode, 409);
+});
+
+test('pending context estimates survive read-save round trips without replacing the visible transcript', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-session-preview-'));
+  const app = Fastify();
+  const feature = createMonsoonFeature({ dataDir });
+  registerMonsoonSessions(app, new CollaborationRouter([feature.module]));
+  t.after(async () => { await app.close(); await fs.rm(dataDir, { recursive: true, force: true }); });
+  const messages = [{ id: 'run-a', role: 'assistant', content: 'Visible answer',
+    timestamp: '2026-01-01T00:00:01.000Z', runCommitted: false,
+    reasoningContent: 'Visible reasoning', toolSteps: [{ tool: 'read_file', args: { path: 'a.txt' },
+      status: 'done', result: 'Original result' }] }];
+  const created = (await app.inject({ method: 'POST', url: '/sessions',
+    payload: { ...session(), messages } })).json();
+  const writer = await feature.journal.begin('agent-a', 'session-a', 'run-a', created.messageRevision);
+  await writer.append({ type: 'input-context', checkpoint: { closed: true, includedIds: [],
+    context: [{ role: 'assistant', content: 'Retained context '.repeat(1000) }] } });
+  const read = (await app.inject('/sessions/agent-a/session-a')).json();
+  assert.deepEqual(read.messages, messages);
+  assert.ok(read.currentInput.tokens > created.currentInput.tokens);
+  assert.equal(read.pendingRuns[0].runId, 'run-a');
+  const saved = await app.inject({ method: 'PUT', url: '/sessions/agent-a/session-a',
+    payload: { expectedRevision: read.revision, mode: 'content', session: read } });
+  assert.equal(saved.statusCode, 200);
+  assert.deepEqual(saved.json().messages, messages);
+  await app.inject('/sessions/agent-a');
+  await app.inject({ method: 'POST', url: '/sessions/agent-a/session-a/input-preview', payload: {} });
+  assert.deepEqual((await feature.sessions.get('agent-a', 'session-a'))?.messages, messages);
+  assert.equal((await app.inject('/sessions/agent-a/session-a')).json().pendingRuns[0].runId, 'run-a');
+  assert.ok((await fs.readFile(writer.file, 'utf8')).includes('input-context'));
+});
+
+test('session handlers expose only the estimate even if a preview mutates its input', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-preview-boundary-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const feature = createMonsoonFeature({ dataDir });
+  const stored = await feature.sessions.create({ ...session(), messages: [{
+    id: 'answer', role: 'assistant', content: 'Keep this answer', timestamp: session().createdAt,
+  }] });
+  const handlers = monsoonSessionHandlers({ sessions: feature.sessions, journal: feature.journal,
+    preview: async value => {
+      value.messages[0]!.content = '';
+      value.messages = [];
+      return { ...value, title: 'Temporary estimate', currentInput: { tokens: 123, images: 0,
+        model: value.model, estimatedAt: value.updatedAt } };
+    } });
+  const context: CollaborationContext = { actor: { type: 'human', id: 'fixture', actingAs: 'human' },
+    audience: 'human', enabledFeatures: new Set(['monsoon']), permissions: new Set(['observe']), requestId: 'fixture' };
+  const read = await handlers.readSession.invoke(context, { agentId: 'agent-a', sessionId: 'session-a' });
+  assert.deepEqual((read as typeof stored).messages, stored.messages);
+  assert.equal((read as typeof stored).title, stored.title);
+  assert.equal((read as { currentInput: { tokens: number } }).currentInput.tokens, 123);
+  assert.deepEqual((await feature.sessions.get('agent-a', 'session-a'))?.messages, stored.messages);
 });

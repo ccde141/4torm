@@ -3,6 +3,7 @@ import type { ConvectionUsage } from './convection-token-usage';
 import { compactionActivity, type CompactionActivity } from '../../../components/common/compaction-activity';
 import type { ToolImageRef } from '../../../engine/tool-media';
 import type { ModelRequestUsage } from '../../../lib/model-usage';
+import type { ConvectionCompactionBoundary } from './convection-compaction-segments';
 
 /** A broken request is not evidence of rollback; keep its checking message until a saved terminal arrives. */
 export function restoreConvectionCompaction(current: CompactionActivity | undefined,
@@ -30,6 +31,7 @@ export type ExternalRoundEvent =
       tool?: string; args?: Record<string, unknown>; result?: string;
       toolImages?: ToolImageRef[];
       toolCalls?: Array<{ tool: string; args: Record<string, unknown>; result?: string; toolImages?: ToolImageRef[] }>;
+      compactions?: ConvectionCompactionBoundary[]; displayContent?: string;
       phase?: 'llm-waiting' | 'tool-exec'; elapsed?: number }
   | { type: 'chair-token' | 'chair-reasoning' | 'chair-done'; chunk?: string; content?: string }
   | { type: 'notice'; message: string }
@@ -37,11 +39,22 @@ export type ExternalRoundEvent =
   | { type: 'input-accepted' }
   | { type: 'usage'; usage: ConvectionUsage | null }
   | { type: 'compact-start' | 'compact-done' | 'compact-failed'; id?: string;
-      operation?: 'compact' | 'reset'; startedAt?: number; updatedAt?: number; aborted?: boolean; message?: string }
+      operation?: 'compact' | 'reset'; startedAt?: number; updatedAt?: number; aborted?: boolean; message?: string;
+      agentId?: string; boundary?: ConvectionCompactionBoundary; summary?: string }
   | { type: 'error'; message?: string };
 
+/** A durable compression checkpoint and the live draft describe the same participant turn. */
+export function restoreConvectionPublicDraft(messages: ConvectionTurnMessage[],
+  live?: { speaker: string; content: string; complete?: boolean }): ConvectionTurnMessage[] {
+  const index = messages.findLastIndex(message => message.execution?.status === 'running'
+    && (!live || message.speaker === live.speaker));
+  if (index >= 0) return updateMessage(messages, index, { streaming: true,
+    ...(live?.complete === false ? { content: live.content, displayContent: live.content } : {}) });
+  return live?.complete === false ? [...messages, { speaker: live.speaker, content: live.content, streaming: true }] : messages;
+}
+
 function lastSpeaker(messages: ConvectionTurnMessage[], event: ExternalRoundEvent): number {
-  if (!('agentId' in event)) return -1;
+  if (!('agentId' in event) || !('label' in event)) return -1;
   return messages.findLastIndex(message => message.streaming
     && (message.agentId === event.agentId
       || (!message.agentId && message.speaker === event.label)));
@@ -56,7 +69,7 @@ function ensureSpeaker(messages: ConvectionTurnMessage[], event: ExternalRoundEv
   [ConvectionTurnMessage[], number] {
   const existing = lastSpeaker(messages, event);
   if (existing >= 0) return [messages, existing];
-  if (!('agentId' in event)) return [messages, -1];
+  if (!('agentId' in event) || !('label' in event)) return [messages, -1];
   const next = [...messages, { agentId: event.agentId, speaker: event.label,
     content: '', streaming: true, timestamp: new Date().toISOString() }];
   return [next, next.length - 1];
@@ -69,8 +82,14 @@ export function applyExternalPublicEvent(
     return [...messages, { speaker: '系统', content: event.message ?? '',
       timestamp: new Date().toISOString() }];
   }
-  if (event.type === 'compact-start' || event.type === 'compact-done') return messages;
-  if (!('agentId' in event)) return messages;
+  if (event.type === 'compact-done' && event.boundary) {
+    const boundary = event.boundary;
+    return messages.map(message => message.streaming && (!event.agentId || message.agentId === event.agentId)
+      && !message.compactions?.some(item => item.id === boundary.id)
+      ? { ...message, displayContent: message.content, compactions: [...(message.compactions ?? []), boundary] } : message);
+  }
+  if (event.type === 'compact-start' || event.type === 'compact-done' || event.type === 'compact-failed') return messages;
+  if (!('agentId' in event) || !('label' in event)) return messages;
   const [current, index] = ensureSpeaker(messages, event);
   if (index < 0 || event.type === 'agent-start') return current;
   const item = current[index];
@@ -86,9 +105,13 @@ export function applyExternalPublicEvent(
   if (event.type === 'tool-result') return updateMessage(current, index,
     { toolCalls: finishTool(item.toolCalls ?? [], event.tool ?? '', event.result ?? '', event.toolImages) });
   if (event.type === 'agent-failed') return updateMessage(current, index,
-    { content: event.message ?? '', streaming: false, waitingInfo: undefined });
+    { execution: { status: 'failed', message: event.message }, displayContent: item.content,
+      toolCalls: item.toolCalls?.map(tool => tool.status === 'running' || tool.status === 'pending'
+        ? { ...tool, status: 'unresolved' } : tool),
+      streaming: false, waitingInfo: undefined });
   return updateMessage(current, index, { content: event.content ?? '',
     rawContent: event.rawContent, streaming: false, waitingInfo: undefined,
+    ...(event.compactions?.length ? { compactions: event.compactions, displayContent: event.displayContent } : {}),
     toolCalls: event.toolCalls?.map(tool => ({ ...tool, status: 'done' as const })) });
 }
 

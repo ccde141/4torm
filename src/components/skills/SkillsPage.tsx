@@ -1,13 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { listSkills, readSkillFile, readSkillToolDefs, createSkill, deleteSkill } from '../../store/skills';
 import type { SkillMeta } from '../../types';
 import { useActiveCapabilityList } from '../capabilities/useActiveCapabilityList';
 import '../../styles/components/capability-management.css';
 import '../../styles/components/skills.css';
 import { useLocale } from '../../i18n/LocaleContext';
+import { useConfirm } from '../common/ConfirmDialog';
 
 export default function SkillsPage({ active }: { active: boolean }) {
   const { t } = useLocale();
+  const confirm = useConfirm();
   const { items: skills, loadError, refresh } = useActiveCapabilityList(active, listSkills);
   const [preview, setPreview] = useState<{ meta: SkillMeta; content: string; tools: Array<{ name: string; description: string }> | null } | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -18,7 +20,8 @@ export default function SkillsPage({ active }: { active: boolean }) {
   const [newDesc, setNewDesc] = useState('');
   const [newContent, setNewContent] = useState(() => t('skills.create.template'));
   const [error, setError] = useState('');
-  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const deletePending = useRef(false);
 
   useEffect(() => {
     if (!preview) return;
@@ -35,19 +38,25 @@ export default function SkillsPage({ active }: { active: boolean }) {
     setPreview({ meta: skill, content: content || t('skills.preview.empty'), tools });
   };
 
-  const handleDelete = async (skillId: string) => {
-    if (confirmingDelete !== skillId) {
-      setConfirmingDelete(skillId);
-      return;
-    }
+  const handleDelete = async (skill: SkillMeta) => {
+    if (deletePending.current) return;
+    deletePending.current = true;
     try {
-      await deleteSkill(skillId);
-      await refresh();
-      setConfirmingDelete(null);
+      if (!(await confirm({
+        title: t('skills.delete.title', { name: skill.name }),
+        message: t('skills.delete.message'),
+        confirmText: t('skills.card.remove'), danger: true,
+      }))) return;
+      setDeletingId(skill.id);
       setError('');
+      await deleteSkill(skill.id);
+      if (preview?.meta.id === skill.id) setPreview(null);
+      await refresh();
     } catch (e) {
-      setError((e as Error).message);
-      setConfirmingDelete(null);
+      setError(e instanceof Error ? e.message : t('skills.delete.failed'));
+    } finally {
+      deletePending.current = false;
+      setDeletingId(null);
     }
   };
 
@@ -149,8 +158,8 @@ export default function SkillsPage({ active }: { active: boolean }) {
             </div>
             <div className="capability-actions skill-card__actions">
               <button className="capability-button capability-button--secondary skill-btn-preview" onClick={() => handlePreview(skill)}>{t('skills.card.preview')}</button>
-              <button className="capability-button capability-button--danger skill-btn-delete" onClick={() => handleDelete(skill.id)}>
-                {confirmingDelete === skill.id ? t('skills.card.confirmRemove') : t('skills.card.remove')}
+              <button className="capability-button capability-button--danger skill-btn-delete" disabled={deletingId !== null} onClick={() => void handleDelete(skill)}>
+                {deletingId === skill.id ? t('skills.delete.pending') : t('skills.card.remove')}
               </button>
             </div>
           </div>

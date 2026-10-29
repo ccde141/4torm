@@ -74,7 +74,7 @@ export async function persistContactMessage(
   signal?: AbortSignal,
 ): Promise<void> {
   signal?.throwIfAborted();
-  seat.messages.push({ role: 'user', content: `[系统信息：来自工位「${fromTitle}」的联络]\n\n${message}` });
+  seat.messages.push({ role: 'user', content: `[系统信息：来自工位「${fromTitle}」的联络]\n\n${message}`, origin: 'framework' });
   seat.compaction = undefined;
   await saveSeat(dataDir, workshopId, seat, signal);
 }

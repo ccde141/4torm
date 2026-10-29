@@ -23,9 +23,9 @@ export async function applyPendingSeatResponse(
       onEvent,
     });
   } else if (pending.pendingToolCallId) {
-    seat.messages.push({ role: 'tool', toolCallId: pending.pendingToolCallId, content: answer });
+    seat.messages.push({ role: 'tool', origin: 'human', toolCallId: pending.pendingToolCallId, content: answer });
   } else {
-    seat.messages.push({ role: 'user', content: formatTextToolResult('ask', answer, true) });
+    seat.messages.push({ role: 'user', origin: 'human', content: formatTextToolResult('ask', answer, true) });
   }
   seat.pending = undefined;
   await saveSeat(dataDir, workshopId, seat);

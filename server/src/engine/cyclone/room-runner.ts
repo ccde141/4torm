@@ -42,6 +42,7 @@ import { genId } from './paths.js';
 import { createRoomDispatchRecord } from './room-dispatch.js';
 import { dispatchAcceptance } from './dispatch-acceptance.js';
 import { createRoomMessageSegments } from './room-message-segments.js';
+import { retainRoomExecutionDraft } from './room-execution-draft.js';
 import {
   buildCycloneMemoryPrompt,
   executeCycloneMemoryTool,
@@ -240,11 +241,13 @@ async function runSeatInRoom(
     allowDispatch: true, contactTargets, dispatchTargets,
   }), seatCollaborationPolicy(seat));
   const segmentCollector = createRoomMessageSegments();
+  let reasoningAcc = '';
   const emit = (event: RoomEvent) => {
     if (event.type === 'token') segmentCollector.token(event.content);
     if (event.type === 'tool-call') segmentCollector.toolCall(event.tool, event.args);
-    if (event.type === 'tool-result') segmentCollector.toolResult(event.result, event.ok);
+    if (event.type === 'tool-result') segmentCollector.toolResult(event.result, event.ok, event.toolImages);
     if (event.type === 'dispatch-created') segmentCollector.dispatch(event.dispatch.id);
+    if (event.type === 'compact-done' && event.summary) segmentCollector.compact(event.id, event.summary, reasoningAcc.length);
     onEvent(event);
   };
   const toolCaller = makeRoomToolCaller({
@@ -269,13 +272,22 @@ async function runSeatInRoom(
   const previousHistorySeen = seat.historySeen;
   const llm = await createRoomCompactionCaller({ dataDir, workshopId, room, agent, messages,
     llm: withSeatContinuity(makeLLM(dataDir, agent.model, agent.temperature), seat, 'room'),
-    onNotice: onEvent, onProgress: onEvent,
+    onNotice: emit, onProgress: emit,
+    displaySnapshot: boundary => {
+      const segments = structuredClone(segmentCollector.segments);
+      segments.push({ kind: 'compaction', ...boundary, reasoningOffset: reasoningAcc.length });
+      return { id: turnId, turnId, roundSeq, speaker: seat.title, timestamp: Date.now(), executionStatus: 'running',
+        content: segments.filter(segment => segment.kind === 'text').map(segment => segment.content).join('\n\n'),
+        reasoning: reasoningAcc || undefined, segments,
+        toolCalls: segments.flatMap(segment => segment.kind === 'tools' ? segment.tools
+          .filter(tool => tool.result !== undefined).map(tool => ({ tool: tool.tool, args: tool.args, result: tool.result!,
+            ...(tool.toolImages?.length ? { toolImages: tool.toolImages } : {}) })) : []) };
+    },
     onCompacted: () => onEvent({ type: 'history-updated' }) });
   // 群聊讨论场：剥 ask/delegate，保留 contact（热注入名单）
   const nativeToolDefs = withSeatFactTools([...effectiveToolDefs, ...virtualToolDefs]);
   // 群聊只保留公告板等讨论工具；工位任务板属于固定工位的执行上下文。
   // 累积本轮思考流：既实时推给前端，也攒下来随发言落盘（重载可恢复）
-  let reasoningAcc = '';
   const result = native
     ? await runReActLoopNative({
         messages, llm, tools: toolCaller, toolDefs: nativeToolDefs,
@@ -307,9 +319,11 @@ async function runSeatInRoom(
     catch (error) { seat.historySeen = previousHistorySeen; throw error; }
   }
 
-  segmentCollector.reconcile(result.content);
+  if (result.termination.status === 'succeeded') segmentCollector.reconcile(result.content);
+  const content = result.termination.status === 'succeeded' ? result.content
+    : segmentCollector.segments.filter(segment => segment.kind === 'text').map(segment => segment.content).join('\n\n');
   return {
-    content: result.content,
+    content,
     rawContent: result.rawContent,
     reasoning: reasoningAcc || undefined,
     segments: segmentCollector.segments,
@@ -327,6 +341,7 @@ export async function speakInRoom(
   dataDir: string, workshopId: string, room: RoomData,
   humanMessage: string, onEvent: (ev: RoomEvent) => void, signal?: AbortSignal,
 ): Promise<void> {
+  if (room.publicExecutionDraft) retainRoomExecutionDraft(room, 'stopped', '上次执行在交付前结束');
   room.publicLatestTokenUsage = undefined;
   room.publicUsageIncomplete = undefined;
   room.compactionNotice = undefined;
@@ -365,6 +380,14 @@ export async function speakInRoom(
         },
       });
       if (!r) continue;
+      if (r.termination.status !== 'succeeded' && (r.segments.length || r.reasoning || r.toolCalls.length)) {
+        const error = r.termination.status === 'failed' || r.termination.status === 'anomaly'
+          ? r.termination.error.message : '本次执行已停止';
+        retainRoomExecutionDraft(room, signal?.aborted || r.termination.status === 'aborted' ? 'stopped' : 'failed', error,
+          { id: turnId, turnId, roundSeq, speaker: currentSeat.title, content: r.content,
+            timestamp: Date.now(), rawContent: r.rawContent, reasoning: r.reasoning, segments: r.segments, toolCalls: r.toolCalls });
+        await saveRoom(dataDir, workshopId, room);
+      }
       throwForReActFailure(r.termination);
       const content = r.content;
       if (r.termination.status === 'succeeded' && content) {
@@ -375,6 +398,7 @@ export async function speakInRoom(
           toolCalls: r.toolCalls.length > 0 ? r.toolCalls : undefined,
           segments: r.segments.length > 0 ? r.segments : undefined,
         });
+        room.publicExecutionDraft = undefined;
         await saveRoom(dataDir, workshopId, room);
         onEvent({ type: 'seat-done', speaker: currentSeat.title, content });
       }
@@ -386,6 +410,12 @@ export async function speakInRoom(
       await expireDispatchDecisions(dataDir, workshopId, room.id, roundSeq);
     }
     await saveRoom(dataDir, workshopId, room);
+  } catch (error) {
+    if (room.publicExecutionDraft) {
+      retainRoomExecutionDraft(room, signal?.aborted ? 'stopped' : 'failed', (error as Error).message);
+      await saveRoom(dataDir, workshopId, room);
+    }
+    throw error;
   } finally {
     dispatchStarts.flush();
   }

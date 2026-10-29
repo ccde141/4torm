@@ -7,6 +7,8 @@ import type { CycloneRoomService } from './room-service.js';
 import type { CycloneWorkshopService } from './workshop-service.js';
 import {
   toCycloneSummaryMessages,
+  retainedCycloneMessages,
+  retainedCyclonePrivateMessages,
   type CycloneContextSummarizer,
 } from '../domain/context-summary.js';
 import type { CycloneChangeFeed } from './change-feed.js';
@@ -14,6 +16,7 @@ import { archiveCycloneCompaction } from '../../../engine/cyclone/compaction-arc
 import { buildCycloneChairContext, clearCycloneChairContext } from '../../../engine/cyclone/chair-context.js';
 import { withCycloneContextChange } from './context-compaction-transaction.js';
 import { finishCycloneCompaction } from '../../../engine/cyclone/compaction-progress.js';
+import { alignCycloneTranscript } from '../../../engine/cyclone/conversation-transcript.js';
 
 export class CycloneChairService {
   constructor(
@@ -32,6 +35,7 @@ export class CycloneChairService {
     );
     const room = await this.rooms.require(workshopId, roomId);
     return { chairAgentId: workshop.chairAgentId, messages: room.chairMessages || [],
+      displayHistory: room.chairDisplayHistory,
       tokenUsage: room.chairTokenUsage, modelUsage: room.chairModelUsage, compactionNotice: room.chairCompactionNotice, compaction: room.chairCompaction };
   }
 
@@ -39,6 +43,7 @@ export class CycloneChairService {
     return this.withLock(workshopId, roomId, async () => {
       const room = await this.rooms.require(workshopId, roomId);
       const messages = room.chairMessages || [];
+      const before = [...messages];
       const changed = content === undefined
         ? deleteContextMessage(messages, index)
         : editContextMessage(messages, index, content);
@@ -46,6 +51,7 @@ export class CycloneChairService {
         'CYCLONE_CHAIR_MESSAGE_INVALID', 'validation', '消息索引越界或内容无效',
       );
       room.chairMessages = messages;
+      alignCycloneTranscript(room.chairDisplayHistory, before, messages);
       clearCycloneChairContext(room);
       room.chairTokenUsage = undefined;
       await saveRoom(this.dataDir, workshopId, room);
@@ -71,23 +77,30 @@ export class CycloneChairService {
             this.dataDir, workshopId, `chair-${roomId}`, { type: 'cyclone-chair-context-compact', roomId,
               messages: status.messages, chairMessages: status.messages, publicMessages: room.publicMessages,
               chairActiveContext: room.chairActiveContext, tokenUsage: room.chairTokenUsage }) : undefined;
-          const chairSummary = mode === 'summary' ? await withCycloneSummaryUsage({
+          const chairContext = buildCycloneChairContext(room, { role: 'system', content: '' }).slice(1);
+          const compacted = mode === 'summary' ? await withCycloneSummaryUsage({
             get: () => room.chairModelUsage, set: value => { room.chairModelUsage = value; },
             persist: () => saveRoom(this.dataDir, workshopId, room),
             emit: () => this.changes?.publish(workshopId, 'activity', roomId),
           }, () => this.summarizer.summarize({
-            agentId: status.chairAgentId, kind: 'meeting', signal, subject: `群聊「${room.title}」会长私聊`,
-            messages: toCycloneSummaryMessages(buildCycloneChairContext(room, { role: 'system', content: '' }).slice(1)),
+            agentId: status.chairAgentId, kind: 'meeting', recentHumanTurns: 4,
+            target: { workshopId, kind: 'chair', id: roomId },
+            signal, subject: `群聊「${room.title}」会长私聊`,
+            messages: toCycloneSummaryMessages(chairContext),
             onNotice: async notice => {
               room.chairCompactionNotice = notice;
               await saveRoom(this.dataDir, workshopId, room);
               this.changes?.publish(workshopId, 'activity', roomId);
             },
           })) : undefined;
+          const chairSummary = compacted?.summary;
           if (mode === 'summary' && !chairSummary?.trim()) throw new Error('压缩摘要为空，原会话保留');
           signal?.throwIfAborted();
           const result = await resetRoomContext(this.dataDir, workshopId, roomId, {
             scope: 'chair', chairSummary, preparedArchivePath: archivePath, signal,
+            chairRetainedContext: compacted ? retainedCycloneMessages(chairContext, compacted) : undefined,
+            chairRetainedMessages: compacted
+              ? retainedCyclonePrivateMessages(room.chairMessages || [], chairContext, compacted) : undefined,
             compaction: finishCycloneCompaction(started),
           });
           this.changes?.publish(workshopId, 'activity', roomId);

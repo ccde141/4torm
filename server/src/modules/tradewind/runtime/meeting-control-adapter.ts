@@ -4,6 +4,7 @@ import { FrameworkError, frameworkError } from '../../../engine/shared/framework
 import { frameworkSseErrorFromUnknown } from '../../../engine/shared/framework-error-transport.js';
 import { atomicWriteFile } from '../../../engine/shared/atomic-io.js';
 import { compactMeetingManually } from '../../../engine/tradewind/execution/meeting-context-compaction.js';
+import { meetingDisplayMessages, meetingDisplaySnapshot } from '../../../engine/tradewind/execution/meeting-display.js';
 import { resetMeetingHistory } from './meeting-history-management.js';
 import { compactChairManually } from '../../../engine/tradewind/execution/chair-context-compaction.js';
 import { finishMeetingCompactions } from '../../../engine/tradewind/execution/meeting-compaction-progress.js';
@@ -93,13 +94,13 @@ async function speakMeeting(input: Scoped<MeetingMessageCommand>) {
       onEvent: event => broadcastMeeting(meeting, event),
     });
     await archiveMeeting(input.nodeId, meeting);
-    const done = { type: 'round-done' as const, messages: meeting.session.publicMessages };
+    const done = { type: 'round-done' as const, messages: meetingDisplayMessages(meeting.session) };
     broadcastMeeting(meeting, done);
     return { completed: true as const, nodeId: input.nodeId, runId: roundIdentity.runId };
   } catch (error) {
     if ((error instanceof Error && error.name === 'AbortError') || cancelledCompaction(meeting, 'public')) {
       finishMeetingCompactions(meeting.session, true, '压缩已停止', 'public');
-      broadcastMeeting(meeting, { type: 'round-done', messages: meeting.session.publicMessages });
+      broadcastMeeting(meeting, { type: 'round-done', messages: meetingDisplayMessages(meeting.session) });
       throw meetingError('TRADEWIND_COMPACTION_CANCELLED', 'cancelled', '压缩已停止', error);
     }
     const failure = interactionFailure(error, 'TRADEWIND_MEETING_SPEAK_FAILED', '会议发言失败');
@@ -159,15 +160,15 @@ async function archiveMeeting(nodeId: string, meeting: ActiveMeeting): Promise<v
   await atomicWriteFile(`${directory}/${getMeetingRoundUsageFileName(nodeId, meeting.session.round)}`,
     JSON.stringify(meeting.session.usageRecorder.state));
   await atomicWriteFile(`${directory}/${getMeetingFileName(nodeId, meeting.session.round)}`,
-    JSON.stringify(meeting.session.publicMessages, null, 2));
+    JSON.stringify({ ...meetingDisplaySnapshot(meeting.session), activePublicMessages: meeting.session.publicMessages }, null, 2));
 }
 
 async function manageMeetingHistory(nodeId: string, meeting: ActiveMeeting, command: string): Promise<void> {
   meeting.session.busy = true;
   if (command === '/compact') await compactMeetingManually(meeting.dataDir, meeting.session);
   else await resetMeetingHistory(nodeId, meeting);
-  broadcastMeeting(meeting, { type: 'round-done', messages: meeting.session.publicMessages });
-  broadcastMeeting(meeting, { type: 'history-updated', messages: meeting.session.publicMessages,
+  broadcastMeeting(meeting, { type: 'round-done', messages: meetingDisplayMessages(meeting.session) });
+  broadcastMeeting(meeting, { type: 'history-updated', messages: meetingDisplayMessages(meeting.session),
     chairMessages: meeting.session.chairMessages });
 }
 

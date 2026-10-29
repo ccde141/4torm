@@ -36,7 +36,7 @@ export type MeetingBroadcastEvent =
   | { type: 'summary-chunk'; chunk: string }
   | { type: 'summary-done'; minutes: string }
   | { type: 'phase-change'; phase: string }
-  | (CompactionProgress & { target?: 'public' | 'chair' })
+  | (CompactionProgress & { target?: 'public' | 'chair'; label?: string })
   | { type: 'compact-warn'; message: string }
   | { type: 'compaction-notice'; message: string }
   | { type: 'compaction-notice-clear' }

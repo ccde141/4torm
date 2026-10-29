@@ -1,4 +1,5 @@
 import type { RoomMessageSegment } from './types.js';
+import type { ToolImageRef } from '../shared/types.js';
 
 export function createRoomMessageSegments() {
   const segments: RoomMessageSegment[] = [];
@@ -16,7 +17,7 @@ export function createRoomMessageSegments() {
       if (current?.kind === 'tools') current.tools.push(item);
       else segments.push({ kind: 'tools', tools: [item] });
     },
-    toolResult(result: string, ok: boolean) {
+    toolResult(result: string, ok: boolean, toolImages?: ToolImageRef[]) {
       for (let index = segments.length - 1; index >= 0; index--) {
         const current = segments[index];
         if (current.kind !== 'tools') continue;
@@ -24,6 +25,7 @@ export function createRoomMessageSegments() {
           const tool = current.tools[toolIndex];
           if (tool.status !== 'running') continue;
           tool.result = result;
+          if (toolImages?.length) tool.toolImages = toolImages;
           tool.status = ok ? 'success' : 'error';
           return;
         }
@@ -31,6 +33,10 @@ export function createRoomMessageSegments() {
     },
     dispatch(dispatchId: string) {
       segments.push({ kind: 'dispatch', dispatchId });
+    },
+    compact(id: string, summary: string, reasoningOffset: number) {
+      if (segments.some(segment => segment.kind === 'compaction' && segment.id === id)) return;
+      segments.push({ kind: 'compaction', id, summary, reasoningOffset });
     },
     reconcile(content: string) {
       const parts = segments

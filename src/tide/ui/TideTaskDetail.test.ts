@@ -66,3 +66,16 @@ test('每日定时详情同时显示触发时间、运行电脑时区规则和�
   assert.match(html, /错过的时间不补跑/);
   assert.ok(html.includes(new Date(task.nextRun!).toLocaleString('zh-CN', { timeZoneName: 'short' })));
 });
+
+test('删除活跃会话入口仅用于暂停且未运行的潮汐独立会话', () => {
+  const task: TideTask = { id: 'tide-delete', name: '会话删除', schedule: 'daily 08:00', prompt: '执行',
+    agentId: 'agent-test', repeatCount: -1, pushMode: 'accumulate', windowN: 2,
+    targetSessionId: 'active-session', selfLoop: false, consecutiveErrors: 0, enabled: false,
+    createdAt: '2026-10-21T00:00:00Z' };
+  const render = (overrides: Partial<TideTask> = {}, running = false) => renderToStaticMarkup(
+    createElement(LocaleProvider, null, createElement(TideTaskDetail, { task: { ...task, ...overrides },
+      runs: [], runState: null, running, onViewSession() {}, onDeleteSession: async () => {}, onUpdated() {} })));
+  assert.match(render(), /删除活跃会话（保留归档）/);
+  for (const html of [render({ enabled: true }), render({}, true), render({ pushMode: 'designated' }),
+    render({ targetSessionId: undefined })]) assert.doesNotMatch(html, /删除活跃会话/);
+});

@@ -4,7 +4,7 @@ import { createBackendEventSource } from '../../../lib/backend-client';
 import { fetchConvectionRead } from './convection-load-retry';
 import { restoreConvectionMessage } from './convection-message-map';
 import type { ConvectionTurnMessage } from './ConvectionTurnCard';
-import { applyExternalChairEvent, applyExternalPublicEvent, restoreConvectionCompaction,
+import { applyExternalChairEvent, applyExternalPublicEvent, restoreConvectionCompaction, restoreConvectionPublicDraft,
   type ExternalChairMessage, type ExternalRoundEvent } from './convection-external-events';
 import type { ConvectionRound } from './convection-round-state';
 import { applyConvectionModelRequest, applyConvectionUsage, beginConvectionUsage, mergeConvectionSessions, restoreConvectionUsage,
@@ -147,11 +147,6 @@ export function useConvectionConferenceFeed(bindings: FeedBindings): boolean {
           latest.current.setActiveRunId(event.runId);
           latest.current.setSessions(current => beginConvectionUsage(current, sessionId, event.round));
           applyProgress(latest.current, sessionId, event.round, event.event);
-          if (event.event.type === 'compact-done') {
-            const expectedRevision = progressRevision;
-            void reloadMessages(sessionId, latest,
-              () => closed || progressRevision !== expectedRevision, event.round);
-          }
         } else if (event.type === 'round-end' && (!runId || runId === event.runId)) {
           progressRevision += 1;
           runId = null;
@@ -254,9 +249,9 @@ async function restoreActive(sessionId: string, event: Snapshot,
     latest.current.setSessions(current => restoreConvectionUsage(current, sessionId, data, round));
     const draft = event.live.activeRound.round === 'chair'
       ? event.chairLive?.messages.at(-1) : event.live.messages.at(-1);
-    latest.current.setMessages([...((data.publicMessages ?? []).map(restoreConvectionMessage)),
-      ...(event.live.activeRound.round === 'public' && draft?.complete === false
-        ? [{ speaker: draft.speaker, content: draft.content, streaming: true }] : [])]);
+    const publicMessages = (data.publicMessages ?? []).map(restoreConvectionMessage);
+    latest.current.setMessages(round === 'public'
+      ? restoreConvectionPublicDraft(publicMessages, draft) : publicMessages);
     latest.current.setChairMessages([...(data.chairMessages ?? []),
       ...(event.live.activeRound.round === 'chair' && draft?.complete === false
         ? [{ role: 'assistant', content: draft.content, streaming: true }] : [])]);

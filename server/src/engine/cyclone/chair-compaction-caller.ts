@@ -9,6 +9,7 @@ import type { RoomData } from './types.js';
 import { cycloneChairBoundaries, rememberChairContextBoundary } from './chair-context.js';
 import type { CompactionProgress } from '../shared/compaction/index.js';
 import { finishCycloneCompaction } from './compaction-progress.js';
+import { captureCycloneCompaction } from './conversation-transcript.js';
 
 /** A room's chair private thread is separate from its public meeting history. */
 export function createChairCompactionCaller(options: {
@@ -24,7 +25,7 @@ export function createChairCompactionCaller(options: {
 }): LLMCaller {
   const { dataDir, workshopId, room, agent } = options;
   const caller = createCompactionCaller({ llm: options.llm, dataDir, area: 'cycloneConversation',
-    kind: 'meeting', model: agent.model, chairModel: agent.model, prompt: agent.compactionPrompt,
+    kind: 'meeting', recentHumanTurns: 4, model: agent.model, chairModel: agent.model, prompt: agent.compactionPrompt,
     protectedPrefixCount: 1, initialPromptTokens: options.initialPromptTokens,
     initialEstimateTokens: room.chairRequestEstimate ?? estimateCompactionTokens(options.messages.slice(0, -1)),
     scopeKey: `cyclone:${workshopId}:room:${room.id}:chair`,
@@ -36,6 +37,8 @@ export function createChairCompactionCaller(options: {
     },
     commit: async (plan, signal) => {
       const next = { ...room, chairActiveContext: structuredClone(plan.messages.slice(1)), chairTokenUsage: undefined,
+        chairDisplayHistory: captureCycloneCompaction(room.chairDisplayHistory, room.chairMessages ?? [], room.chairMessages ?? [],
+          { role: 'system' as const, content: `[历史压缩记录]\n${plan.summary}`, compactionId: room.chairCompaction?.id }),
         chairCompaction: room.chairCompaction ? finishCycloneCompaction(room.chairCompaction) : undefined };
       rememberChairContextBoundary(next);
       await saveRoom(dataDir, workshopId, next, signal);

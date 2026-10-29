@@ -180,7 +180,7 @@ for (const resetCase of [
     await updateDispatch(dataDir, workshop.id, running.id, { status: 'running' });
 
     const reset = await resetRoomContext(dataDir, workshop.id, room.id, {
-      scope: 'public', publicSummary: resetCase.publicSummary,
+      scope: 'public', publicSummary: resetCase.publicSummary, publicRetainedMessages: [],
     });
     const roomUrl = `/api/cyclone/workshop/${workshop.id}/room/${room.id}/dispatches`;
     const workshopUrl = `/api/cyclone/workshop/${workshop.id}/dispatches`;
@@ -219,7 +219,7 @@ test('/compact 保留派发所属上下文，晚到结果仍能查询和带入',
   });
   await updateDispatch(dataDir, workshop.id, dispatch.id, { status: 'running' });
   await resetRoomContext(dataDir, workshop.id, room.id, {
-    scope: 'public', publicSummary: '等待派发结果，保留运行编号。',
+    scope: 'public', publicSummary: '等待派发结果，保留运行编号。', publicRetainedMessages: [],
   });
   await updateDispatch(dataDir, workshop.id, dispatch.id, { status: 'completed', response: '交付已完成' });
   const response = await app.inject({ method: 'GET',

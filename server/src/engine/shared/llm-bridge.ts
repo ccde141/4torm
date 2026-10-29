@@ -50,6 +50,7 @@ import type { ProviderProtocol } from './provider-transports/protocol.js';
 import { parseTextToolResponse } from './text-tool-protocol.js';
 import { TextToolStreamGate } from './text-tool-stream-gate.js';
 import { resolveProviderSelection } from '../../model-runtime/config/provider-selection.js';
+import { resolveProviderAdapter } from '../../model-runtime/providers/registry.js';
 import { resolveLoggedProviderSelection } from '../../model-runtime/config/provider-selection-log.js';
 import { providerScheduler } from '../../model-runtime/scheduling/provider-scheduler.js';
 import { providerHttpError, providerNetworkError, providerResponseError, providerTransportError } from './provider-request-error.js';
@@ -60,6 +61,7 @@ import { enforceProviderOutputBudget } from './provider-output-budget.js';
 import { applyProviderOutputControl, type ProviderOutputControl } from './provider-output-control.js';
 import { createModelRequestUsage, estimateRequestInput, type CurrentInputEstimate,
   type ModelRequestPurpose } from './model-request-usage.js';
+import { frameworkError } from './framework-error.js';
 
 interface Provider {
   id: string;
@@ -228,6 +230,8 @@ export interface LLMCallParams {
    * 不传 = 纯文本模式（向后兼容，现有调用方行为不变）。
    */
   tools?: ToolDef[];
+  /** Preserve historical tool encoding independently of tools offered for this request. */
+  historyToolTransport?: 'native' | 'text';
 }
 
 export async function resolveModelPromptBudget(
@@ -236,8 +240,10 @@ export async function resolveModelPromptBudget(
 ): Promise<number | undefined> {
   const { identity, runtimeFetch } = await modelBudgetContext(dataDir, fullModelKey);
   const runtime = await discoverProviderRuntimeCapabilities(identity, runtimeFetch);
-  if (!runtime) return undefined;
-  return resolveSafePromptTokens(runtime.contextWindowTokens, resolveMaxOutputTokens(identity));
+  const declared = resolveProviderAdapter(identity).generationLimits?.(identity)?.contextWindowTokens;
+  const windows = [runtime?.contextWindowTokens, declared].filter((value): value is number => value !== undefined);
+  if (!windows.length) return undefined;
+  return resolveSafePromptTokens(Math.min(...windows), resolveMaxOutputTokens(identity));
 }
 
 /** Budget resolution and request translation share the same provider identity and runtime policy. */
@@ -290,12 +296,15 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
       model,
       messages,
       tools: params.tools,
+      historyToolTransport: params.historyToolTransport
+        ?? (params.purpose === 'compaction' ? 'native' : undefined),
       stream,
       maxTokens: params.outputTokenBudget ?? options?.maxTokens ?? 8192,
       temperature: options?.temperature ?? 0.7,
     });
     const body = mergeCustomRequestParameters(request.body, provider.customRequestParameters);
     enforceProviderOutputBudget(body, params.outputTokenBudget);
+    if (params.purpose === 'compaction' && params.tools?.length) body.tool_choice = { type: 'none' };
     logCustomParameterFields(provider.id, provider.customRequestParameters);
     return {
       ...request,
@@ -343,7 +352,8 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
     messages: compileModelMessages(messages, {
       identity,
       forwardToolNames: forwardMap,
-      toolTransport: params.tools?.length ? 'native' : 'text',
+      toolTransport: params.historyToolTransport
+        ?? (params.tools?.length || params.purpose === 'compaction' ? 'native' : 'text'),
     }),
     ...(temperature === undefined ? {} : { temperature }),
     // 通用默认 8192；显式 Provider 档案可声明更稳妥的默认值。
@@ -364,6 +374,7 @@ async function buildRequest(params: LLMCallParams, stream: boolean) {
     body,
   );
   enforceProviderOutputBudget(normalizedBody, params.outputTokenBudget, identity);
+  if (params.purpose === 'compaction' && params.tools?.length) normalizedBody.tool_choice = 'none';
   applyProviderOutputControl(normalizedBody, identity, params.outputControl);
   logCustomParameterFields(provider.id, provider.customRequestParameters);
   return {
@@ -462,6 +473,12 @@ async function sendModelAttempt(
           onReasoning: chunk => { if (chunk) touch(); params.onReasoning?.(chunk); },
           onToolProgress: progress => { touch(); params.onToolProgress?.(progress); } },
         request, useStream, meter.report, () => meter.update({ state: 'sent', wasSent: true }))), params.signal);
+    if (params.purpose === 'compaction' && (result.toolCalls?.length || result.finishReason === 'tool_calls'
+      || parseTextToolResponse(result.content).kind === 'tool-call')) {
+      meter.finish('failed', result.usage, false);
+      throw frameworkError({ code: 'COMPACTION_TOOL_CALL_REJECTED', kind: 'provider',
+        message: '压缩请求返回了工具调用，未执行，原会话保留', source: 'llm-bridge', retryable: false });
+    }
     meter.finish('completed', result.usage, result.usageComplete ?? Boolean(result.usage));
     return result;
   } catch (error) {
@@ -528,7 +545,7 @@ async function callLLMInner(
       const message = data.choices?.[0]?.message;
       const rawContent = message?.content;
       // 原生模式：有 tool_calls 时 content 常为 null/空，属正常
-      const toolCalls = params.tools ? parseToolCalls(message, 'openai') : [];
+      const toolCalls = params.tools || params.purpose === 'compaction' ? parseToolCalls(message, 'openai') : [];
       // 工具名反解（把净化名还原成原始 mcp:... ，react-loop 才能正确分发）
       for (const tc of toolCalls) tc.name = restoreToolName(tc.name, nameMap);
       const content = typeof rawContent === 'string' ? rawContent : '';
@@ -564,7 +581,7 @@ async function callLLMInner(
       return normalized;
     }
     const result = await parseSSEStream(
-      res, onChunk, !!params.tools, nameMap, params.onReasoning, params.onToolProgress,
+      res, onChunk, !!params.tools || params.purpose === 'compaction', nameMap, params.onReasoning, params.onToolProgress,
       cumulativeStream, params.outputControl, onUsage,
     );
     const normalized = applyTextToolFallback(result, params.tools, nameMap);

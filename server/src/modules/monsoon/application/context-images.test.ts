@@ -91,8 +91,8 @@ test('compaction inserts before the current pending reply, never an older failed
     const port = new MonsoonContextPort(dataDir);
     const saved = await port.commit('agent-a', 'session-a', session.revision, {
       before: context, prefix: context, tail: [], summary: 'facts', sourceTokens: 100,
-      reason: 'manual', mode: 'full', messages: context,
-    }, 0);
+      reason: 'threshold', mode: 'partial', messages: context,
+    }, 0, undefined, { runId: 'current-pending', toolOffset: 0, textOffset: 0, eventOffset: 0 });
     assert.equal(saved.messages[0].id, 'old-failed');
     assert.equal(saved.messages[2].type, 'compact-marker');
     assert.equal(saved.messages[3].id, 'current-pending');

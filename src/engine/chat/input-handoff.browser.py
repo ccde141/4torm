@@ -20,7 +20,10 @@ with sync_playwright() as p:
     for mode in ['closed', 'received', 'included', 'uncertain']:
         context, page, errors = open_case(browser, mode)
         page.get_by_role('button', name='Send', exact=True).click()
-        expect(page.get_by_role('status').last).to_have_text('等待下一轮' if mode == 'closed' else '已接收')
+        expect(page.locator('.chat__human-input-status').last).to_have_text('等待下一轮' if mode == 'closed' else '已接收 · 等待本次模型响应')
+        expect(page.locator('.chat__message--steering')).to_have_count(1)
+        expect(page.locator('.chat__input-area')).to_have_count(0)
+        expect(page.get_by_role('button', name='核对接收状态并继续')).to_have_count(0)
         expect(page.get_by_role('button', name='Send', exact=True)).to_be_enabled()
         expect(page.locator('output')).to_contain_text('chats=0')
         page.get_by_role('button', name='Finish', exact=True).click()
@@ -29,10 +32,32 @@ with sync_playwright() as p:
             expect(page.locator('output')).to_contain_text('chats=1')
         else:
             expect(page.locator('output')).to_contain_text('streaming=false')
+            expect(page.locator('.chat__human-input-status')).to_have_text('已纳入上下文')
+            expect(page.get_by_role('button', name='核对接收状态并继续')).to_have_count(0)
         expect(page.locator('output')).to_contain_text('posts=1')
         assert not errors, errors
         context.close()
         print(f'PASS: {mode}')
+
+    context, page, errors = open_case(browser, 'included')
+    page.get_by_role('button', name='Send', exact=True).click()
+    for button, status in [
+        ('Model output', '已接收 · 等待本次模型响应'),
+        ('Tool arguments', '已接收 · 等待本次模型响应'),
+        ('Tool execution', '已接收 · 等待当前工具结束'),
+        ('Team waiting', '已接收 · 等待主 Agent 继续'),
+        ('Compact', '已接收 · 等待压缩结束'),
+        ('Compacted', '已接收 · 等待主 Agent 继续'),
+    ]:
+        page.get_by_role('button', name=button, exact=True).click()
+        expect(page.locator('.chat__human-input-status')).to_have_text(status)
+        expect(page.locator('.chat__message--steering')).to_have_count(1)
+        expect(page.locator('output')).to_contain_text('chats=0 | posts=1')
+    page.get_by_role('button', name='Finish', exact=True).click()
+    expect(page.locator('.chat__human-input-status')).to_have_text('已纳入上下文')
+    assert not errors, errors
+    context.close()
+    print('PASS: wait hints follow model, tools, team and compaction without restarting work')
 
     context, page, errors = open_case(browser, 'reordered')
     page.get_by_role('button', name='Send', exact=True).click()
@@ -56,7 +81,8 @@ with sync_playwright() as p:
     expect(page.locator('output')).to_contain_text('chats=0')
     page.reload()
     page.wait_for_load_state('networkidle')
-    expect(page.locator('div').filter(has_text='first correction').last).to_be_visible()
+    expect(page.locator('.chat__message--steering').filter(has_text='first correction')).to_be_visible()
+    expect(page.locator('.chat__input-area')).to_have_count(0)
     expect(page.locator('output')).to_contain_text('posts=0')
     assert not errors, errors
     context.close()

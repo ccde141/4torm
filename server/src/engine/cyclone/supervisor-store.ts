@@ -17,7 +17,7 @@ export interface SupervisorMessage extends SeatContextMessage {
   supervisorGoalOrigin?: SupervisorGoalOrigin;
 }
 export interface SupervisorData extends Pick<SeatData,
-  'rolePrompt' | 'tokenUsage' | 'modelUsage' | 'pending' | 'compactState' | 'compaction' | 'compactionNotice'> {
+  'rolePrompt' | 'tokenUsage' | 'modelUsage' | 'pending' | 'compactState' | 'compaction' | 'compactionNotice' | 'displayHistory'> {
   id: typeof SUPERVISOR_ID;
   title: string;
   agentId?: string;

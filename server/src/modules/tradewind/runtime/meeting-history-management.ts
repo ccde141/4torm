@@ -6,6 +6,7 @@ import { getMeetingFileName, getMeetingsDir } from '../../../engine/tradewind/fo
 import type { ActiveMeeting } from '../../../engine/tradewind/nodes/meeting.js';
 import { publishMeetingCompaction } from '../../../engine/tradewind/execution/meeting-compaction-progress.js';
 import type { CompactionProgress } from '../../../engine/shared/compaction/index.js';
+import { meetingDisplaySnapshot } from '../../../engine/tradewind/execution/meeting-display.js';
 
 /** Archive first, commit cleared records second, then expose the cleared live state. */
 export async function resetMeetingHistory(nodeId: string, meeting: ActiveMeeting): Promise<void> {
@@ -17,8 +18,7 @@ export async function resetMeetingHistory(nodeId: string, meeting: ActiveMeeting
     signal.throwIfAborted();
     await fs.mkdir(meeting.compactArchiveDir, { recursive: true });
     await atomicWriteFile(path.join(meeting.compactArchiveDir, `${Date.now()}-${randomUUID()}-reset.json`),
-      JSON.stringify({ publicMessages: meeting.session.publicMessages,
-        chairMessages: meeting.session.chairMessages, round: meeting.session.round }));
+      JSON.stringify({ ...meetingDisplaySnapshot(meeting.session), round: meeting.session.round }));
     signal.throwIfAborted();
     await meeting.session.usageRecorder.clearPromptMeasurement();
     if (meeting.runDir) {
@@ -30,6 +30,8 @@ export async function resetMeetingHistory(nodeId: string, meeting: ActiveMeeting
     }
     meeting.session.publicMessages = [];
     meeting.session.chairMessages = [];
+    delete meeting.session.publicDisplayHistory;
+    delete meeting.session.publicDisplayContextCount;
     delete meeting.session.chairActiveContext;
     delete meeting.session.chairContextRawCount;
     delete meeting.session.chairContextPublicAnchor;

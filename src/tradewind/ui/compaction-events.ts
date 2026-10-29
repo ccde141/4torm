@@ -8,6 +8,8 @@ export interface CompactionEvent {
   updatedAt: number;
   reason: 'manual' | 'threshold' | 'provider-overflow';
   message?: string;
+  summary?: string;
+  label?: string;
   aborted?: boolean;
   target?: 'public' | 'chair';
 }

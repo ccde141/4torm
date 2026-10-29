@@ -26,7 +26,7 @@ function projectMessage(message: MonsoonMessage): StoredMonsoonContextMessage[] 
   if (message.runCommitted === false && !message.content && !Array.isArray(message.toolSteps)) return [];
   let context: StoredMonsoonContextMessage[];
   if (isRecord(message.ask) && message.ask.answered === true && typeof message.ask.reply === 'string') {
-    context = [{ role: 'assistant', content: message.content }, { role: 'user', content: message.ask.reply }];
+    context = [{ role: 'assistant', content: message.content }, { role: 'user', content: message.ask.reply, origin: 'human' }];
   } else if (message.contextExact === true && Array.isArray(message.nativeContext)) {
     context = readStoredMonsoonContext(message.nativeContext);
   } else if (message.type === 'compact-marker') {
@@ -34,6 +34,7 @@ function projectMessage(message: MonsoonMessage): StoredMonsoonContextMessage[] 
   } else if (message.role === 'assistant') {
     context = assistantContext(message);
   } else context = readStoredMonsoonContext([{ role: message.role, content: message.content,
+    ...(message.role === 'user' ? { origin: message.origin === 'framework' ? 'framework' : 'human' } : {}),
     ...(Array.isArray(message.images) ? { images: message.images } : {}) }]);
   if (message.streamStopped === true) context.push({ role: 'assistant',
     content: '上一轮执行被人类停止。已返回的工具结果和已经产生的文件改动仍然有效；没有结果的步骤不得视为完成，以上记录不代表任务完成。请结合人类的新消息判断是否继续。' });

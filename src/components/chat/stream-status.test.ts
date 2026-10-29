@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { formatStreamStatus, getToolTarget } from './stream-status';
 
 test('stream status uses the same labels for model and long tool waits', () => {
+  assert.equal(formatStreamStatus('team-waiting', 0, '数据采集员'), '等待工作队 · 数据采集员...');
+  assert.equal(formatStreamStatus('team-waiting', 0, 'Collector', undefined, 'en-US'), 'Waiting for team · Collector...');
   assert.equal(formatStreamStatus('llm-waiting', 12), '等待模型响应 12s...');
   assert.equal(formatStreamStatus('model-output', 3), '模型正在生成 3s...');
   assert.equal(formatStreamStatus('tool-exec', 65, 'write_file'), '正在执行 write_file 1m 5s...');

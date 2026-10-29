@@ -4,6 +4,7 @@ import { mutateTeam, readTeam } from './storage.js';
 import { enforcePermissions, validateContext, validateDefinition } from './validation.js';
 import { teamError, type MemberDefinition, type MemberReport, type TeamMember, type TeamOutcome, type TeamOwner,
   type TeamPermissions, type TeamState } from './types.js';
+import { TeamMailbox } from './mailbox.js';
 
 const processIdentity = randomUUID();
 
@@ -21,9 +22,14 @@ function runningMember(state: TeamState, id: string, runId: string, runtimeId: s
 function report(state: TeamState, member: TeamMember, outcome: TeamOutcome, content: string): void {
   if (!member.run) throw teamError('TEAM_RUN_CONFLICT');
   member.run.status = outcome;
+  member.run.phase = outcome;
+  delete member.run.tool;
+  member.run.updatedAt = new Date().toISOString();
+  for (const message of state.messages ?? []) if (message.direction === 'to-member'
+    && message.runId === member.run.id && message.status === 'queued') message.status = 'undelivered';
   state.reports.push({ id: randomUUID(), memberId: member.id, runId: member.run.id,
     ...(member.run.requestId ? { requestId: member.run.requestId } : {}),
-    task: member.run.task, outcome, content, acknowledged: false });
+    task: member.run.task, outcome, content, acknowledged: false, createdAt: new Date().toISOString() });
 }
 function validRequestId(value: unknown): value is string {
   return typeof value === 'string' && /^[a-zA-Z0-9_-]{1,160}$/.test(value);
@@ -42,13 +48,15 @@ export class TeamStore {
     this.owner = { ...owner };
   }
   read(): Promise<TeamState> { return readTeam(this.dataDir, this.owner); }
+  mailbox(): TeamMailbox { return new TeamMailbox(this.dataDir, this.owner); }
 
   async create(value: unknown, parent: TeamPermissions): Promise<TeamMember> {
     validateDefinition(value);
     enforcePermissions(value.permissions, parent);
     const definition: MemberDefinition = structuredClone(value);
     return mutateTeam(this.dataDir, this.owner, state => {
-      const member: TeamMember = { ...definition, id: randomUUID(), lifecycle: 'active', context: [] };
+      const member: TeamMember = { ...definition, id: randomUUID(), lifecycle: 'active', context: [],
+        recruitedAt: new Date().toISOString() };
       state.members.push(member);
       return member;
     });
@@ -72,7 +80,9 @@ export class TeamStore {
         return { memberId: member.id, ...run, replayed: true };
       }
       const member: TeamMember = { ...definition, id: randomUUID(), lifecycle: 'active', context: [],
-        run: { id: randomUUID(), runtimeId: this.runtimeId, task, requestId, status: 'running' } };
+        recruitedAt: new Date().toISOString(),
+        run: { id: randomUUID(), runtimeId: this.runtimeId, task, requestId, status: 'running',
+          startedAt: new Date().toISOString() } };
       state.members.push(member);
       return { memberId: member.id, ...member.run!, replayed: false };
     });
@@ -97,7 +107,8 @@ export class TeamStore {
       if (member.lifecycle === 'dismissed') throw teamError('TEAM_MEMBER_DISMISSED');
       if (member.run?.status === 'running') throw teamError('TEAM_MEMBER_BUSY');
       enforcePermissions(member.permissions, policy);
-      member.run = { id: randomUUID(), runtimeId: this.runtimeId, task, status: 'running', ...(requestId ? { requestId } : {}) };
+      member.run = { id: randomUUID(), runtimeId: this.runtimeId, task, status: 'running',
+        startedAt: new Date().toISOString(), ...(requestId ? { requestId } : {}) };
       return { ...member.run, replayed: false };
     });
   }
@@ -121,11 +132,30 @@ export class TeamStore {
     });
   }
 
+  async activity(memberId: string, runId: string, phase: string, tool?: string, recentResult?: string): Promise<void> {
+    await mutateTeam(this.dataDir, this.owner, state => {
+      const run = runningMember(state, memberId, runId, this.runtimeId).run!;
+      Object.assign(run, { phase: run.stopReason ? 'stopping' : phase, tool, updatedAt: new Date().toISOString() });
+      if (recentResult !== undefined) run.recentResult = recentResult.slice(0, 600);
+    });
+  }
+
+  async requestStop(memberId: string, runId: string, reason: string): Promise<void> {
+    if (typeof reason !== 'string' || !reason.trim()) throw teamError('TEAM_INVALID_STOP_REASON');
+    await mutateTeam(this.dataDir, this.owner, state => {
+      const member = findMember(state, memberId);
+      if (member.run?.id !== runId) throw teamError('TEAM_RUN_CONFLICT');
+      if (member.run.status === 'running') Object.assign(member.run,
+        { stopReason: reason, phase: 'stopping', updatedAt: new Date().toISOString() });
+    });
+  }
+
   async dismiss(memberId: string): Promise<void> {
     await mutateTeam(this.dataDir, this.owner, state => {
       const member = findMember(state, memberId);
       if (member.run?.status === 'running') throw teamError('TEAM_MEMBER_BUSY');
       member.lifecycle = 'dismissed';
+      member.dismissedAt ??= new Date().toISOString();
     });
   }
 
@@ -136,6 +166,19 @@ export class TeamStore {
       const changed = state.reports.filter(item => ids.includes(item.id) && !item.acknowledged);
       for (const item of changed) item.acknowledged = true;
       return changed;
+    });
+  }
+
+  /** A durable context checkpoint proves delivery, independently of acknowledgement or review. */
+  async delivered(reportIds: string[], runId: string, includedAt?: string): Promise<MemberReport[]> {
+    if (!/^[a-zA-Z0-9_-]{1,160}$/.test(runId)
+      || (includedAt !== undefined && !Number.isFinite(Date.parse(includedAt)))) throw teamError('TEAM_INVALID_DELIVERY');
+    const ids = new Set(reportIds);
+    return mutateTeam(this.dataDir, this.owner, state => {
+      for (const id of ids) if (!state.reports.some(item => item.id === id)) throw teamError('TEAM_REPORT_NOT_FOUND');
+      const reports = state.reports.filter(item => ids.has(item.id));
+      for (const item of reports) item.delivery ??= { runId, ...(includedAt ? { includedAt } : {}) };
+      return reports;
     });
   }
 

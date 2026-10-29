@@ -1,9 +1,8 @@
 import type { KeyboardEventHandler, RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { renderTextWithCode } from '../../../engine/markdown';
-import BoundedText from '../../../engine/text-display/BoundedText';
 import type { MeetingChairMessage, MeetingMessage, MeetingStatus } from './meeting-client';
 import { MeetingMessageItem } from './MeetingMessageItem';
+import MeetingChairMessageItem from './MeetingChairMessageItem';
 import { useLocale } from '../../../i18n/LocaleContext';
 import type { ProviderUsage } from '../token-usage';
 import { CompactionNotice } from '../../../components/common/CompactionNotice';
@@ -160,12 +159,8 @@ export default function MeetingPanelView(props: MeetingPanelViewProps) {
               <div className="tw-meeting-panel__conversation-head"><div><span className="tw-meeting-panel__section-title">{t('tradewind.meeting.chairTitle')}</span><small>{t('tradewind.meeting.chairSubtitle')}</small></div></div>
               <div className="tw-meeting-panel__messages" ref={chairContainerRef}>
                 {chairMsgs.filter(message => message.role !== 'system' || isCompactedHistory(message.content)).map((message, index) => message.role === 'system' && isCompactedHistory(message.content)
-                  ? <CompactedHistory key={index} content={message.content} /> : (
-                  <div key={index} className={`tw-meeting-msg tw-meeting-msg--${message.role}`}>
-                    {message.reasoningContent && <details className="tw-meeting-think" open={!message.content}><summary className="tw-meeting-think__trigger">{t('tradewind.meeting.reasoning')}</summary><div className="tw-meeting-think__body"><BoundedText text={message.reasoningContent} followTail={chairBusy} /></div></details>}
-                    <span className="tw-meeting-msg__content">{renderTextWithCode(message.content, `chair-${index}`)}</span>
-                  </div>
-                ))}
+                  ? <CompactedHistory key={index} content={message.content} handoff={!!message.compactionId} />
+                  : <MeetingChairMessageItem key={index} message={message} index={index} busy={chairBusy && index === chairMsgs.length - 1} />)}
                 <div ref={chairEndRef} />
               </div>
               <CompactionStatus activity={props.compactions?.chair} />

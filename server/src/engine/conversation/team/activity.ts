@@ -17,7 +17,8 @@ export interface TeamActivityEvent {
 export function teamActivity(
   stage: TeamActivityEvent['stage'],
   fact: Omit<TeamActivityEvent, 'type' | 'id' | 'stage' | 'timestamp'>,
+  timestamp = new Date().toISOString(),
 ): TeamActivityEvent {
   return { ...fact, preview: fact.preview?.slice(0, 240), type: 'team-activity',
-    id: randomUUID(), stage, timestamp: new Date().toISOString() };
+    id: fact.reportId ? `team-report-${fact.reportId}-${stage}` : randomUUID(), stage, timestamp };
 }

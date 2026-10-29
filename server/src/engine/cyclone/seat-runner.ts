@@ -55,7 +55,7 @@ import { createSeatCompactionCaller } from './conversation-compaction-caller.js'
 import { createSeatDispatchRecord, deliverSeatDispatchReceipts } from './seat-dispatch.js';
 import { dispatchAcceptance } from './dispatch-acceptance.js';
 import { kickDispatchQueue } from './dispatch-queue.js';
-import { recordSeatAssistantResult } from './seat-reasoning.js';
+import { recordSeatAssistantResult, unclaimedSeatContent } from './seat-reasoning.js';
 import { executeSeatFactTool, isSeatFactTool } from './seat-fact-tools.js';
 import {
   prepareToolRegistration,
@@ -345,10 +345,16 @@ async function driveSeat(ctx: DriveCtx): Promise<{
   } = ctx;
   const wsDir = wsRelPath(dataDir, workshopId);
   let generatedContextStart = messages.length;
+  const sealedContext: SeatContextMessage[] = [];
+  let reasoning = '';
+  let reasoningOffset = 0;
   const llm = createSeatCompactionCaller({ dataDir, workshopId, seat, messages, agent,
     llm: makeLLM(dataDir, agent.model, agent.temperature), onNotice: onEvent, onProgress: onEvent,
+    displayReasoning: () => reasoning.slice(reasoningOffset),
     onCompacted: plan => {
-      generatedContextStart = 2 + Math.max(0, generatedContextStart - 1 - plan.prefix.length);
+      sealedContext.push(...plan.before.slice(generatedContextStart));
+      generatedContextStart = plan.messages.length;
+      reasoningOffset = reasoning.length;
     },
   });
   let pendingToolRegistration: ToolRegistrationProposal | undefined;
@@ -359,7 +365,6 @@ async function driveSeat(ctx: DriveCtx): Promise<{
     onToolRegistration: proposal => { pendingToolRegistration = proposal; },
     onExecution: executionId => executionIds.add(executionId),
   });
-  let reasoning = '';
 
   // toolCaller 恒提供：ask/delegate/contact/task_board/bulletin 是恒在的虚拟工具，
   // 即使工位没有任何真实工具也要能调用（否则文本模式下 bulletin/task_board 调不动）
@@ -387,7 +392,8 @@ async function driveSeat(ctx: DriveCtx): Promise<{
 
   // 气旋历史存后端：补齐循环返回的最终回复，并把本轮原生思考作为展示元数据绑定。
   if (!result.suspended) {
-    recordSeatAssistantResult(messages, result.content, reasoning, generatedContextStart);
+    recordSeatAssistantResult(messages, unclaimedSeatContent(result.content, sealedContext),
+      reasoning.slice(reasoningOffset), generatedContextStart);
   }
 
   // messages 被循环原地追加了 assistant/tool 消息；剔除开头注入的 system prompt 后即新历史。
@@ -499,7 +505,8 @@ export async function chatSeatWithinExecution(
             wsRelPath: wsRelPath(dataDir, workshopId), bulletinSeenAt: seat.bulletinSeenAt,
           }),
         };
-        seat.messages.push({ role: 'user', content: humanMessage, ...inputIdentity });
+        seat.messages.push({ role: 'user', content: humanMessage,
+          origin: inputIdentity?.dispatchId ? 'framework' : 'human', ...inputIdentity });
         seat.compactionNotice = undefined;
         seat.compaction = undefined;
         await saveSeat(dataDir, workshopId, seat, signal);

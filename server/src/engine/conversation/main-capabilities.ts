@@ -43,7 +43,7 @@ export const MAIN_CAPABILITIES: MainCapability[] = [
   {
     id: 'team',
     title: '工作队',
-    tools: ['team_start', 'team_create', 'team_dispatch', 'team_read', 'team_wait', 'team_ack', 'team_review', 'team_dismiss'],
+    tools: ['team_start', 'team_create', 'team_dispatch', 'team_read', 'team_wait', 'team_ack', 'team_review', 'team_dismiss', 'team_message', 'team_stop'],
     route: '有一个可独立交付或复核的责任单元，就可启动成员；上下文隔离与专业分工也能降低风险。',
     guidance: MAIN_TEAM,
     examples: [{ scenario: '成员已完成调查，主线需要核验并继续派工',
@@ -92,10 +92,12 @@ function capabilityEntry(capability: MainCapability, hasGuide: boolean): string 
     return '';
   }
   if (MAIN_CAPABILITIES.some(entry => entry.id === capability.id) || !hasGuide) return '';
-  return `起手：用 \`framework_guide\` 读取 \`${capability.id}\` 当前 action，再按任务意图调用对应超级工具。`;
+  return `起手：用 \`framework_guide\` 读取 \`${capability.id}\` 的工作指南；准备操作时传 view="tools" 查看已开放操作，再传 action 展开字段。`;
 }
 
-export function renderCapabilityRouter(capabilities: MainCapability[]): string {
+export function renderCapabilityRouter(
+  capabilities: MainCapability[], options: { includeWorkShape?: boolean } = {},
+): string {
   if (!capabilities.length) return '';
   const collaboration = capabilities.some(capability =>
     ['cyclone', 'convection', 'tradewind', 'tide'].includes(capability.id)
@@ -113,14 +115,14 @@ export function renderCapabilityRouter(capabilities: MainCapability[]): string {
     return `- \`${capability.id}\` · **${capability.title}**：${route}${entry ? ` ${entry}` : ''}`;
   }).join('\n');
   const guideHint = hasGuide
-    ? '决定采用某项高级能力后，需要详细协议时调用 `framework_guide` 并传入上方能力 ID；不要凭旧会话记忆猜测已关闭能力的用法。'
+    ? '需要详细工作指南时调用 `framework_guide` 并传入能力 ID；准备实际操作时填写 view="tools" 查看当前开放操作，再用 action 展开单项字段。'
     : '';
   return [
     '## 选择可用能力',
-    collaboration
+    options.includeWorkShape === false ? '' : collaboration
       ? '处理可执行请求时，在第一个实质动作前初选工作形态；可以先做少量读取确认边界。发现新的独立责任单元、等待或复核需要时重新选择，不要把开工时的单干判断视为固定。简单交流和紧密串行任务可直接完成。'
       : '需要检查状态、记录或长期知识时，从当前提供的能力中选择；无须为了使用能力而增加流程。',
-    canStartTeam
+    canStartTeam && options.includeWorkShape !== false
       ? '中等任务只要有一块独立且可验收的工作，就可考虑在亲自修改前用 `team_start` 派出成员。摸清边界后，若有两个可独立验收、不会争用同一文件或状态的工作面，默认在首次写入前用 `team_start` 派出其中一块，自己推进另一块并整合；无需先证明并行更快。例如，两个互不依赖的模块各有测试时，一块交成员、一块留主线；不要只因源文件少就排除分工。单点修改、强串行依赖或交接成本明显更高时直接完成。'
       : '',
     cards, guideHint,
@@ -156,26 +158,39 @@ export function renderMainCapabilityGuide(
   defs: readonly ToolDef[],
   taskboard: unknown,
   action?: string,
+  options: { view?: 'guide' | 'tools'; catalog?: readonly ToolDef[] } = {},
 ): string {
-  const capability = activeMainCapabilities(defs)
+  const active = activeMainCapabilities(defs);
+  const enabled = active
     .find(candidate => candidate.id === capabilityId);
-  if (!capability) throw new Error('FRAMEWORK_GUIDE_UNAVAILABLE');
-  const tools = defs.filter(definition => capability.tools.includes(definition.name));
-  const extra = capability.detail === 'taskboard-state'
+  const view = options.view ?? (action ? 'tools' : 'guide');
+  if (view === 'guide') {
+    if (action) throw new Error('FRAMEWORK_GUIDE_INPUT_INVALID');
+    const capability = activeMainCapabilities(options.catalog ?? [])
+      .find(candidate => candidate.id === capabilityId) ?? enabled
+      ?? MAIN_CAPABILITIES.find(candidate => candidate.id === capabilityId);
+    if (!capability) throw new Error('FRAMEWORK_GUIDE_NOT_FOUND');
+    return [capability.guidance, renderCapabilityExamples(capability),
+      '准备实际操作时，使用 framework_guide 并填写相同 capability、view="tools"，查看当前开放的操作；再填写 action 读取对应字段。']
+      .filter(Boolean).join('\n\n');
+  }
+  if (!enabled) throw new Error('FRAMEWORK_GUIDE_UNAVAILABLE');
+  const tools = defs.filter(definition => enabled.tools.includes(definition.name));
+  if (action && !tools.some(tool => tool.name === action)) {
+    throw new Error('FRAMEWORK_GUIDE_ACTION_UNAVAILABLE');
+  }
+  const extra = enabled.detail === 'taskboard-state'
     ? `set/clear 使用当前 expectedRevision；冲突后先 get 再合并。当前任务板：\n${JSON.stringify(taskboard)}`
     : '';
   const definitions = tools.some(tool => tool.frameworkCapability)
-    ? renderCapabilityActions(capability.id, tools, capability.actionGuide, action)
-    : renderMainToolDefinitions(tools);
-  return [action ? '' : capability.guidance, extra,
-    action ? '' : renderCapabilityExamples(capability), definitions]
-    .filter(Boolean).join('\n\n');
+    ? renderCapabilityActions(enabled.id, tools, action)
+    : renderMainToolDefinitions(action ? tools.filter(tool => tool.name === action) : tools);
+  return [extra, definitions].filter(Boolean).join('\n\n');
 }
 
-function renderCapabilityExamples(capability: MainCapability): string {
-  const available = new Set(capability.tools);
+function renderCapabilityExamples(capability: FrameworkCapabilityDescriptor): string {
   const examples = (capability.examples ?? []).filter(example =>
-    example.actions.length > 0 && example.actions.every(action => available.has(action)))
+    example.actions.length > 0)
     .slice(0, 2);
   if (!examples.length) return '';
   const lines = examples.map(example =>
@@ -184,15 +199,12 @@ function renderCapabilityExamples(capability: MainCapability): string {
 }
 
 function renderCapabilityActions(
-  capabilityId: string, tools: readonly ToolDef[], layered = false, action?: string,
+  capabilityId: string, tools: readonly ToolDef[], action?: string,
 ): string {
   const gateway = frameworkCapabilityToolName(capabilityId);
-  if (layered && !action) {
+  if (!action) {
     const entries = tools.map(tool => `- \`${tool.name}\`：${tool.description}`);
     return `通过 \`${gateway}\` 调用本能力。先选择 action；需要字段时再调用 \`framework_guide\` 并传入 capability 与 action。\n${entries.join('\n')}`;
-  }
-  if (layered && action && !tools.some(tool => tool.name === action)) {
-    throw new Error('FRAMEWORK_GUIDE_ACTION_UNAVAILABLE');
   }
   const selected = action ? tools.filter(tool => tool.name === action) : tools;
   const actions = selected.map(tool => `#### action: ${tool.name}\n${tool.description}\ninput JSON Schema：\n${JSON.stringify(tool.parameters ?? {})}`);

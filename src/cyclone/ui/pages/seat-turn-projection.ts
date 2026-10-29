@@ -84,6 +84,7 @@ function messageSegments(message: DisplayMessage): CycloneReplySegment[] {
 
 /** 同一流片段可能同时含工具前说明和工具块；拆开后才能准确识别真正的末尾回答。 */
 function normalizeSegment(segment: CycloneReplySegment): CycloneReplySegment[] {
+  if (segment.compaction) return [segment];
   const normalized: CycloneReplySegment[] = [];
   if (segment.content) normalized.push({ content: segment.content, blocks: [] });
   if (segment.blocks.length) normalized.push({ content: '', blocks: segment.blocks });

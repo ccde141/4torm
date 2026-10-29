@@ -1,10 +1,4 @@
-import { estimateTextTokens } from './estimate.js';
-
 /** Share the estimator's weights and iterate code points, never cut a UTF-16 pair in half. */
-export function clipSummaryBody(text: string, maxTokens: number): string {
-  return takeUnits(text, Math.max(0, Math.floor(maxTokens * 4))).text;
-}
-
 function takeUnits(text: string, budget: number): { text: string; units: number } {
   let units = 0;
   let end = 0;
@@ -18,11 +12,10 @@ function takeUnits(text: string, budget: number): { text: string; units: number 
 }
 
 /** Streamed text and the persisted summary use the same bounded body buffer. */
-export function collectSummaryBody(maxTokens: number, onChunk?: (text: string) => void) {
+export function collectSummaryBody(maxTokens: number) {
   let body = '';
   let remaining = Math.floor(maxTokens * 4);
   let pending = '';
-  let published = 0;
   let atLimit = false;
   return {
     read: () => body,
@@ -35,22 +28,9 @@ export function collectSummaryBody(maxTokens: number, onChunk?: (text: string) =
       const accepted = takeUnits(text, remaining);
       remaining -= accepted.units;
       body += accepted.text;
-      atLimit ||= remaining === 0 || accepted.text.length < text.length;
-      // Hold leading whitespace so an empty first phase cannot pollute the fallback's display.
-      if (body.trim() && body.length > published) {
-        onChunk?.(body.slice(published));
-        published = body.length;
-      }
+      // Exactly filling the allowance can still be a complete provider response.
+      // Only an omitted code point proves that the buffer clipped its body.
+      atLimit ||= accepted.text.length < text.length;
     },
   };
-}
-
-/** An always-thinking provider may exhaust both phases. Retain facts, never invent a summary. */
-export function compactionSourceExcerpt(text: string, maxTokens: number): string {
-  const sourceBudget = Math.max(1, Math.floor(estimateTextTokens(text) * 0.45));
-  const label = maxTokens >= 12 ? '[原文节选]\n' : '原文:';
-  const remaining = Math.max(0, maxTokens - estimateTextTokens(label));
-  // The label has its own space; a short source must not become a label-only "summary".
-  const excerpt = clipSummaryBody(text, Math.min(remaining, sourceBudget));
-  return clipSummaryBody(label + excerpt, maxTokens);
 }

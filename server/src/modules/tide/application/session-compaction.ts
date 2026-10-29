@@ -16,6 +16,9 @@ import type { TideChangeFeed } from './change-feed.js';
 import { ambiguousTideSession } from '../sessions/session-io.js';
 import { parseTideCompactionProgress } from '../domain/compaction-progress.js';
 import { observeModelRequests, recordModelRequest, type ModelRequestUsageEvent } from '../../../engine/shared/model-request-usage.js';
+import type { CompactionRequestContext } from '../../../engine/shared/compaction/contracts.js';
+import type { LoadedAgent } from '../../../engine/shared/agent-loader.js';
+import type { TideSession } from '../sessions/session-types.js';
 
 const activeCompactions = new Set<string>();
 function compactionKey(dataDir: string, agentId: string, sessionId: string) {
@@ -28,13 +31,18 @@ export function isTideSessionCompacting(dataDir: string, agentId: string, sessio
 export interface TideCompactionResult { compacted: boolean; notices: string[]; updatedAt: number }
 export type SeasonCompaction = (agentId: string, sessionId: string,
   onNotice: (notice: CompactionNotice) => void, signal?: AbortSignal) => Promise<void>;
+export type TideCompactionContextBuilder = (input: {
+  dataDir: string; agent: LoadedAgent | null; session: TideSession;
+  task: { prompt?: string; selfLoop?: boolean }; signal?: AbortSignal;
+}) => Promise<CompactionRequestContext>;
 
 /** Human-only lifecycle port; scheduled task prompts never invoke this command. */
 export class TideSessionCompaction {
   constructor(private readonly dataDir: string, private readonly tasks: TideTaskRepository,
     private readonly scheduler: TideScheduler, private readonly changes?: TideChangeFeed,
     private readonly seasonCompaction?: SeasonCompaction,
-    private readonly summaryPorts: Pick<CompactionOptions, 'summarize' | 'resolveSummaryBudget'> = {}) {}
+    private readonly summaryPorts: Pick<CompactionOptions, 'summarize' | 'resolveSummaryBudget'> = {},
+    private readonly buildContext?: TideCompactionContextBuilder) {}
 
   async compact(agentId: string, sessionId: string, signal?: AbortSignal): Promise<TideCompactionResult> {
     signal?.throwIfAborted();
@@ -65,11 +73,14 @@ export class TideSessionCompaction {
     return result;
   }
 
-  private async compactOwn(task: { id: string; name: string; agentId: string }, sessionId: string,
+  private async compactOwn(task: { id: string; name: string; agentId: string; prompt?: string; selfLoop?: boolean }, sessionId: string,
     onNotice: (notice: CompactionNotice) => void, signal?: AbortSignal): Promise<void> {
     const session = await readTideSession(this.dataDir, task.agentId, sessionId, task);
     if (!session) throw compactionError('TIDE_TARGET_SESSION_NOT_FOUND', 'not_found', '潮汐会话不存在');
     const agent = await loadAgent(this.dataDir, task.agentId);
+    const summaryContext = this.buildContext ? await this.buildContext({
+      dataDir: this.dataDir, agent, session, task, signal,
+    }) : { messages: [{ role: 'system' as const, content: session.systemPrompt }] };
     let current = session;
     let progress: CompactionProgress | undefined;
     let lifecycleError: unknown;
@@ -88,6 +99,7 @@ export class TideSessionCompaction {
       try { return await compactMessages({ ...this.summaryPorts, dataDir: this.dataDir, area: 'tide',
       model: agent?.model ?? session.model, prompt: agent?.compactionPrompt, kind: 'conversation', protectedPrefixCount: 0,
       scopeKey: `tide:${task.agentId}:${sessionId}`, messages: activeTideContext(session.messages),
+      summaryContext,
       mode: 'full', reason: 'manual', onNotice, signal,
       onProgress: async event => {
         await writes;
@@ -122,7 +134,7 @@ export class TideSessionCompaction {
         current = next;
       } }); } finally { await writes; }
     });
-    if (!plan) throw compactionError('TIDE_COMPACTION_EMPTY', 'validation', '没有可压缩的会话内容');
+    if (!plan) throw compactionError('TIDE_COMPACTION_EMPTY', 'validation', '近期原文均受保护，没有更早历史可供压缩');
   }
 }
 

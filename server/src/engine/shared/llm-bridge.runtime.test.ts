@@ -170,6 +170,17 @@ test('model prompt budget consumes configured llama.cpp caps and output defaults
   assert.equal(await resolveModelPromptBudget(dataDir, 'local:qwen'), 4_700);
 });
 
+test('model prompt budget uses declared capacity without contacting a cloud model', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-declared-prompt-budget-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [{
+    id: 'cloud', baseUrl: 'https://api.deepseek.com/v1', models: ['deepseek-v4-flash'],
+    providerType: 'deepseek', transport: 'openai-chat-completions',
+  }] }));
+  t.mock.method(globalThis, 'fetch', async () => assert.fail('declared cloud capacity needs no model request'));
+  assert.equal(await resolveModelPromptBudget(dataDir, 'cloud:deepseek-v4-flash'), 987_955);
+});
+
 test('request execution logs a corrected provider transport without rewriting config', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-provider-correction-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));

@@ -13,6 +13,7 @@ export interface RoomToolCall {
 }
 
 export interface RoomMsg {
+  compactionId?: string;
   id?: string;
   turnId?: string;
   speaker: string;
@@ -29,6 +30,8 @@ export interface RoomMsg {
 }
 
 export interface RoomData {
+  publicDisplayHistory?: { messages: RoomMsg[]; contextOffset: number };
+  publicExecutionDraft?: RoomMsg;
   publicCurrentInput?: import('../../../lib/model-usage').CurrentInputEstimate;
   id: string;
   title: string;
@@ -48,7 +51,24 @@ export async function readRoomError(response: Response, fallback: string): Promi
   return body?.error || `${fallback}（HTTP ${response.status}）`;
 }
 
-export function publicToFeed(messages: RoomMsg[]): FeedMsg[] {
+export function publicToFeed(messages: RoomMsg[], displayHistory?: { messages: RoomMsg[]; contextOffset: number },
+  executionDraft?: RoomMsg): FeedMsg[] {
+  if (executionDraft) {
+    const history = publicToFeed(messages, displayHistory);
+    if (executionDraft.turnId && history.some(message => message.turnId === executionDraft.turnId)) return history;
+    const draft = publicToFeed([executionDraft]).map(message => ({ ...message,
+      key: `draft-${message.turnId ?? message.key}`, sourceIndex: undefined }));
+    return [...history, ...draft];
+  }
+  if (displayHistory) {
+    if (!Number.isSafeInteger(displayHistory.contextOffset) || displayHistory.contextOffset < 0
+      || displayHistory.contextOffset > messages.length) throw new Error('群聊展示履历的上下文位置无效');
+    const archived = publicToFeed(displayHistory.messages).map(message => ({ ...message,
+      key: `archive-${message.key}`, sourceIndex: undefined }));
+    const active = publicToFeed(messages.slice(displayHistory.contextOffset)).map(message => ({ ...message,
+      key: `active-${message.key}`, sourceIndex: message.sourceIndex! + displayHistory.contextOffset }));
+    return [...archived, ...active];
+  }
   return messages.map((message, sourceIndex) => {
     const system = message.speaker === 'system' || message.speaker === '系统';
     const archive = !message.kind && system && isCompactionHistory(message.content);
@@ -60,6 +80,7 @@ export function publicToFeed(messages: RoomMsg[]): FeedMsg[] {
       content: message.content,
       isHuman: message.speaker === '人类',
       isArchiveSummary: archive,
+      compactionId: message.compactionId,
       kind: message.kind,
       dispatchId: message.dispatchId,
       seatId: message.seatId,

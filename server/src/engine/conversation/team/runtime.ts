@@ -2,9 +2,17 @@ import type { ContextMessage } from '../../shared/types.js';
 import { TeamStore } from './store.js';
 import type { TeamMember, TeamPermissions } from './types.js';
 import { teamActivity, type TeamActivityEvent } from './activity.js';
+import { TeamMailbox, internalMessage, hasInternalMessage } from './mailbox.js';
+import type { ConversationEvent } from '../session-runner-contracts.js';
+
+export interface MemberControl {
+  report(content: string, id: string): Promise<unknown>;
+  inbox(context: ContextMessage[]): Promise<{ messages: string[]; commit(): Promise<void> }>;
+  observe(event: ConversationEvent): void;
+}
 
 export type MemberExecutor = (member: TeamMember, task: string,
-  checkpoint: (context: ContextMessage[]) => Promise<void>, signal: AbortSignal) => Promise<string>;
+  checkpoint: (context: ContextMessage[]) => Promise<void>, signal: AbortSignal, control: MemberControl) => Promise<string>;
 
 /** Owns live executions only. TeamStore remains the durable source of truth. */
 export class TeamRuntime {
@@ -12,7 +20,8 @@ export class TeamRuntime {
   private readonly failures: unknown[] = [];
   private stopVersion = 0;
   private readonly listeners = new Set<(event: TeamActivityEvent) => void>();
-  constructor(readonly store: TeamStore, private execute: MemberExecutor) {}
+  readonly mailbox: TeamMailbox;
+  constructor(readonly store: TeamStore, private execute: MemberExecutor) { this.mailbox = store.mailbox(); }
   configure(execute: MemberExecutor): void { this.execute = execute; }
 
   async dispatch(memberId: string, task: string, policy: TeamPermissions, requestId?: string) {
@@ -48,16 +57,36 @@ export class TeamRuntime {
   private async perform(memberId: string, runId: string, task: string, signal: AbortSignal, execute: MemberExecutor): Promise<void> {
     let content: string;
     let outcome: 'completed' | 'failed' | 'aborted' = 'completed';
+    let observations = Promise.resolve();
+    const observe = (event: ConversationEvent) => {
+      if (!['tool-call', 'tool-result', 'model-request'].includes(event.type)) return;
+      observations = observations.then(() => this.store.activity(memberId, runId,
+        event.type === 'tool-call' ? 'tool-exec' : event.type === 'tool-result' ? 'tool-completed' : 'model',
+        'tool' in event ? event.tool : undefined, event.type === 'tool-result' ? event.result : undefined));
+      void observations.catch(() => {});
+    };
     try {
       const member = (await this.store.read()).members.find(item => item.id === memberId)!;
-      content = await execute(member, task, context => this.store.checkpoint(memberId, runId, context), signal);
+      content = await execute(member, task, context => this.store.checkpoint(memberId, runId, context), signal, {
+        observe,
+        report: (content, id) => this.mailbox.send(memberId, runId, 'to-main', content, id),
+        inbox: async context => {
+          const state = await this.store.read();
+          const pending = (state.messages ?? []).filter(message => message.status === 'queued'
+            && message.direction === 'to-member' && message.memberId === memberId && message.runId === runId);
+          return { messages: pending.filter(message => !hasInternalMessage(context, message.id)).map(internalMessage),
+            commit: () => this.mailbox.included(pending.map(message => message.id)) };
+        },
+      });
       if (signal.aborted) outcome = 'aborted';
     } catch (error) {
       outcome = signal.aborted ? 'aborted' : 'failed';
       content = error instanceof Error ? error.message : String(error);
     }
+    await observations;
+    if (outcome === 'aborted') content = `Execution stopped. ${(await this.store.read()).members.find(item => item.id === memberId)?.run?.stopReason ?? ''}\n${content}`;
     const report = await this.store.finish(memberId, runId, outcome, content);
-    this.publish(teamActivity('reported', { memberId, runId, reportId: report.id, outcome, preview: content }));
+    this.publish(teamActivity('reported', { memberId, runId, reportId: report.id, outcome, preview: content }, report.createdAt));
   }
 
   subscribe(listener: (event: TeamActivityEvent) => void): () => void {
@@ -90,6 +119,15 @@ export class TeamRuntime {
     for (const run of this.active.values()) run.controller.abort();
   }
   isActive(): boolean { return this.active.size > 0; }
+  async stopMember(memberId: string, runId: string, reason: string) {
+    await this.store.requestStop(memberId, runId, reason);
+    const active = this.active.get(runId);
+    active?.controller.abort();
+    const state = await this.store.read();
+    const member = state.members.find(item => item.id === memberId)!;
+    const status = member.run?.id === runId ? member.run.status : state.reports.find(report => report.runId === runId)?.outcome;
+    return { memberId, runId, status: status === 'running' ? 'stopping' : status };
+  }
   async waitForProgress(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) return;
     let timer: ReturnType<typeof setTimeout> | undefined;

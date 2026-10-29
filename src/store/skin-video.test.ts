@@ -48,14 +48,15 @@ test('video upload reports progress and can be cancelled without accepting a res
     url = '';
     contentType = '';
     body?: Document | XMLHttpRequestBodyInit | null;
-    constructor() { pending = this; }
     open(method: string, url: string) { this.method = method; this.url = url; }
     setRequestHeader(_name: string, value: string) { this.contentType = value; }
     send(body?: Document | XMLHttpRequestBodyInit | null) { this.body = body; }
     abort() { this.onabort?.(); }
   }
   try {
-    globalThis.XMLHttpRequest = FakeUpload as unknown as typeof XMLHttpRequest;
+    pending = new FakeUpload();
+    const upload = pending;
+    globalThis.XMLHttpRequest = class { constructor() { return upload; } } as unknown as typeof XMLHttpRequest;
     const controller = new AbortController();
     const result = uploadBackgroundVideoFile(file, { signal: controller.signal, onProgress: value => progress.push(value) });
     assert.equal(pending?.method, 'PUT');

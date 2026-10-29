@@ -27,7 +27,12 @@ export function monsoonSessionManifests(): ModuleMethodManifest[] {
 
 export function monsoonSessionHandlers(ports: MonsoonSessionPorts): Record<string, ModuleMethodHandler> {
   const { sessions, journal } = ports;
-  const preview = ports.preview ?? (async (session: MonsoonSession) => session);
+  const preview = async (session: MonsoonSession, model?: string):
+    Promise<MonsoonSession & { currentInput?: CurrentInputEstimate }> => {
+    if (!ports.preview) return session;
+    const { currentInput } = await ports.preview(structuredClone(session), model);
+    return { ...session, currentInput };
+  };
   return {
     createSession: { parse: value => record(value),
       invoke: async (_context, input) => preview(await sessions.create(input)) },
@@ -37,7 +42,7 @@ export function monsoonSessionHandlers(ports: MonsoonSessionPorts): Record<strin
         const list = await sessions.list(agentId, Boolean(ports.preview));
         if (!ports.preview) return list;
         return Promise.all(list.map(async item => {
-          return { ...item, messages: [], currentInput: (await ports.preview!(item)).currentInput };
+          return { ...item, messages: [], currentInput: (await preview(item)).currentInput };
         }));
       } },
     previewInput: { parse: parsePreview,

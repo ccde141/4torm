@@ -7,6 +7,7 @@ interface Props {
   provider: ProviderEntry;
   probing: ReadonlySet<string>;
   messages: Readonly<Record<string, string>>;
+  removing?: boolean;
   onProbe: (model: string, capability: ModelCapability) => void;
   onRemove: (model: string) => void;
   onRefresh: () => void;
@@ -56,7 +57,7 @@ function CapabilityCell({ provider, model, capability, probing, message, onProbe
   );
 }
 
-export function ModelCapabilityPanel({ provider, probing, messages, onProbe, onRemove, onRefresh }: Props) {
+export function ModelCapabilityPanel({ provider, removing, probing, messages, onProbe, onRemove, onRefresh }: Props) {
   const { t } = useLocale();
   return (
     <section className="provider-capability-panel" style={{ marginTop: 'var(--space-3)' }}>
@@ -78,7 +79,7 @@ export function ModelCapabilityPanel({ provider, probing, messages, onProbe, onR
               <span title={model} style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--color-text)', fontSize: 'var(--text-xs)' }}>
                 {model}
               </span>
-              <button className="capability-icon-button capability-button--danger provider-remove-model" type="button" onClick={() => onRemove(model)} title={t('model.capability.remove')} aria-label={t('model.capability.remove')} style={removeButtonStyle}>×</button>
+              <button className="capability-icon-button capability-button--danger provider-remove-model" type="button" disabled={removing || probing.has(probeKey(model, 'vision')) || probing.has(probeKey(model, 'tools'))} onClick={() => onRemove(model)} title={t('model.capability.remove')} aria-label={t('model.capability.remove')} style={removeButtonStyle}>×</button>
             </div>
             <CapabilityCell
               provider={provider}

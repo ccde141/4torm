@@ -1,6 +1,6 @@
 import type { MonsoonMessage, MonsoonSession } from '../domain/session.js';
 import { activeMonsoonMessages, projectMonsoonContext } from './active-context.js';
-import { serializeCompactionMessages } from '../../../engine/shared/compaction/index.js';
+import { serializeCompactionMessages, splitCompactionMessages } from '../../../engine/shared/compaction/index.js';
 
 export interface PreparedCompaction {
   expectedRevision: number;
@@ -11,11 +11,15 @@ export interface PreparedCompaction {
 
 export function prepareCompaction(session: MonsoonSession): PreparedCompaction {
   const active = activeMonsoonMessages(session);
-  const dialogText = serializeCompactionMessages(projectMonsoonContext(session));
-  if (!dialogText.trim()) throw new Error('没有可压缩的对话内容');
+  if (!active.length) throw new Error('没有可压缩的对话内容');
+  const split = splitCompactionMessages(projectMonsoonContext(session), {
+    mode: 'full', prefixRatio: 1, protectedPrefixCount: 0,
+  });
+  if (!split) throw new Error('近期原文均受保护，没有更早历史可供压缩');
+  const dialogText = serializeCompactionMessages(split.prefix);
   return {
     expectedRevision: session.revision,
-    compressedCount: active.length,
+    compressedCount: split.prefix.length,
     insertIndex: session.messages.length,
     dialogText,
   };

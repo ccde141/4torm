@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { estimateCurrentInput, resolveNativeMode, type LLMCallParams } from '../shared/llm-bridge.js';
 import type { CurrentInputEstimate } from '../shared/model-request-usage.js';
-import { loadAgent } from '../shared/agent-loader.js';
+import { loadAgent, type LoadedAgent } from '../shared/agent-loader.js';
 import { loadAgentToolDefs } from '../shared/tool-defs-loader.js';
 import type { ContextMessage } from '../shared/types.js';
 import { buildCycloneMemoryPrompt, withCycloneMemoryTools } from './cyclone-memory.js';
@@ -36,21 +36,29 @@ export async function estimateSeatCurrentInput(dataDir: string, workshopId: stri
   try {
     history = await projectSeatDispatchReceiptContext(dataDir, workshopId, seat);
     if (!agent) return canonical(dataDir, '', fallback());
-    const hint = [...history].reverse().find(message => message.role === 'user')?.content ?? '';
-    const base = await withSupervisorReporting(dataDir, workshopId, withCycloneMemoryTools(
-      await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode), { workshopId, seatId: seat.id }));
-    const [contactTargets, dispatchTargets, memorySection, native] = await Promise.all([
-      listOtherSeats(dataDir, workshopId, seat.id), listWorkshopSeats(dataDir, workshopId, seat.id, false),
-      buildCycloneMemoryPrompt(dataDir, agent.id, hint, { workshopId, seatId: seat.id }), nativeMode(dataDir, agent.model),
-    ]);
-    const tools = buildSeatToolCatalog(base, contactTargets, dispatchTargets, seatCollaborationPolicy(seat));
-    const messages = projectSeatContinuityContext([{ role: 'system', content: buildSeatSystemPrompt({
-      dataDir, workshopId, seat, agent, toolDefs: tools, native, contactTargets, memorySection,
-      wsRelPath: workspace(dataDir, workshopId), bulletinSeenAt: seat.bulletinSeenAt,
-    }) }, ...history], seat, 'solo');
-    return estimateCurrentInput({ dataDir, fullModelKey: agent.model, messages,
-      ...(native ? { tools } : {}) });
+    return estimateCurrentInput(await buildSeatRequestContext(dataDir, workshopId, seat, agent, history));
   } catch { return canonical(dataDir, agent?.model ?? '', fallback()); }
+}
+
+/** Shared read-only assembly for input estimates and human-requested compaction. */
+export async function buildSeatRequestContext(dataDir: string, workshopId: string, seat: SeatData,
+  agent: LoadedAgent, providedHistory?: ContextMessage[]) {
+  const history = providedHistory ?? await projectSeatDispatchReceiptContext(dataDir, workshopId, seat);
+  const hint = [...history].reverse().find(message => message.role === 'user')?.content ?? '';
+  const base = await withSupervisorReporting(dataDir, workshopId, withCycloneMemoryTools(
+    await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode), { workshopId, seatId: seat.id }));
+  const [contactTargets, dispatchTargets, memorySection, native] = await Promise.all([
+    listOtherSeats(dataDir, workshopId, seat.id), listWorkshopSeats(dataDir, workshopId, seat.id, false),
+    buildCycloneMemoryPrompt(dataDir, agent.id, hint, { workshopId, seatId: seat.id }),
+    resolveNativeMode(dataDir, agent.model).then(mode => mode.native),
+  ]);
+  const tools = buildSeatToolCatalog(base, contactTargets, dispatchTargets, seatCollaborationPolicy(seat));
+  const messages = projectSeatContinuityContext([{ role: 'system', content: buildSeatSystemPrompt({
+    dataDir, workshopId, seat, agent, toolDefs: tools, native, contactTargets, memorySection,
+    wsRelPath: workspace(dataDir, workshopId), bulletinSeenAt: seat.bulletinSeenAt,
+  }) }, ...history], seat, 'solo');
+  return { dataDir, fullModelKey: agent.model, messages, ...(native ? { tools } : {}),
+    historyToolTransport: native ? 'native' as const : 'text' as const };
 }
 
 export async function estimateRoomCurrentInput(dataDir: string, workshopId: string, room: RoomData) {
@@ -114,7 +122,7 @@ export async function estimateSupervisorCurrentInput(dataDir: string, workshopId
     for (const item of await readPendingSupervisorInformation(dataDir, workshopId)) {
       if (known.has(item.id) || hasSupervisorReceiptEvidence(messages, item)) continue;
       if (added === 20) break;
-      messages.push({ role: 'user', supervisorInboxId: item.id, supervisorSourceTitle: item.sourceTitle,
+      messages.push({ role: 'user', origin: 'framework', supervisorInboxId: item.id, supervisorSourceTitle: item.sourceTitle,
         content: `[协作信息：${item.sourceTitle}；${item.createdAt}。仅为工作室协作资料，不替代人类目标。]\n${item.content}` });
       added++;
     }

@@ -31,7 +31,7 @@ test('气旋会长 /compact 汇总完整公共观察与私聊，归档原文且�
     assert.equal(input.kind, 'meeting');
     assert.match(JSON.stringify(input.messages), /公共目标/);
     assert.match(JSON.stringify(input.messages), /私人疑问/);
-    return '公共目标与私人疑问已整理';
+    return { summary: '公共目标与私人疑问已整理', retainedIndexes: [0, 1] };
   } });
   const result = await chairs.reset(workshop.id, room.id, 'summary');
   assert.ok(result.archivePath);
@@ -42,12 +42,16 @@ test('气旋会长 /compact 汇总完整公共观察与私聊，归档原文且�
   assert.ok(saved);
   assert.deepEqual(saved.publicMessages, room.publicMessages);
   const context = buildCycloneChairContext(saved, { role: 'system', content: '身份' });
-  assert.equal(context.length, 2);
+  assert.equal(context.length, 4);
   assert.match(context[1].content, /公共目标与私人疑问已整理/);
+  assert.equal(context[2].content, `[公共会议：人类] ${room.publicMessages[0].content}`);
+  assert.equal(context[3].content, room.chairMessages[0].content);
+  assert.equal(saved.chairDisplayHistory?.messages[0].content, room.chairMessages[0].content);
 });
 
 test('会长 /reset 只清私聊真实上下文，公共/reset 不允许旧摘要重新进入模型', async t => {
-  const { dataDir, workshop, room, rooms, chairs } = await fixture(t, { summarize: async () => '摘要' });
+  const { dataDir, workshop, room, rooms, chairs } = await fixture(t,
+    { summarize: async () => ({ summary: '摘要', retainedIndexes: [] }) });
   room.chairActiveContext = [{ role: 'system', content: '旧摘要不得复活' }];
   rememberChairContextBoundary(room);
   await saveRoom(dataDir, workshop.id, room);

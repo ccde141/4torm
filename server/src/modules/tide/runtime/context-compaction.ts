@@ -8,12 +8,13 @@ import type { LLMCaller } from '../../../engine/shared/react/native-loop.js';
 import { requireSeasonSessionPort } from '../sessions/season-session-port.js';
 import type { TideTask } from '../domain/task.js';
 import type { ResolvedTarget } from '../sessions/session-resolver.js';
-import type { TideSession } from '../sessions/session-types.js';
+import type { TideMessage, TideSession } from '../sessions/session-types.js';
 import { commitTideCompaction } from '../sessions/compaction-store.js';
 import { tideTaskSessionDir } from '../sessions/session-paths.js';
 
 export class TideContextCompaction {
   flushUsage: () => Promise<unknown> = async () => undefined;
+  displaySnapshot?: () => TideMessage[];
   private changed = false;
   private progress?: CompactionProgress;
   readonly notices: string[] = [];
@@ -73,8 +74,11 @@ export class TideContextCompaction {
       this.resolved.existing = await requireSeasonSessionPort(this.resolved.seasonSessions).commitCompaction(
         this.task.agentId, this.resolved.sessionId, revision, plan, signal);
     } else {
-      const next = { ...(this.resolved.existing ?? this.base),
-        messages: [...(this.resolved.existing ?? this.base).messages,
+      const current = this.resolved.existing ?? this.base;
+      const saved = new Set(current.messages.map(message => message.id));
+      const display = (this.displaySnapshot?.() ?? []).filter(message => !saved.has(message.id));
+      const next = { ...current,
+        messages: [...current.messages, ...display,
           { id: `msg-${randomUUID()}`, role: 'system', content: plan.summary,
             type: 'compact-marker' as const, contextExact: true,
             compactionId: this.progress?.id,

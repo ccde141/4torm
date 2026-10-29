@@ -12,17 +12,19 @@ export interface NodeHistoryMessage {
   reasoningContent?: string;
   messageId?: string;
   toolSteps?: ChatMessage['toolSteps'];
+  compaction?: { id: string; summary: string };
 }
 
 /** Snapshot and post-compaction events share the same public conversation projection. */
 export function projectNodeHistoryMessages(messages: NodeHistoryMessage[], nextId: () => string,
   timestamp = new Date().toISOString()): ChatMessage[] {
   return messages.filter(message => ['user', 'assistant', 'system'].includes(message.role)).map(message => ({
-    id: message.messageId ?? nextId(),
+    id: message.compaction?.id ?? message.messageId ?? nextId(),
     role: message.role as 'user' | 'assistant' | 'system',
     content: message.content,
     reasoningContent: message.reasoningContent,
     ...(message.toolSteps ? { toolSteps: message.toolSteps } : {}),
+    ...(message.compaction ? { type: 'compact-marker' } : {}),
     timestamp,
   }));
 }

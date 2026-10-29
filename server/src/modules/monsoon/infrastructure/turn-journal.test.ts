@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { FileMonsoonTurnJournal } from './turn-journal.js';
+import type { MonsoonMessage } from '../domain/session.js';
 
 test('turn journal survives a placeholder and is removed only after the run is committed', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-turn-journal-'));
@@ -84,4 +85,48 @@ test('pending replay folds adjacent text chunks without changing event boundarie
   assert.equal(pending[0]?.events[3]?.content, 'CD');
   assert.equal(pending[0]?.events[4]?.sequence, 1);
   assert.equal((await fs.readFile(writer.file, 'utf8')).split('\n').length, 1008);
+});
+
+test('replay restores committed boundaries missing from a turn journal and retains their exact positions', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-turn-boundary-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const journal = new FileMonsoonTurnJournal(dataDir);
+  const writer = await journal.begin('agent-a', 'session-a', 'run-a', 1);
+  await writer.append({ type: 'reply-accepted', waitingRunId: 'previous', answer: 'continue' });
+  await writer.append({ type: 'token', content: 'before' });
+  await writer.append({ type: 'tool-call', tool: 'read', args: {} });
+  await writer.append({ type: 'tool-result', tool: 'read', result: 'found', ok: true });
+  await writer.append({ type: 'token', content: 'after' });
+  const timestamp = new Date().toISOString();
+  const marker: MonsoonMessage = { id: 'marker-a', role: 'system', content: 'handoff', timestamp,
+    type: 'compact-marker', contextExact: true, nativeContext: [{ role: 'system', content: 'handoff' }],
+    committedRevision: 2, execution: { assistantId: 'answer-a', toolOffset: 1, textOffset: 6, eventOffset: 3 } };
+  const messages: MonsoonMessage[] = [marker,
+    { id: 'answer-a', inputRunId: 'run-a', role: 'assistant', content: '', timestamp, runCommitted: false }];
+  const original = await fs.readFile(writer.file, 'utf8');
+  const replay = await journal.pending('agent-a', 'session-a', messages, false);
+  assert.deepEqual(replay[0].events.map(event => event.type),
+    ['reply-accepted', 'token', 'tool-call', 'tool-result', 'context-compacted', 'token']);
+  assert.equal(replay[0].events[4].revision, 2);
+  assert.deepEqual(replay[0].events[4].marker, marker);
+  assert.equal(await fs.readFile(writer.file, 'utf8'), original);
+  assert.deepEqual(await journal.pending('agent-a', 'session-a', messages, false), replay);
+});
+
+test('already journaled boundaries are not duplicated and other execution markers never leak', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-turn-boundary-idempotent-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const journal = new FileMonsoonTurnJournal(dataDir);
+  const writer = await journal.begin('agent-a', 'session-a', 'run-a', 1);
+  const timestamp = new Date().toISOString();
+  const marker: MonsoonMessage = { id: 'marker-a', role: 'system', content: 'handoff', timestamp,
+    type: 'compact-marker', committedRevision: 2,
+    execution: { assistantId: 'run-a', toolOffset: 0, textOffset: 0, eventOffset: 0 } };
+  await writer.append({ type: 'context-compacted', revision: 2, marker });
+  const messages: MonsoonMessage[] = [marker, { ...marker, id: 'other-marker',
+    execution: { assistantId: 'other-run', toolOffset: 0, textOffset: 0, eventOffset: 0 } },
+    { id: 'run-a', role: 'assistant', content: '', timestamp, runCommitted: false }];
+  const replay = await journal.pending('agent-a', 'session-a', messages, false);
+  assert.equal(replay[0].events.length, 1);
+  assert.deepEqual(replay[0].events[0].marker, marker);
 });

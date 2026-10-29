@@ -78,6 +78,21 @@ test('public tool order and typed arguments survive presentation without payload
   assert.equal(JSON.stringify(completed), before);
 });
 
+test('a committed compaction creates independent bubbles with separate tools and reasoning', () => {
+  const message: ConvectionTurnMessage = { ...completed, content: '新的答复', displayContent: '先前说明新的答复',
+    reasoning: '先前思考新的思考', compactions: [{ id: 'compact-one', summary: '交接',
+      toolOffset: 1, textOffset: 4, reasoningOffset: 4 }] };
+  const original = JSON.stringify(message);
+  const html = publicTurn(message);
+  assert.equal((html.match(/class="chat__bubble convection-turn__bubble"/g) ?? []).length, 2);
+  const line = html.indexOf('上下文已压缩 · 查看交接');
+  assert.ok(html.indexOf('read_fixture') < line);
+  assert.ok(html.indexOf('check_fixture') > line);
+  assert.ok(html.indexOf('先前思考') < line);
+  assert.ok(html.indexOf('新的思考') > line);
+  assert.equal(JSON.stringify(message), original);
+});
+
 test('public error and running tools retain their distinct visible statuses', () => {
   const failed = publicTurn(completed);
   assert.match(failed, /convection-turn__tool--error/);
@@ -97,7 +112,7 @@ test('public plain answers and archived summaries avoid empty process framing', 
   const archive = publicTurn({ speaker: '系统', content: '[会议历史摘要]归档内容',
     reasoning: '不应显示为本轮思考', toolCalls: completed.toolCalls });
   assert.match(archive, /compaction-history__toggle/);
-  assert.match(archive, /历史摘要/);
+  assert.match(archive, /上下文已压缩 · 查看交接/);
   assert.doesNotMatch(archive, /convection-turn__process|reasoning-block|不应显示为本轮思考/);
 });
 

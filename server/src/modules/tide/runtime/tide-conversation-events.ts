@@ -5,6 +5,7 @@ import { advanceTideUsage, type TideUsageProgress } from '../domain/token-usage.
 import type { TideMessage } from '../sessions/session-types.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import { recordModelRequest, type ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
+import { parseTextToolResponse } from '../../../engine/shared/text-tool-protocol.js';
 
 export function createTideEventState(
   persistUsage?: (usage: TokenUsage | null) => Promise<void>,
@@ -18,7 +19,16 @@ export function createTideEventState(
   let usage: TideUsageProgress | undefined;
   let writes = Promise.resolve();
   let toolContext: ContextMessage[] | undefined;
+  let text = '';
+  const flushText = () => {
+    if (text.trim() && parseTextToolResponse(text).kind !== 'tool-call') intermediate.push({
+      id: `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      role: 'assistant', content: text, timestamp: new Date().toISOString(),
+    });
+    text = '';
+  };
   const onEvent = (event: ConversationEvent) => {
+    if (event.type === 'token') text += event.content;
     if (event.type === 'model-request') {
       usage = { calls: usage?.calls ?? 0, reportedCalls: usage?.reportedCalls ?? 0, ...usage,
         modelUsage: recordModelRequest(usage?.modelUsage, event.request) };
@@ -38,6 +48,7 @@ export function createTideEventState(
       }
     }
     if (event.type === 'tool-call') {
+      flushText();
       pendingArgs = event.args;
       intermediate.push(message('tool-call', { tool: event.tool, args: event.args }));
     }
@@ -46,15 +57,16 @@ export function createTideEventState(
         ...(event.toolImages?.length ? { toolImages: event.toolImages } : {}) });
       pendingArgs = {};
       turns += 1;
-      intermediate.push(message('tool-result', {
+      intermediate.push({ ...message('tool-result', {
         tool: event.tool, result: event.result, ok: event.ok,
         ...(event.toolImages?.length ? { toolImages: event.toolImages } : {}),
-      }));
+      }), ...(event.toolImages?.length ? { toolImages: event.toolImages } : {}) });
     }
   };
   return {
     onEvent,
     flush: () => writes,
+    displaySnapshot: () => { flushText(); return intermediate; },
     snapshot: () => ({ toolCalls, intermediate, turns, usage, toolContext }),
   };
 }

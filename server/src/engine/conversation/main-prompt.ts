@@ -6,9 +6,10 @@ import { buildMemoryToolDefs, recallMemory } from '../shared/agent-memory.js';
 import { buildBackgroundExecutionToolDefs } from '../shared/background-execution-tools.js';
 import { buildVirtualToolDefs } from './virtual-tools.js';
 import { withMainToolGuidance, renderMainToolDefinitions } from './main-tool-defs.js';
-import { MAIN_IDENTITY, MAIN_COLLABORATION, MAIN_ORGANIZATION, MAIN_WORK_SHAPE_CHECK, MAIN_COMPLETION,
+import { MAIN_IDENTITY, MAIN_LOCAL_CAPABILITIES, MAIN_ADVANCED_CAPABILITIES,
+  MAIN_COLLABORATION, MAIN_ORGANIZATION, MAIN_WORK_SHAPE_CHECK, MAIN_COMPLETION,
   MAIN_CAPABILITY_GUIDANCE as guidance } from './main-guidance.js';
-import { activeMainCapabilities, renderCapabilityRouter } from './main-capabilities.js';
+import { MAIN_CAPABILITIES, activeMainCapabilities, renderCapabilityRouter } from './main-capabilities.js';
 import type { ToolDef } from '../shared/tool-defs-loader.js';
 
 function frameworkDefinitions(opts: PromptBuildOpts): ToolDef[] {
@@ -27,6 +28,11 @@ function capabilitySections(
 ): string[] {
   const active = activeMainCapabilities(defs).filter(capability =>
     capability.id !== 'skill' || opts.skillIds.length > 0);
+  const residentIds = new Set(['team', 'ask', 'background', 'board', 'memory', 'coordination']);
+  const resident = active.filter(capability => residentIds.has(capability.id)
+    && MAIN_CAPABILITIES.find(entry => entry.id === capability.id)?.tools
+      .every(name => capability.tools.includes(name)));
+  const local = resident.some(capability => capability.id === 'team') ? MAIN_LOCAL_CAPABILITIES : '';
   const workShapeCheck = active.some(capability => capability.id === 'team'
     && (capability.tools.includes('team_start') || (capability.tools.includes('team_create')
       && capability.tools.includes('team_dispatch'))))
@@ -34,7 +40,9 @@ function capabilitySections(
   const activeNames = new Set(active.flatMap(capability => capability.tools));
   const definitions = opts.native ? '' : renderMainToolDefinitions(defs.filter(definition =>
     activeNames.has(definition.name) && !configuredNames.has(definition.name)));
-  return [workShapeCheck, renderCapabilityRouter(active), definitions];
+  return [local, workShapeCheck,
+    renderCapabilityRouter(active, { includeWorkShape: workShapeCheck.length === 0 }),
+    ...resident.map(capability => capability.guidance), definitions];
 }
 
 /** 仅季风主会话使用；历史与提供商适配仍由原调用链处理。 */
@@ -48,7 +56,7 @@ export async function buildMainAgentPrompt(opts: PromptBuildOpts): Promise<strin
   const protocol = opts.native
     ? '使用本次运行提供的原生工具通道调用工具，依据结果继续工作；无需调用时直接自然语言回应。'
     : buildTextToolProtocol(configured);
-  const parts = [MAIN_IDENTITY, buildSandboxSection({
+  const parts = [MAIN_IDENTITY, MAIN_ADVANCED_CAPABILITIES, buildSandboxSection({
     workspaceAbs: opts.workspaceAbs, projectDir: opts.projectDir,
     sandboxLevel: opts.sandboxLevel, workspaceLabel: '当前工作空间',
   }), buildFrameworkNavigationSection(), MAIN_COLLABORATION, protocol];

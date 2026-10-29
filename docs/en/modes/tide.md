@@ -33,7 +33,7 @@ These tasks still share the pooled Agent's configuration, memory, workspace, and
 
 **Continue a Monsoon conversation** suits periodic results that belong in an existing discussion. The Agent reads that conversation's context and appends the current task instructions and final reply. Tool activity does not appear in the Monsoon conversation, but is saved in the corresponding Tide run record. If the target conversation is already responding, this Tide run fails rather than writing over it or immediately retrying. This busy conflict does not count toward consecutive failures.
 
-Retained rounds control whole-round archiving, which is separate from compaction. When viewing a dedicated Tide conversation, click **Compact conversation** to summarize the active context while preserving the original records. Manual compaction does not promise to retain the latest rounds verbatim.
+**Retained rounds** controls whole-round archiving after task executions. **Compact conversation** summarizes older context while retaining recent original content. When viewing an independent Tide conversation, select **Compact conversation** to begin. See [Conversation compaction](../guide/agents#conversation-compaction) for the retention rules.
 
 The page shows execution or compaction status; you can stop compaction before it is committed, and a failed or stopped request continues to use the saved content. After compaction completes, click the **History summary** divider to expand its summary; subsequent messages remain visible normally. Content appended to Monsoon is summarized in the corresponding Monsoon conversation.
 

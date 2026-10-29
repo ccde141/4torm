@@ -20,10 +20,12 @@ test('convection meeting shell localizes controls while retaining stable speaker
   assert.match(page, /speaker: '系统'/);
 });
 
-test('a participant failure closes only that streaming bubble', () => {
+test('a participant failure closes only that bubble while preserving received text and a localized failure state', () => {
   const page = read('ConvectionPage.tsx');
   assert.match(page, /ev\.type === 'agent-failed'/);
-  assert.match(page, /convection\.page\.participantFailed/);
+  assert.match(page, /content: streamContent/);
+  assert.match(page, /execution: \{ status: 'failed'/);
+  assert.match(read('ConvectionTurnCard.tsx'), /chat\.delegate\.failed/);
   assert.match(page, /streaming: false/);
 });
 

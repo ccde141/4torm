@@ -17,7 +17,7 @@ import type { ContextMessage } from '../../shared/types';
 import type { SandboxLevel } from '../../shared/sandbox-prompt';
 import { atomicWriteFile } from '../../shared/atomic-io';
 import { callLLM, type TokenUsage } from '../../shared/llm-bridge';
-import { loadAgentToolDefs } from '../../shared/tool-defs-loader';
+import { loadAgentToolDefs, type ToolDef } from '../../shared/tool-defs-loader';
 import { execToolUnifiedOutcome } from '../../shared/exec-tool';
 import { legacyToolArguments } from '../../shared/tool-arguments.js';
 import {
@@ -44,6 +44,7 @@ import { resolveHandoffCompletion } from './handoff-completion.js';
 import type { CompactionProgress } from '../../shared/compaction/index.js';
 import { projectNodeHistory, type NodeHistoryMessage } from './node-history-view.js';
 import { estimateNodeCurrentInput } from './current-input.js';
+import { NodeDisplayHistory } from './node-display-history.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -209,12 +210,18 @@ export class NodeRunner {
   private currentContactFrom: string | null = null;
   private readonly usage: TokenUsageRecorder;
   private lastRequestEstimate?: number;
+  private lastRequestTools?: ToolDef[];
   private compactionNotice?: string;
   private compaction?: CompactionProgress;
   private contextWrites: Promise<void> = Promise.resolve();
+  private readonly display: NodeDisplayHistory;
+  private roundDisplayBase?: NodeHistoryMessage[];
 
   constructor(opts: NodeRunnerOpts) {
     this.opts = opts;
+    this.display = new NodeDisplayHistory(opts.persistDir, messages => projectNodeHistory(messages.map(message => ({
+      ...message, ...(this.messageIds.has(message) ? { messageId: this.messageIds.get(message) } : {}),
+    }))));
     this.events = new NodeEventEmitter(opts.nodeId,
       { workflowId: opts.workflowId, executionId: opts.executionId });
     this.usage = new TokenUsageRecorder(opts.persistDir
@@ -251,15 +258,12 @@ export class NodeRunner {
    * 前端订阅时拉一次，用同一 reducer 回放 roundLog，再按 seq 应用增量。
    */
   getSnapshot(): NodeSnapshot {
-    const msgs = projectNodeHistory(this.messages
-      .filter((_, i) => i !== 0) // 去掉首条 system prompt
-      .map(m => ({
-        ...m,
-        ...(this.messageIds.has(m) ? { messageId: this.messageIds.get(m) } : {}),
-      })));
+    const roundLog = this.events.getRoundLog();
+    const replaying = this.busy && !roundLog.some(event => event.type === 'answer' || event.type === 'done');
+    const msgs = replaying && this.roundDisplayBase ? this.roundDisplayBase : this.display.messages(this.messages);
     return {
       messages: msgs,
-      roundLog: this.events.getRoundLog(),
+      roundLog,
       busy: this.busy,
       roundSource: this.busy ? this.currentRoundSource : this.pausedMsg?.source ?? this.currentRoundSource,
       ...(this.roundIdentity ? {
@@ -334,7 +338,7 @@ export class NodeRunner {
    */
   appendSystemMessage(content: string): void {
     // Runtime facts belong to compactable history, not permanent system instructions.
-    this.messages.push({ role: 'user', content: `[系统信息：工作流记录]\n${content}` });
+    this.messages.push({ role: 'user', content: `[系统信息：工作流记录]\n${content}`, origin: 'framework' });
     void this.persist();
   }
 
@@ -371,6 +375,7 @@ export class NodeRunner {
 
   /** 处理单条消息 */
   private async handle(msg: QueuedMessage): Promise<void> {
+    this.roundDisplayBase = this.display.messages(this.messages);
     this.busy = true;
     this.currentRoundSource = msg.source;
     if (msg.source === 'human') this.compactionNotice = undefined;
@@ -394,15 +399,20 @@ export class NodeRunner {
         this.compaction = ev;
       }
       if (ev.type === 'reasoning') reasoningContent += ev.content;
+      if (ev.type === 'compact-done') reasoningContent = '';
       this.events.emit(ev);
     };
     emit({ type: 'round-start', ...roundIdentity });
 
     // 追加 user message 到上下文（续跑重投的消息除外——原消息已在上下文里）
     if (!msg._resume && !(msg.source === 'human' && msg.content.trim() === '/compact')) {
-      const message: ContextMessage = { role: 'user', content: msg.content };
+      const message: ContextMessage = { role: 'user', content: msg.content,
+        origin: msg.source === 'human' ? 'human' : 'framework' };
       this.messages.push(message);
-      if (msg.messageId) this.messageIds.set(message, msg.messageId);
+      if (msg.messageId) {
+        this.messageIds.set(message, msg.messageId);
+        Object.assign(message, { messageId: msg.messageId });
+      }
       // Every sender uses this event; ACK/SSE/snapshot share one ID for reconciliation.
       emit({ type: 'user-message', content: msg.content, source: msg.source,
         messageId: msg.messageId, timestamp: roundIdentity.startedAt, actor: msg.actor });
@@ -480,6 +490,7 @@ export class NodeRunner {
       emit({ type: 'done', outcome: isAbort ? 'stopped' : 'error' });
     } finally {
       this.busy = false;
+      this.roundDisplayBase = undefined;
       this.currentRoundSource = null;
       this.roundAbort = null;
       if (this.roundIdentity?.runId === roundIdentity.runId) this.roundIdentity = null;
@@ -515,10 +526,12 @@ export class NodeRunner {
       scopeKey: `tradewind:${this.opts.executionId}:${this.opts.nodeId}`,
       archiveDir: this.opts.compactArchiveDir ?? path.join(this.opts.persistDir
         ?? path.join(this.opts.dataDir, 'tradewind', 'compaction'), 'bak'),
-      messages: this.messages, emit,
+      messages: this.messages, emit, display: this.display,
       initialPromptTokens: this.usage.state.latest?.promptTokens,
       initialEstimateTokens: this.lastRequestEstimate,
       prompt: this.opts.compactionPrompt,
+      tools: this.lastRequestTools,
+      historyToolTransport: this.opts.native ? 'native' as const : 'text' as const,
       identity: { workflowId: this.opts.workflowId, executionId: this.opts.executionId,
         nodeId: this.opts.nodeId, agentId: this.opts.agentId },
       signal,
@@ -616,6 +629,7 @@ export class NodeRunner {
         const nativeToolDefs = envelopeRound
           ? [...toolDefs, ...virtualDefs, ...memoryDefs, ...buildEnvelopeToolDefs(handoff ? this.opts.handoffRoutes ?? [] : undefined)]
           : [...toolDefs, ...virtualDefs, ...memoryDefs];
+        this.lastRequestTools = nativeToolDefs;
 
         const result = await runTradewindReActNative({
           dataDir,

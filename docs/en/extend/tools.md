@@ -10,6 +10,12 @@ Enable tools in the Console agent configuration. New agents select framework too
 
 A dangerous marker identifies write, delete, or command capability and supports restrictions such as Cyclone `plan` mode. It does not imply a confirmation prompt before every call.
 
+## Tool Catalog
+
+Open **Capabilities → Tools**. The catalog has separate **Framework tools** and **Custom tools** sections.
+
+Framework collaboration capabilities are grouped by feature, with foundation tools listed separately. Expand a group to view tool purposes and parameter definitions. Framework definitions are read-only. To enable or disable tools for an agent, open that agent's **Tools** configuration in the Console.
+
 ## Built-In Tools
 
 | Tool | Purpose |
@@ -29,9 +35,9 @@ Feature-owned capabilities such as `ask`, taskboards, the Monsoon session team, 
 
 ## Create and Manage Tools
 
-![Global tool registry](/images/extend/tool-registry-current.png)
+![Framework tools grouped by feature and a separate custom tools section, shown in Chinese](/images/extend/tool-registry-current.png)
 
-Use **Register Tool** to provide a stable unique name, purpose, JSON Schema arguments, dangerous marker, execution lifecycle, and either a command template or custom JavaScript executor.
+In **Custom tools**, select **Add custom tool**, provide a stable unique name, purpose, JSON Schema arguments, dangerous marker, execution lifecycle, and either a command template or custom JavaScript executor, then select **Register tool**. Existing custom tools can be edited or deleted.
 
 - **Synchronous** waits for the executor and suits short work or executors that cannot stop safely.
 - **Detachable** allows long work to move into the background after the synchronous window. Use it only when the executor handles cancellation and safely stops child processes, requests, and timers.

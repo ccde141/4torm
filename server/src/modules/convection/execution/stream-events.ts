@@ -5,7 +5,8 @@ import type { TokenUsage } from '../../../engine/shared/llm-bridge.js';
 export type ConvectionStreamEvent =
   | import('../../../engine/shared/model-request-usage.js').ModelRequestUsageEvent
   | import('../../../engine/shared/compaction/contracts.js').CompactionNotice
-  | import('../../../engine/shared/compaction/contracts.js').CompactionProgress
+  | (import('../../../engine/shared/compaction/contracts.js').CompactionProgress & {
+    agentId?: string; boundary?: NonNullable<import('../infrastructure/session-store.js').ConvectionMessage['compactions']>[number] })
   | { type: 'input-accepted' }
   | { type: 'agent-start'; agentId: string; label: string }
   | { type: 'token'; agentId: string; label: string; chunk: string }
@@ -14,7 +15,8 @@ export type ConvectionStreamEvent =
   | { type: 'tool-result'; agentId: string; label: string; tool: string; result: string; ok?: boolean;
       toolImages?: import('../../../engine/shared/types.js').ToolImageRef[] }
   | { type: 'agent-done'; agentId: string; label: string; content: string; rawContent: string;
-      reasoning?: string; toolCalls: ToolCallRecord[] }
+      reasoning?: string; toolCalls: ToolCallRecord[]; displayContent?: string;
+      compactions?: import('../infrastructure/session-store.js').ConvectionMessage['compactions'] }
   | { type: 'agent-failed'; agentId: string; label: string; message: string;
       code?: string; kind?: FrameworkErrorKind }
   | { type: 'heartbeat'; agentId: string; label: string;

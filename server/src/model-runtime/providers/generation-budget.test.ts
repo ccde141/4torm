@@ -78,6 +78,38 @@ test('small observed contexts proportionally narrow output and leave safe input 
   assert.ok(budget.inputTokens! + budget.maxOutputTokens < 8192);
 });
 
+test('deferred allocation preserves a 60K summary ceiling without changing ordinary allocation', async () => {
+  const identity: ProviderModelIdentity = {
+    baseUrl: 'http://deferred.local.test/v1', model: 'local', providerType: 'llama-cpp',
+  };
+  const fetchRuntime = async () => new Response(JSON.stringify({
+    default_generation_settings: { n_ctx: 180_000 },
+  }));
+  const request = { maxContentTokens: 60_000, reasoningReserveTokens: 2_048 };
+  const ordinary = await resolveProviderGenerationBudget(identity, request, fetchRuntime);
+  const deferred = await resolveProviderGenerationBudget(identity,
+    { ...request, deferContextAllocation: true }, fetchRuntime);
+  assert.equal(ordinary.maxOutputTokens, 42_750);
+  assert.ok(ordinary.maxContentTokens < 60_000);
+  assert.equal(deferred.maxContentTokens, 60_000);
+  assert.equal(deferred.maxOutputTokens, 62_048);
+  assert.equal(deferred.inputTokens, 108_952);
+  assert.equal(deferred.inputTokens! + deferred.maxOutputTokens, 171_000);
+});
+
+test('deferred context allocation retains hard provider output and context ceilings', async () => {
+  const providerLimited = await resolveProviderGenerationBudget(deepseek, {
+    maxContentTokens: 500_000, reasoningReserveTokens: 2_048, deferContextAllocation: true,
+  });
+  assert.equal(providerLimited.maxOutputTokens, 393_216);
+  const contextLimited = await resolveProviderGenerationBudget({
+    baseUrl: 'http://small-deferred.local.test/v1', model: 'local', providerType: 'llama-cpp',
+  }, { maxContentTokens: 60_000, reasoningReserveTokens: 2_048, deferContextAllocation: true },
+  async () => new Response(JSON.stringify({ default_generation_settings: { n_ctx: 8192 } })));
+  assert.equal(contextLimited.maxOutputTokens, 7782);
+  assert.equal(contextLimited.inputTokens, 0);
+});
+
 test('invalid allowances and failed runtime discovery remain explicit failures', async () => {
   await assert.rejects(resolveProviderGenerationBudget(deepseek, {
     ...requested, maxContentTokens: 0,

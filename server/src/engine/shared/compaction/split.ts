@@ -2,11 +2,14 @@ import type { ContextMessage } from '../types.js';
 import type { CompactionMode } from './contracts.js';
 import { estimateCompactionTokens, estimateMessageTokens } from './estimate.js';
 import { parseTextToolResponse, parseTextToolResult } from '../text-tool-protocol.js';
+import { isHumanContextMessage } from '../context-origin.js';
+import { recentContextStart } from './recent-context.js';
 
 export interface CompactionSplitOptions {
   mode: CompactionMode;
   prefixRatio: number;
   protectedPrefixCount?: number;
+  recentHumanTurns?: 3 | 4;
   boundaries?: (messages: readonly ContextMessage[]) => readonly number[];
 }
 export interface CompactionSplit {
@@ -22,7 +25,8 @@ export function splitCompactionMessages(
   messages: readonly ContextMessage[], options: CompactionSplitOptions,
 ): CompactionSplit | null {
   const start = protectedCount(messages, options.protectedPrefixCount);
-  const candidates = safeBoundaries(messages, start, options);
+  const recentStart = recentContextStart(messages, start, options.recentHumanTurns ?? 4);
+  const candidates = safeBoundaries(messages, start, options).filter(end => end <= recentStart);
   if (!candidates.length) return null;
   const history = messages.slice(start);
   const sourceTokens = estimateCompactionTokens(history);
@@ -30,6 +34,8 @@ export function splitCompactionMessages(
   const end = options.mode === 'full' ? candidates.at(-1)!
     : nearestBoundary(messages, start, candidates, target);
   if (end <= start) return null;
+  // Rewriting only an existing handoff adds no newly completed work to the summary.
+  if (messages.slice(start, end).every(message => message.role === 'system')) return null;
   return { before: [...messages], protected: messages.slice(0, start),
     prefix: messages.slice(start, end), tail: messages.slice(end), sourceTokens };
 }
@@ -63,6 +69,7 @@ function safeBoundaries(messages: readonly ContextMessage[], start: number, opts
 function completedWorkBoundary(message: ContextMessage, next: ContextMessage | undefined): boolean {
   if (!next || /^(?:\[System: continuation|【系统：续写指令)/.test(next.content.trim())) return false;
   return message.role === 'tool' || (message.role === 'user' && !!parseTextToolResult(message.content))
+    || (message.role === 'user' && !isHumanContextMessage(message))
     || (message.role === 'assistant' && !message.toolCalls?.length
       && parseTextToolResponse(message.content).kind === 'final');
 }
@@ -79,8 +86,7 @@ function updateTextPending(message: ContextMessage, pending: Set<string>): void 
 }
 
 function isHumanTurnStart(message: ContextMessage | undefined): boolean {
-  return message?.role === 'user' && !parseTextToolResult(message.content)
-    && !/^(?:\[System:|【系统)/.test(message.content.trim());
+  return !!message && isHumanContextMessage(message);
 }
 
 function nearestBoundary(messages: readonly ContextMessage[], start: number, candidates: number[], target: number): number {

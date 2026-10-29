@@ -7,11 +7,12 @@ import { createCompactionCaller, estimateCompactionTokens, type CompactionCommit
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import type { LoadedAgent } from '../../../engine/shared/agent-loader.js';
 import type { LLMCaller } from '../../../engine/shared/react/native-loop.js';
-import { saveSession, sessionWorkspace, type ConvectionSessionData } from '../infrastructure/session-store.js';
+import { saveSession, sessionWorkspace, type ConvectionSessionData, type ConvectionMessage } from '../infrastructure/session-store.js';
 import { convectionRoundBoundaries } from './compaction-context.js';
 import type { ConvectionEventSink } from './stream-events.js';
 import { rememberChairContextBoundary, clearConvectionChairContext, convectionChairBoundaries } from './chair-context.js';
 import { recordConvectionCompaction } from '../application/compaction-progress.js';
+import { retainConvectionDisplay } from '../application/display-history.js';
 
 interface CallerOptions {
   dataDir: string;
@@ -22,6 +23,7 @@ interface CallerOptions {
   emit?: ConvectionEventSink;
   initialPromptTokens?: number;
   messages: ContextMessage[];
+  displayDraft?: (compaction: { id: string; summary: string }) => ConvectionMessage;
 }
 
 /** Called under the existing session lease: manual, threshold and overflow share one owner. */
@@ -31,7 +33,7 @@ export function createConvectionCompactionCaller(options: CallerOptions): LLMCal
     callLLM({ dataDir, fullModelKey: agent.model, messages, options: { temperature: agent.temperature, ...callOptions },
       onChunk, signal, tools, onReasoning, onToolProgress }) };
   return createCompactionCaller({ llm, dataDir, area: 'convection', model: agent.model,
-    kind: 'meeting', chairModel: chair.model,
+    kind: 'meeting', chairModel: chair.model, recentHumanTurns: kind === 'public' ? 3 : 4,
     prompt: chair.compactionPrompt, protectedPrefixCount: 1,
     scopeKey: `convection:${session.id}:${kind}`,
     initialPromptTokens: options.initialPromptTokens
@@ -69,8 +71,12 @@ async function commitCompaction(options: CallerOptions, plan: CompactionCommit, 
     next.chairTokenUsage = undefined;
   } else {
     const consumed = Math.min(plan.prefix.length, session.publicMessages.length);
-    next.publicMessages = [{ speaker: '系统', content: `[对话历史摘要]\n${plan.summary}`, timestamp: Date.now() },
+    next.publicMessages = [{ speaker: '系统', content: `[对话历史摘要]\n${plan.summary}`, timestamp: Date.now(), compactionId: progress?.id },
       ...session.publicMessages.slice(consumed)];
+    retainConvectionDisplay({ ...session, publicExecutionDraft: undefined }, next, next.publicMessages[0]);
+    if (options.displayDraft && progress?.id) {
+      next.publicExecutionDraft = options.displayDraft({ id: progress.id, summary: plan.summary });
+    }
     next.tokenUsage = undefined;
     next.publicLatestTokenUsage = undefined;
     next.publicUsageIncomplete = undefined;

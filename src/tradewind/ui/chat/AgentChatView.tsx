@@ -128,7 +128,8 @@ const AgentChatMessage = memo(function AgentChatMessage({ message, isStreaming, 
   if (message.toolCall?.toolName === 'delegate') return <DelegateCard toolCall={message.toolCall as any} content={message.content} mediaScope={mediaScope} />;
   if (message.toolCall?.toolName === 'contact') return <ContactCard toolCall={message.toolCall} />;
   if (message.toolCall) return <ToolCallMessage toolCall={message.toolCall} mediaScope={mediaScope} />;
-  if (message.role === 'system' && isCompactedHistory(message.content)) return <CompactedHistory content={message.content} />;
+  if (message.role === 'system' && isCompactedHistory(message.content)) return <CompactedHistory content={message.content}
+    handoff={message.type === 'compact-marker'} />;
   if (message.role === 'system') return <div className="tw-chat-msg tw-chat-msg--system"><BoundedText text={message.content} /></div>;
   if (message.role === 'user') return <div className="tw-chat-row tw-chat-row--user">
     <div className="tw-chat-avatar tw-chat-avatar--user">{t('tradewind.chat.you')}</div><div className="tw-chat-bubble"><BoundedText text={message.content} /></div>

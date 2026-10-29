@@ -247,15 +247,19 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
     }
     if (parsed.kind === 'final') {
       tokenGate.finish(true);
+      if (params.retainBeforeFinish) {
+        params.messages.push({ role: 'assistant', content: parsed.content });
+      }
       if (params.beforeFinish) {
         const notices = await params.beforeFinish();
         if (params.signal?.aborted) return { content: '[Interrupted]', rawContent: '', toolCalls,
           turns: turn + 1, usage, termination: abortedTermination() };
         if (notices.length || params.steering?.hasPending()) {
-          params.messages.push(...notices.map(content => ({ role: 'user' as const, content })));
+          params.messages.push(...notices.map(content => ({ role: 'user' as const, origin: 'framework' as const, content })));
           continue;
         }
       }
+      if (params.retainFinalContext && !params.retainBeforeFinish) params.messages.push({ role: 'assistant', content: parsed.content });
       return { content: parsed.content, rawContent: reply, toolCalls, turns: turn + 1, usage, termination: succeededTermination() };
     }
     tokenGate.finish(false);

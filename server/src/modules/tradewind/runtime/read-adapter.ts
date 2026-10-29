@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { readNodeDisplayHistory } from '../../../engine/tradewind/execution/node-display-history.js';
 import path from 'node:path';
 import { activeNodeRunners } from '../../../engine/tradewind/nodes/agent.js';
 import { activeMeetings } from '../../../engine/tradewind/nodes/meeting.js';
@@ -12,10 +13,10 @@ import { projectAgentNodeConversation } from './agent-node-view.js';
 import type { NodeSnapshot } from '../../../engine/tradewind/execution/node-runner.js';
 import { readAgentMeetingConversation } from './agent-meeting-read.js';
 import { readTokenUsageFile } from '../../../engine/tradewind/execution/token-usage.js';
-import { projectNodeHistory } from '../../../engine/tradewind/execution/node-history-view.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import { estimateCurrentInput } from '../../../engine/shared/llm-bridge.js';
 import { estimateMeetingCurrentInput } from '../../../engine/tradewind/execution/meeting-current-input.js';
+import { meetingDisplayMessages } from '../../../engine/tradewind/execution/meeting-display.js';
 
 export function createTradewindReadPort(dataDir: string): TradewindReadPort {
   return {
@@ -53,7 +54,7 @@ async function agentNodeConversation(
       message: '节点会话记录格式无效', source: 'tradewind.read', retryable: false });
   }
   const tokenUsage = await readTokenUsageFile(path.join(runDir, 'nodes', input.nodeId, 'usage.json'));
-  const snapshot: NodeSnapshot = { messages: projectNodeHistory(raw as ContextMessage[]),
+  const snapshot: NodeSnapshot = { messages: await readNodeDisplayHistory(path.join(runDir, 'nodes', input.nodeId), raw as ContextMessage[]),
     roundLog: [], busy: false, lastSeq: 0, tokenUsage };
   return projectAgentNodeConversation(snapshot, input);
 }
@@ -102,7 +103,7 @@ async function nodeSnapshot(dataDir: string, nodeId: string, identity?: Tradewin
       if (!Array.isArray(messages)) throw new Error('节点消息记录格式无效');
       const tokenUsage = await readTokenUsageFile(path.join(path.dirname(file), 'usage.json'));
       const currentInput = await estimateCurrentInput({ dataDir, fullModelKey: '', messages: messages as ContextMessage[] });
-      return { messages: projectNodeHistory((messages as ContextMessage[]).slice(1)), roundLog: [], busy: false, lastSeq: 0,
+      return { messages: await readNodeDisplayHistory(path.dirname(file), messages as ContextMessage[]), roundLog: [], busy: false, lastSeq: 0,
         tokenUsage, workflowId, executionId, currentInput };
     } catch (error) {
       if (!isMissingFile(error)) throw error;
@@ -121,11 +122,11 @@ function meetingStatus(nodeId: string, identity?: TradewindReadIdentity, dataDir
     nodeId, workflowId: meeting.workflowId, executionId: meeting.executionId,
     round: meeting.session.round,
     busy: meeting.session.busy, runId: meeting.roundIdentity?.runId,
-    phase: meeting.session.phase, messageCount: meeting.session.publicMessages.length,
+    phase: meeting.session.phase, messageCount: meetingDisplayMessages(meeting.session).length,
     participants: meeting.session.participants,
     configuredParticipants: meeting.configuredParticipants,
     chairAgentId: meeting.session.chairAgentId,
-    publicMessages: meeting.session.publicMessages,
+    publicMessages: meetingDisplayMessages(meeting.session),
     chairMessages: meeting.session.chairMessages,
     compactionNotice: meeting.session.compactionNotice,
     compactions: meeting.session.compactions,

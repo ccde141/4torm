@@ -25,7 +25,7 @@ test('a changed fixed model is verified before settings are committed', async ()
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
-test('model verification reserves the same output budget as a real compression request', async t => {
+test('model verification uses the shared handoff prompt with a small verification body budget', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-policy-budget-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const received: number[] = [];
@@ -34,6 +34,9 @@ test('model verification reserves the same output budget as a real compression r
     for await (const chunk of request) body += chunk;
     const payload = JSON.parse(body);
     const budget = payload.max_completion_tokens ?? payload.max_tokens;
+    assert.match(payload.messages.at(-1).content, /目标与背景/);
+    assert.match(payload.messages.at(-1).content, /压缩模型验证/);
+    assert.match(payload.messages.at(-1).content, /正文上限为 512 token/);
     received.push(budget);
     response.setHeader('content-type', 'text/event-stream');
     response.end(`data: ${JSON.stringify({ choices: [{ delta: {
@@ -52,7 +55,7 @@ test('model verification reserves the same output budget as a real compression r
   }] }));
   const service = new CompactionSettings(dir);
   assert.deepEqual(await service.test({ model: 'budget:thinking' }), { ok: true, model: 'budget:thinking' });
-  assert.deepEqual(received, [768]);
+  assert.deepEqual(received, [2560]);
 });
 
 test('a local archive excerpt cannot report an empty capped model as successfully verified', async t => {

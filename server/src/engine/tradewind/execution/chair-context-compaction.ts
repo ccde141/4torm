@@ -15,6 +15,8 @@ import { reportMeetingCompactionNotice } from './meeting-compaction-notice.js';
 import { tradewindCompactionGuidance } from './compaction-guidance.js';
 import { publishMeetingCompaction } from './meeting-compaction-progress.js';
 import { withMeetingModelUsage } from './meeting-usage.js';
+import { meetingDisplayMessages, meetingDisplaySnapshot } from './meeting-display.js';
+import { buildMeetingChairSystem } from './meeting-handlers.js';
 
 export interface ChairContextBoundary {
   publicAnchor?: { timestamp: number; content: string };
@@ -41,50 +43,54 @@ export function chairCompactionCaller(
 }
 
 function chairCompactionOptions(dataDir: string, session: MeetingSessionData, agent: LoadedAgent,
-  manual = false, signal?: AbortSignal) {
+  signal?: AbortSignal) {
   const meeting = activeMeetings.get(session.nodeId, session.executionId);
   const archiveDir = meeting?.compactArchiveDir ?? path.join(dataDir, 'tradewind', 'compaction', 'chairs');
   const boundary = captureChairContextBoundary(session);
+  let progressId: string | undefined;
   return { dataDir, area: 'tradewindConversation' as const,
     model: agent.model, chairModel: agent.model, kind: 'meeting' as const,
     scopeKey: `tradewind:chair:${session.executionId ?? "legacy"}:${session.nodeId}`,
-    protectedPrefixCount: 1, signal: signal ?? meeting?.signal,
+    protectedPrefixCount: 1, recentHumanTurns: 4 as const, signal: signal ?? meeting?.signal,
     prompt: tradewindCompactionGuidance({ scope: 'chair', meeting: session }, agent.compactionPrompt),
     archive: async (before: ContextMessage[]) => {
       await fs.mkdir(archiveDir, { recursive: true });
       await atomicWriteFile(path.join(archiveDir, `${Date.now()}-${randomUUID()}-chair.json`),
-        JSON.stringify({ publicMessages: session.publicMessages, chairMessages: session.chairMessages, context: before }));
+        JSON.stringify({ ...meetingDisplaySnapshot(session), context: before }));
     },
     commit: async (plan: { messages: ContextMessage[]; summary: string }, commitSignal?: AbortSignal) => {
       const context = structuredClone(plan.messages.slice(1));
-      const nextMessages: ContextMessage[] = manual
-        ? [{ role: 'system', content: `[历史压缩记录]\n${plan.summary}` }] : session.chairMessages;
+      const nextMessages = [...session.chairMessages, { role: 'system' as const,
+        content: `[历史压缩记录]\n${plan.summary}`, compactionId: progressId ?? randomUUID() }];
       const activeSignal = commitSignal ?? signal ?? meeting?.signal;
       activeSignal?.throwIfAborted();
       if (meeting?.runDir) await atomicWriteFile(path.join(meeting.runDir,
-        `chair-context-${session.nodeId}.json`), JSON.stringify(context), activeSignal);
+        `chair-context-${session.nodeId}.json`), JSON.stringify({ context, chairMessages: nextMessages }), activeSignal);
       session.chairActiveContext = context;
-      if (manual) session.chairMessages = nextMessages;
+      session.chairMessages = nextMessages;
       rememberChairBoundary(session, boundary);
     },
     onCompacted: () => {
-      if (manual) broadcastToMeeting(session.nodeId, { type: 'history-updated', messages: session.publicMessages,
+      broadcastToMeeting(session.nodeId, { type: 'history-updated', messages: meetingDisplayMessages(session),
         chairMessages: session.chairMessages, target: 'chair' }, session.executionId);
     },
     onNotice: (notice: { message: string }) => reportMeetingCompactionNotice(session, notice.message),
-    onProgress: (event: CompactionProgress) =>
-      publishMeetingCompaction(session, 'chair', event),
+    onProgress: (event: CompactionProgress) => {
+      if (event.type === 'compact-start') progressId = event.id;
+      publishMeetingCompaction(session, 'chair', event);
+    },
   };
 }
 
 export async function compactChairManually(
   dataDir: string, session: MeetingSessionData, agent: LoadedAgent, signal?: AbortSignal,
 ): Promise<void> {
-  const messages = buildChairContext({ role: 'system', content: '' }, session);
-  await withMeetingModelUsage(session, () => compactMessages({
-    ...chairCompactionOptions(dataDir, session, agent, true, signal),
+  const messages = buildChairContext(buildMeetingChairSystem(agent, session), session);
+  const plan = await withMeetingModelUsage(session, () => compactMessages({
+    ...chairCompactionOptions(dataDir, session, agent, signal),
     messages, mode: 'full', reason: 'manual' }),
   event => broadcastToMeeting(session.nodeId, event, session.executionId));
+  if (!plan) throw new Error('近期私聊原文已保留，暂无更早的可压缩内容');
 }
 
 export function finishChairContext(

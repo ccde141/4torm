@@ -10,6 +10,8 @@ import { useContactActivity } from './ContactActivityScope';
 import './cyclone-seat-turn.css';
 import type { ToolMediaScope } from '../../../engine/tool-media';
 import { useProcessFade } from '../../../components/chat/useProcessFade';
+import { CompactionHistory } from '../../../components/common/CompactionHistory';
+import { compactedSeatTurns } from './compacted-turns';
 
 interface Props {
   turn: SeatTurn;
@@ -25,12 +27,20 @@ interface Props {
   onDelete?: (message: DisplayMessage) => void;
   onAskReply: (answer: string) => void;
   mediaScope?: ToolMediaScope;
+  continued?: boolean;
 }
 
 export default function SeatTurnCard(props: Props) {
   const { t } = useLocale();
   const { turn, streaming = false, phase, dispatches, onAskReply } = props;
   if (props.editing && turn.actionMessage) return <TurnEditor {...props} />;
+  const parts = compactedSeatTurns(turn);
+  if (parts.length > 1) return <>{parts.map((part, index) => <div key={part.turn.id} style={{ display: 'contents' }}>
+    {part.boundary && <CompactionHistory content={part.boundary.summary} handoff />}
+    {(part.turn.workSegments.length > 0 || part.turn.finalContent || part.turn.reasoning || (!part.continued && streaming))
+      && <SeatTurnCard {...props} turn={part.turn} continued={part.continued}
+        streaming={!part.continued && streaming} phase={index === parts.length - 1 ? phase : undefined} />}
+  </div>)}</>;
   const actions = !streaming && turn.actionMessage ? (
     <div className="chat__bubble-actions">
       <button className="chat__msg-action-btn" title={t('chat.editMessage')} aria-label={t('chat.editMessage')}
@@ -44,7 +54,7 @@ export default function SeatTurnCard(props: Props) {
       <div className="chat__avatar">AI</div>
       <div className="chat__bubble cyclone-seat-turn__bubble">
         {turn.reasoning && <ReasoningBlock reasoning={turn.reasoning} isStreaming={streaming} preview />}
-        <SeatTurnWorklog turn={turn} dispatches={dispatches} onAskReply={onAskReply} streaming={streaming} mediaScope={props.mediaScope} />
+        <SeatTurnWorklog turn={turn} dispatches={dispatches} onAskReply={onAskReply} streaming={streaming} mediaScope={props.mediaScope} continued={props.continued} />
         {phase && <div className="chat__streaming-phase">{phase}</div>}
         {turn.finalContent && <div className={`md-bubble cyclone-seat-turn__answer${turn.reasoning || turn.workSegments.length ? ' cyclone-seat-turn__answer--separated' : ''}`}>
           {renderTextWithCode(turn.finalContent, `${turn.id}-answer`)}{streaming ? '▌' : ''}
@@ -55,12 +65,13 @@ export default function SeatTurnCard(props: Props) {
   );
 }
 
-function SeatTurnWorklog({ turn, dispatches, onAskReply, streaming, mediaScope }: {
+function SeatTurnWorklog({ turn, dispatches, onAskReply, streaming, mediaScope, continued }: {
   turn: SeatTurn;
   dispatches: CycloneDispatch[];
   onAskReply: (answer: string) => void;
   streaming: boolean;
   mediaScope?: ToolMediaScope;
+  continued?: boolean;
 }) {
   const { t, locale } = useLocale();
   const id = useId();
@@ -75,7 +86,7 @@ function SeatTurnWorklog({ turn, dispatches, onAskReply, streaming, mediaScope }
   const blocks = segments.flatMap(segment => segment.blocks);
   const failed = blocks.filter(block => 'status' in block && block.status === 'error').length;
   const running = streaming || blocks.some(block => 'status' in block && block.status === 'running');
-  const state = failed ? t('cyclone.activity.failed', { count: failed })
+  const state = continued ? (locale === 'en-US' ? 'Continued' : '已接续') : failed ? t('cyclone.activity.failed', { count: failed })
     : running ? t('cyclone.activity.running') : t('cyclone.activity.completed');
   return (
     <section className="cyclone-seat-turn__worklog">

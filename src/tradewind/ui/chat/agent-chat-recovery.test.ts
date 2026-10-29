@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createSnapshotGate, createStatusRequestGate, readNodeSnapshot, shouldReplaySnapshotRound,
+  projectNodeHistoryMessages,
 } from './agent-chat-runtime';
+import { mergeNodeUserMessage } from './node-message-identity';
 
 type Event = { type: string; seq?: number };
 
@@ -41,6 +43,17 @@ test('已提交 assistant 的终答日志不会在 busy 快照中再回放', () 
   assert.equal(shouldReplaySnapshotRound({ busy: false, roundLog: [
     { type: 'token', content: '旧轮' },
   ] }), false);
+});
+
+test('busy snapshot replay restores the current human input once for both display baselines', () => {
+  const input = { id: 'input-a', role: 'user' as const, content: '继续原任务', timestamp: '2026-10-26T00:00:00Z' };
+  for (const history of [[], [{ role: 'user', content: input.content, messageId: input.id }]]) {
+    const messages = projectNodeHistoryMessages(history, () => 'generated');
+    const restored = mergeNodeUserMessage(messages, input);
+    assert.equal(restored.length, 1);
+    assert.equal(restored[0].id, input.id);
+    assert.equal(mergeNodeUserMessage(restored, input).length, 1);
+  }
 });
 
 test('快照 HTTP 失败和错误格式真实报错', async () => {

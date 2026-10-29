@@ -1,13 +1,19 @@
 import type { ToolImageRef } from '../../../engine/tool-media';
+import type { ConvectionCompactionBoundary } from './convection-compaction-segments';
 
 interface StoredToolCall {
   tool: string;
   args: Record<string, unknown>;
   result?: string;
   toolImages?: ToolImageRef[];
+  completed?: boolean;
+  ok?: boolean;
 }
 
 interface StoredConvectionMessage {
+  execution?: { status: 'running' | 'failed' | 'stopped'; message?: string };
+  compactions?: ConvectionCompactionBoundary[];
+  displayContent?: string;
   agentId?: string;
   speaker: string;
   content: string;
@@ -26,11 +32,14 @@ export function restoreConvectionMessage(message: StoredConvectionMessage) {
     ...(message.agentId ? { agentId: message.agentId } : {}),
     speaker: message.speaker,
     content: message.content,
+    ...(message.execution ? { execution: message.execution } : {}),
+    ...(message.compactions?.length ? { compactions: message.compactions, displayContent: message.displayContent } : {}),
     ...(message.rawContent ? { rawContent: message.rawContent } : {}),
     ...(message.reasoning ? { reasoning: message.reasoning } : {}),
     ...(message.timestamp !== undefined ? { timestamp: new Date(message.timestamp).toISOString() } : {}),
     ...(message.toolCalls ? {
-      toolCalls: message.toolCalls.map(toolCall => ({ ...toolCall, status: 'done' as const })),
+      toolCalls: message.toolCalls.map(toolCall => ({ ...toolCall, status: toolCall.completed === false
+        ? 'unresolved' as const : toolCall.ok === false ? 'error' as const : 'done' as const })),
     } : {}),
   };
 }

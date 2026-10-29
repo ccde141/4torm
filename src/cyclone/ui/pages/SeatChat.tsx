@@ -29,7 +29,7 @@ import { useTaskboardObservations } from '../../../components/chat/useTaskboardO
 import {
   loadSeatTaskboard, saveSeatTaskboard, TaskboardConflictError, type TaskBoard,
 } from '../../../utils/taskboard';
-import { contextToDisplay, type DisplayMessage } from './messageDisplay';
+import type { DisplayMessage } from './messageDisplay';
 import type { SeatStreamRunners } from './useSeatStreamRunners';
 import { useDroppedPathInput } from '../../../lib/useDroppedPathInput';
 import ExecutionStatusBar from '../../../components/chat/ExecutionStatusBar';
@@ -47,6 +47,7 @@ import { useSmartChatScroll } from './useSmartChatScroll';
 import { buildSeatDisplayHistory, hasUnansweredAsk } from './cyclone-reply-sequence';
 import SeatTurnCard from './SeatTurnCard';
 import { createLiveSeatTurn, projectSeatTimeline } from './seat-turn-projection';
+import { projectSeatDisplayHistory, type SeatDisplayHistory } from './seat-display-history';
 import { useSeatExternalActivity } from './useSeatExternalActivity';
 import { usePrivateChatActivity } from './usePrivateChatActivity';
 import { projectPrivateChatLive } from './private-chat-live';
@@ -67,6 +68,7 @@ import { ContactActivityScope } from './ContactActivityScope';
 import CycloneConversationHeader, { CycloneTokenBadge } from './CycloneConversationHeader';
 
 interface SeatStatus {
+  displayHistory?: SeatDisplayHistory;
   id: string; title: string;
   scope?: string;
   messages: { role: string; content: string; toolCalls?: any[]; toolCallId?: string }[];
@@ -244,12 +246,12 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
       const taskboard = isSupervisor ? await loadSupervisorTaskboard(workshopId) : undefined;
       if (seq !== reloadSeq.current) return false;
       const s: SeatStatus = isChair
-        ? { id: '__chair__', title: tRef.current('cyclone.seatChat.chairTitle', { agent: raw.chairAgentId }), messages: raw.messages, pending: raw.pending, tokenUsage: raw.tokenUsage, modelUsage: raw.modelUsage, currentInput: raw.currentInput, compactionNotice: raw.compactionNotice, compaction: raw.compaction }
+        ? { id: '__chair__', title: tRef.current('cyclone.seatChat.chairTitle', { agent: raw.chairAgentId }), messages: raw.messages, displayHistory: raw.displayHistory, pending: raw.pending, tokenUsage: raw.tokenUsage, modelUsage: raw.modelUsage, currentInput: raw.currentInput, compactionNotice: raw.compactionNotice, compaction: raw.compaction }
         : raw;
       s.scope = `${workshopId}:${seatId}`;
       setLoadError(null); setSeat(s);
       if (isSupervisor) setBoard(current => reconcileSupervisorTaskboard(current, taskboard ?? null));
-      setHistory(contextToDisplay(s.messages, tRef.current('cyclone.seatChat.askFallback'), { supervisor: isSupervisor }));
+      setHistory(projectSeatDisplayHistory(s.messages, s.displayHistory, tRef.current('cyclone.seatChat.askFallback'), { supervisor: isSupervisor }));
       revisionRef.current = s.updatedAt || '';
       if (notifyParent) onReloadedRef.current?.();
       return true;
@@ -375,11 +377,11 @@ export default function SeatChat({ workshopId, seatId, runners, dispatches = [],
         }
       } else {
         const next = runners.dequeue(doneSeatId);
-        if (next != null) dispatchText(next);  // 自然结束：逐条出队续发
+        if (next != null) dispatchTextRef.current(next);  // 自然结束：逐条出队续发
       }
       forceTick(t => t + 1);
     })();
-  }, [doneRunner, doneSeatId, reload, runners]);
+  }, [doneRunner, doneSeatId, reload, runners, setInput]);
 
   /** 统一发送：chat（新消息）/ resume（回答挂起的 ask） */
   function run(action: 'chat' | 'resume', text: string) {
@@ -669,7 +671,7 @@ function DisplayRow({ msg, editing, editContent, onEditContent, onStartEdit, onS
     );
   }
   if (msg.role === 'system') {
-    return <CompactionHistory content={msg.content}>{actions}</CompactionHistory>;
+    return <CompactionHistory content={msg.content} handoff={!!msg.compactionId}>{actions}</CompactionHistory>;
   }
   return null;
 }

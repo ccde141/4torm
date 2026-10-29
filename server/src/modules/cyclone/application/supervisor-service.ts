@@ -1,4 +1,5 @@
 import { withCycloneSummaryUsage } from './summary-model-usage.js';
+import { alignCycloneTranscript, captureCycloneCompaction } from '../../../engine/cyclone/conversation-transcript.js';
 import { loadAgent } from '../../../engine/shared/agent-loader.js';
 import { withAgentActivity } from '../../../engine/shared/agent-activity.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
@@ -17,7 +18,7 @@ import type { CycloneCommands } from './execution-commands.js';
 import type { CycloneExecutionPort, CycloneExecutionSnapshot } from '../domain/operation-snapshot.js';
 import type { CycloneChangeFeed } from './change-feed.js';
 import type { CycloneContextSummarizer } from '../domain/context-summary.js';
-import { toCycloneSummaryMessages } from '../domain/context-summary.js';
+import { retainedCycloneMessages, toCycloneSummaryMessages } from '../domain/context-summary.js';
 import type { CyclonePrivateChatActivity } from './private-chat-activity.js';
 import { withCycloneContextChange } from './context-compaction-transaction.js';
 import { finishCycloneCompaction, recoveredCycloneCompaction } from '../../../engine/cyclone/compaction-progress.js';
@@ -214,9 +215,11 @@ export class CycloneSupervisorService {
     try {
       await mutateSupervisor(this.dataDir, workshopId, current => {
         if (current.pending) throw failure('请先回答主管的问题');
+        const before = [...current.messages];
         const changed = content === undefined ? deleteContextMessage(current.messages, index)
           : editContextMessage(current.messages, index, content);
         if (!changed) throw failure('消息索引无效', 'validation');
+        alignCycloneTranscript(current.displayHistory, before, current.messages);
       });
       this.changed(workshopId); return { ok: true };
     } finally { release(); }
@@ -263,22 +266,28 @@ export class CycloneSupervisorService {
     const inboxBefore = mode === 'clear'
       ? (await readPendingSupervisorInformation(this.dataDir, workshopId)).map(item => item.id) : [];
         const archivePath = await archiveSupervisorContext(this.dataDir, workshopId, current);
-        const summary = mode === 'summary' ? await withCycloneSummaryUsage({
+        const compacted = mode === 'summary' ? await withCycloneSummaryUsage({
           get: () => current.modelUsage, set: value => { current.modelUsage = value; },
           persist: () => mutateSupervisor(this.dataDir, workshopId, next => { next.modelUsage = current.modelUsage; }),
           emit: event => { this.changed(workshopId); emit(event); },
         }, () => this.summarizer.summarize({
           agentId: current.agentId!, subject: '工作室主管会话',
+          target: { workshopId, kind: 'supervisor' },
           messages: toCycloneSummaryMessages(current.messages), signal,
           onNotice: async notice => {
             await mutateSupervisor(this.dataDir, workshopId, next => { next.compactionNotice = notice; });
             this.changed(workshopId); emit(notice);
           },
         })) : undefined;
+        const summary = compacted?.summary;
         if (mode === 'summary' && !summary?.trim()) throw failure('摘要为空，原会话保留', 'io');
         signal?.throwIfAborted();
         await mutateSupervisor(this.dataDir, workshopId, next => {
-          next.messages = summary ? [{ role: 'system', content: `[会话归档摘要]\n${summary}` }] : [];
+          const before = next.messages;
+          next.messages = summary ? [{ role: 'system', content: `[会话归档摘要]\n${summary}` },
+            ...retainedCycloneMessages(before, compacted!)] : [];
+          next.displayHistory = summary ? captureCycloneCompaction(next.displayHistory, before, next.messages,
+            { role: 'system', content: `[历史压缩记录]\n${summary}`, compactionId: started.id }) : undefined;
           next.tokenUsage = undefined;
           next.pending = undefined;
           next.compaction = finishCycloneCompaction(started);

@@ -40,6 +40,7 @@ export interface ImageAttachment {
 export interface NativeContextMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
+  origin?: 'human' | 'framework';
   images?: ImageAttachment[];
   toolImages?: ToolImageRef[];
   reasoningContent?: string;
@@ -77,6 +78,8 @@ export interface ChatMessage {
   toolCall?: ToolCall;
   /** 运行时类型标记（如 'compact-marker'） */
   type?: string;
+  /** Successful in-turn compaction boundary; references display records without splitting the run. */
+  execution?: { assistantId: string; toolOffset: number; textOffset?: number; eventOffset?: number; reasoningOffset?: number };
   /** agent 反问（ask 工具触发） */
   ask?: {
     question: string;
@@ -93,7 +96,7 @@ export interface ChatMessage {
    */
   toolSteps?: ToolStep[];
   /** 流式阶段标识（运行时字段，不持久化） */
-  streamingPhase?: 'queued' | 'llm-waiting' | 'model-output' | 'tool-preparing' | 'tool-exec';
+  streamingPhase?: 'queued' | 'llm-waiting' | 'model-output' | 'tool-preparing' | 'tool-exec' | 'team-waiting';
   /** 当前阶段已等待秒数（运行时字段） */
   phaseElapsed?: number;
   /** 正在准备或执行的工具名（运行时字段） */
@@ -131,7 +134,8 @@ export interface TeamActivity {
 export type ChatActivity =
   | { kind: 'text'; content: string }
   | { kind: 'tool'; index: number }
-  | { kind: 'team'; event: TeamActivity };
+  | { kind: 'team'; event: TeamActivity }
+  | { kind: 'compact'; markerId: string; toolOffset: number; timestamp: string; reasoningOffset?: number };
 
 /** 工具调用步骤（StructuredMessage 与流式期间共用） */
 export interface ToolStep {

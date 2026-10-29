@@ -35,7 +35,7 @@ export function useRoomStatus(input: {
       if (next !== current.current) {
         current.current = next;
         setRoom(next);
-        setHistory(publicToFeed(next.publicMessages));
+        setHistory(publicToFeed(next.publicMessages, next.publicDisplayHistory, next.publicExecutionDraft));
       }
       setError(null);
       if (notify) onChangedRef.current?.();

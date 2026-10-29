@@ -1,6 +1,8 @@
 import type { Locale } from '../i18n/locale';
 
 export interface CurrentInputEstimate {
+  runId?: string;
+  active?: boolean;
   tokens: number;
   images: number;
   model: string;
@@ -15,7 +17,7 @@ export function formatCurrentInput(estimate: CurrentInputEstimate | undefined, l
   if (!estimate || !Number.isFinite(estimate.tokens) || estimate.tokens < 0) return undefined;
   const latest = progress?.latest;
   // Persisted in-flight states can survive a crash; a newer context read must supersede them.
-  if (latest && latest.updatedAt > estimate.estimatedAt) return formatModelUsage(progress, locale);
+  if (!estimate.active && latest && latest.updatedAt > estimate.estimatedAt) return formatModelUsage(progress, locale);
   const english = locale === 'en-US';
   const count = estimate.tokens >= 1_000 ? `${(estimate.tokens / 1_000).toFixed(1)}K` : String(estimate.tokens);
   const note = estimate.basis === 'canonical'

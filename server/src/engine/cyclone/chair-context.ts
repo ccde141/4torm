@@ -10,6 +10,7 @@ export function buildCycloneChairContext(room: RoomData, system: ContextMessage)
     && (!anchor || seen >= 0);
   return [system, ...(active ? room.chairActiveContext! : []),
     ...room.publicMessages.slice(active ? seen + 1 : 0).map(message => ({ role: 'user' as const,
+      origin: message.speaker === '人类' ? 'human' as const : 'framework' as const,
       content: `[公共会议：${message.speaker}] ${message.content}${message.toolCalls?.length
         ? `\n[工具执行事实]\n${JSON.stringify(message.toolCalls)}` : ''}` })),
     ...(room.chairMessages ?? []).slice(active ? room.chairContextRawCount ?? 0 : 0)

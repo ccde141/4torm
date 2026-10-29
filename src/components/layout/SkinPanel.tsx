@@ -24,6 +24,7 @@ const SkinPanel: React.FC<SkinPanelProps> = ({ onClose, triggerRef }) => {
   }, []);
 
   const handleClickOutside = useCallback((e: MouseEvent) => {
+    if (e.target instanceof Element && e.target.closest('[data-confirm-overlay]')) return;
     if (triggerRef?.current?.contains(e.target as Node)) return;
     if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
       onClose();

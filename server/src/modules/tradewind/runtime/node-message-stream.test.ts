@@ -16,7 +16,8 @@ test('human and Agent node messages share one visible event and stable acknowled
   ] }));
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
     const body = JSON.parse(String(init.body));
-    assert.ok(body.messages.every((message: Record<string, unknown>) => !('messageId' in message) && !('actor' in message)));
+    assert.ok(body.messages.every((message: Record<string, unknown>) => !('messageId' in message)
+      && !('actor' in message) && !('nodeCompactionId' in message)));
     return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: '已收到' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`,
       { headers: { 'content-type': 'text/event-stream' } });
   });
@@ -39,8 +40,16 @@ test('human and Agent node messages share one visible event and stable acknowled
     const events: NodeRunnerEvent[] = [];
     let finish!: () => void;
     const done = new Promise<void>(resolve => { finish = resolve; });
-    const listener = (event: NodeRunnerEvent) => { events.push(event); if (event.type === 'done') finish(); };
+    let answeredSnapshot: ReturnType<NodeRunner['getSnapshot']> | undefined;
+    let listening = false;
+    const listener = (event: NodeRunnerEvent) => {
+      if (!listening) return;
+      events.push(event);
+      if (event.type === 'answer') answeredSnapshot = runner.getSnapshot();
+      if (event.type === 'done') finish();
+    };
     runner.addEventListener(listener);
+    listening = true;
     events.length = 0;
     const receipt = await createTradewindCommands(root).sendNodeMessage({ executionId: execution.executionId,
       nodeId: 'worker', message: `${type} 的工作指令` }, { type, id: `${type}-sender` });
@@ -53,8 +62,12 @@ test('human and Agent node messages share one visible event and stable acknowled
     assert.ok(visible.messageId);
     assert.equal((receipt as { messageId?: string }).messageId, visible.messageId);
     assert.equal(visible.actor?.type, type);
-    assert.ok(runner.getSnapshot().messages.some(message =>
-      (message as { messageId?: string }).messageId === visible.messageId));
+    assert.ok(answeredSnapshot?.messages.some(message => message.messageId === visible.messageId),
+      'the answer/busy transition exposes committed history once terminal round replay is disabled');
+    assert.equal(answeredSnapshot?.messages.at(-1)?.content, '已收到');
+    const snapshot = runner.getSnapshot();
+    assert.ok(snapshot.messages.some(message => message.messageId === visible.messageId)
+      || snapshot.roundLog.some(event => event.type === 'user-message' && event.messageId === visible.messageId));
     assert.ok(facts.some(fact => fact.messageId === visible.messageId && (fact.actor as { type?: string })?.type === type));
   }
 });

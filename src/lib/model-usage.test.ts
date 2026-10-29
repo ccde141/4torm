@@ -47,6 +47,15 @@ test('current context preview can decrease after an edit without changing actual
   assert.equal(formatCurrentInput(undefined, 'zh-CN'), undefined);
 });
 
+test('a running context observation remains authoritative while its request reports usage', () => {
+  const progress = applyModelRequest(undefined, request('live', { state: 'completed', usageComplete: true,
+    usage: { promptTokens: 174243, completionTokens: 643, totalTokens: 174886 } }));
+  const live = { tokens: 185150, images: 0, model: 'fixture', active: true, runId: 'run-one',
+    contextRevision: 'run-one:10', estimatedAt: '2026-10-23T23:00:00.000Z' };
+  assert.equal(formatCurrentInput(live, 'zh-CN', progress)?.label, '185.2K');
+  assert.equal(formatCurrentInput({ ...live, tokens: 40000, contextRevision: 'run-one:11' }, 'zh-CN', progress)?.label, '40.0K');
+});
+
 test('a new request temporarily supersedes an older context preview until a fresh context read', () => {
   const progress = applyModelRequest(undefined, request('live'));
   const estimate = { tokens: 100, images: 0, model: 'fixture', estimatedAt: '2026-10-23T23:00:00.000Z' };

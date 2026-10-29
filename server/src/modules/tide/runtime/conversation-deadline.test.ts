@@ -19,11 +19,13 @@ for (const outcome of ['success', 'failure', 'abort'] as const) {
     const advance = fakeClock(t);
     const controller = new AbortController();
     let aborts = 0;
+    let summaries = 0;
     const transform = TideContextCompaction.prototype.transform;
     t.mock.method(TideContextCompaction.prototype, 'transform', function(this: TideContextCompaction, llm) {
       Object.assign(Reflect.get(this, 'summaryPorts'), {
         resolveSummaryBudget: async () => 100_000,
         summarize: async () => {
+          summaries++;
           advance(61 * MINUTE);
           assert.equal(aborts, 0, '压缩期间不能耗尽普通工作预算');
           if (outcome === 'abort') {
@@ -53,6 +55,7 @@ for (const outcome of ['success', 'failure', 'abort'] as const) {
     if (outcome === 'success') assert.equal((await run).answer, '完成');
     else await assert.rejects(run, error => error instanceof TideConversationFailure
       && error.aborted === (outcome === 'abort'));
+    assert.equal(summaries, 1, '必须真实进入长压缩，不能被近期保护跳过后误判通过');
     advance(180 * MINUTE);
     assert.equal(aborts, 0, '没有残留的执行计时器');
   });
@@ -84,6 +87,10 @@ async function conversationFixture(t: TestContext) {
     messages: [
       { id: 'u1', role: 'user', content: '此前的任务内容 '.repeat(1000), timestamp: new Date().toISOString() },
       { id: 'a1', role: 'assistant', content: '此前已核验的结果 '.repeat(1000), timestamp: new Date().toISOString() },
+      ...Array.from({ length: 4 }, (_, index) => [
+        { id: `recent-user-${index}`, role: 'user', content: `最近要求${index}`, timestamp: new Date().toISOString() },
+        { id: `recent-answer-${index}`, role: 'assistant', content: `最近回复${index}`, timestamp: new Date().toISOString() },
+      ]).flat(),
     ] }, task.id, task.name);
   return { dataDir, task };
 }

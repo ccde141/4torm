@@ -5,6 +5,7 @@ import {
   getCapabilitySelectionState,
   groupAgentTools,
   toggleCapabilitySelection,
+  toggleCapabilityTool,
   type AgentCapabilityGroup,
 } from './agent-capability-groups';
 import './AgentToolCapabilities.css';
@@ -23,7 +24,7 @@ interface Props {
 }
 
 function countSelected(group: AgentCapabilityGroup, selected: ReadonlySet<string>) {
-  if (['tide', 'convection'].includes(group.id)
+  if (['tide', 'convection', 'cyclone'].includes(group.id)
     && getCapabilitySelectionState(group, selected) === 'on') return group.tools.length;
   return group.tools.filter(tool => selected.has(tool.name)).length;
 }
@@ -50,7 +51,7 @@ export default function AgentToolCapabilities({
       )}
 
       <CapabilitySection groups={capabilities} selected={checkedTools}
-        onChange={onChange} onToggle={toggleTool} />
+        onChange={onChange} />
 
       <StandaloneTools title={t('config.foundationTools')} tools={frameworkTools}
         selected={checkedTools} onToggle={toggleTool} />
@@ -63,11 +64,10 @@ export default function AgentToolCapabilities({
   );
 }
 
-function CapabilitySection({ groups, selected, onChange, onToggle }: {
+function CapabilitySection({ groups, selected, onChange }: {
   groups: AgentCapabilityGroup[];
   selected: ReadonlySet<string>;
   onChange: (tools: Set<string>) => void;
-  onToggle: (name: string) => void;
 }) {
   const { t } = useLocale();
   if (groups.length === 0) return null;
@@ -97,7 +97,9 @@ function CapabilitySection({ groups, selected, onChange, onToggle }: {
                 <span className="agent-tool-row__name">{tool.name}</span>
                 <span className="agent-tool-row__description">{tool.description}</span>
               </div>
-              : <ToolRow key={tool.name} tool={tool} checked={selected.has(tool.name)} onToggle={onToggle} />)}
+              : <ToolRow key={tool.name} tool={tool}
+                  checked={selected.has(tool.name) || selected.has(`framework_capability_${group.id}`)}
+                  onToggle={name => onChange(toggleCapabilityTool(group, selected, name))} />)}
           </div>
         </details>
       </article>;

@@ -12,7 +12,7 @@ const seatIds = { type: 'array', maxItems: 50, uniqueItems: true, items: id };
 export function cycloneAgentManagementManifests(): ModuleMethodManifest[] {
   return [
     method('addCollaborationSeat', 'add_collaboration_seat',
-      '在已有气旋工作室新增工位，绑定已存在的全局 Agent；不会重绑旧工位。',
+      '在已有气旋工作室新增工位，绑定已存在的全局 Agent；不会重绑旧工位，也不自动加入协作组或群聊。随后读取 read_collaboration_structure；显式协作图中须按任务需要设置组或连线，再派发。',
       ['workshopId', 'agentId', 'title'], {
         workshopId: id, agentId: id, title: text, rolePrompt: text, duty: text,
         overrideAgentRole: { type: 'boolean' },

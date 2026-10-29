@@ -8,7 +8,7 @@ export function TeamPreviewGraph({ data, busy, mainName, w, open }: {
       <small>{w.main}</small><strong>{mainName}</strong><small>{busy ? w.running : w.idle}</small>
     </button>
     <div className="team-preview-members">
-      {data.members.map(member => {
+      {data.members.filter(member => member.lifecycle === 'active').map(member => {
         const report = member.run?.status === 'running' ? undefined : data.reports.findLast(item => item.memberId === member.id && item.runId === member.run?.id);
         return <div className={`team-preview-branch ${member.run?.status === 'running' ? 'is-active' : ''}`} key={member.id}>
           <button className="team-summary-member" onClick={() => open(member.id)}>

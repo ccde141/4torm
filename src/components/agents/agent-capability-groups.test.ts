@@ -6,6 +6,7 @@ import {
   getCapabilitySelectionState,
   toggleCapabilitySelection,
   normalizeCapabilitySelection,
+  toggleCapabilityTool,
 } from './agent-capability-groups.js';
 
 const capability = {
@@ -32,6 +33,19 @@ test('只把可信框架工具组织为能力组', () => {
     id: group.id, names: group.tools.map(tool => tool.name),
   })), [{ id: 'tradewind', names: ['tradewind_start', 'tradewind_status'] }]);
   assert.deepEqual(grouped.standalone.map(tool => tool.name), ['read_file', 'custom_spoof']);
+});
+
+test('气旋全区开关包含后续工具，单项调整恢复精细选择且旧部分配置不扩权', () => {
+  const cycloneTools = tools.map(tool => tool.frameworkCapability
+    ? { ...tool, frameworkCapability: { ...tool.frameworkCapability, id: 'cyclone' } } : tool);
+  const group = groupAgentTools(cycloneTools).capabilities[0];
+  const old = new Set(['read_file', 'tradewind_start']);
+  assert.deepEqual(normalizeCapabilitySelection(cycloneTools, old), old);
+  const enabled = toggleCapabilitySelection(group, old);
+  assert.deepEqual([...enabled].sort(), ['framework_capability_cyclone', 'read_file']);
+  assert.equal(getCapabilitySelectionState({ ...group, tools: [...group.tools,
+    { ...group.tools[0], name: 'new_action' }] }, enabled), 'on');
+  assert.deepEqual([...toggleCapabilityTool(group, enabled, 'tradewind_status')].sort(), ['read_file', 'tradewind_start']);
 });
 
 test('能力组准确区分关闭、部分启用和全部启用', () => {

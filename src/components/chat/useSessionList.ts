@@ -55,6 +55,7 @@ export function useSessionList(
   useEffect(() => {
     const agentId = selectedAgent?.id;
     if (!agentId || !activeSessionId || !selectedModel) return;
+    if (activePreview?.currentInput?.active && activePreview.currentInput.model === selectedModel) return;
     if (activePreview?.currentInput?.model === selectedModel
       && activePreview.currentInput.contextRevision === activePreview.messageRevision) return;
     let current = true;

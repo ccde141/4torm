@@ -12,6 +12,21 @@ const definition = {
   taskContext: 'Shared project', constraints: 'Read only', permissions: policy,
 };
 
+test('解散保留招募时间、首次解散时间和完整成员上下文', async t => {
+  const { root, store } = await fixture(t);
+  const member = await store.create(definition, policy);
+  assert.ok(member.recruitedAt && Number.isFinite(Date.parse(member.recruitedAt)));
+  const run = await store.start(member.id, '核验', policy);
+  await store.checkpoint(member.id, run.id, [{ role: 'user', content: '原始任务' }, { role: 'assistant', content: '核验结果' }]);
+  await store.finish(member.id, run.id, 'completed', '完成');
+  await store.dismiss(member.id);
+  const first = (await store.read()).members[0];
+  assert.ok(first.dismissedAt); assert.equal(first.recruitedAt, member.recruitedAt);
+  await store.dismiss(member.id);
+  const saved = (await new TeamStore(root, owner).read()).members[0];
+  assert.equal(saved.dismissedAt, first.dismissedAt); assert.deepEqual(saved.context, first.context);
+});
+
 async function fixture(t: test.TestContext, runtimeId = 'process-one') {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-team-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

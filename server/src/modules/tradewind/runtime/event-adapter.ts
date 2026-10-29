@@ -6,6 +6,7 @@ import { frameworkError } from '../../../engine/shared/framework-error.js';
 import type { TradewindEventPort } from '../application/event-port.js';
 import { getTradewindExecutions } from '../../../services/tradewind-execution.js';
 import { sameTradewindDataRoot } from '../../../services/tradewind-execution-registry.js';
+import { meetingDisplayMessages } from '../../../engine/tradewind/execution/meeting-display.js';
 
 export function createTradewindEventPort(dataDir: string): TradewindEventPort {
   return {
@@ -19,7 +20,7 @@ export function createTradewindEventPort(dataDir: string): TradewindEventPort {
         kind: 'not_found', message: 'No active meeting', source: 'tradewind.events', retryable: false });
       return { snapshots: () => [{ type: 'connected', phase: meeting.session.phase,
         round: meeting.session.round, runId: meeting.roundIdentity?.runId,
-        messages: meeting.session.publicMessages,
+        messages: meetingDisplayMessages(meeting.session),
         chairMessages: meeting.session.chairMessages,
         compactionNotice: meeting.session.compactionNotice,
         compactions: meeting.session.compactions,
@@ -40,7 +41,7 @@ function unifiedSnapshots(dataDir: string): Record<string, unknown>[] {
       scope: 'meeting', nodeId, type: 'connected',
       workflowId: meeting.workflowId, executionId: meeting.executionId,
       phase: meeting.session.phase, round: meeting.session.round,
-      messages: meeting.session.publicMessages,
+      messages: meetingDisplayMessages(meeting.session),
       chairMessages: meeting.session.chairMessages,
       compactionNotice: meeting.session.compactionNotice,
       compactions: meeting.session.compactions,

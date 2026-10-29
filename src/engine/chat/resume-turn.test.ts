@@ -202,3 +202,21 @@ test('a stop after a completed reply saves from the acknowledged revision', asyn
 
   assert.deepEqual(h.saved.map(value => value.revision), [3, 4]);
 });
+
+test('resuming after ask never lowers its saved revision when a prior compaction checkpoint is repeated', async () => {
+  const marker = (id: string, content: string) => ({ id, role: 'system', content, timestamp: 'now',
+    type: 'compact-marker', contextExact: true, nativeContext: [{ role: 'system', content }] });
+  const first = marker('compact-first', '旧交接');
+  const h = harness(async () => sse(accepted,
+    { type: 'context-compacted', revision: 9, marker: first },
+    { type: 'context-compacted', revision: 10, marker: marker('compact-second', '新交接') },
+    { type: 'context-compacted', revision: 9, marker: first },
+    { type: 'answer', content: '已继续' }, { type: 'done' }));
+  h.ports.loadSession = async () => ({ ...session, revision: 7 });
+  await resumeMonsoonTurn({ sessionId: session.id, agent, model: agent.model,
+    askMessageId: ask.id, waitingRunId: 'run-before-ask', answer: '继续' }, h.ports);
+  assert.equal(h.saved.at(-1)?.revision, 10);
+  assert.deepEqual(h.saved.at(-1)?.messages.filter(message => message.type === 'compact-marker')
+    .map(message => message.id), ['compact-first', 'compact-second']);
+  assert.equal(h.finalized(), true);
+});

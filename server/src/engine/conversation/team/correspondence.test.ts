@@ -1,0 +1,94 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { TeamStore } from './store.js';
+import { TeamRuntime } from './runtime.js';
+import { createTeamHandoff } from './handoff.js';
+import { internalMessage } from './mailbox.js';
+import { teamExtension } from './tools.js';
+
+test('session correspondence is durable, idempotent, scoped and only acknowledged after context commit', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'team-mailbox-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const store = new TeamStore(dataDir, { agentId: 'a', sessionId: 's' });
+  const policy = { tools: [], skills: [], sandboxLevel: 'project' as const };
+  const member = await store.create({ name: 'Collector', mission: 'collect', rolePrompt: '',
+    taskContext: '', constraints: '', permissions: policy }, policy);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let reported!: () => void;
+  const ready = new Promise<void>(resolve => { reported = resolve; });
+  const runtime = new TeamRuntime(store, async (_member, _task, checkpoint, _signal, control) => {
+    await checkpoint([{ role: 'user', content: 'retained work' }]);
+    await control.report('Need a different source', 'report-one');
+    reported();
+    await gate;
+    return 'finished';
+  });
+  t.after(async () => { release(); await runtime.wait(); });
+  const run = await runtime.dispatch(member.id, 'collect', policy, 'task-one');
+  await ready;
+  const extension = teamExtension(runtime, policy);
+  await assert.rejects(extension.call('team_message', { memberId: member.id, runId: 'wrong', content: 'x', messageId: 'wrong' }), /RUN_CONFLICT/);
+  const args = { memberId: member.id, runId: run.id, content: 'Use batch requests', messageId: 'message-one' };
+  await extension.call('team_message', args);
+  await extension.call('team_message', args);
+  await assert.rejects(extension.call('team_message', { ...args, content: 'changed' }), /MESSAGE_CONFLICT/);
+  const state = await store.read();
+  assert.equal(state.messages!.filter(message => message.id === 'message-one').length, 1);
+  assert.equal(state.messages!.find(message => message.id === 'message-one')!.status, 'queued');
+  const handoff = createTeamHandoff(runtime);
+  const notices = await handoff.notifications();
+  assert.match(notices.join('\n'), /Need a different source/);
+  assert.equal((await store.read()).messages!.find(message => message.id === 'report-one')!.status, 'queued');
+  // A new handoff after failure can retry delivery. A retained context marker prevents duplication.
+  const retry = createTeamHandoff(runtime);
+  const report = state.messages!.find(message => message.id === 'report-one')!;
+  assert.deepEqual(await retry.notifications([{ role: 'user', content: internalMessage(report) }]), []);
+  await retry.inContext();
+  assert.equal((await store.read()).messages!.find(message => message.id === 'report-one')!.status, 'included');
+  assert.equal((await store.read()).reports.length, 0, 'progress must not finish the member');
+  release(); await runtime.wait();
+  assert.equal((await store.read()).messages!.find(message => message.id === 'message-one')!.status, 'undelivered');
+  await assert.rejects(extension.call('team_message', { ...args, messageId: 'too-late' }), /RUN_CONFLICT/);
+  const other = new TeamRuntime(new TeamStore(dataDir, { agentId: 'a', sessionId: 'other' }), async () => '');
+  await assert.rejects(other.mailbox.send(member.id, run.id, 'to-member', 'cross-session', 'cross'), /RUN_CONFLICT/);
+});
+
+test('targeted stop retains busy state until exit, does not stop peers, and rejects obsolete run IDs', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'team-stop-one-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const store = new TeamStore(dataDir, { agentId: 'a', sessionId: 's' });
+  const policy = { tools: [], skills: [], sandboxLevel: 'project' as const };
+  const definition = { name: 'Worker', mission: 'work', rolePrompt: '', taskContext: '', constraints: '', permissions: policy };
+  const first = await store.create(definition, policy); const peer = await store.create(definition, policy);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const signals = new Map<string, AbortSignal>();
+  const runtime = new TeamRuntime(store, async (member, _task, checkpoint, signal) => {
+    signals.set(member.id, signal);
+    await checkpoint([{ role: 'user', content: 'saved before cancellation' }]);
+    await gate; return 'late return';
+  });
+  t.after(async () => { release(); await runtime.wait(); });
+  const run = await runtime.dispatch(first.id, 'one', policy, 'first');
+  await runtime.dispatch(peer.id, 'two', policy, 'peer');
+  const stopping = await runtime.stopMember(first.id, run.id, 'Change collection strategy');
+  assert.equal(stopping.status, 'stopping');
+  assert.equal((await store.read()).members[0].run?.phase, 'stopping');
+  await assert.rejects(runtime.dispatch(first.id, 'new', policy, 'new'), /TEAM_MEMBER_BUSY/);
+  assert.equal(signals.get(first.id)?.aborted, true);
+  assert.equal(signals.get(peer.id)?.aborted, false);
+  release(); await runtime.wait();
+  const state = await store.read();
+  assert.equal(state.members[0].run?.status, 'aborted');
+  assert.equal(state.members[0].run?.phase, 'aborted');
+  assert.equal(state.members[1].run?.status, 'completed');
+  assert.match(state.reports.find(report => report.memberId === first.id)!.content, /Change collection strategy/);
+  assert.equal(state.members[0].context[0].content, 'saved before cancellation');
+  await runtime.dispatch(first.id, 'new', policy, 'new');
+  await assert.rejects(runtime.stopMember(first.id, run.id, 'obsolete stop'), /RUN_CONFLICT/);
+  await runtime.wait();
+});

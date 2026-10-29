@@ -46,6 +46,8 @@ export interface ResolvedTarget {
   compactedContext?: ContextMessage[];
   /** Current generated tool chain retained when MCP media must survive the next run. */
   turnContext?: ContextMessage[];
+  /** Stable visible input shared by mid-turn compaction and the final append. */
+  displayInput?: TideMessage;
   seasonSessions?: SeasonSessionPort;
 }
 
@@ -117,7 +119,8 @@ export async function saveTurn(
   usage?: TideUsageProgress,
 ): Promise<SaveResult> {
   const now = new Date().toISOString();
-  const userMsg: TideMessage = { id: msgId(), role: 'user', content: userText, timestamp: now };
+  const userMsg: TideMessage = resolved.displayInput
+    ?? { id: msgId(), role: 'user', origin: 'framework', content: userText, timestamp: now };
   const botMsg: TideMessage = { id: msgId(), role: 'assistant', content: answer, timestamp: now };
   if (resolved.turnContext) {
     botMsg.contextExact = true;
@@ -146,9 +149,15 @@ export async function saveTurn(
   if (resolved.liveUsageCalls && usage?.calls !== resolved.liveUsageCalls) {
     throw new Error('潮汐实时用量与最终运行记录不一致');
   }
-  base.messages.push(...turnMsgs);
+  const savedIds = new Set(base.messages.map(message => message.id));
+  if (botMsg.contextExact) {
+    const intermediateIds = new Set(intermediate.map(message => message.id));
+    base.messages = base.messages.map(message => intermediateIds.has(message.id)
+      ? { ...message, contextOmitted: true } : message);
+  }
+  base.messages.push(...turnMsgs.filter(message => !savedIds.has(message.id)));
   if (resolved.compactedContext) base.messages.push({ id: msgId(), role: 'system',
-    content: '[历史压缩记录]', type: 'compact-marker', contextExact: true,
+    content: '[历史压缩记录]', type: 'compact-marker', contextExact: true, contextOnly: true,
     nativeContext: resolved.compactedContext, timestamp: now });
   base.usage = resolved.liveUsageCalls ? base.usage : mergeTideUsage(base.usage, usage);
   if (usage?.modelUsage && base.usage) {

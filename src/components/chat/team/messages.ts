@@ -14,6 +14,8 @@ export const zh = {
   contextHint: '只读显示已保存的成员消息与工具结果；运行中的最新内容可能尚未保存。',
   noContext: '尚无已保存的会话消息', search: '搜索成员会话', user: '派工 / 输入', assistant: '成员', tool: '工具结果',
   partial: '内容已按查看预算截断，可缩小范围后刷新。',
+  activeMembers: '当前成员', dismissedMembers: '已解散成员', recruitedAt: '招募时间', dismissedAt: '解散时间',
+  unrecorded: '未记录', noDismissed: '本会话尚无已解散成员', loadMore: '加载更多', historyChanged: '成员记录已变化，请刷新历史页。',
 };
 export const en: Record<keyof typeof zh, string> = {
   title: 'Team', open: 'View team', collaboration: 'Collaborate', close: 'Close', refresh: 'Refresh', loading: 'Loading team…',
@@ -31,4 +33,6 @@ export const en: Record<keyof typeof zh, string> = {
   contextHint: 'Read-only saved messages and tool results. The latest running output may not yet be saved.',
   noContext: 'No saved messages yet', search: 'Search member conversation', user: 'Assignment / input', assistant: 'Member', tool: 'Tool result',
   partial: 'Content was truncated to the viewing budget. Narrow the scope and refresh.',
+  activeMembers: 'Current members', dismissedMembers: 'Dismissed members', recruitedAt: 'Recruited', dismissedAt: 'Dismissed',
+  unrecorded: 'Not recorded', noDismissed: 'No dismissed members in this session', loadMore: 'Load more', historyChanged: 'Member records changed. Refresh this page.',
 };

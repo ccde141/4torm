@@ -1,4 +1,5 @@
 import { buildAgentMeta } from '../../../engine/shared/meta-prompt.js';
+import { buildFrameworkAwarenessSection } from '../../../engine/shared/framework-awareness.js';
 
 const PARTICIPANT_META = `# 当前协作身份
 
@@ -47,6 +48,7 @@ interface ChairPromptOptions {
 
 export function buildConvectionChairPrompt(opts: ChairPromptOptions): string {
   const parts = [
+    buildFrameworkAwarenessSection(),
     CHAIR_META,
     `你当前以会议助理「${opts.chairName}」的身份提供意见。`,
   ];

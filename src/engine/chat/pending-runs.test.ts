@@ -162,6 +162,39 @@ test('replaying a full pending journal replaces its partial snapshot instead of 
   assert.deepEqual(second, first);
 });
 
+test('recovery across two compactions preserves all display text and reasoning once while keeping only the latest model tail', () => {
+  const value = session();
+  const marker = (id: string, offset: number) => ({ id, role: 'system', content: `handoff-${id}`,
+    timestamp: '2026-10-26T08:00:00Z', type: 'compact-marker', contextExact: true,
+    execution: { assistantId: 'run-a', toolOffset: offset },
+    nativeContext: [{ role: 'system', content: `handoff-${id}` }] });
+  const run = { runId: 'run-a', truncated: false, events: [
+    { type: 'token', content: 'before' }, { type: 'reasoning', content: 'thinking-before' },
+    { type: 'tool-call', tool: 'read_file', args: { path: 'before' } },
+    { type: 'tool-result', result: 'before-result', ok: true },
+    { type: 'context-compacted', revision: 3, marker: marker('first', 1) },
+    { type: 'token', content: 'middle' }, { type: 'reasoning', content: 'thinking-middle' },
+    { type: 'tool-call', tool: 'read_file', args: { path: 'middle' } },
+    { type: 'tool-result', result: 'middle-result', ok: true },
+    { type: 'context-compacted', revision: 4, marker: marker('second', 2) },
+    { type: 'token', content: 'after' }, { type: 'reasoning', content: 'thinking-after' },
+    { type: 'tool-call', tool: 'read_file', args: { path: 'after' } },
+    { type: 'tool-result', result: 'after-result', ok: true },
+  ] };
+  const original = structuredClone(value);
+  const first = hydratePendingRuns(value, [run]);
+  const second = hydratePendingRuns(first, [run]);
+  const assistant = first.messages.find(message => message.id === run.runId)!;
+  assert.equal(assistant.content, 'beforemiddleafter');
+  assert.equal(assistant.reasoningContent, 'thinking-beforethinking-middlethinking-after');
+  assert.deepEqual(assistant.toolSteps?.map(step => step.result), ['before-result', 'middle-result', 'after-result']);
+  assert.equal(assistant.activitySequence?.filter(item => item.kind === 'compact').length, 2);
+  assert.equal(assistant.nativeContext?.filter(item => item.role === 'tool').length, 1);
+  assert.equal(assistant.nativeContext?.find(item => item.role === 'tool')?.content, 'after-result');
+  assert.deepEqual(second, first);
+  assert.deepEqual(value, original);
+});
+
 test('recovery retains the saved identity and human reply of a journal question', () => {
   const value = waitingSession();
   value.messages[1]!.ask!.answered = true;

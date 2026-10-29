@@ -160,7 +160,7 @@ export interface TideSession {
   agentName: string;
   title: string;
   messages: Array<{ id: string; role: string; content: string; timestamp?: string; toolImages?: ToolImageRef[];
-    type?: 'compact-marker'; nativeContext?: Array<{ role: string; content: string; toolCallId?: string;
+    type?: 'compact-marker'; contextOnly?: boolean; nativeContext?: Array<{ role: string; content: string; toolCallId?: string;
       toolOk?: boolean; toolImages?: ToolImageRef[]; toolCalls?: Array<{ id: string; name: string; arguments: string }> }> }>;
   model: string;
   systemPrompt: string;

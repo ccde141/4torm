@@ -55,10 +55,11 @@ function MemberTranscript({ agentId, sessionId, memberId, revision, w }: {
   </section>;
 }
 
-export function MemberInspector({ member, reports, agentId, sessionId, revision, w }: {
+export function MemberInspector({ member, reports, agentId, sessionId, revision, w, initialTab = 'activity' }: {
   member: TeamMember; reports: TeamReport[]; agentId: string; sessionId: string; revision: number; w: Words;
+  initialTab?: 'activity' | 'transcript' | 'configuration';
 }) {
-  const [tab, setTab] = useState<'activity' | 'transcript' | 'configuration'>('activity');
+  const [tab, setTab] = useState(initialTab);
   return <>
     <h3>{member.name}</h3><span className="session-team-status">{w[memberStatus(member, reports)]}</span>
     <details className="session-team-mission"><summary>{w.mission}</summary><p>{member.mission}</p></details>

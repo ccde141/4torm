@@ -6,6 +6,7 @@ import {
   reconcileOrganizationSeats,
 } from './organization-model';
 import type { EditableOrganization, OrganizationSeat, WorkshopOrganizationState } from './organization-types';
+import { hasOrganizationEdits } from './organization-sync';
 
 type DraftSetter = Dispatch<SetStateAction<EditableOrganization | null>>;
 
@@ -54,22 +55,19 @@ function useReconciliationRuntime(
 function resolveRebasedDraft(
   current: EditableOrganization | null,
   before: { draft: EditableOrganization | null; savedDraft: EditableOrganization | null },
-  reconciledBefore: EditableOrganization | null,
   authoritative: EditableOrganization,
   state: WorkshopOrganizationState,
   seats: OrganizationSeat[],
 ): EditableOrganization {
   if (!current) return authoritative;
-  const remainedSaved = (current === before.draft || current === reconciledBefore)
-    && before.draft === before.savedDraft
-    && !current.activatesExplicitMode;
+  const remainedSaved = before.savedDraft !== null
+    && !hasOrganizationEdits(current, before.savedDraft, seats);
   return remainedSaved ? authoritative : rebaseEditableOrganization(current, state, seats);
 }
 
 async function loadAfterSeatRemoval(
   options: LoadOptions,
   before: { draft: EditableOrganization | null; savedDraft: EditableOrganization | null },
-  reconciledBefore: EditableOrganization | null,
   controller: AbortController,
   onSettled: (succeeded: boolean) => void,
 ): Promise<void> {
@@ -78,7 +76,7 @@ async function loadAfterSeatRemoval(
     const authoritative = createEditableOrganization(state, options.seats);
     options.setSavedDraft(authoritative);
     options.setDraft(current => resolveRebasedDraft(
-      current, before, reconciledBefore, authoritative, state, options.seats,
+      current, before, authoritative, state, options.seats,
     ));
     onSettled(true);
   } catch (cause) {
@@ -113,6 +111,7 @@ export function useOrganizationSeatReconciliation(options: Options): Organizatio
     const removedSeatIds = [...previous.seatIds].filter(seatId => !nextSeatIds.has(seatId));
     if (removedSeatIds.length > 0) pendingRebaseRef.current = true;
     setDraft(current => current ? reconcileOrganizationSeats(current, currentSeats) : current);
+    setSavedDraft(current => current ? reconcileOrganizationSeats(current, currentSeats) : current);
     if (!pendingRebaseRef.current) {
       setReconciling(false);
       setReconcileFailed(false);
@@ -131,7 +130,7 @@ export function useOrganizationSeatReconciliation(options: Options): Organizatio
       : current ? reconcileOrganizationSeats(current, currentSeats) : current);
     void loadAfterSeatRemoval({
       workshopId, seats: currentSeats, loadFailedMessage, setDraft, setSavedDraft, setError,
-    }, before, reconciledBefore, controller, succeeded => {
+    }, before, controller, succeeded => {
       if (controller.signal.aborted) return;
       pendingRebaseRef.current = !succeeded;
       setReconciling(false);

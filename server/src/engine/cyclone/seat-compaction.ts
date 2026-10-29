@@ -21,7 +21,8 @@ export function planSeatCompaction(messages: SeatContextMessage[], promptTokens?
   const estimatedTokens = promptTokens ?? split?.sourceTokens ?? 0;
   if (!split?.prefix.length) return { ok: false, reason: 'nothing-to-compact', estimatedTokens,
     turnCount: messages.filter(message => message.role === 'user').length };
-  return { ok: true, archivedMessages: split.prefix, keptMessages: split.tail,
+  const keptMessages = [...split.tail];
+  return { ok: true, archivedMessages: split.prefix, keptMessages,
     summaryInput: serializeCompactionMessages(split.prefix), estimatedTokens,
-    keptTurnCount: split.tail.filter(message => message.role === 'user').length };
+    keptTurnCount: keptMessages.filter(message => message.role === 'user').length };
 }

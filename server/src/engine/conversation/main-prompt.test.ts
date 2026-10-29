@@ -57,7 +57,7 @@ test('主入口按能力集中注入，角色最后，两种协议保持分离',
       assert.match(prompt, /\*\*工作队\*\*：有一个可独立交付或复核的责任单元/);
       assert.match(prompt, /\*\*任务板\*\*：需要持续记录多个阶段与依赖/);
       assert.match(prompt, /\*\*协作总览\*\*：需要判断已有工作/);
-      assert.match(prompt, /需要详细协议时调用 `framework_guide`/);
+      assert.match(prompt, /需要详细工作指南时调用 `framework_guide`/);
       assert.match(prompt, /`team` · \*\*工作队\*\*/);
       assert.match(prompt, /`tradewind` · \*\*信风工作流\*\*/);
       assert.match(prompt, /这些能力可以组合使用/);
@@ -69,14 +69,15 @@ test('主入口按能力集中注入，角色最后，两种协议保持分离',
       assert.ok(prompt.endsWith('ROLE-END'));
       assert.doesNotMatch(prompt, /默认热情|宁可多记|满足任一|\bdelegate\b|SubAgent|⟦/);
       assert.doesNotMatch(prompt, /在 `data\/mcp\/servers\.json` 追加/);
-      for (const heading of ['### 信风工作流', '### 对流会议', '### 潮汐自动任务', '### 工作队协作']) {
+      for (const heading of ['### 信风工作流', '### 对流会议', '### 潮汐自动任务']) {
         assert.doesNotMatch(prompt, new RegExp(heading));
       }
+      assert.equal(prompt.split('### 工作队协作').length - 1, 1);
       assert.match(prompt, /检查已有成员并优先考虑创建或复用/);
       assert.match(prompt, /一个可独立交付或复核的责任单元/);
       assert.doesNotMatch(prompt, /两个以上能够分别交付/);
       if (native) {
-        assert.doesNotMatch(prompt, /JSON 调用信封|"type":"tool_call"|team_dispatch|expectedRevision/);
+        assert.doesNotMatch(prompt, /JSON 调用信封|"type":"tool_call"|参数 JSON Schema/);
       } else {
         assert.match(prompt, /JSON 调用信封/);
         assert.match(prompt, /team_dispatch/);
@@ -93,10 +94,10 @@ test('协作总览包含按时间检索并按 ID 分页读取历史执行的工�
   ];
   const capabilities = activeMainCapabilities(defs);
   assert.deepEqual(capabilities.map(item => item.id), ['coordination']);
-  const guide = renderMainCapabilityGuide('coordination', defs, null);
+  const guide = renderMainCapabilityGuide('coordination', defs, null, undefined, { view: 'tools' });
   assert.match(guide, /find_operation_records/);
   assert.match(guide, /read_operation_record/);
-  assert.match(guide, /时间/);
+  assert.match(renderMainCapabilityGuide('coordination', defs, null), /时间/);
 });
 
 test('关闭指南工具时能力路由不提示调用不存在的指南', () => {
@@ -223,7 +224,7 @@ test('高级能力指南按当前可见工具单独加载，关闭后不能沿�
   assert.match(guide, /回报不会自动唤醒/);
   assert.throws(
     () => renderMainCapabilityGuide('workflow', defs, null),
-    /FRAMEWORK_GUIDE_UNAVAILABLE/,
+    /FRAMEWORK_GUIDE_NOT_FOUND/,
   );
 });
 
@@ -235,7 +236,7 @@ test('功能岛指南把细粒度定义表达为超级工具 action', () => {
     name: 'start_workflow', description: '启动工作流',
     parameters: { type: 'object', required: ['workflowId'] },
     frameworkCapability: descriptor,
-  }], null);
+  }], null, 'start_workflow');
 
   assert.match(guide, /framework_capability_tradewind/);
   assert.match(guide, /action.*start_workflow/s);

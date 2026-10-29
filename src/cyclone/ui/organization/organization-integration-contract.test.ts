@@ -93,7 +93,7 @@ test('远端组织版本仅替换干净草稿，保存和乱序请求不能覆�
   const workspace = await fs.readFile(new URL('./OrganizationWorkspace.tsx', import.meta.url), 'utf8');
   assert.match(workspace, /request\.isCurrent\(\)/);
   assert.match(workspace, /state\.organization\?\.revision === savedDraftRef\.current\.baseRevision/);
-  assert.match(workspace, /!current \|\| current === previousSaved \? authoritative : current/);
+  assert.match(workspace, /synchronizeOrganizationDraft\(current, previousSaved, authoritative, props\.seats\)/);
   assert.match(workspace, /savingRef\.current/);
   assert.match(workspace, /deferredChangeRef\.current/);
   assert.match(workspace, /if \(!succeeded \|\| deferredChangeRef\.current\) void reload\(\)/);

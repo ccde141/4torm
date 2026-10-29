@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { atomicWriteFile } from '../../shared/atomic-io.js';
 import { loadAgent } from '../../shared/agent-loader.js';
 import { compactMessages, createCompactionCaller } from '../../shared/compaction/index.js';
-import type { CompactionProgress } from '../../shared/compaction/index.js';
+import type { CompactionCommit, CompactionProgress } from '../../shared/compaction/index.js';
 import type { ContextMessage } from '../../shared/types.js';
 import type { LLMCaller } from '../../shared/react/native-loop.js';
 import type { MeetingParticipant, MeetingSessionData } from './meeting-session.js';
@@ -16,6 +16,8 @@ import { reportMeetingCompactionNotice } from './meeting-compaction-notice.js';
 import { tradewindCompactionGuidance } from './compaction-guidance.js';
 import { publishMeetingCompaction } from './meeting-compaction-progress.js';
 import { withMeetingModelUsage } from './meeting-usage.js';
+import { meetingDisplaySnapshot, meetingDisplayMessages } from './meeting-display.js';
+import { buildMeetingChairSystem } from './meeting-handlers.js';
 
 /** Opening summaries are isolated from the public meeting and the originating node history. */
 export async function meetingOpeningCaller(
@@ -26,8 +28,9 @@ export async function meetingOpeningCaller(
   if (!chair?.model) throw new Error('会议会长或会长模型不存在');
   const dir = activeMeetings.get(session.nodeId, session.executionId)?.compactArchiveDir
     ?? path.join(dataDir, 'tradewind', 'compaction', 'openings');
+  let progressId: string | undefined;
   return createCompactionCaller({ llm, dataDir, area: 'tradewindMeeting', model,
-    kind: 'meeting', chairModel: chair.model, protectedPrefixCount: 1,
+    kind: 'meeting', chairModel: chair.model, protectedPrefixCount: 1, recentHumanTurns: 3,
     prompt: tradewindCompactionGuidance({ scope: 'opening', meeting: session, sourceNode }, chair.compactionPrompt),
     scopeKey: `tradewind:opening:${session.executionId ?? "legacy"}:${session.nodeId}`,
     archive: async before => {
@@ -35,10 +38,22 @@ export async function meetingOpeningCaller(
       await atomicWriteFile(path.join(dir, `${Date.now()}-${randomUUID()}-opening-raw.json`), JSON.stringify(before));
     },
     commit: async (plan, signal) => {
-      await atomicWriteFile(path.join(dir, `${Date.now()}-${randomUUID()}-opening-active.json`), JSON.stringify(plan.messages), signal);
+      const slot = session.publicMessages.at(-1);
+      const compaction = { id: progressId ?? randomUUID(), summary: plan.summary, toolOffset: 0,
+        textOffset: slot?.content.length ?? 0, reasoningOffset: slot?.reasoning?.length ?? 0 };
+      const current = slot?.streaming && (!sourceNode || slot.speaker === sourceNode.label) ? slot : undefined;
+      await atomicWriteFile(path.join(dir, `${Date.now()}-${randomUUID()}-opening-active.json`),
+        JSON.stringify({ context: plan.messages, ...(current ? { message: { ...current,
+          compactions: [...(current.compactions ?? []), compaction] } } : {}) }), signal);
+      if (current && !current.compactions?.some(item => item.id === compaction.id)) {
+        current.compactions = [...(current.compactions ?? []), compaction];
+      }
     },
     onNotice: notice => reportMeetingCompactionNotice(session, notice.message),
-    onProgress: event => publishMeetingCompaction(session, 'public', event),
+    onProgress: event => {
+      if (event.type === 'compact-start') progressId = event.id;
+      publishMeetingCompaction(session, 'public', { ...event, ...(sourceNode ? { label: sourceNode.label } : {}) });
+    },
   });
 }
 
@@ -56,47 +71,83 @@ async function meetingCompactionOptions(
   if (!chair?.model) throw new Error('会议会长或会长模型不存在');
   const meeting = activeMeetings.get(session.nodeId, session.executionId);
   let snapshot = [...session.publicMessages];
+  let progressId: string | undefined;
+  let participantContext = false;
   const archiveDir = meeting?.compactArchiveDir ?? path.join(dataDir, 'tradewind', 'compaction', 'meetings');
   const signal = meeting?.roundAbort?.signal ?? meeting?.signal;
   return {
     dataDir, area: 'tradewindMeeting' as const, kind: 'meeting' as const,
     model, chairModel: chair.model, scopeKey: `tradewind:meeting:${session.executionId ?? "legacy"}:${session.nodeId}`,
-    protectedPrefixCount: 1, signal,
+    protectedPrefixCount: 1, recentHumanTurns: 3 as const, signal,
     prompt: tradewindCompactionGuidance({ scope: 'meeting', meeting: session }, chair.compactionPrompt),
-    boundaries: () => meetingContextBoundaries(snapshot).filter(offset =>
-      !activeRound || offset < snapshot.length + 1),
-    archive: async (_before: ContextMessage[]) => {
+    boundaries: (context: readonly ContextMessage[]) => participantContext
+      ? Array.from({ length: context.length - 1 }, (_, index) => index + 2)
+      : [...meetingContextBoundaries(snapshot).filter(offset => !activeRound || offset < snapshot.length + 1),
+        ...Array.from({ length: Math.max(0, context.length - snapshot.length - 1) }, (_, index) => snapshot.length + index + 2)],
+    archive: async (before: ContextMessage[]) => {
       await fs.mkdir(archiveDir, { recursive: true });
       await atomicWriteFile(path.join(archiveDir, `${Date.now()}-${randomUUID()}.json`),
-        JSON.stringify({ publicMessages: snapshot, chairMessages: session.chairMessages }));
+        JSON.stringify({ ...meetingDisplaySnapshot(session), activePublicMessages: snapshot, context: before }));
     },
-    commit: async (plan: { prefix: ContextMessage[]; summary: string }, commitSignal?: AbortSignal) => {
+    commit: async (plan: CompactionCommit, commitSignal?: AbortSignal) => {
+      const id = progressId ?? randomUUID();
+      const stream = session.streamingCurrent;
+      const boundary = { id, summary: plan.summary, toolOffset: stream?.toolCount ?? 0,
+        textOffset: stream?.content.length ?? 0, reasoningOffset: stream?.reasoning?.length ?? 0 };
+      if (participantContext || plan.prefix.length > snapshot.length) {
+        await fs.mkdir(archiveDir, { recursive: true });
+        await atomicWriteFile(path.join(archiveDir, `${Date.now()}-${randomUUID()}-participant-active.json`),
+          JSON.stringify({ context: plan.messages, speaker: stream?.speaker,
+            compactions: [...(stream?.compactions ?? []), boundary] }), commitSignal ?? signal);
+        participantContext = true;
+        if (stream && !stream.compactions?.some(item => item.id === id)) {
+          stream.compactions = [...(stream.compactions ?? []), boundary];
+        }
+        return;
+      }
       const next = replaceMeetingPrefix(snapshot, plan.prefix.length, plan.summary);
+      const history = meetingDisplayMessages(session);
+      if (!stream) history.push({ speaker: '系统', content: `[会议历史摘要]\n\n${plan.summary}`,
+        timestamp: Date.now(), compactionId: id });
       if (meeting?.runDir) {
         const directory = getMeetingsDir(meeting.runDir);
         await fs.mkdir(directory, { recursive: true });
         (commitSignal ?? signal)?.throwIfAborted();
         await atomicWriteFile(path.join(directory, getMeetingFileName(session.nodeId, session.round)),
-          JSON.stringify(next), commitSignal ?? signal);
+          JSON.stringify({ publicMessages: history, activePublicMessages: next,
+            chairMessages: session.chairMessages,
+            ...(stream ? { streamingCurrent: { ...stream, compactions: [...(stream.compactions ?? []), boundary] } } : {}) }),
+          commitSignal ?? signal);
+      }
+      session.publicDisplayHistory = history;
+      session.publicDisplayContextCount = next.length;
+      if (stream && !stream.compactions?.some(item => item.id === id)) {
+        stream.compactions = [...(stream.compactions ?? []), boundary];
       }
       session.publicMessages.splice(0, session.publicMessages.length, ...next);
       snapshot = [...next];
     },
     onCompacted: () => {
-      broadcastToMeeting(session.nodeId, { type: 'history-updated', messages: session.publicMessages,
+      broadcastToMeeting(session.nodeId, { type: 'history-updated', messages: meetingDisplayMessages(session),
         chairMessages: session.chairMessages, target: 'public' }, session.executionId);
     },
     onNotice: (notice: { message: string }) => reportMeetingCompactionNotice(session, notice.message),
-    onProgress: (event: CompactionProgress) =>
-      publishMeetingCompaction(session, 'public', event),
+    onProgress: (event: CompactionProgress) => {
+      if (event.type === 'compact-start') progressId = event.id;
+      publishMeetingCompaction(session, 'public', { ...event,
+        ...(activeRound && session.streamingCurrent ? { label: session.streamingCurrent.speaker } : {}) });
+    },
   };
 }
 
 export async function compactMeetingManually(dataDir: string, session: MeetingSessionData): Promise<void> {
   const { meetingContextMessages } = await import('./meeting-compaction-context.js');
   const options = await meetingCompactionOptions(dataDir, session, '', false);
-  await withMeetingModelUsage(session, () => compactMessages({ ...options,
-    messages: [{ role: 'system', content: '' }, ...meetingContextMessages(session.publicMessages)],
+  const chair = await loadAgent(dataDir, session.chairAgentId);
+  if (!chair) throw new Error('会议会长不存在');
+  const plan = await withMeetingModelUsage(session, () => compactMessages({ ...options,
+    messages: [buildMeetingChairSystem(chair, session), ...meetingContextMessages(session.publicMessages)],
     mode: 'full', reason: 'manual' }),
   event => broadcastToMeeting(session.nodeId, event, session.executionId));
+  if (!plan) throw new Error('近期会议原文已保留，暂无更早的可压缩内容');
 }

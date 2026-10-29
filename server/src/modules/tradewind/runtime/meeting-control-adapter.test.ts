@@ -82,8 +82,14 @@ for (const target of ['public', 'chair'] as const) {
     const session = createMeetingSession({ nodeId: `abort-${target}`, meetingLabel: '交付评审',
       chairAgentId: 'chair', participants: [writer], topic: '交付' });
     session.phase = 'discussion';
-    session.publicMessages = [{ speaker: '人类', content: '原始公开记录'.repeat(300), timestamp: 1 }];
-    session.chairMessages = [{ role: 'user', content: '原始私聊记录'.repeat(300) }];
+    session.publicMessages = Array.from({ length: 5 }, (_, index) => [
+      { speaker: '人类', content: `第${index}轮原始公开记录`.repeat(300), timestamp: index * 2 + 1 },
+      { speaker: '撰写', content: `公开回复${index}`.repeat(300), timestamp: index * 2 + 2 },
+    ]).flat();
+    session.chairMessages = Array.from({ length: 5 }, (_, index) => [
+      { role: 'user' as const, content: `第${index}轮原始私聊记录`.repeat(300) },
+      { role: 'assistant' as const, content: `私聊回复${index}` },
+    ]).flat();
     const before = { public: structuredClone(session.publicMessages), chair: structuredClone(session.chairMessages) };
     const live = { ...meeting(session), dataDir: directory, runDir: directory,
       compactArchiveDir: path.join(directory, 'bak') };

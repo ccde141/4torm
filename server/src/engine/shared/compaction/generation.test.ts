@@ -6,7 +6,6 @@ import path from 'node:path';
 import test from 'node:test';
 import { generateCompactionSummary } from './generation.js';
 import { estimateTextTokens } from './estimate.js';
-import { compactionSourceExcerpt } from './body-limit.js';
 
 type Payload = Record<string, unknown>;
 type Reply = (payload: Payload, response: http.ServerResponse, index: number) => void;
@@ -36,20 +35,23 @@ async function fixture(type: 'deepseek' | 'kimi', reply: Reply) {
     baseUrl: `http://127.0.0.1:${address.port}/v1`, models: [model], thinking: 'enabled',
     customRequestParameters: { thinking: { type: 'enabled' }, reasoning_effort: 'high' },
   }] }));
+  const text = '资料已核对，XZ-6 尚待验收。'.repeat(100);
   return { requests, input: { dataDir, model: `p:${model}`, prompt: '保留事实与待办。',
-    text: '资料已核对，XZ-6 尚待验收。'.repeat(100), maxContentTokens: 64, maxOutputTokens: 256 },
+    messages: [{ role: 'system' as const, content: '原始岗位规则。' },
+      { role: 'user' as const, content: text }],
+    text, maxContentTokens: 64, maxOutputTokens: 256 },
   close: async () => { await new Promise<void>(resolve => provider.close(() => resolve()));
     await fs.rm(dataDir, { recursive: true, force: true }); } };
 }
 
-test('provider length keeps the existing summary instead of discarding or retrying it', async () => {
+test('provider length rejects a nonempty partial summary without publishing or retrying it', async () => {
   const context = await fixture('deepseek', (_, response) => stream(response,
     { delta: { content: 'XZ-6 待验收。' }, finish_reason: 'length' }));
   try {
     const displayed: string[] = [];
-    const summary = await generateCompactionSummary({ ...context.input, onChunk: text => displayed.push(text) });
-    assert.equal(summary, 'XZ-6 待验收。');
-    assert.equal(displayed.join(''), summary);
+    await assert.rejects(generateCompactionSummary({ ...context.input, onChunk: text => displayed.push(text) }),
+      { name: 'SummaryOutputLimitError' });
+    assert.equal(displayed.join(''), '');
     assert.equal(context.requests.length, 1);
   } finally { await context.close(); }
 });
@@ -76,6 +78,11 @@ for (const type of ['deepseek', 'kimi'] as const) {
       assert.equal(summary, 'XZ-6 尚待验收。');
       assert.equal(displayed.join(''), summary);
       assert.equal(context.requests.length, 2);
+      const firstMessages = context.requests[0].messages as Array<{ role: string; content: string }>;
+      const finishingMessages = context.requests[1].messages as Array<{ role: string; content: string }>;
+      assert.deepEqual(firstMessages.slice(0, -1), context.input.messages);
+      assert.deepEqual(finishingMessages.slice(0, -1), context.input.messages);
+      assert.notEqual(firstMessages.at(-1)!.content, finishingMessages.at(-1)!.content);
       if (type === 'deepseek') {
         assert.deepEqual(context.requests[0].thinking, { type: 'disabled' });
         assert.deepEqual(context.requests[1].thinking, { type: 'disabled' });
@@ -85,18 +92,16 @@ for (const type of ['deepseek', 'kimi'] as const) {
   });
 }
 
-test('body cap clips Unicode safely and the streamed display equals the retained body', async () => {
+test('a clipped body is rejected instead of committing a Unicode-safe but incomplete prefix', async () => {
   const context = await fixture('kimi', (_, response) => stream(response,
     { delta: { content: '核验🙂' }, finish_reason: null },
     { delta: { content: '待完成。后续正文不可进入记录。' }, finish_reason: null },
     { delta: { content: '不可继续消费' }, finish_reason: 'stop' }));
   try {
     const displayed: string[] = [];
-    const summary = await generateCompactionSummary({ ...context.input, maxContentTokens: 5,
-      onChunk: text => displayed.push(text) });
-    assert.equal(summary, '核验🙂待完');
-    assert.equal(displayed.join(''), summary);
-    assert.equal(estimateTextTokens(summary), 5);
+    await assert.rejects(generateCompactionSummary({ ...context.input, maxContentTokens: 5,
+      onChunk: text => displayed.push(text) }), { name: 'SummaryOutputLimitError' });
+    assert.equal(displayed.join(''), '');
     assert.equal(context.requests.length, 1);
   } finally { await context.close(); }
 });
@@ -110,17 +115,6 @@ test('two empty length endings fail without replacing context by an incomplete s
     assert.equal(displayed.join(''), '');
     assert.equal(context.requests.length, 2);
   } finally { await context.close(); }
-});
-
-test('a short preserved excerpt contains actual source text as well as its provenance label', () => {
-  for (const text of ['资料已读取，校验仍在等待。下一步核对内容，不要宣布任务完成。', '唯一任务ABC尚未完成。']) {
-    const excerpt = compactionSourceExcerpt(text, 64);
-    assert.ok(excerpt.startsWith('[原文节选]\n'));
-    const body = excerpt.slice('[原文节选]\n'.length);
-    assert.ok(body.length > 0);
-    assert.ok(text.startsWith(body));
-    assert.ok(estimateTextTokens(excerpt) <= 64);
-  }
 });
 
 test('Unicode pairs split across chunks remain one code point in the shared body allowance', async () => {

@@ -12,6 +12,7 @@ registerHooks({ load(url, context, nextLoad) {
 } });
 const { default: SeatTurnCard } = await import('./SeatTurnCard');
 const { default: RoomFeedRow } = await import('./RoomFeedRow');
+const { default: RoomTimeline } = await import('./RoomTimeline');
 
 const turn: SeatTurn = {
   id: 'seat-turn-fixture', messages: [], reasoning: '工位思考记录', finalContent: '工位最终答复',
@@ -108,4 +109,55 @@ test('answers without earlier reasoning or work do not add an empty separator', 
     assert.doesNotMatch(html, /answer--separated|worklog-summary|reasoning-block--preview/);
     assert.match(html, /最终答复/);
   }
+});
+
+test('a committed seat compaction separates complete bubbles and preserves both reasoning slices', () => {
+  const before = '前段思考'; const after = '后段思考';
+  const source: SeatTurn = { ...turn, reasoning: before + after, workSegments: [
+    ...turn.workSegments,
+    { content: '', blocks: [], compaction: { id: 'compact-seat', summary: '交接', reasoningOffset: before.length } },
+    { content: '接续操作', blocks: [{ kind: 'tool', tool: 'write_file', args: {}, result: '接续结果', status: 'success' }] },
+  ] };
+  const html = renderSeat(true, JSON.parse(JSON.stringify(source)) as SeatTurn);
+  assert.equal((html.match(/class="chat__bubble cyclone-seat-turn__bubble"/g) ?? []).length, 2);
+  assert.equal((html.match(/上下文已压缩 · 查看交接/g) ?? []).length, 1);
+  const text = html.replace(/<[^>]*>/g, ''); const divider = text.indexOf('上下文已压缩');
+  assert.ok(text.indexOf(before) < divider);
+  assert.ok(text.indexOf(after) > divider);
+  assert.match(html, /已接续/);
+  assert.equal((html.match(/工位最终答复/g) ?? []).length, 1);
+});
+
+test('a committed room compaction separates tools into new bubbles and leaves a single final answer', () => {
+  const source: FeedMsg = { ...room, reasoning: '前思考后思考', segments: [
+    { kind: 'text', content: '前说明' }, { kind: 'tools', tools: [{ tool: 'read_file', args: {}, result: 'old', status: 'success' }] },
+    { kind: 'compaction', id: 'compact-room', summary: '交接', reasoningOffset: 3 },
+    { kind: 'tools', tools: [{ tool: 'write_file', args: {}, result: 'new', status: 'success' }] },
+    { kind: 'text', content: '最终答复' },
+  ] };
+  const html = renderRoom(true, false, JSON.parse(JSON.stringify(source)) as FeedMsg);
+  assert.equal((html.match(/class="chat__bubble cyclone-room-turn__bubble"/g) ?? []).length, 2);
+  assert.equal((html.match(/上下文已压缩 · 查看交接/g) ?? []).length, 1);
+  assert.equal((html.match(/最终答复/g) ?? []).length, 1);
+  assert.match(html, /已接续/);
+  const text = html.replace(/<[^>]*>/g, ''); const divider = text.indexOf('上下文已压缩');
+  assert.ok(text.indexOf('前思考') < divider);
+  assert.ok(text.indexOf('后思考') > divider);
+});
+
+test('live room turns take over durable drafts by turn identity without duplicate dividers', () => {
+  const noop = () => {};
+  const snapshot: FeedMsg = { ...room, turnId: 'same-turn', content: '旧草稿',
+    segments: [{ kind: 'text', content: '旧草稿' },
+      { kind: 'compaction', id: 'same-compact', summary: '交接', reasoningOffset: 0 }] };
+  const live: FeedMsg = { ...snapshot, key: 'live', content: '最新过程', streaming: true,
+    segments: [{ kind: 'text', content: '压缩前原文' }, snapshot.segments![1], { kind: 'text', content: '最新过程' }] };
+  const html = renderToStaticMarkup(createElement(LocaleProvider, null, createElement(RoomTimeline, {
+    history: [snapshot], roundFeed: [live], dispatches: [], highlightedId: null,
+    editingMessageIndex: null, editMessageContent: '', onEditContent: noop, onStartEdit: noop,
+    onSaveEdit: noop, onCancelEdit: noop, onDelete: noop, onDispatchAction: async () => {}, onOpenSeat: noop,
+  })));
+  assert.doesNotMatch(html, /旧草稿/);
+  assert.equal((html.match(/最新过程/g) ?? []).length, 1);
+  assert.equal((html.match(/上下文已压缩 · 查看交接/g) ?? []).length, 1);
 });

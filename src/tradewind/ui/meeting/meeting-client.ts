@@ -38,6 +38,8 @@ export interface ToolStep {
 }
 
 export interface MeetingMessage {
+  compactions?: MeetingCompaction[];
+  compactionId?: string;
   speaker: string;
   content: string;
   timestamp: number;
@@ -55,9 +57,15 @@ export interface MeetingParticipant {
 }
 
 export interface MeetingChairMessage {
+  compactions?: MeetingCompaction[];
+  compactionId?: string;
   role: string;
   content: string;
   reasoningContent?: string;
+}
+
+export interface MeetingCompaction {
+  id: string; summary: string; toolOffset: number; textOffset: number; reasoningOffset: number;
 }
 
 export interface MeetingStatus {

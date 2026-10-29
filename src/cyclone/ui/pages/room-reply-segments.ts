@@ -12,6 +12,7 @@ export interface FeedTool {
 export type RoomReplySegment =
   | { kind: 'text'; content: string }
   | { kind: 'tools'; tools: FeedTool[] }
+  | { kind: 'compaction'; id: string; summary: string; reasoningOffset?: number }
   | { kind: 'dispatch'; dispatchId: string };
 
 export function appendRoomText(segments: RoomReplySegment[], content: string): void {

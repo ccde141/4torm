@@ -17,5 +17,6 @@ export function buildConvectionMessage(args: BuildConvectionMessageArgs): Convec
     ...(args.rawContent ? { rawContent: args.rawContent } : {}),
     ...(args.reasoning ? { reasoning: args.reasoning } : {}),
     ...(args.toolCalls.length > 0 ? { toolCalls: args.toolCalls } : {}),
+    ...(args.compactions?.length ? { compactions: args.compactions, displayContent: args.displayContent } : {}),
   };
 }

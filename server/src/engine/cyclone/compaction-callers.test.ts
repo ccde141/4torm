@@ -51,8 +51,8 @@ function summarizeFetch(t: test.TestContext, check: (body: Record<string, unknow
 }
 
 function isCompactionRequest(body: { messages: Array<{ role: string; content: string }> }): boolean {
-  return body.messages.some(message => message.role === 'user'
-    && message.content.startsWith('[归档资料 JSON]\n'));
+  const last = body.messages.at(-1);
+  return last?.role === 'user' && last.content.includes('你负责把已有会话整理');
 }
 
 function summarySse(content: string): Response {
@@ -66,6 +66,8 @@ test('工位下一次模型调用才压缩，热提高阈值取消旧触发，�
   seat.messages = [
     { role: 'user', content: '第一轮'.repeat(1_000) }, { role: 'assistant', content: '已完成任务 task-1'.repeat(500) },
     { role: 'user', content: '第二轮'.repeat(500) }, { role: 'assistant', content: '继续核验' },
+    { role: 'user', content: '第三轮' }, { role: 'assistant', content: '继续分析' },
+    { role: 'user', content: '第四轮' }, { role: 'assistant', content: '保留最新进度' },
     { role: 'user', content: '下一步' },
   ];
   seat.tokenUsage = usage; await saveSeat(dataDir, workshop.id, seat);
@@ -226,6 +228,8 @@ test('群聊压缩固定会长模型和压缩提示词，完整轮次留尾且�
   const { dataDir, workshop } = await fixture(t);
   const room = await createRoom(dataDir, workshop.id, { title: '评审' });
   room.publicMessages = [
+    { speaker: '人类', content: '更早的议题'.repeat(500), timestamp: -1 },
+    { speaker: '研究员', content: '早期结论'.repeat(300), timestamp: 0 },
     { speaker: '人类', content: '第一轮'.repeat(1_000), timestamp: 1 },
     { speaker: '研究员', content: '任务 task-1 已验证'.repeat(500), timestamp: 2 },
     { speaker: '人类', content: '第二轮'.repeat(500), timestamp: 3 },
@@ -239,12 +243,22 @@ test('群聊压缩固定会长模型和压缩提示词，完整轮次留尾且�
     assert.match(JSON.stringify(body.messages), /保留异步任务编号与不同意见/); });
   const messages: ContextMessage[] = [{ role: 'system', content: '会议规则' }, ...cycloneMeetingContext(room.publicMessages)];
   const caller = await createRoomCompactionCaller({ dataDir, workshopId: workshop.id, room, agent, messages,
+    displaySnapshot: boundary => ({ id: 'turn-a', turnId: 'turn-a', speaker: '研究员', timestamp: 6,
+      content: '本轮进行中', executionStatus: 'running', reasoning: '当前完整思考',
+      segments: [{ kind: 'compaction', ...boundary }] }),
     llm: { call: async () => ({ content: '新意见', finishReason: 'stop', usage }) } });
   await callPreparedModel(caller, messages, undefined, {});
   assert.equal(summaries, 1);
   assert.equal(room.publicMessages.at(-1)?.content, '继续讨论');
   assert.equal(room.publicMessages[0].speaker, '系统');
+  assert.deepEqual(room.publicMessages.filter(message => message.speaker === '人类').map(message => message.timestamp),
+    [1, 3, 5], '最近三个完整人类轮次保留原始记录身份');
+  assert.ok(room.publicMessages.some(message => message.content === '有一个待确认点'));
+  assert.deepEqual((await loadRoom(dataDir, workshop.id, room.id))?.publicMessages, room.publicMessages);
   assert.equal((await loadRoom(dataDir, workshop.id, room.id))?.dispatchContextVersion, 7);
+  const restored = await loadRoom(dataDir, workshop.id, room.id);
+  assert.equal(restored?.publicExecutionDraft?.reasoning, '当前完整思考');
+  assert.equal(restored?.publicExecutionDraft?.segments?.[0].kind, 'compaction');
 });
 
 test('会长真实请求能看到十二条前的公共发言和长发言后半段，不裁剪进静态身份', async t => {
@@ -275,7 +289,11 @@ test('会长私聊压缩始终优先会长模型与其提示词，固定全局�
   policy.modelMode = 'fixed'; policy.fixedModel = 'p:worker'; await saveCompactionPolicy(dataDir, policy);
   const room = await createRoom(dataDir, workshop.id, { title: '会长压缩' });
   room.chairMessages = [{ role: 'user', content: '旧问题'.repeat(1000) },
-    { role: 'assistant', content: '旧答复'.repeat(500) }, { role: 'user', content: '继续分析' }];
+    { role: 'assistant', content: '旧答复'.repeat(500) },
+    { role: 'user', content: '第二轮' }, { role: 'assistant', content: '第二轮进度' },
+    { role: 'user', content: '第三轮' }, { role: 'assistant', content: '第三轮进度' },
+    { role: 'user', content: '第四轮' }, { role: 'assistant', content: '第四轮进度' },
+    { role: 'user', content: '继续分析' }];
   await saveRoom(dataDir, workshop.id, room);
   const messages: ContextMessage[] = [{ role: 'system', content: '静态身份' }, ...room.chairMessages];
   const summaryModels: unknown[] = [];
@@ -295,7 +313,7 @@ test('公共会议继续增长后会长下一次私聊使用上次请求基线�
   const { dataDir, workshop, policy } = await fixture(t);
   policy.enabled = false; await saveCompactionPolicy(dataDir, policy);
   const room = await createRoom(dataDir, workshop.id, { title: '增量观察' });
-  room.publicMessages = [{ speaker: '人类', content: '简短目标', timestamp: 1 }];
+  room.publicMessages = [{ speaker: '人类', content: '原始目标'.repeat(600), timestamp: 1 }];
   await saveRoom(dataDir, workshop.id, room);
   const previous = globalThis.fetch; let summaries = 0;
   globalThis.fetch = async (_input, init) => {
@@ -312,7 +330,11 @@ test('公共会议继续增长后会长下一次私聊使用上次请求基线�
   const saved = await loadRoom(dataDir, workshop.id, room.id); assert.ok(saved);
   assert.equal(saved.chairTokenUsage?.promptTokens, 500);
   saved.publicMessages.push({ speaker: '人类', content: '新增需求'.repeat(1000), timestamp: 2 },
-    { speaker: '工位', content: '新增证据'.repeat(1000), timestamp: 3 });
+    { speaker: '工位', content: '新增证据'.repeat(1000), timestamp: 3 },
+    { speaker: '人类', content: '第二项需求', timestamp: 4 },
+    { speaker: '工位', content: '第二项证据', timestamp: 5 },
+    { speaker: '人类', content: '第三项需求', timestamp: 6 },
+    { speaker: '工位', content: '第三项证据', timestamp: 7 });
   await saveRoom(dataDir, workshop.id, saved);
   policy.enabled = true; await saveCompactionPolicy(dataDir, policy);
   await chatChairWithinExecution(dataDir, workshop.id, room.id, '再分析', () => {});

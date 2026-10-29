@@ -9,12 +9,12 @@ import { sessionWorkspace } from '../infrastructure/session-store.js';
 import type { ConvectionCompactionSink } from './compaction-progress.js';
 import type { CompactionProgress } from '../../../engine/shared/compaction/contracts.js';
 
-test('助理公共观察仅按完整会议轮次分割，私聊只在下一次人类输入前分割', () => {
+test('助理公共观察可在完整成员发言后分割，私聊保持工具安全边界', () => {
   const messages = [{ role: 'system' as const, content: '身份' },
     ...['[公共会议：人类] 问题', '[公共会议：成员A] 答复', '[公共会议：成员B] 答复',
       '[公共会议：人类] 第二轮', '[公共会议：成员A] 回答', '私聊问题'].map(content => ({ role: 'user' as const, content })),
     { role: 'assistant' as const, content: '私聊答复' }, { role: 'user' as const, content: '继续私聊' }];
-  assert.deepEqual(convectionChairBoundaries(messages), [4, 6, 8, 9]);
+  assert.deepEqual(convectionChairBoundaries(messages), [2, 3, 4, 5, 6, 8, 9]);
 });
 
 async function fixture(t: test.TestContext, onCompaction?: ConvectionCompactionSink) {
@@ -29,8 +29,12 @@ async function fixture(t: test.TestContext, onCompaction?: ConvectionCompactionS
   ] }));
   const service = new ConvectionSessionService(dataDir, undefined, undefined, undefined, onCompaction);
   const session = await service.create({ chairAgentId: 'chair', participantAgentIds: ['member'] });
-  session.publicMessages = [{ speaker: '人类', content: '公共目标'.repeat(500), timestamp: 1 }];
-  session.chairMessages = [{ role: 'user', content: '私人疑问'.repeat(500) }];
+  session.publicMessages = [{ speaker: '人类', content: '公共目标'.repeat(500), timestamp: 1 },
+    { speaker: 'member', content: '已核实的公共资料'.repeat(500), timestamp: 2 }];
+  session.chairMessages = Array.from({ length: 5 }, (_, index) => [
+    { role: 'user' as const, content: `私人疑问${index}：${'问题'.repeat(500)}` },
+    { role: 'assistant' as const, content: `私人答复${index}` },
+  ]).flat();
   session.chairActiveContext = [{ role: 'system', content: '旧摘要' }];
   rememberChairContextBoundary(session);
   await service.save(session);
@@ -53,7 +57,7 @@ test('助理 /reset 清除实际上下文，公共会议 /reset 不再残留助�
     [{ role: 'system', content: '静态身份' }]);
 });
 
-test('助理 /compact 全量压缩公共观察与私聊，原文归档且公共会议不被改写', async t => {
+test('助理 /compact 压缩较早观察并保留四轮完整私聊，原文归档且公共会议不改写', async t => {
   let now = 1_800_000_000_000;
   t.mock.method(Date, 'now', () => now);
   const progress: CompactionProgress[] = [];
@@ -85,9 +89,16 @@ test('助理 /compact 全量压缩公共观察与私聊，原文归档且公共�
   assert.equal(archive.publicMessages[0].content, session.publicMessages[0].content);
   assert.equal(archive.chairMessages[0].content, session.chairMessages[0].content);
   const request = buildConvectionChairContext(saved, { role: 'system', content: '静态身份' });
-  assert.equal(request.length, 2);
+  assert.equal(request.length, 10);
   assert.match(request[1].content, /公共目标与私人疑问已区分/);
+  assert.deepEqual(request.slice(2), session.chairMessages.slice(2));
   assert.equal(saved.chairCompactionProgress?.startedAt, now - 12_000);
   assert.equal(saved.chairCompactionProgress?.updatedAt, now);
   assert.deepEqual(progress.at(-1), saved.chairCompactionProgress);
+  await service.editMessage(session.id, 1, '更新后的公共资料');
+  const afterPublicChange = await service.require(session.id);
+  assert.equal(afterPublicChange.chairActiveContext, undefined);
+  const rebuilt = buildConvectionChairContext(afterPublicChange, { role: 'system', content: '静态身份' });
+  assert.equal(rebuilt.filter(message => message.content === session.chairMessages[0].content).length, 1);
+  assert.equal(afterPublicChange.chairMessages.filter(message => message.role === 'user').length, 5);
 });

@@ -64,4 +64,11 @@ test('current model context includes answered human questions and unclaimed nati
     ['assistant', 'Choose a format'], ['user', 'Markdown'], ['assistant', 'first'], ['assistant', 'final'],
   ]);
   assert.equal(context.at(-1)?.reasoningContent, 'after');
+  assert.equal(context[1]?.origin, 'human');
+});
+
+test('raw human input is protected without relabeling explicit framework notices', () => {
+  const context = projectMonsoonContext({ messages: [message('human', 'user', 'continue'),
+    message('framework', 'user', 'internal notice', { origin: 'framework' })] });
+  assert.deepEqual(context.map(message => message.origin), ['human', 'framework']);
 });

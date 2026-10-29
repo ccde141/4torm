@@ -9,14 +9,26 @@ export function useRoomDispatchFeedback(input: {
   onDispatchAction: (roomId: string, dispatchId: string, action: DispatchAction) => Promise<CycloneDispatch>;
   scrollRef: RefObject<HTMLDivElement | null>;
 }) {
+  const { roomId, dispatches, onDispatchAction, scrollRef } = input;
   const [notice, setNotice] = useState<CycloneDispatch | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const known = useRef(new Map<string, CycloneDispatch['status']>());
-  const mountedAt = useRef(Date.now());
-  const roomDispatches = input.dispatches.filter(item => item.sourceRoomId === input.roomId);
+  const mountedAt = useRef(0);
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const scrollFrame = useRef<number | undefined>(undefined);
+  const roomDispatches = dispatches.filter(item => item.sourceRoomId === roomId);
 
   useEffect(() => {
-    const current = input.dispatches.filter(item => item.sourceRoomId === input.roomId);
+    mountedAt.current = Date.now(); known.current = new Map();
+    setNotice(null); setHighlightedId(null);
+    return () => {
+      clearTimeout(highlightTimer.current);
+      if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
+    };
+  }, [roomId]);
+
+  useEffect(() => {
+    const current = dispatches.filter(item => item.sourceRoomId === roomId);
     const completed = current.find(item => {
       const terminal = item.status === 'completed' || item.status === 'failed';
       const previous = known.current.get(item.id);
@@ -26,7 +38,7 @@ export function useRoomDispatchFeedback(input: {
     });
     known.current = new Map(current.map(item => [item.id, item.status]));
     if (completed) setNotice(completed);
-  }, [input.dispatches, input.roomId]);
+  }, [dispatches, roomId]);
 
   useEffect(() => {
     if (!notice) return;
@@ -36,16 +48,18 @@ export function useRoomDispatchFeedback(input: {
 
   const focus = useCallback((item: CycloneDispatch) => {
     if (item.readState === 'unread') {
-      void input.onDispatchAction(input.roomId, item.id, 'read')
+      void onDispatchAction(roomId, item.id, 'read')
         .catch(error => console.error('[cyclone] 标记派发已读失败', error));
     }
     setHighlightedId(item.id);
-    requestAnimationFrame(() => {
-      input.scrollRef.current?.querySelector<HTMLElement>(`#dispatch-${CSS.escape(item.id)}`)
+    clearTimeout(highlightTimer.current);
+    if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollRef.current?.querySelector<HTMLElement>(`#dispatch-${CSS.escape(item.id)}`)
         ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
-    window.setTimeout(() => setHighlightedId(current => current === item.id ? null : current), 1_600);
-  }, [input.onDispatchAction, input.roomId, input.scrollRef]);
+    highlightTimer.current = setTimeout(() => setHighlightedId(current => current === item.id ? null : current), 1_600);
+  }, [onDispatchAction, roomId, scrollRef]);
 
   return { roomDispatches, notice, setNotice, highlightedId, focus };
 }

@@ -8,6 +8,15 @@ const placeholder: ChatMessage = {
   timestamp: '2026-09-30T00:00:00.000Z', agentId: 'agent-a',
 };
 
+test('team wait heartbeats identify waiting members without creating a tool step or message', () => {
+  const projection = new MonsoonMessageProjection([placeholder], 'run-a', 'agent-a', () => 'next');
+  projection.apply({ type: 'heartbeat', phase: 'team-waiting', elapsed: 0, members: ['Collector'] });
+  assert.equal(projection.messages.length, 1);
+  assert.equal(projection.messages[0].streamingPhase, 'team-waiting');
+  assert.equal(projection.messages[0].streamingTool, 'Collector');
+  assert.equal(projection.messages[0].toolSteps, undefined);
+});
+
 test('MCP screenshots survive stream completion, reload and conversation history reconstruction', async () => {
   const { buildConversationHistory } = await import('./conversation-history');
   const images = [{ id: 'image-a', name: 'screen.png', mimeType: 'image/png', size: 10 }];
@@ -104,4 +113,50 @@ test('compaction updates the save revision without discarding displayed raw hist
 test('invalid compaction checkpoint is rejected rather than saved as a success', () => {
   const projection = new MonsoonMessageProjection([placeholder], 'run-a', 'agent-a', () => 'next');
   assert.throws(() => projection.apply({ type: 'context-compacted', revision: -1, marker: {} }));
+});
+
+test('in-loop compaction preserves a single assistant while creating one stable boundary per committed marker', () => {
+  const projection = new MonsoonMessageProjection([placeholder], 'run-a', 'agent-a', () => 'next');
+  projection.apply({ type: 'token', content: '检查旧结果' });
+  projection.apply({ type: 'tool-call', tool: 'read_file', args: { path: 'fixture' } });
+  projection.apply({ type: 'tool-result', result: 'done', ok: true });
+  const marker = { id: 'compact-in-loop', role: 'system', content: '四项交接',
+    timestamp: placeholder.timestamp, type: 'compact-marker', contextExact: true,
+    execution: { assistantId: 'run-a', toolOffset: 1 }, nativeContext: [{ role: 'system', content: '交接' }] };
+  projection.apply({ type: 'context-compacted', revision: 3, marker });
+  projection.apply({ type: 'tool-call', tool: 'read_file', args: { path: 'fixture-next' } });
+  projection.apply({ type: 'tool-result', result: 'next-result', ok: true });
+  projection.apply({ type: 'context-compacted', revision: 3, marker });
+  projection.apply({ type: 'token', content: '继续当前任务' });
+  const saved = JSON.parse(JSON.stringify(projection.messages)) as ChatMessage[];
+  assert.equal(saved.filter(item => item.role === 'assistant').length, 1);
+  assert.equal(saved.filter(item => item.role === 'user').length, 0);
+  assert.deepEqual(saved.at(-1)?.activitySequence?.map(item => item.kind), ['text', 'tool', 'compact', 'tool', 'text']);
+  assert.deepEqual(saved.at(-1)?.toolSteps?.map(item => item.result), ['done', 'next-result']);
+  assert.equal(saved.filter(item => item.id === marker.id).length, 1);
+});
+
+test('compaction notices and rejected checkpoints do not start a fresh execution segment', () => {
+  const projection = new MonsoonMessageProjection([placeholder], 'run-a', 'agent-a', () => 'next');
+  projection.apply({ type: 'tool-call', tool: 'read_file', args: {} });
+  projection.apply({ type: 'compaction-notice', message: '压缩已取消，保留原上下文' });
+  assert.throws(() => projection.apply({ type: 'context-compacted', revision: 2, marker: {
+    id: 'bad', role: 'system', content: '', timestamp: '', type: 'compact-marker', contextExact: true,
+    nativeContext: [], execution: { assistantId: 'run-a', toolOffset: -1 },
+  } }));
+  assert.deepEqual(projection.messages[0].activitySequence?.map(item => item.kind), ['tool']);
+});
+
+test('replayed older checkpoints cannot move behind newer compactions in saved context history', () => {
+  const projection = new MonsoonMessageProjection([placeholder], 'run-a', 'agent-a', () => 'next');
+  const marker = (id: string, summary: string) => ({ id, role: 'system', content: summary,
+    timestamp: placeholder.timestamp, type: 'compact-marker', contextExact: true,
+    execution: { assistantId: 'run-a', toolOffset: 0, textOffset: 0 }, nativeContext: [{ role: 'system', content: summary }] });
+  const first = marker('compact-first', '旧交接');
+  projection.apply({ type: 'context-compacted', revision: 3, marker: first });
+  projection.apply({ type: 'context-compacted', revision: 4, marker: marker('compact-second', '新交接') });
+  const replayed = projection.apply({ type: 'context-compacted', revision: 3, marker: first });
+  assert.deepEqual(projection.messages.map(item => item.id), ['compact-first', 'compact-second', 'run-a']);
+  assert.equal(projection.messages.at(-1)?.activitySequence?.filter(item => item.kind === 'compact').length, 2);
+  assert.equal(Object.hasOwn(replayed, 'usage'), false);
 });

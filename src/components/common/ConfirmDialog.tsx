@@ -8,10 +8,10 @@
  *   const confirm = useConfirm();
  *   if (!(await confirm({ title: '删除此消息？', danger: true }))) return;
  */
-import { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useLayoutEffect, useRef, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocale } from '../../i18n/LocaleContext';
-import '../../styles/components/confirm-dialog.css';
+import { createConfirmationController, type ConfirmationState } from './confirmation-controller';
 
 export interface ConfirmOptions {
   title: string;
@@ -20,8 +20,6 @@ export interface ConfirmOptions {
   cancelText?: string;
   danger?: boolean;
 }
-
-type Resolver = (ok: boolean) => void;
 
 const ConfirmContext = createContext<((opts: ConfirmOptions) => Promise<boolean>) | null>(null);
 
@@ -32,76 +30,75 @@ export function useConfirm(): (opts: ConfirmOptions) => Promise<boolean> {
   return async (opts: ConfirmOptions) => window.confirm(opts.message || opts.title);
 }
 
-interface DialogState {
-  opts: ConfirmOptions;
-  resolve: Resolver;
-  closing: boolean;
-}
-
 export function ConfirmProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<DialogState | null>(null);
-
-  const confirm = useCallback((opts: ConfirmOptions) => {
-    return new Promise<boolean>(resolve => {
-      setState({ opts, resolve, closing: false });
-    });
-  }, []);
-
-  // 关闭：先播退场动画，再结算 promise + 卸载
-  const close = useCallback((ok: boolean) => {
-    setState(prev => {
-      if (!prev) return null;
-      prev.resolve(ok);
-      return { ...prev, closing: true };
-    });
-    window.setTimeout(() => setState(null), 160);
-  }, []);
-
-  // Esc 取消 / Enter 确认（弹窗打开时才挂）。
-  // 关键：打开弹窗的那次按键（如 slash 指令 /reset + 回车）常常还按着，其 repeat keydown
-  // 会瞬间被这里的 Enter 分支「确认」掉 → 弹窗一帧闪现即消失。故要求 Enter 必须先「抬起」
-  // 过一次才认（ready 门闩），并忽略 e.repeat。
+  const [state, setState] = useState<ConfirmationState<ConfirmOptions> | null>(null);
+  const [controller] = useState(() => createConfirmationController<ConfirmOptions>(setState));
   useEffect(() => {
-    if (!state || state.closing) return;
-    let ready = false;
-    const onUp = (e: KeyboardEvent) => { if (e.key === 'Enter') ready = true; };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.repeat) return;
-      if (e.key === 'Escape') { e.preventDefault(); close(false); }
-      else if (e.key === 'Enter') {
-        if (!ready) return;   // 开窗那次回车未抬起前不认，杜绝「开即关」
-        e.preventDefault(); close(true);
-      }
-    };
-    window.addEventListener('keyup', onUp);
-    window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('keyup', onUp); window.removeEventListener('keydown', onKey); };
-  }, [state, close]);
+    controller.activate();
+    return () => controller.dispose();
+  }, [controller]);
+  const confirm = useCallback((options: ConfirmOptions) => controller.request(options), [controller]);
+  const close = useCallback((accepted: boolean) => controller.settle(accepted), [controller]);
 
   return (
     <ConfirmContext.Provider value={confirm}>
       {children}
-      {state && createPortal(<ConfirmView state={state} onClose={close} />, document.body)}
+      {state && createPortal(<ConfirmView key={state.id} state={state} onClose={close} />, document.body)}
     </ConfirmContext.Provider>
   );
 }
 
-function ConfirmView({ state, onClose }: { state: DialogState; onClose: (ok: boolean) => void }) {
+function ConfirmView({ state, onClose }: {
+  state: ConfirmationState<ConfirmOptions>;
+  onClose: (accepted: boolean) => void;
+}) {
   const { t } = useLocale();
-  const { opts, closing } = state;
+  const { options: opts, closing } = state;
+  const titleId = useId();
+  const messageId = useId();
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const acceptRef = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    const previous = document.activeElement;
+    cancelRef.current?.focus({ preventScroll: true });
+    return () => {
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, []);
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (!['Escape', 'Enter', 'Tab'].includes(event.key)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (closing || event.repeat) return;
+      if (event.key === 'Escape') onClose(false);
+      else if (event.key === 'Enter') onClose(document.activeElement === acceptRef.current);
+      else {
+        const buttons = [cancelRef.current, acceptRef.current];
+        const index = buttons.findIndex(button => button === document.activeElement);
+        buttons[index < 0 ? 0 : (index + (event.shiftKey ? -1 : 1) + 2) % 2]?.focus();
+      }
+    };
+    // Capture before underlying dialogs handle Escape or move their own focus.
+    window.addEventListener('keydown', keydown, true);
+    return () => window.removeEventListener('keydown', keydown, true);
+  }, [closing, onClose]);
   return (
     <div
+      data-confirm-overlay
       className={`confirm-overlay${closing ? ' confirm-overlay--closing' : ''}`}
-      onClick={() => onClose(false)}
+      onClick={event => { event.stopPropagation(); onClose(false); }}
     >
-      <div className="confirm-dialog" role="alertdialog" aria-modal="true" onClick={e => e.stopPropagation()}>
-        <h3 className="confirm-title">{opts.title}</h3>
-        {opts.message && <p className="confirm-message">{opts.message}</p>}
+      <div className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby={titleId}
+        aria-describedby={opts.message ? messageId : undefined} onClick={e => e.stopPropagation()}>
+        <h3 id={titleId} className="confirm-title">{opts.title}</h3>
+        {opts.message && <p id={messageId} className="confirm-message">{opts.message}</p>}
         <div className="confirm-actions">
-          <button className="confirm-btn confirm-btn--cancel" onClick={() => onClose(false)}>
+          <button ref={cancelRef} type="button" disabled={closing} className="confirm-btn confirm-btn--cancel" onClick={() => onClose(false)}>
             {opts.cancelText || t('common.cancel')}
           </button>
           <button
+            ref={acceptRef} type="button" disabled={closing}
             className={`confirm-btn ${opts.danger ? 'confirm-btn--danger' : 'confirm-btn--confirm'}`}
             onClick={() => onClose(true)}
           >

@@ -16,7 +16,7 @@ export function useTeam(agentId: string, sessionId: string, mainBusy: boolean) {
           method: 'POST', signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            feature: 'monsoon', method: 'getTeam', input: { agentId, sessionId },
+            feature: 'monsoon', method: 'getTeam', input: { agentId, sessionId, view: 'active' },
             budget: { items: 60, textChars: 20_000 },
           }),
         });

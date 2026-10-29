@@ -12,6 +12,7 @@ import { TideChangeFeed } from '../application/change-feed.js';
 import { TideSessionCompaction, type SeasonCompaction } from '../application/session-compaction.js';
 import type { SeasonSessionPort } from '../sessions/season-session-port.js';
 import { withTideToolImages } from './tool-images.js';
+import { buildTideCompactionContext } from '../runtime/input-context.js';
 
 export interface TideFeatureOptions {
   dataDir: string;
@@ -43,7 +44,7 @@ export function createTideFeature(options: TideFeatureOptions): TideFeature {
       repository: tasks, runStates, runRecords: runs, commands: taskService, automations,
       targets: new TideTargetSessions(options.seasonSessions), scheduler,
       compaction: new TideSessionCompaction(options.dataDir, tasks, scheduler, changes,
-        options.seasonCompaction),
+        options.seasonCompaction, {}, buildTideCompactionContext),
     }), options.dataDir, taskService, runs, runStates),
     tasks: taskService,
     scheduler,

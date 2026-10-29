@@ -96,6 +96,11 @@ function messages(value: unknown): MonsoonMessage[] {
     if (!record(item) || !['user', 'assistant', 'system'].includes(String(item.role))) {
       throw new Error(`会话消息无效：${index}`);
     }
+    if (item.type === 'compact-marker' && item.execution !== undefined) validateExecution(item.execution);
+    if (item.type === 'compact-marker' && item.committedRevision !== undefined
+      && (!Number.isSafeInteger(item.committedRevision) || Number(item.committedRevision) < 1)) {
+      throw new Error('压缩提交版本无效');
+    }
     return {
       ...structuredClone(item), id: text(item.id, 'message.id', 200),
       role: item.role as MonsoonMessage['role'],
@@ -103,6 +108,15 @@ function messages(value: unknown): MonsoonMessage[] {
       timestamp: timestamp(item.timestamp, 'message.timestamp'),
     };
   });
+}
+
+function validateExecution(value: unknown): void {
+  if (!record(value)) throw new Error('压缩执行位置无效');
+  text(value.assistantId, 'execution.assistantId', 200);
+  for (const field of ['toolOffset', 'textOffset', 'reasoningOffset', 'eventOffset'] as const) {
+    if (field !== 'toolOffset' && value[field] === undefined) continue;
+    if (!Number.isSafeInteger(value[field]) || Number(value[field]) < 0) throw new Error('压缩执行位置无效');
+  }
 }
 
 function tokenUsage(value: unknown): MonsoonTokenUsage {

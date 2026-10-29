@@ -8,6 +8,8 @@ import { resolveProviderAdapter } from './registry.js';
 export interface ProviderGenerationBudgetRequest {
   maxContentTokens: number;
   reasoningReserveTokens: number;
+  /** Measure the complete input before allocating context between input and output. */
+  deferContextAllocation?: boolean;
 }
 
 export interface ProviderGenerationBudget {
@@ -38,7 +40,8 @@ function allocateBudget(
   const reserve = limits.reasoning === false ? 0 : requested.reasoningReserveTokens;
   const total = requested.maxContentTokens + reserve;
   const usable = context === undefined ? undefined : context - Math.ceil(context * 0.05);
-  const windowLimit = usable === undefined ? undefined : Math.floor(usable * 0.25);
+  const windowLimit = usable === undefined ? undefined
+    : requested.deferContextAllocation ? usable : Math.floor(usable * 0.25);
   const maxOutputTokens = Math.min(total, minimumKnown(limits.maxOutputTokens, windowLimit) ?? total);
   const maxContentTokens = Math.floor(maxOutputTokens * requested.maxContentTokens / total);
   if (maxContentTokens < 1) throw new Error('模型容量不足以容纳压缩正文预算');
@@ -58,6 +61,9 @@ function minimumKnown(first?: number, second?: number): number | undefined {
 }
 
 function validateRequest(requested: ProviderGenerationBudgetRequest): void {
+  if (requested.deferContextAllocation !== undefined && typeof requested.deferContextAllocation !== 'boolean') {
+    throw new Error('上下文预算延迟分配选项必须是布尔值');
+  }
   if (!Number.isSafeInteger(requested.maxContentTokens) || requested.maxContentTokens < 1) {
     throw new Error('压缩正文预算必须是正整数');
   }

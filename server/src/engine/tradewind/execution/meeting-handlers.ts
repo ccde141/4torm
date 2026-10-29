@@ -196,7 +196,21 @@ export function shouldAttachMeetingToolCaller(
  * 返回最后一个 Agent 的 promptTokens（用于压缩阈值判断）。
  */
 export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undefined> {
-  const { dataDir, workspace, session, humanMessage, signal, onEvent, teamRoster } = opts;
+  const { dataDir, workspace, session, humanMessage, signal, onEvent: publish, teamRoster } = opts;
+  const onEvent = (event: MeetingStreamEvent) => {
+    const stream = session.streamingCurrent;
+    if (stream && (event.type === 'tool-call' || event.type === 'contact-start')) {
+      stream.toolCount = (stream.toolCount ?? 0) + 1;
+      (stream.toolCalls ??= []).push({ tool: event.type === 'tool-call' ? event.tool : 'contact',
+        args: event.type === 'tool-call' ? event.args : { target: event.target }, result: '' });
+    }
+    if (stream && (event.type === 'tool-result' || event.type === 'contact-done')) {
+      const last = stream.toolCalls?.at(-1);
+      if (last) { last.result = event.result;
+        if (event.type === 'tool-result') { last.meta = event.meta; last.toolImages = event.toolImages; } }
+    }
+    publish?.(event);
+  };
 
   session.publicMessages.push({ speaker: '人类', content: humanMessage, timestamp: Date.now() });
   session.round++;
@@ -401,6 +415,8 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       if (!aborted) resolveTradewindTermination(result.termination);
       const streamedContent = session.streamingCurrent?.content?.trim() || '';
       const reasoning = session.streamingCurrent?.reasoning || undefined;
+      const compactions = session.streamingCurrent?.compactions;
+      const rawContent = compactions?.length ? session.streamingCurrent?.content : result.rawContent;
       const finalContent = (aborted ? streamedContent : result.content).trim();
 
       const hasContent = !!finalContent && !finalContent.startsWith('[中止]') && !finalContent.startsWith('[错误]');
@@ -409,8 +425,9 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           speaker: label,
           content: finalContent,
           timestamp: Date.now(),
-          rawContent: result.rawContent || undefined,
+          rawContent: rawContent || undefined,
           reasoning,
+          ...(compactions?.length ? { compactions } : {}),
           toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
         });
       } else if (!aborted) {
@@ -422,6 +439,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           content: `（${label} 未回复）`,
           timestamp: Date.now(),
           noReply: true,
+          ...(compactions?.length ? { compactions } : {}),
         });
       }
       session.streamingCurrent = undefined;
@@ -430,6 +448,10 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       if (aborted) break;
     }
   } finally {
+    const stream = session.streamingCurrent;
+    if (stream?.compactions?.length) session.publicMessages.push({ speaker: stream.speaker,
+      content: stream.content || '（执行已停止）', rawContent: stream.content, reasoning: stream.reasoning,
+      toolCalls: stream.toolCalls, compactions: stream.compactions, timestamp: Date.now() });
     session.busy = false;
     session.streamingCurrent = undefined;
   }

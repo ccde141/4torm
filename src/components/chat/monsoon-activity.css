@@ -48,6 +48,9 @@
 .monsoon-turn__answer { min-width: 0; overflow-wrap: anywhere; }
 .monsoon-turn__answer--separated { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--glass-border); }
 .monsoon-turn__phase { margin: var(--space-2) 0; }
+.monsoon-turn__compaction { width: 100%; margin: var(--space-4) 0; }
+.monsoon-turn__compaction .compaction-history__toggle { white-space: normal; }
+.monsoon-turn__compaction .compaction-history__body { max-height: min(420px, 60vh); overflow-y: auto; scrollbar-width: thin; }
 @keyframes monsoon-worklog-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 600px) {
   .monsoon-turn__worklog-header { flex-wrap: wrap; padding: 0 8px 8px; gap: 0 8px; }

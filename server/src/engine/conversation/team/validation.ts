@@ -33,6 +33,7 @@ export function enforcePermissions(member: TeamPermissions, parent: TeamPermissi
 export function validateContext(value: unknown): asserts value is ContextMessage[] {
   if (!Array.isArray(value) || !value.every(message => record(message)
     && ['system', 'user', 'assistant', 'tool'].includes(String(message.role)) && text(message.content)
+    && (message.origin === undefined || ['human', 'framework'].includes(String(message.origin)))
     && (message.toolCallId === undefined || (message.role === 'tool' && text(message.toolCallId)))
     && (message.reasoningContent === undefined || text(message.reasoningContent))
     && (message.reasoningEnvelope === undefined || (record(message.reasoningEnvelope)
@@ -56,19 +57,50 @@ export function parseState(raw: string, owner: TeamOwner): TeamState {
     if (!record(member) || !definition(member) || !text(member.id) || ids.has(member.id)
       || !['active', 'dismissed'].includes(String(member.lifecycle))) throw teamError('TEAM_CORRUPT');
     ids.add(member.id);
+    for (const key of ['recruitedAt', 'dismissedAt']) {
+      if (member[key] !== undefined && (typeof member[key] !== 'string'
+        || !Number.isFinite(Date.parse(member[key] as string)))) throw teamError('TEAM_CORRUPT');
+    }
     validateContext(member.context);
     if (record(member.run) && member.run.requestId !== undefined
       && (!text(member.run.requestId) || !/^[a-zA-Z0-9_-]{1,160}$/.test(member.run.requestId))) throw teamError('TEAM_CORRUPT');
     if (member.run !== undefined && (!record(member.run)
       || !['id', 'runtimeId', 'task'].every(key => text(member.run && (member.run as Record<string, unknown>)[key]))
       || !['running', 'completed', 'failed', 'aborted', 'crashed'].includes(String(member.run.status)))) throw teamError('TEAM_CORRUPT');
+    const run = member.run;
+    if (record(run)) {
+      if (['phase', 'tool', 'recentResult', 'stopReason'].some(key => run[key] !== undefined && !text(run[key]))) throw teamError('TEAM_CORRUPT');
+      if (['startedAt', 'updatedAt'].some(key => run[key] !== undefined
+        && !Number.isFinite(Date.parse(String(run[key]))))) throw teamError('TEAM_CORRUPT');
+    }
   }
   const reportIds = new Set<string>();
+  if (state.messages !== undefined) {
+    if (!Array.isArray(state.messages)) throw teamError('TEAM_CORRUPT');
+    const messageIds = new Set<string>();
+    for (const message of state.messages) {
+      if (!record(message) || !['id', 'memberId', 'runId', 'content', 'createdAt'].every(key => text(message[key]))
+        || !ids.has(String(message.memberId)) || messageIds.has(String(message.id))
+        || !['to-main', 'to-member'].includes(String(message.direction))
+        || !['queued', 'included', 'undelivered'].includes(String(message.status))
+        || !Number.isFinite(Date.parse(String(message.createdAt)))
+        || (message.deliveredAt !== undefined && !Number.isFinite(Date.parse(String(message.deliveredAt))))) {
+        throw teamError('TEAM_CORRUPT');
+      }
+      messageIds.add(String(message.id));
+    }
+  }
   for (const report of state.reports) {
     if (!record(report) || !['id', 'memberId', 'runId', 'task', 'content'].every(key => text(report[key]))
       || !ids.has(String(report.memberId)) || reportIds.has(String(report.id)) || typeof report.acknowledged !== 'boolean'
       || !['completed', 'failed', 'aborted', 'crashed'].includes(String(report.outcome))) throw teamError('TEAM_CORRUPT');
     reportIds.add(String(report.id));
+    if (report.createdAt !== undefined && (typeof report.createdAt !== 'string'
+      || !Number.isFinite(Date.parse(report.createdAt)))) throw teamError('TEAM_CORRUPT');
+    if (report.delivery !== undefined && (!record(report.delivery)
+      || typeof report.delivery.runId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(report.delivery.runId)
+      || (report.delivery.includedAt !== undefined && (typeof report.delivery.includedAt !== 'string'
+        || !Number.isFinite(Date.parse(report.delivery.includedAt)))))) throw teamError('TEAM_CORRUPT');
     if (report.requestId !== undefined && (!text(report.requestId)
       || !/^[a-zA-Z0-9_-]{1,160}$/.test(report.requestId))) throw teamError('TEAM_CORRUPT');
     if (report.review !== undefined && (!record(report.review)

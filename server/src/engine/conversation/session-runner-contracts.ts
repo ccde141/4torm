@@ -14,6 +14,7 @@ import type { LLMCaller } from '../shared/react/native-loop.js';
 import type { ModelRequestUsageEvent } from '../shared/model-request-usage.js';
 
 export type ConversationEvent =
+  | { type: 'current-input'; estimate: import('../shared/model-request-usage.js').CurrentInputEstimate }
   | ModelRequestUsageEvent
   | TeamActivityEvent
   | ConversationInputEvent
@@ -21,7 +22,7 @@ export type ConversationEvent =
   | CompactionProgress
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
-  | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec'; elapsed: number }
+  | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec' | 'team-waiting'; elapsed: number; members?: string[] }
   | ({ type: 'tool-progress' } & ToolPreparationProgress)
   | { type: 'tool-call'; tool: string; args: Record<string, unknown> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown;
@@ -43,6 +44,7 @@ export type ConversationEvent =
   | { type: 'done' };
 
 export interface SessionRunnerOpts {
+  internalInbox?: (context: ContextMessage[]) => Promise<{ messages: string[]; commit(): Promise<void> }>;
   toolMediaScope?: import('../shared/tool-media-access.js').ToolMediaScope;
   mainAgent?: boolean;
   extension?: SessionToolExtension & { createHandoff?: (emit?: (event: TeamActivityEvent) => void) => TeamHandoff };

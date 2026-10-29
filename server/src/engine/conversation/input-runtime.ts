@@ -53,6 +53,8 @@ export class ConversationInputRuntime {
     this.dirty = false;
   }
 
+  recordContext(): void { this.dirty = true; }
+
   /** The owner saved the compacted prefix; future checkpoints contain only new work. */
   rebase(start: number): void {
     this.start = start;

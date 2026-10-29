@@ -31,8 +31,10 @@ async function fixture(t: test.TestContext) {
 for (const setupStage of ['headers', 'first-frame'] as const) {
   test(`工位压缩 SSE ${setupStage} 失败释放准备身份且保留原文`, async t => {
     const { app, dataDir, workshop, seat, feature } = await fixture(t);
-    seat.messages = [{ role: 'user', content: '必须保留的原始问题' },
-      { role: 'assistant', content: '必须保留的原始答复' }];
+    seat.messages = Array.from({ length: 5 }, (_, index) => [
+      { role: 'user' as const, content: `必须保留的原始问题-${index}` },
+      { role: 'assistant' as const, content: `必须保留的原始答复-${index}` },
+    ]).flat();
     await saveSeat(dataDir, workshop.id, seat);
     await fs.mkdir(path.join(dataDir, 'agents'), { recursive: true });
     await fs.writeFile(path.join(dataDir, 'agents', 'registry.json'), JSON.stringify({
@@ -74,12 +76,14 @@ for (const setupStage of ['headers', 'first-frame'] as const) {
   });
 }
 
-test('主动压缩短会话不受旧四轮门槛限制，完整归档并以摘要接续', async (t) => {
+test('主动压缩归档早期历史并以摘要和最近四轮完整原文接续', async (t) => {
   const { app, dataDir, workshop, seat } = await fixture(t);
   seat.messages = [
-    { role: 'user', content: '一' }, { role: 'assistant', content: '答一' },
+    { role: 'user', content: '一'.repeat(200) }, { role: 'assistant', content: '答一'.repeat(200) },
     { role: 'user', content: '二' }, { role: 'assistant', content: '答二' },
-    { role: 'user', content: '三' },
+    { role: 'user', content: '三' }, { role: 'assistant', content: '答三' },
+    { role: 'user', content: '四' }, { role: 'assistant', content: '答四' },
+    { role: 'user', content: '五' }, { role: 'assistant', content: '答五' },
   ];
   seat.tokenUsage = { promptTokens: 9_000, completionTokens: 1, totalTokens: 9_001 };
   await saveSeat(dataDir, workshop.id, seat);
@@ -104,10 +108,26 @@ test('主动压缩短会话不受旧四轮门槛限制，完整归档并以摘�
     method: 'POST', url: `/api/cyclone/workshop/${workshop.id}/seat/${seat.id}/compact`,
   });
   assert.equal(response.statusCode, 200);
-  assert.match(response.body, /"archivedCount":5/);
+  assert.match(response.body, /"archivedCount":2/);
   const saved = await loadSeat(dataDir, workshop.id, seat.id);
-  assert.equal(saved?.messages.length, 1);
+  assert.equal(saved?.messages.length, 9);
   assert.match(saved?.messages[0].content || '', /任务继续/);
+  assert.deepEqual(saved?.messages.slice(1), seat.messages.slice(2));
+  assert.equal(saved?.displayHistory?.messages.filter(message => message.role === 'assistant').length, 5);
+});
+
+test('不足四轮且不足30K的近期短会话不启动摘要请求，原文保持不变', async t => {
+  const { app, dataDir, workshop, seat } = await fixture(t);
+  seat.messages = [{ role: 'user', content: '当前问题' }, { role: 'assistant', content: '当前答复' }];
+  await saveSeat(dataDir, workshop.id, seat);
+  let modelCalls = 0;
+  t.mock.method(globalThis, 'fetch', async () => { modelCalls++; throw new Error('must not request'); });
+  const response = await app.inject({ method: 'POST',
+    url: `/api/cyclone/workshop/${workshop.id}/seat/${seat.id}/compact` });
+  assert.equal(response.statusCode, 400);
+  assert.match(response.json().error, /近期原文已保留/);
+  assert.equal(modelCalls, 0);
+  assert.deepEqual((await loadSeat(dataDir, workshop.id, seat.id))?.messages, seat.messages);
 });
 
 test('工位被占用时滚动压缩不读取旧快照覆盖当前轮次', async (t) => {

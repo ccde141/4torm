@@ -151,8 +151,6 @@ data/
 │           MCP 工具返回的图片文件；会话中只保存引用
 │
 ├── runtime/
-│   ├── compaction/
-│   │       按会话范围、模型和原文校验保存已完成的压缩片段，用于重新压缩时接续
 │   └── execution-observations.json
 │           任务板中的后台命令和执行视窗记录
 │

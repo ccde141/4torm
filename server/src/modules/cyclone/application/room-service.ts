@@ -1,4 +1,5 @@
 import { withCycloneSummaryUsage } from './summary-model-usage.js';
+import { alignCycloneTranscript } from '../../../engine/cyclone/conversation-transcript.js';
 import { frameworkError } from '../../../engine/shared/framework-error.js';
 import {
   createRoom,
@@ -17,10 +18,12 @@ import {
   setRoomTopic,
   tryAcquireRoomLock,
 } from '../../../engine/cyclone/room-store.js';
-import type { RoomData, RoomMessage, RoomMode } from '../../../engine/cyclone/types.js';
+import type { ContextMessage, RoomData, RoomMessage, RoomMode, SeatContextMessage } from '../../../engine/cyclone/types.js';
 import type { CycloneExecutionPort } from '../domain/operation-snapshot.js';
 import {
   toCycloneSummaryMessages,
+  retainedCycloneMessages,
+  retainedCyclonePrivateMessages,
   type CycloneContextSummarizer,
 } from '../domain/context-summary.js';
 import type { CycloneWorkshopService } from './workshop-service.js';
@@ -110,8 +113,10 @@ export class CycloneRoomService {
       if (expectedMessage && !matchesExpectedMessage(room.publicMessages, message, expectedMessage)) {
         throw messageConflict();
       }
+      const before = [...room.publicMessages];
       if (content === undefined) room.publicMessages.splice(index, 1);
       else { message.content = content; message.rawContent = undefined; }
+      alignCycloneTranscript(room.publicDisplayHistory, before, room.publicMessages);
       clearCycloneChairContext(room);
       room.chairTokenUsage = undefined;
       await saveRoom(this.dataDir, workshopId, room);
@@ -138,6 +143,7 @@ export class CycloneRoomService {
           const archivePath = options.mode === 'summary' ? await archiveCycloneCompaction(
             this.dataDir, workshopId, `room-${roomId}`, { type: 'cyclone-room-context-compact',
               roomId, scope: options.scope, publicMessages: room.publicMessages,
+              publicExecutionDraft: room.publicExecutionDraft,
               chairMessages: room.chairMessages, chairActiveContext: room.chairActiveContext,
               dispatchContextVersion: room.dispatchContextVersion }) : undefined;
           const summaries = options.mode === 'summary'
@@ -158,12 +164,13 @@ export class CycloneRoomService {
     workshopId: string,
     room: RoomData,
     scope: 'public' | 'chair' | 'both', signal?: AbortSignal,
-  ): Promise<{ publicSummary?: string; chairSummary?: string }> {
+  ): Promise<{ publicSummary?: string; chairSummary?: string; publicRetainedMessages?: RoomMessage[];
+    chairRetainedMessages?: SeatContextMessage[]; chairRetainedContext?: ContextMessage[] }> {
     const chairId = (await this.workshops.require(workshopId)).chairAgentId;
     if (!chairId) throw roomError(
       'CYCLONE_ROOM_CHAIR_REQUIRED', 'validation', '摘要重置需要先设置会长 Agent',
     );
-    const publicSummary = scope === 'public' || scope === 'both'
+    const publicCompaction = scope === 'public' || scope === 'both'
       ? await withCycloneSummaryUsage({
         get: () => room.modelUsage, set: value => { room.modelUsage = value; },
         persist: () => saveRoom(this.dataDir, workshopId, room),
@@ -175,27 +182,35 @@ export class CycloneRoomService {
           this.changes?.publish(workshopId, 'activity', room.id);
         },
         subject: `群聊「${room.title}」公共上下文`,
+        target: { workshopId, kind: 'room', id: room.id },
         messages: toCycloneSummaryMessages(room.publicMessages || []) }))
       : undefined;
-    const chairSummary = (scope === 'chair' || scope === 'both')
+    const chairContext = buildCycloneChairContext(room, { role: 'system', content: '' }).slice(1);
+    const chairCompaction = (scope === 'chair' || scope === 'both')
       && (room.chairMessages?.length || room.publicMessages.length)
       ? await withCycloneSummaryUsage({
         get: () => room.chairModelUsage, set: value => { room.chairModelUsage = value; },
         persist: () => saveRoom(this.dataDir, workshopId, room),
         emit: () => this.changes?.publish(workshopId, 'activity', room.id),
       }, () => this.summarizer.summarize({ agentId: chairId,
-        kind: 'meeting', signal, onNotice: async notice => {
+        kind: 'meeting', recentHumanTurns: 4, signal, onNotice: async notice => {
           room.chairCompactionNotice = notice;
           await saveRoom(this.dataDir, workshopId, room);
           this.changes?.publish(workshopId, 'activity', room.id);
         },
         subject: `群聊「${room.title}」会长私聊`,
-        messages: toCycloneSummaryMessages(buildCycloneChairContext(room,
-          { role: 'system', content: '' }).slice(1)) }))
+        target: { workshopId, kind: 'chair', id: room.id },
+        messages: toCycloneSummaryMessages(chairContext) }))
       : undefined;
+    const publicSummary = publicCompaction?.summary;
+    const chairSummary = chairCompaction?.summary;
     if ((scope !== 'chair' && !publicSummary?.trim())
       || (chairSummary !== undefined && !chairSummary.trim())) throw new Error('压缩摘要为空，原会话保留');
-    return { publicSummary, chairSummary };
+    return { publicSummary, chairSummary,
+      publicRetainedMessages: publicCompaction ? retainedCycloneMessages(room.publicMessages, publicCompaction) : undefined,
+      chairRetainedContext: chairCompaction ? retainedCycloneMessages(chairContext, chairCompaction) : undefined,
+      chairRetainedMessages: chairCompaction
+        ? retainedCyclonePrivateMessages(room.chairMessages || [], chairContext, chairCompaction) : undefined };
   }
 
   async remove(workshopId: string, roomId: string): Promise<{ ok: true }> {

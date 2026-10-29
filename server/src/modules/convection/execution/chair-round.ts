@@ -27,7 +27,7 @@ export async function handleChair(
   const previousPromptTokens = session.chairTokenUsage?.promptTokens;
   session.chairCompactionNotice = undefined;
   session.chairCompactionProgress = undefined;
-  session.chairMessages.push({ role: 'user', content: humanMessage,
+  session.chairMessages.push({ role: 'user', content: humanMessage, origin: 'human',
     ...(runId ? { runId } : {}) });
   recordChairUsage(session, null);
   await saveSession(dataDir, session);

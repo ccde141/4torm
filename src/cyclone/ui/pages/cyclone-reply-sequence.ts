@@ -3,12 +3,13 @@ import type { DisplayBlock, DisplayMessage } from './messageDisplay';
 export interface CycloneReplySegment {
   content: string;
   blocks: DisplayBlock[];
+  compaction?: { id: string; summary: string; reasoningOffset?: number };
 }
 
 export function appendReplyText(segments: CycloneReplySegment[], content: string): void {
   if (!content) return;
   const current = segments.at(-1);
-  if (!current || current.blocks.length > 0) {
+  if (!current || current.blocks.length > 0 || current.compaction) {
     segments.push({ content, blocks: [] });
     return;
   }
@@ -17,7 +18,7 @@ export function appendReplyText(segments: CycloneReplySegment[], content: string
 
 export function appendReplyBlock(segments: CycloneReplySegment[], block: DisplayBlock): void {
   let current = segments.at(-1);
-  if (!current) {
+  if (!current || current.compaction) {
     current = { content: '', blocks: [] };
     segments.push(current);
   }

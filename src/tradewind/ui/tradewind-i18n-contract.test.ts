@@ -103,6 +103,7 @@ test('tradewind meeting separates rendering from its dual stream state', () => {
 test('tradewind meeting localizes chrome without translating meeting payloads', () => {
   const panel = read('meeting/MeetingPanel.tsx');
   const view = read('meeting/MeetingPanelView.tsx');
+  const chair = read('meeting/MeetingChairMessageItem.tsx');
   const status = read('meeting/meeting-status.ts');
   assert.match(view, /useLocale/);
   assert.match(view, /tradewind\.meeting\.publicTitle/);
@@ -111,7 +112,7 @@ test('tradewind meeting localizes chrome without translating meeting payloads', 
   assert.match(panel, /tradewind\.meeting\.sendPublicFailed/);
   assert.match(status, /tradewind\.meeting\.status\.ended/);
   assert.match(view, /\{participant\.label\}/);
-  assert.match(view, /renderTextWithCode\(message\.content/);
+  assert.match(chair, /renderTextWithCode\(part\.message\.content/);
   assert.match(panel, /subscribe\(nodeId, handler\)/);
   assert.doesNotMatch(panel, /subscribe\(nodeId, handler\)[\s\S]{0,160}\bt\b/);
 });

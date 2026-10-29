@@ -1,5 +1,6 @@
 import { loadCompactionPolicy, parseCompactionPolicy, saveCompactionPolicy,
-  resolveSummaryModelBudget, summaryStageBudget, estimateTextTokens, generateCompactionResult,
+  resolveSummaryModelBudget, summaryGenerationBudget, estimateCompactionTokens, generateCompactionResult,
+  buildCompactionMessages, compactionVerificationPrompt,
   type CompactionPolicy } from '../../engine/shared/compaction/index.js';
 import { frameworkError } from '../../engine/shared/framework-error.js';
 
@@ -43,10 +44,14 @@ async function verifyModel(dataDir: string, model: string): Promise<void> {
   try {
     const limits = await resolveSummaryModelBudget(dataDir, model);
     const text = '资料已读取，校验仍在等待。下一步核对内容，不要宣布任务完成。';
-    const budget = summaryStageBudget(estimateTextTokens(text), true, limits);
+    const bodyLimit = Math.min(512, limits.maxContentTokens);
+    const messages = [{ role: 'user' as const, content: text }];
+    const inputTokens = estimateCompactionTokens(buildCompactionMessages({ messages,
+      prompt: compactionVerificationPrompt(text, bodyLimit) }));
+    const budget = summaryGenerationBudget(inputTokens, limits, bodyLimit);
     const result = await generateCompactionResult({ dataDir, model, ...budget, signal: controller.signal,
-      prompt: '将给定记录压缩为一句简短事实，保留尚未完成的工作。只返回摘要。',
-      text });
+      prompt: compactionVerificationPrompt(text, budget.maxContentTokens),
+      messages, text });
     if (result.source !== 'model') throw new Error('模型已响应，但未在输出限额内生成压缩正文，无法验证压缩能力');
   } finally { clearTimeout(timer); }
 }

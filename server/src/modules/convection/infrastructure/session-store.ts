@@ -39,8 +39,14 @@ export interface ConvectionSessionData {
   topic: string;
   /** 公共消息历史 */
   publicMessages: ConvectionMessage[];
+  publicDisplayHistory?: ConvectionMessage[];
+  publicDisplayContextCount?: number;
+  /** Current participant display checkpoint; excluded from model context. */
+  publicExecutionDraft?: ConvectionMessage;
   /** 会长私聊历史 */
   chairMessages: Array<ContextMessage & { runId?: string }>;
+  chairDisplayHistory?: Array<ContextMessage & { runId?: string }>;
+  chairDisplayContextCount?: number;
   /** Compressed assistant model history; public/private source records remain independent. */
   chairActiveContext?: ContextMessage[];
   chairContextRawCount?: number;
@@ -67,6 +73,11 @@ export interface ConvectionSessionData {
 }
 
 export interface ConvectionMessage {
+  recordId?: string;
+  execution?: { status: 'running' | 'failed' | 'stopped'; message?: string };
+  compactionId?: string;
+  compactions?: Array<{ id: string; summary: string; toolOffset: number; textOffset: number; reasoningOffset: number }>;
+  displayContent?: string;
   /** 启动本次公开发言的运行 ID；旧消息可能缺失。 */
   runId?: string;
   /** 稳定的 Agent 实体 ID；旧消息可能缺失。 */
@@ -80,6 +91,7 @@ export interface ConvectionMessage {
   reasoning?: string;
   /** 本轮工具调用记录 */
   toolCalls?: Array<{ tool: string; args: Record<string, unknown>; result: string;
+    completed?: boolean; ok?: boolean;
     toolImages?: import('../../../engine/shared/types.js').ToolImageRef[] }>;
 }
 

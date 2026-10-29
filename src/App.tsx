@@ -24,6 +24,7 @@ import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
 import ErrorBoundary from './components/layout/ErrorBoundary';
 import { ConfirmProvider } from './components/common/ConfirmDialog';
+import './styles/components/confirm-dialog.css';
 import DashboardPage from './components/agents/DashboardPage';
 import ChatPage from './components/chat/ChatPage';
 import SettingsPage from './components/layout/SettingsPage';

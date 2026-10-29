@@ -9,7 +9,7 @@ import { resolveTideRuntime } from './tide-runtime';
 interface Props {
   entities: TideEntities;
   onViewSession: (sessionId: string, agentId?: string) => void;
-  onDeleteSession: () => void;
+  onDeleteSession: (taskId: string, agentId: string) => Promise<void>;
 }
 
 export default function TidePageMain({ entities, onViewSession, onDeleteSession }: Props) {

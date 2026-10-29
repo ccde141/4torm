@@ -2,6 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { activeTideContext } from './active-context.js';
 
+test('Tide provenance distinguishes scheduled input from a human message after reloading', () => {
+  const messages = activeTideContext([
+    { id: 'scheduled', role: 'user', origin: 'framework', content: 'Daily check' },
+    { id: 'human', role: 'user', origin: 'human', content: 'Keep this correction' },
+  ]);
+  assert.deepEqual(messages.map(message => message.origin), ['framework', 'human']);
+});
+
 test('Tide active context uses the latest exact compaction marker and retains new records', () => {
   const context = activeTideContext([
     { id: 'one', role: 'user', content: '应归档的旧内容' },

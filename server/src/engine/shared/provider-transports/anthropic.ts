@@ -16,6 +16,7 @@ interface AnthropicRequestInput {
   model: string;
   messages: ContextMessage[];
   tools?: ToolDef[];
+  historyToolTransport?: 'native' | 'text';
   stream: boolean;
   maxTokens: number;
   temperature?: number;
@@ -42,13 +43,14 @@ export interface AnthropicResult {
 
 export function buildAnthropicRequest(input: AnthropicRequestInput): AnthropicRequest {
   const { tools, nameMap, forwardMap } = mapAnthropicTools(input.tools ?? []);
-  const history = tools.length
+  const nativeHistory = input.historyToolTransport ? input.historyToolTransport === 'native' : tools.length > 0;
+  const history = nativeHistory
     ? restoreTextToolHistory(input.messages)
     : encodeNativeToolHistoryForText(input.messages, forwardMap);
-  const historyNames = tools.length
+  const historyNames = nativeHistory
     ? completeHistoricalToolNameMap(history, forwardMap)
     : forwardMap;
-  const safeHistory = tools.length
+  const safeHistory = nativeHistory
     ? downgradeIncompleteNativeToolHistory(history, historyNames)
     : history;
   const { system, messages } = mapMessages(safeHistory, historyNames);

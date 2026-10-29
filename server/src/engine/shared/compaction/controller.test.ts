@@ -26,12 +26,15 @@ function history(): ContextMessage[] {
   return [{ role: 'system', content: 'static rules' },
     { role: 'user', content: 'a'.repeat(3_000) }, { role: 'assistant', content: 'b'.repeat(3_000) },
     { role: 'user', content: 'c'.repeat(2_000) }, { role: 'assistant', content: 'done' },
-    { role: 'user', content: 'latest input' }];
+    ...[3, 4, 5].flatMap(index => [
+      { role: 'user' as const, content: `direction ${index}` },
+      { role: 'assistant' as const, content: `work ${index}` },
+    ]), { role: 'user', content: 'latest input' }];
 }
 const success = { content: 'answer', finishReason: 'stop' as const };
 const overflow = () => providerHttpError(400, '{"error":{"code":"context_length_exceeded","message":"context too long"}}');
 
-test('durable archive precedes summary and commit; manual compaction covers all history', async () => {
+test('durable archive precedes summary and commit; manual compaction preserves complete recent turns', async () => {
   await fixture(async options => {
     const messages = history();
     messages.pop();
@@ -39,23 +42,24 @@ test('durable archive precedes summary and commit; manual compaction covers all 
     const plan = await compactMessages({ ...options, messages, mode: 'full', reason: 'manual',
       archive: async () => { order.push('archive'); },
       summarize: async () => { order.push('summary'); return 'facts'; },
-      commit: async pending => { order.push('commit'); assert.equal(messages.length, 5);
-        assert.equal(pending.tail.length, 0); } });
+      commit: async pending => { order.push('commit'); assert.equal(messages.length, 11);
+        assert.equal(pending.tail.length, 8); } });
     assert.deepEqual(order, ['archive', 'summary', 'commit']);
-    assert.equal(plan!.prefix.length, 4);
-    assert.equal(messages.length, 2);
+    assert.equal(plan!.prefix.length, 2);
+    assert.equal(messages.length, 10);
     assert.equal(messages[0].content, 'static rules');
+    assert.deepEqual(messages.slice(2), plan!.tail);
   });
 });
 
-test('short summaries cannot increase live context through summary framing overhead', async () => {
+test('short recent conversations do not invoke a summary or create a marker', async () => {
   await fixture(async options => {
     const messages: ContextMessage[] = [{ role: 'system', content: 'static' },
       { role: 'user', content: 'a'.repeat(24) }];
     const before = structuredClone(messages);
     let commits = 0;
-    await assert.rejects(compactMessages({ ...options, messages, mode: 'full', reason: 'manual',
-      summarize: async () => 'short', commit: async () => { commits++; } }), /未减少/);
+    assert.equal(await compactMessages({ ...options, messages, mode: 'full', reason: 'manual',
+      summarize: async () => assert.fail('recent history is protected'), commit: async () => { commits++; } }), null);
     assert.equal(commits, 0);
     assert.deepEqual(messages, before);
   });
@@ -107,7 +111,7 @@ test('meeting always uses chair prompt and chair model, fixed model is its only 
     await compactMessages({ ...options, kind: 'meeting', chairModel: 'p:chair', prompt: 'chair-specific',
       messages: history(), mode: 'full', reason: 'manual', summarize: async input => {
         calls.push(input.model); assert.match(input.prompt, /chair-specific/);
-        assert.match(input.prompt, /不能把缺席/);
+        assert.match(input.prompt, /缺席、沉默.*不能视为同意/);
         if (input.model === 'p:chair') throw new Error('offline'); return 'positions';
       } });
     assert.deepEqual(calls, ['p:chair', 'p:fixed']);
@@ -175,7 +179,7 @@ test('context overflow keeps compacting while history can shrink; other errors n
   });
 });
 
-test('proactive compaction and actual overflow co-trigger recover different remaining prefixes', async () => {
+test('overflow after proactive compaction can consume additional unprotected older turns', async () => {
   await fixture(async (options, policy) => {
     policy.enabled = true; policy.thresholds.monsoon = 1_000;
     await saveCompactionPolicy(options.dataDir, policy);

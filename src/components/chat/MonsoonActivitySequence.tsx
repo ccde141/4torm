@@ -1,12 +1,14 @@
 import { Fragment, useId, useState, type ReactNode } from 'react';
 import type { Agent, ChatActivity, ChatMessage, TeamActivity, ToolStep } from '../../types';
-import { projectActivityTurn } from '../../engine/chat/activity-sequence';
+import { teamActivityKey } from '../../engine/chat/activity-sequence';
+import { executionSegments, type ExecutionBoundary } from '../../engine/chat/execution-segments';
 import { useLocale } from '../../i18n/LocaleContext';
 import { formatTimestamp } from '../../utils/time';
 import AgentAvatar from '../agents/AgentAvatar';
 import BoundedMessageText from './BoundedMessageText';
 import { useProcessFade } from './useProcessFade';
 import BoundedText from '../../engine/text-display/BoundedText';
+import { compactionHistoryContent } from '../common/compaction-history';
 import './monsoon-activity.css';
 
 interface Props {
@@ -16,31 +18,49 @@ interface Props {
   actions?: ReactNode;
   streaming?: boolean;
   reasoning?: ReactNode;
+  renderReasoning?(start: number, end: number, streaming: boolean): ReactNode;
   phase?: ReactNode;
+  compactionMarkers?: ChatMessage[];
 }
 
 export default function MonsoonActivitySequence({ message, agent, renderTools, actions,
-  streaming = false, reasoning, phase }: Props) {
-  const { work, answer } = projectActivityTurn(message);
-  return <div className="chat__message chat__message--assistant monsoon-turn">
-    <AgentAvatar agent={agent} className="chat__avatar" fallback="AI" />
-    <div className="chat__bubble monsoon-turn__bubble">
-      {reasoning}
-      {!!work.length && <TurnWorklog message={message} work={work}
-        streaming={streaming} renderTools={renderTools} />}
-      {phase && <div className="monsoon-turn__phase">{phase}</div>}
-      {answer && <div className={`stmsg-answer monsoon-turn__answer${reasoning || work.length ? ' monsoon-turn__answer--separated' : ''}`}>
-        <BoundedMessageText text={answer} id={message.id} />
-      </div>}
-      {message.timestamp && <div className="chat__timestamp" title={formatTimestamp(message.timestamp)}>
-        {formatTimestamp(message.timestamp)}
-      </div>}
-      {actions && <div className="chat__bubble-actions">{actions}</div>}
-    </div>
-  </div>;
+  streaming = false, reasoning, renderReasoning, phase, compactionMarkers }: Props) {
+  const { segments, answer } = executionSegments(message, compactionMarkers);
+  const displayed = segments.map((segment, index) => {
+    const latest = index === segments.length - 1;
+    const thought = renderReasoning
+      ? renderReasoning(segment.reasoningStart, segment.reasoningEnd, streaming && latest)
+      : index === 0 ? reasoning : undefined;
+    return { segment, latest, thought,
+      visible: !!(segment.work.length || thought || (latest && (answer || streaming))) };
+  });
+  const lastVisible = displayed.findLastIndex(item => item.visible);
+  return <>{displayed.map(({ segment, latest, thought, visible }, index) => <Fragment key={segment.id}>
+    {segment.boundary && <CompactionBoundary boundary={segment.boundary}
+      marker={compactionMarkers?.find(marker => marker.id === segment.boundary?.markerId)} />}
+    {visible && <div className="chat__message chat__message--assistant monsoon-turn" data-execution-segment={segment.id}>
+      <AgentAvatar agent={agent} className="chat__avatar" fallback="AI" />
+      <div className="chat__bubble monsoon-turn__bubble">
+        {thought}
+        {(!!segment.work.length || (latest && streaming && !!segment.boundary))
+          && <TurnWorklog message={message} work={segment.work} continued={segment.continued}
+            toolOffset={segment.toolOffset} streaming={streaming && latest} renderTools={renderTools} />}
+        {latest && phase && <div className="monsoon-turn__phase">{phase}</div>}
+        {latest && answer && <div className={`stmsg-answer monsoon-turn__answer${thought || segment.work.length ? ' monsoon-turn__answer--separated' : ''}`}>
+          <BoundedMessageText text={answer} id={message.id} />
+        </div>}
+        {(segment.continued ? segments[index + 1]?.boundary?.timestamp : message.timestamp) && <div className="chat__timestamp">
+          {formatTimestamp(segment.continued ? segments[index + 1].boundary!.timestamp : message.timestamp)}
+        </div>}
+        {index === lastVisible && actions && <div className="chat__bubble-actions">{actions}</div>}
+      </div>
+    </div>}
+  </Fragment>)}</>;
 }
 
-function TurnWorklog({ message, work, streaming, renderTools }: Props & { work: ChatActivity[] }) {
+function TurnWorklog({ message, work, streaming, renderTools, continued, toolOffset }: Props & {
+  work: ChatActivity[]; continued: boolean; toolOffset: number;
+}) {
   const { locale, t } = useLocale();
   const english = locale === 'en-US';
   const id = useId();
@@ -51,11 +71,12 @@ function TurnWorklog({ message, work, streaming, renderTools }: Props & { work: 
   const [open, setOpen] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const { viewport, content } = useProcessFade(open, expanded, streaming);
-  const state = message.streamStopped ? (english ? 'Turn stopped' : '本轮已停止')
+  const state = continued ? (english ? 'Continued' : '已接续')
+    : message.streamStopped ? (english ? 'Turn stopped' : '本轮已停止')
     : failed ? t('chat.tool.failedCount', { count: failed })
     : streaming ? (english ? 'In progress' : '进行中')
     : pending ? (english ? 'Unfinished' : '未完成') : t('chat.tool.completed');
-  return <section className="monsoon-turn__worklog">
+  return <section className="monsoon-turn__worklog" data-tool-offset={toolOffset}>
     <div className="monsoon-turn__worklog-header">
       <button type="button" className="monsoon-turn__worklog-summary" aria-expanded={open}
         aria-controls={id} onClick={() => setOpen(value => !value)}>
@@ -76,13 +97,15 @@ function TurnWorklog({ message, work, streaming, renderTools }: Props & { work: 
     <div id={id} ref={viewport} hidden={!open} className={`monsoon-turn__worklog-body${expanded ? ' is-expanded' : ''}`} tabIndex={0}
       role="region" aria-label={english ? 'Execution process' : '执行过程'}>
       <div ref={content} className="monsoon-turn__worklog-content">
-        <WorklogItems sequence={work} message={message} renderTools={renderTools} />
+        <WorklogItems sequence={work} message={message} renderTools={renderTools} toolOffset={toolOffset} />
       </div>
     </div>
   </section>;
 }
 
-function WorklogItems({ sequence, message, renderTools }: Pick<Props, 'message' | 'renderTools'> & { sequence: ChatActivity[] }) {
+function WorklogItems({ sequence, message, renderTools, toolOffset }: Pick<Props, 'message' | 'renderTools'> & {
+  sequence: ChatActivity[]; toolOffset: number;
+}) {
   const nodes: ReactNode[] = [];
   for (let index = 0; index < sequence.length; index++) {
     const item = sequence[index];
@@ -95,17 +118,38 @@ function WorklogItems({ sequence, message, renderTools }: Pick<Props, 'message' 
         index++;
       }
       index--;
-      if (steps.length) nodes.push(<div className="monsoon-turn__tools" key={`tools-${start}`}>
+      if (steps.length) nodes.push(<div className="monsoon-turn__tools" key={`tools-${start}`}
+        data-tool-start={item.index - toolOffset + 1}>
         {renderTools(steps, item.index)}</div>);
     } else if (item.kind === 'team') {
-      nodes.push(<TeamActivityRow key={item.event.id} event={item.event} />);
-    } else if (item.content.trim()) {
+      nodes.push(<TeamActivityRow key={teamActivityKey(item.event)} event={item.event} />);
+    } else if (item.kind === 'text' && item.content.trim()) {
       nodes.push(<div key={`text-${index}`} className="monsoon-turn__note">
         <BoundedMessageText text={item.content} id={`${message.id}-note-${index}`} />
       </div>);
     }
   }
   return <>{nodes.map((node, index) => <Fragment key={index}>{node}</Fragment>)}</>;
+}
+
+function CompactionBoundary({ boundary, marker }: { boundary: ExecutionBoundary; marker?: ChatMessage }) {
+  const { locale } = useLocale();
+  const english = locale === 'en-US';
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return <div className="compaction-history monsoon-turn__compaction" data-marker-id={boundary.markerId}>
+    <div className="compaction-history__divider">
+      <span className="compaction-history__line" aria-hidden="true" />
+      {marker ? <button type="button" className="compaction-history__toggle" aria-expanded={open}
+        aria-controls={id} onClick={() => setOpen(value => !value)}>
+        {english ? 'Context compacted · View handoff' : '上下文已压缩 · 查看交接'}</button>
+        : <span>{english ? 'Context compacted' : '上下文已压缩'}</span>}
+      <span className="compaction-history__line" aria-hidden="true" />
+    </div>
+    {marker && open && <div id={id} className="compaction-history__body">
+      <BoundedText text={compactionHistoryContent(marker.content)} />
+    </div>}
+  </div>;
 }
 
 function TeamActivityRow({ event }: { event: TeamActivity }) {
