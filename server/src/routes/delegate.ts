@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import { getAppContext } from '../services/app-context.js';
 import { runSubAgent } from '../engine/shared/sub-agent-runner.js';
 import { SUB_AGENT_MAX_ROUNDS } from '../engine/shared/sub-agent-budget.js';
+import { SUB_AGENT_MAX_DURATION_MS } from '../engine/shared/sub-agent-deadline.js';
 import type { SubAgentEvent } from '../engine/shared/sub-agent-types.js';
 import { initSSE, pushSSE, startHeartbeat, endSSE } from '../utils/sse.js';
 
@@ -29,7 +30,7 @@ export async function delegateRoutes(app: FastifyInstance): Promise<void> {
 
     const rounds = Number.isSafeInteger(maxRounds) && maxRounds > 0
       ? Math.min(maxRounds, SUB_AGENT_MAX_ROUNDS) : SUB_AGENT_MAX_ROUNDS;
-    const timeoutMs = typeof timeout === 'number' && timeout > 0 ? timeout : 3_600_000;
+    const timeoutMs = typeof timeout === 'number' && timeout > 0 ? timeout : SUB_AGENT_MAX_DURATION_MS;
 
     // 创建 AbortController
     const ac = new AbortController();

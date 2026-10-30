@@ -24,7 +24,7 @@ export class LlmCycloneContextSummarizer implements CycloneContextSummarizer {
       mode: 'full', reason: 'manual', signal: input.signal,
     });
     if (!plan) throw new Error('近期原文保护范围内没有更早的可压缩内容');
-    return { summary: plan.summary, retainedIndexes: Array.from({ length: plan.tail.length },
-      (_, index) => input.messages.length - plan.tail.length + index) };
+    return { summary: plan.summary, retainedIndexes: plan.retainedIndexes
+      ?? Array.from({ length: plan.tail.length }, (_, index) => input.messages.length - plan.tail.length + index) };
   }
 }

@@ -6,6 +6,33 @@ import path from 'node:path';
 import { TeamRuntime } from './runtime.js';
 import { TeamStore } from './store.js';
 
+test('member compaction uses existing run phases without publishing new human-facing activity', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'team-compaction-phase-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new TeamStore(root, { agentId: 'a', sessionId: 's' });
+  const policy = { tools: [], skills: [], sandboxLevel: 'project' as const };
+  const member = await store.create({ name: 'Researcher', mission: 'TASK-42', rolePrompt: '', taskContext: '', constraints: '', permissions: policy }, policy);
+  const phases: string[] = [], activity: string[] = [];
+  const record = store.activity.bind(store);
+  t.mock.method(store, 'activity', async (...args) => { phases.push(args[2]); await record(...args); });
+  const runtime = new TeamRuntime(store, async (_member, _task, _checkpoint, _signal, control) => {
+    control.observe({ type: 'compact-start', id: 'compaction', operation: 'compact', reason: 'threshold', startedAt: 1, updatedAt: 1 });
+    const request = { id: 'summary', purpose: 'compaction' as const, state: 'prepared' as const,
+      startedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      estimatedInputTokens: 70_000, imageCount: 0, usageComplete: false };
+    control.observe({ type: 'model-request', request });
+    control.observe({ type: 'model-request', request: { ...request, state: 'completed' } });
+    control.observe({ type: 'compact-done', id: 'compaction', operation: 'compact', reason: 'threshold', startedAt: 1, updatedAt: 2 });
+    control.observe({ type: 'model-request', request: { ...request, id: 'continuation', purpose: 'conversation' } });
+    return 'TASK-42 done';
+  });
+  runtime.subscribe(event => activity.push(event.stage));
+  await runtime.dispatch(member.id, 'Continue TASK-42', policy);
+  await runtime.wait();
+  assert.deepEqual(phases, ['compacting', 'compacting', 'model', 'model']);
+  assert.deepEqual(activity, ['dispatched', 'reported']);
+});
+
 test('dispatch returns before execution finishes, preserves history and records real failures', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'team-runtime-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

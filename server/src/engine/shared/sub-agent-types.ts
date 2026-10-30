@@ -18,7 +18,7 @@ export interface SubAgentParams {
   model?: string;
   dataDir: string;
   signal: AbortSignal;
-  /** 本次委托总时限（毫秒），默认且最多 60 分钟。 */
+  /** 本次委托总时限（毫秒），默认且最多 120 分钟。 */
   timeout?: number;
   maxRounds: number;
   /**

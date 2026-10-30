@@ -22,12 +22,21 @@ function session(): MonsoonSession {
 }
 
 test('manual compaction prepares only the older prefix before the latest four complete human turns', () => {
-  const prepared = prepareCompaction(session());
+  const original = session();
+  const prepared = prepareCompaction({ ...original,
+    messages: original.messages.map(message => ({ ...message, content: message.content.slice(0, 300) })) });
   assert.equal(prepared.expectedRevision, 4);
   assert.equal(prepared.compressedCount, 4);
   assert.match(prepared.dialogText, /content-0/);
   assert.match(prepared.dialogText, /content-3/);
   assert.doesNotMatch(prepared.dialogText, /content-4|content-11/);
+});
+
+test('manual compaction includes completed work inside oversized recent turns', () => {
+  const prepared = prepareCompaction(session());
+  assert.ok(prepared.compressedCount > 4, 'recent human turns cannot protect an unbounded amount of work');
+  assert.match(prepared.dialogText, /content-4/);
+  assert.match(prepared.dialogText, /content-11/);
 });
 
 test('manual compaction inserts one final marker, preserves raw history, and clears stale usage', () => {
@@ -41,7 +50,9 @@ test('manual compaction inserts one final marker, preserves raw history, and cle
 test('manual compaction respects history protection independently of stale reported usage', () => {
   const value = session();
   value.tokenUsage = { promptTokens: 100, completionTokens: 10, totalTokens: 110 };
-  assert.equal(prepareCompaction(value).compressedCount, 4);
-  assert.throws(() => prepareCompaction({ ...value, messages: value.messages.slice(-8) }), /近期原文均受保护/);
+  assert.equal(prepareCompaction(value).compressedCount, prepareCompaction(session()).compressedCount);
+  assert.throws(() => prepareCompaction({ ...value,
+    messages: value.messages.slice(-8).map(message => ({ ...message, content: message.content.slice(0, 300) })) }),
+  /近期原文均受保护/);
   assert.throws(() => prepareCompaction({ ...value, messages: [] }), /没有可压缩/);
 });

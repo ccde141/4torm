@@ -35,7 +35,11 @@ export function editConvectionDisplay(session: ConvectionSessionData, index: num
     || (target.recordId !== undefined && message.recordId === target.recordId));
   if (content !== undefined) {
     target.content = content;
-    if (matching && matching !== target) matching.content = content;
+    if (typeof target.modelContent === 'string') target.modelContent = content;
+    if (matching && matching !== target) {
+      matching.content = content;
+      if (typeof matching.modelContent === 'string') matching.modelContent = content;
+    }
   } else {
     if (session.publicExecutionDraft === target) session.publicExecutionDraft = undefined;
     if (session.publicDisplayHistory) session.publicDisplayHistory = session.publicDisplayHistory.filter(message => message !== target);

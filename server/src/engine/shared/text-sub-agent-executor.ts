@@ -59,8 +59,8 @@ export async function runTextSubAgent(params: TextSubAgentParams): Promise<SubAg
       messages,
       maxRounds: params.maxRounds,
       signal: params.signal,
-      callModel: () => callPreparedModel(llm, messages, params.signal, {
-        onChunk: chunk => params.emitEvent({ type: 'token', data: { t: chunk } }),
+      callModel: onPartial => callPreparedModel(llm, messages, params.signal, {
+        onChunk: chunk => { onPartial?.(chunk); params.emitEvent({ type: 'token', data: { t: chunk } }); },
         onReasoning: chunk => params.emitEvent({ type: 'reasoning', data: { t: chunk } }),
       }),
       callTool: async (tool, args) => {

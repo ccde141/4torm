@@ -31,3 +31,22 @@ for (const native of [true, false]) test(`stop during completion handoff cannot 
   const result = native ? await runReActLoopNative(opts) : await runReActLoop(opts);
   assert.equal(result.termination.status, 'aborted');
 });
+
+for (const retainBeforeFinish of [false, true]) for (const retainFinalContext of [false, true]) {
+  test(`text completion stores one reply per request across handoffs (${retainBeforeFinish}, ${retainFinalContext})`, async () => {
+    const messages: ContextMessage[] = [{ role: 'user', content: 'work' }];
+    let calls = 0;
+    const result = await runReActLoop({ messages, retainBeforeFinish, retainFinalContext,
+      llm: { call: async () => ({ content: `REPLY-${++calls}`, finishReason: 'stop' }) },
+      beforeFinish: async () => {
+        assert.equal(messages.filter(message => message.role === 'assistant' && message.content === `REPLY-${calls}`).length, 1,
+          'the completion hook sees one canonical copy of this response');
+        return calls === 1 ? ['[framework] late member update'] : [];
+      },
+    });
+    assert.equal(result.termination.status, 'succeeded');
+    assert.equal(result.content, 'REPLY-2');
+    assert.deepEqual(messages.filter(message => message.role === 'assistant').map(message => message.content),
+      ['REPLY-1', 'REPLY-2']);
+  });
+}

@@ -5,7 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { createSession } from '../infrastructure/session-store.js';
 import { retainedConvectionMessages, summarizeConvectionSession } from './manual-summary.js';
-import { convectionContext, convectionRecordText } from '../execution/compaction-context.js';
+import { convectionContext, convectionRecordText, convectionRoundBoundaries, retainedConvectionRecords } from '../execution/compaction-context.js';
+import { estimateCompactionTokens } from '../../../engine/shared/compaction/index.js';
 
 test('manual public compaction keeps three complete human rounds and their tool facts', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'convection-recent-rounds-'));
@@ -56,6 +57,13 @@ test('completed public replies and interrupted replies expose the same observed 
   assert.equal(interrupted.match(/read_file/g)?.length, 1);
 });
 
+test('an explicitly empty compacted continuation never falls back to full display tools', () => {
+  const record = { speaker: 'member', content: '旧展示', modelContent: '', timestamp: 1,
+    toolCalls: [{ tool: 'read_file', args: {}, result: '已压缩旧工具' }] };
+  assert.equal(convectionRecordText(record), '');
+  assert.doesNotMatch(convectionContext([record])[0].content, /旧展示|已压缩旧工具/);
+});
+
 test('public round protection retains all short discussions and a 30K suffix of autonomous discussion', () => {
   const short = [{ speaker: '人类', content: '请检查', timestamp: 1 },
     { speaker: 'member', content: '已检查', timestamp: 2 }];
@@ -65,6 +73,32 @@ test('public round protection retains all short discussions and a 30K suffix of 
   }));
   const recent = retainedConvectionMessages(long);
   assert.ok(recent.length < long.length);
-  assert.ok(recent.length >= 15);
+  const retainedTokens = estimateCompactionTokens(convectionContext(recent));
+  assert.ok(retainedTokens <= 30_000);
+  assert.ok(retainedTokens > 27_000, 'completed records fill the recent-context allowance');
   assert.equal(recent.at(-1), long.at(-1));
+});
+
+test('public record mapping retains isolated human input and later replies without reviving compressed tool facts', () => {
+  const records = [{ speaker: '人类', content: '保持最初约束', timestamp: 1 },
+    { speaker: 'member', content: '很长的旧执行', timestamp: 2,
+      toolCalls: [{ tool: 'read_file', args: {}, result: '旧证据' }] },
+    { speaker: 'member', content: '最近进度', timestamp: 3 }];
+  const before = [{ role: 'system' as const, content: '身份' }, ...convectionContext(records),
+    { role: 'assistant' as const, content: '当前发言的工具链' }];
+  const kept = retainedConvectionRecords(records,
+    { before, tail: [before[1], before[3], before[4]], retainedIndexes: [1, 3, 4] }, 1);
+  assert.deepEqual(kept, [records[0], records[2]]);
+  assert.equal(kept[0], records[0]);
+  assert.doesNotMatch(JSON.stringify(kept), /旧证据|旧执行|当前发言/);
+});
+
+test('public compaction boundaries stop before a running record even when later records and tools exist', () => {
+  const records = [{ speaker: '人类', content: '目标', timestamp: 1 },
+    { speaker: 'member', content: '已完成', timestamp: 2 },
+    { speaker: 'member', content: '运行中', timestamp: 3, execution: { status: 'running' as const } },
+    { speaker: 'member', content: '后续记录', timestamp: 4 }];
+  const context = [{ role: 'system' as const, content: '身份' }, ...convectionContext(records),
+    { role: 'assistant' as const, content: '后续工具' }];
+  assert.deepEqual(convectionRoundBoundaries(context, records), [2, 3]);
 });

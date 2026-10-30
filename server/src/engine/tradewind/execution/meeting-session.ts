@@ -21,6 +21,9 @@ export interface MeetingMessage {
   compactions?: MeetingTurnCompaction[];
   speaker: string;
   content: string;
+  /** Effective continuation after in-turn compaction, separate from the complete display trace. */
+  modelContent?: string;
+  executionStatus?: 'stopped' | 'failed';
   timestamp: number;
   rawContent?: string;
   reasoning?: string;
@@ -88,7 +91,7 @@ export interface MeetingSessionData {
   phase: 'opening' | 'discussion' | 'ending' | 'ended';
   /** 当前正在流式产出的消息（面板关了再开时 replay 用） */
   streamingCurrent?: { speaker: string; content: string; reasoning?: string;
-    toolCount?: number; toolCalls?: MeetingMessage['toolCalls']; compactions?: MeetingTurnCompaction[] };
+    toolCount?: number; toolCalls?: MeetingMessage['toolCalls']; compactions?: MeetingTurnCompaction[]; modelContent?: string };
   /** Provider-reported usage for every model call in this meeting activation. */
   usageRecorder: TokenUsageRecorder;
   compactionNotice?: string;

@@ -88,16 +88,16 @@ test('manual compaction reserves original framing and tools in the resumed conte
   t.mock.method(globalThis, 'fetch', async () => assert.fail('the fixture uses declared capacity and an injected summarizer'));
   const messages: ContextMessage[] = Array.from({ length: 5 }, (_, index) => [
     { role: 'user' as const, origin: 'human' as const, content: `Direction ${index}` },
-    { role: 'assistant' as const, content: '原'.repeat(index === 0 ? 3_000 : 20_000) },
+    { role: 'assistant' as const, content: '原'.repeat(index === 0 ? 3_000 : 5_000) },
   ]).flat();
   let summary: CompactionSummaryInput | undefined;
   await compactMessages({ dataDir, area: 'monsoon', kind: 'conversation', model: 'fixture:deepseek-v4-flash',
     messages, protectedPrefixCount: 0, policy: defaultCompactionPolicy(), mode: 'full', reason: 'manual',
-    summaryContext: { messages: [{ role: 'system', content: '规'.repeat(900_000) }], tools: [tool] },
+    summaryContext: { messages: [{ role: 'system', content: '规'.repeat(960_000) }], tools: [tool] },
     summarize: async input => { summary = input; return 'Earlier verified facts.'; } });
   assert.ok(summary);
   assert.ok(summary.maxContentTokens > 0 && summary.maxContentTokens < 9_000,
-    'a 30K handoff would overflow the original framing and four protected complete turns');
+    'a 30K handoff would overflow the original framing and retained recent context');
   assert.equal(messages[0].role, 'system');
   assert.ok(!messages.some(message => message.content.startsWith('规')),
     'the original runtime system prompt stays outside persisted conversation history');

@@ -74,15 +74,11 @@ Meetings use the meeting assistant's model and compaction prompt. Tide tasks tha
 
 ### Retain Recent Original Content
 
-Compaction preserves complete recent conversation rounds:
-
-| Conversation type | Original content retained |
-|---|---|
-| Private chat | The latest four rounds |
-| Group discussion | The latest three rounds |
-| Fewer rounds than listed above | Approximately the latest 30K tokens |
+Compaction prioritizes recent human messages and conversation content within a recent-original-content budget of approximately 30K tokens. Private chats prioritize the latest four rounds, and group discussions prioritize the latest three. When a round is long, its completed replies and tool activity can also be summarized.
 
 A round consists of one human message followed by the agents' replies and tool activity. Multiple agent replies in a group discussion belong to the same round. These rounds are counted separately from Tide task executions and its retained-round setting.
+
+Subsequent requests use the summary and retained original content, while earlier messages and tool records remain available to review. The 30K budget applies to recent original content; the final context also includes the summary and content outside the selected compaction range.
 
 ### Compact Manually
 

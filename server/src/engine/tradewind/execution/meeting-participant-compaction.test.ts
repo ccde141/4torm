@@ -10,7 +10,7 @@ import { callPreparedModel } from '../../shared/react/model-call.js';
 import { formatTextToolCall, parseTextToolResponse, parseTextToolResult } from '../../shared/text-tool-protocol.js';
 import { defaultCompactionPolicy, saveCompactionPolicy } from '../../shared/compaction/index.js';
 import { createMeetingSession } from './meeting-session.js';
-import { meetingCompactionTransform } from './meeting-context-compaction.js';
+import { compactMeetingManually, meetingCompactionTransform } from './meeting-context-compaction.js';
 import { meetingContextMessages } from './meeting-compaction-context.js';
 
 async function fixture(t: test.TestContext, onSummary?: () => void) {
@@ -60,6 +60,22 @@ function assertPaired(messages: readonly ContextMessage[], native: boolean) {
   assert.equal(pending.size, 0, 'compaction never exposes an incomplete tool pair');
 }
 
+test('manual meeting compaction retains sparse human directions without restoring summarized public tools', async t => {
+  const { dataDir, session } = await fixture(t);
+  session.streamingCurrent = undefined;
+  session.publicMessages = Array.from({ length: 4 }, (_, index) => [
+    { speaker: '人类', content: `近期约束-${index}`, timestamp: index * 2 },
+    { speaker: 'Writer', content: `执行${index}:${'原'.repeat(12_000)}`, timestamp: index * 2 + 1,
+      toolCalls: [{ tool: 'read_file', args: {}, result: `已执行证据-${index}` }] },
+  ]).flat();
+  const source = [...session.publicMessages];
+  await compactMeetingManually(dataDir, session);
+  assert.ok(session.publicMessages.some(record => record.content === '近期约束-1'));
+  assert.ok(!session.publicMessages.some(record => record.toolCalls?.some(tool => tool.result === '已执行证据-1')));
+  assert.ok(session.publicMessages.some(record => record.toolCalls?.some(tool => tool.result === '已执行证据-3')));
+  assert.deepEqual(session.publicDisplayHistory?.slice(0, source.length), source);
+});
+
 for (const native of [true, false]) {
   test(`one ${native ? 'native' : 'text'} participant turn can compact repeatedly without replaying tools`, async t => {
     const { dataDir, session, messages, summaries } = await fixture(t);
@@ -88,8 +104,10 @@ for (const native of [true, false]) {
     assert.deepEqual(executed, Array.from({ length: 12 }, (_, index) => index + 1));
     assert.ok(summaries() >= 2, 'the same turn completes multiple successful compactions');
     assert.equal(session.streamingCurrent?.compactions?.length, summaries());
-    assert.deepEqual(session.publicMessages, originalPublic, 'tool facts do not become fictitious public statements');
-    assert.equal(session.publicDisplayHistory, undefined);
+    assert.deepEqual(session.publicDisplayHistory, originalPublic, 'people retain the original public transcript');
+    assert.ok(session.publicMessages.every(message => message.speaker === '系统' || message.speaker === '人类'),
+      'participant tool facts never become fictitious public statements');
+    assert.ok(session.publicMessages.some(message => message.speaker === '系统' && message.content.includes('交接')));
     const files = await fs.readdir(path.join(dataDir, 'tradewind', 'compaction', 'meetings'));
     const checkpoints = files.filter(file => file.endsWith('-participant-active.json'));
     assert.equal(checkpoints.length, summaries(), 'each successful boundary has a durable exact model checkpoint');

@@ -40,10 +40,20 @@ export function retainedCycloneMessages<T>(messages: readonly T[], result: Cyclo
 /** Public observations remain in the exact model context, never become private chat bubbles. */
 export function retainedCyclonePrivateMessages<T>(messages: readonly T[], context: readonly ContextMessage[],
   result: CycloneContextSummary): T[] {
-  const retained = new Set(retainedCycloneMessages(context, result).map(message => JSON.stringify(message)));
-  let start = messages.length;
-  while (start > 0 && retained.has(JSON.stringify(messages[start - 1]))) start--;
-  return messages.slice(start);
+  retainedCycloneMessages(context, result);
+  const retained = new Set(result.retainedIndexes);
+  const selected: T[] = [];
+  let cursor = context.length - 1;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const record = JSON.stringify(messages[index]);
+    let match = cursor;
+    while (match >= 0 && JSON.stringify(context[match]) !== record) match--;
+    if (match < 0) continue;
+    cursor = match;
+    if (retained.has(cursor)) selected.unshift(messages[index]);
+    cursor--;
+  }
+  return selected;
 }
 
 export function toCycloneSummaryMessages(messages: Array<{

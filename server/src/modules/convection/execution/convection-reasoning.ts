@@ -13,6 +13,7 @@ export function buildConvectionMessage(args: BuildConvectionMessageArgs): Convec
     ...(args.agentId ? { agentId: args.agentId } : {}),
     speaker: args.speaker,
     content: args.content,
+    ...(typeof args.modelContent === 'string' ? { modelContent: args.modelContent } : {}),
     timestamp: args.timestamp,
     ...(args.rawContent ? { rawContent: args.rawContent } : {}),
     ...(args.reasoning ? { reasoning: args.reasoning } : {}),

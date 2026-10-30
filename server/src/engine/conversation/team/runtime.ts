@@ -59,9 +59,13 @@ export class TeamRuntime {
     let outcome: 'completed' | 'failed' | 'aborted' = 'completed';
     let observations = Promise.resolve();
     const observe = (event: ConversationEvent) => {
-      if (!['tool-call', 'tool-result', 'model-request'].includes(event.type)) return;
+      if (!['tool-call', 'tool-result', 'model-request', 'compact-start', 'compact-done', 'compact-failed'].includes(event.type)) return;
+      if (event.type === 'model-request' && event.request.state !== 'prepared') return;
+      const phase = event.type === 'tool-call' ? 'tool-exec' : event.type === 'tool-result' ? 'tool-completed'
+        : event.type === 'compact-start' || (event.type === 'model-request' && event.request.purpose === 'compaction')
+          ? 'compacting' : event.type === 'compact-failed' ? 'compaction-failed' : 'model';
       observations = observations.then(() => this.store.activity(memberId, runId,
-        event.type === 'tool-call' ? 'tool-exec' : event.type === 'tool-result' ? 'tool-completed' : 'model',
+        phase,
         'tool' in event ? event.tool : undefined, event.type === 'tool-result' ? event.result : undefined));
       void observations.catch(() => {});
     };

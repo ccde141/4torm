@@ -247,9 +247,8 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
     }
     if (parsed.kind === 'final') {
       tokenGate.finish(true);
-      if (params.retainBeforeFinish) {
-        params.messages.push({ role: 'assistant', content: parsed.content });
-      }
+      // A complete text response is already in messages before the final/tool branch.
+      // Completion hooks must observe that same record instead of appending a second copy.
       if (params.beforeFinish) {
         const notices = await params.beforeFinish();
         if (params.signal?.aborted) return { content: '[Interrupted]', rawContent: '', toolCalls,
@@ -259,7 +258,6 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
           continue;
         }
       }
-      if (params.retainFinalContext && !params.retainBeforeFinish) params.messages.push({ role: 'assistant', content: parsed.content });
       return { content: parsed.content, rawContent: reply, toolCalls, turns: turn + 1, usage, termination: succeededTermination() };
     }
     tokenGate.finish(false);

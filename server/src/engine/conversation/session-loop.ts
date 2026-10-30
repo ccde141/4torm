@@ -119,7 +119,13 @@ function createLlmCaller(
     if (!signal?.aborted) { await handoff?.inContext(input.inputRuntime?.owner.runId); await internal?.commit(); }
     await caller.prepare?.(msgs, options, signal, tools);
     await input.observeContext?.update(msgs, opts.native ? toolDefs : []);
-  }, recover: caller.recover?.bind(caller), async call(...args) {
+  }, recover: caller.recover && (async (error, messages, signal) => {
+    const recovered = await caller.recover!(error, messages, signal);
+    if (recovered && !signal?.aborted) {
+      await input.observeContext?.update(messages, opts.native ? toolDefs : []);
+    }
+    return recovered;
+  }), async call(...args) {
     const result = await caller.call(...args);
     await input.observeContext?.update(args[0], opts.native ? toolDefs : [],
       { role: 'assistant', content: result.content,

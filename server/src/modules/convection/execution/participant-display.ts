@@ -11,6 +11,7 @@ export class ConvectionParticipantDisplay {
   private readonly recordId = randomUUID();
   private readonly timestamp = Date.now();
   private readonly tools: NonNullable<ConvectionMessage['toolCalls']> = [];
+  private modelContent?: string;
 
   constructor(private readonly agent: { id: string; name: string }, private readonly runId?: string) {}
 
@@ -31,19 +32,22 @@ export class ConvectionParticipantDisplay {
       reasoningOffset: this.reasoning.length };
   }
 
-  snapshot(compaction?: { id: string; summary: string }): ConvectionMessage {
+  snapshot(compaction?: { id: string; summary: string }, modelContent = this.modelContent): ConvectionMessage {
+    this.modelContent = modelContent;
     const compactions = compaction && !this.compactions.some(item => item.id === compaction.id)
       ? [...this.compactions, this.boundary(compaction)] : this.compactions;
     return { recordId: this.recordId, agentId: this.agent.id, speaker: this.agent.name,
       content: this.content, displayContent: this.content, reasoning: this.reasoning,
+      ...(typeof modelContent === 'string' ? { modelContent } : {}),
       timestamp: this.timestamp, ...(this.runId ? { runId: this.runId } : {}),
       toolCalls: structuredClone(this.tools),
       ...(compactions.length ? { compactions: structuredClone(compactions) } : {}), execution: { status: 'running' } };
   }
 
-  async preserve(dataDir: string, session: ConvectionSessionData, error?: unknown, stopped = false): Promise<void> {
+  async preserve(dataDir: string, session: ConvectionSessionData, error?: unknown, stopped = false,
+    modelContent?: string): Promise<void> {
     if (!this.content && !this.reasoning && !this.tools.length && !this.compactions.length) return;
-    const draft = this.snapshot();
+    const draft = this.snapshot(undefined, modelContent);
     draft.execution = { status: stopped ? 'stopped' : 'failed',
       ...(error !== undefined ? { message: frameworkTransportErrorFromUnknown(error, 'convection.participant').message } : {}) };
     const next = { ...session, publicExecutionDraft: undefined,

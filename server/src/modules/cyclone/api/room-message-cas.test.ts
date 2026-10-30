@@ -8,6 +8,7 @@ import { COLLABORATION_PERMISSIONS, type CollaborationContext } from '../../../e
 import { loadRoom, saveRoom } from '../../../engine/cyclone/room-store.js';
 import type { RoomMessage } from '../../../engine/cyclone/types.js';
 import { createCycloneFeature } from './factory.js';
+import { cycloneMeetingContext } from '../../../engine/cyclone/meeting-compaction-caller.js';
 
 const human: CollaborationContext = {
   actor: { type: 'human', id: 'local-human', actingAs: 'human' },
@@ -43,6 +44,22 @@ function hasCode(code: string, kind: string) {
     return true;
   };
 }
+
+test('editing a compacted participant delivery replaces its active model wording and keeps the display tools', async t => {
+  const original: RoomMessage = { ...message('Original display body', 1, 'compacted-message'), speaker: 'Writer',
+    modelContent: 'Previous active projection',
+    toolCalls: [{ tool: 'read', args: {}, result: 'Old display-only tool result' }] };
+  const { invoke, read } = await fixture(t, [original]);
+  await invoke('editRoomMessage', { index: 0, content: 'Human revised delivery', expectedMessage: {
+    id: original.id, speaker: original.speaker, timestamp: original.timestamp, content: original.content,
+  } });
+  const saved = await read();
+  assert.equal(saved[0].modelContent, 'Human revised delivery');
+  assert.deepEqual(saved[0].toolCalls, original.toolCalls);
+  const active = JSON.stringify(cycloneMeetingContext(saved));
+  assert.match(active, /Human revised delivery/);
+  assert.doesNotMatch(active, /Previous active projection|Old display-only tool result/);
+});
 
 test('消息 index 因前一条被删而漂移时，带 id 的删除与无 id 的编辑都拒绝', async t => {
   const withIds = await fixture(t, [message('甲', 1, 'msg-a'), message('乙', 2, 'msg-b'), message('丙', 3, 'msg-c')]);

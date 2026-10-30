@@ -12,6 +12,8 @@ A place may also give an agent a task-specific role or shared directory. A Cyclo
 
 Monsoon team members are different: the main agent creates them for the current conversation, and they do not appear in the console's agent list. A member has its own conversation context and can receive further assignments. The main agent must supply the necessary background and check and integrate the member's reports.
 
+An ordinary SubAgent handles one independent delegation, with a default and maximum budget of 300 rounds and 120 minutes per delegation. Monsoon team members can continue receiving assignments and do not use this delegation budget. Both can compact context during long tasks and continue execution after successful compaction.
+
 ## Tools, Skills, and MCP
 
 **Tools** let an agent read information, modify files, run commands, and collaborate. You can choose which tools to enable for an agent in the console.

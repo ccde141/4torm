@@ -37,6 +37,7 @@ import type { TokenUsageProgress } from './token-usage.js';
 import { captureTokenUsage } from './token-usage.js';
 import { callPreparedModel } from '../../shared/react/model-call.js';
 import { meetingContextMessages } from './meeting-compaction-context.js';
+import { meetingParticipantModelContext } from './meeting-participant-context.js';
 import { meetingCompactionTransform, meetingOpeningCaller } from './meeting-context-compaction.js';
 import { buildChairContext, captureChairContextBoundary, chairCompactionCaller, finishChairContext } from './chair-context-compaction.js';
 import { buildVirtualToolDefs } from './virtual-tools';
@@ -83,7 +84,7 @@ export type MeetingStreamEvent =
 function formatPublicContext(session: MeetingSessionData): string {
   if (session.publicMessages.length === 0) return '（暂无发言）';
   return session.publicMessages
-    .map(m => `[${m.speaker}] ${m.content}`)
+    .map(m => `[${m.speaker}] ${typeof m.modelContent === 'string' ? m.modelContent : m.content}`)
     .join('\n\n');
 }
 
@@ -216,6 +217,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
   session.round++;
   session.busy = true;
   let lastPromptTokens: number | undefined;
+  let participantContext: Pick<ReturnType<typeof meetingParticipantModelContext>, 'project'> = { project: () => undefined };
 
   try {
     for (const participant of session.participants) {
@@ -226,6 +228,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
 
       const label = participant.label;
       session.streamingCurrent = { speaker: label, content: '', reasoning: '' };
+      participantContext = { project: () => undefined };
       onEvent?.({ type: 'agent-start', label });
 
       const toolDefs = await loadAgentToolDefs(dataDir, agent.tools, agent.skills, agent.toolMode);
@@ -257,7 +260,11 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         ...meetingContextMessages(session.publicMessages),
       ];
       const compact = await meetingCompactionTransform(dataDir, session, agent.model);
-      const llmTransform = compact;
+      const llmTransform = (llm: SharedLLMCaller) => {
+        const context = meetingParticipantModelContext(compact(llm), messages, () => session.publicMessages.length);
+        participantContext = context;
+        return context.llm;
+      };
 
       // toolCaller：双路径共用，contact 路由不变
       //
@@ -416,6 +423,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
       const streamedContent = session.streamingCurrent?.content?.trim() || '';
       const reasoning = session.streamingCurrent?.reasoning || undefined;
       const compactions = session.streamingCurrent?.compactions;
+      const modelContent = participantContext?.project(!!compactions?.length);
       const rawContent = compactions?.length ? session.streamingCurrent?.content : result.rawContent;
       const finalContent = (aborted ? streamedContent : result.content).trim();
 
@@ -428,8 +436,14 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
           rawContent: rawContent || undefined,
           reasoning,
           ...(compactions?.length ? { compactions } : {}),
+          ...(typeof modelContent === 'string' ? { modelContent } : {}),
+          ...(aborted ? { executionStatus: 'stopped' as const } : {}),
           toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
         });
+      } else if (aborted && compactions?.length) {
+        session.publicMessages.push({ speaker: label, content: '（执行已停止）', timestamp: Date.now(),
+          executionStatus: 'stopped', rawContent: rawContent || undefined, reasoning,
+          modelContent, compactions, toolCalls: result.toolCalls.length ? result.toolCalls : undefined });
       } else if (!aborted) {
         // 无有效回复：显式入库一条 noReply 消息（对齐信封轮的兜底做法）。
         // 让 round-done 权威快照带上它——既向用户呈现"未回复"，也让前端任何
@@ -443,6 +457,7 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
         });
       }
       session.streamingCurrent = undefined;
+      participantContext = { project: () => undefined };
       onEvent?.({ type: 'agent-done', label, content: finalContent, rawContent: result.rawContent, reasoning, toolCalls: result.toolCalls, noReply: !hasContent && !aborted });
 
       if (aborted) break;
@@ -451,6 +466,8 @@ export async function handleSpeak(opts: HandleSpeakOpts): Promise<number | undef
     const stream = session.streamingCurrent;
     if (stream?.compactions?.length) session.publicMessages.push({ speaker: stream.speaker,
       content: stream.content || '（执行已停止）', rawContent: stream.content, reasoning: stream.reasoning,
+      modelContent: participantContext?.project(true) ?? stream.modelContent,
+      executionStatus: signal?.aborted ? 'stopped' : 'failed',
       toolCalls: stream.toolCalls, compactions: stream.compactions, timestamp: Date.now() });
     session.busy = false;
     session.streamingCurrent = undefined;

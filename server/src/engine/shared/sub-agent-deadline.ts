@@ -1,6 +1,6 @@
 import type { SubAgentEvent, SubAgentResult } from './sub-agent-types.js';
 
-export const SUB_AGENT_MAX_DURATION_MS = 60 * 60 * 1000;
+export const SUB_AGENT_MAX_DURATION_MS = 120 * 60 * 1000;
 
 interface DeadlineOptions {
   signal: AbortSignal;

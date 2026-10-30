@@ -154,6 +154,8 @@ export interface RoomMessage {
   /** 发言者显示名（工位 title 或「人类」） */
   speaker: string;
   content: string;
+  /** Active participant context after in-loop compaction; display content and tools stay intact. */
+  modelContent?: string;
   timestamp: number;
   /** 工位回复的原始 LLM 输出（含标签），前端解析渲染用 */
   rawContent?: string;

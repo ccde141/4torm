@@ -7,6 +7,7 @@ import test from 'node:test';
 import { runSubAgent as runShared } from './sub-agent-runner.js';
 import { runSubAgent as runTradewind } from '../tradewind/execution/sub-agent-runner.js';
 import { resolveToolTransportContract } from '../../model-runtime/config/tool-transport-contract.js';
+import { SUB_AGENT_MAX_ROUNDS } from './sub-agent-budget.js';
 import type { SubAgentEvent } from './sub-agent-types.js';
 
 async function fixture(t: test.TestContext, native: boolean, hold: boolean, repeat = false) {
@@ -19,7 +20,7 @@ async function fixture(t: test.TestContext, native: boolean, hold: boolean, repe
     calls++;
     response.once('close', closed);
     if (hold) return;
-    const name = repeat && calls <= 220 ? 'unavailable_tool' : 'done';
+    const name = repeat && calls <= SUB_AGENT_MAX_ROUNDS + 20 ? 'unavailable_tool' : 'done';
     const args = name === 'done' ? { summary: 'delegated task completed' } : {};
     const delta = native ? { tool_calls: [{ index: 0, id: `call-${calls}`, type: 'function',
       function: { name, arguments: JSON.stringify(args) } }] }
@@ -53,10 +54,10 @@ async function fixture(t: test.TestContext, native: boolean, hold: boolean, repe
 
 for (const [name, run] of [['shared', runShared], ['tradewind', runTradewind]] as const) {
   for (const native of [true, false]) {
-    test(`${name} ${native ? 'native' : 'text'} delegation cannot exceed two hundred turns`, async t => {
+    test(`${name} ${native ? 'native' : 'text'} delegation cannot exceed three hundred turns`, async t => {
       const f = await fixture(t, native, false, true);
       const result = await run({ ...f.params, maxRounds: 1_000 });
-      assert.equal(f.calls(), 200);
+      assert.equal(f.calls(), 300);
       assert.equal(result.status, 'timeout');
       assert.equal(f.events.filter(event => event.type === 'done' || event.type === 'error').length, 1);
     });

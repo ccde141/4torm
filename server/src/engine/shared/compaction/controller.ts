@@ -27,8 +27,10 @@ export async function compactMessages(options: CompactMessagesOptions): Promise<
       recentHumanTurns: options.recentHumanTurns ?? (options.kind === 'meeting' ? 3 : 4),
       prefixRatio: options.reason === 'provider-overflow' ? 2 / 3 : policy.prefixRatio });
     if (!split) return null;
+    const retained = (split.retainedIndexes ?? split.tail.map((_, index) => source.length - split.tail.length + index))
+      .map(index => source[index]);
     const keep = [...source.slice(0, split.protected.length),
-      ...source.slice(source.length - split.tail.length)];
+      ...retained];
     const releasedTokens = estimateCompactionTokens(source) - estimateCompactionTokens(keep);
     if (options.reason === 'threshold' && !options.signal?.aborted
       && releasedTokens <= estimateCompactionTokens([{ role: 'system', content: '[历史压缩记录]\n' }])) return null;
@@ -45,7 +47,7 @@ export async function compactMessages(options: CompactMessagesOptions): Promise<
       await options.archive?.(structuredClone(split.before), options.reason);
       signal?.throwIfAborted();
       const summaryContext = options.summaryContext ?? { messages: split.protected };
-      const resumedKeep = [...summaryContext.messages, ...source.slice(source.length - split.tail.length)];
+      const resumedKeep = [...summaryContext.messages, ...retained];
       const requestOverheadTokens = Math.max(options.requestOverheadTokens ?? 0,
         estimateTextTokens(JSON.stringify(summaryContext.tools ?? [])));
       const summaryTokenBudget = await remainingSummaryBudget({ ...options, requestOverheadTokens }, resumedKeep);
@@ -57,11 +59,11 @@ export async function compactMessages(options: CompactMessagesOptions): Promise<
       // references must survive. Only the material sent to the summarizer is detached.
       const messages: ContextMessage[] = [...source.slice(0, split.protected.length),
         { role: 'system', content: `[历史压缩记录]\n${summary}` },
-        ...source.slice(source.length - split.tail.length)];
+        ...retained];
       if (estimateCompactionTokens(messages) >= estimateCompactionTokens(source)) {
         throw new CompactionNoGainError();
       }
-      plan = { ...split, summary, messages,
+      plan = { ...split, tail: retained, summary, messages,
         mode: options.mode, reason: options.reason };
       await options.commit?.(plan, signal);
     } catch (error) {

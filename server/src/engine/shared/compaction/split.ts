@@ -1,9 +1,10 @@
 import type { ContextMessage } from '../types.js';
 import type { CompactionMode } from './contracts.js';
-import { estimateCompactionTokens, estimateMessageTokens } from './estimate.js';
+import { compactionTokenCounter, estimateCompactionTokens, type CompactionTokenCounter } from './estimate.js';
 import { parseTextToolResponse, parseTextToolResult } from '../text-tool-protocol.js';
 import { isHumanContextMessage } from '../context-origin.js';
-import { recentContextStart } from './recent-context.js';
+import { RECENT_CONTEXT_TOKENS, recentContextPreference,
+  type CompletedHumanToolGroup } from './recent-context.js';
 
 export interface CompactionSplitOptions {
   mode: CompactionMode;
@@ -17,6 +18,8 @@ export interface CompactionSplit {
   protected: ContextMessage[];
   prefix: ContextMessage[];
   tail: ContextMessage[];
+  /** Original indexes of the retained human wording and contiguous recent suffix. */
+  retainedIndexes?: number[];
   sourceTokens: number;
 }
 
@@ -25,19 +28,40 @@ export function splitCompactionMessages(
   messages: readonly ContextMessage[], options: CompactionSplitOptions,
 ): CompactionSplit | null {
   const start = protectedCount(messages, options.protectedPrefixCount);
-  const recentStart = recentContextStart(messages, start, options.recentHumanTurns ?? 4);
-  const candidates = safeBoundaries(messages, start, options).filter(end => end <= recentStart);
+  const permitted = options.boundaries ? new Set(options.boundaries(messages)) : null;
+  const { boundaries: safe, humanToolGroups } = safeBoundaries(messages, start, permitted);
+  if (!safe.length) return null;
+  const countTokens = compactionTokenCounter(messages);
+  const recent = recentContextPreference(messages, start, options.recentHumanTurns ?? 4, safe.at(-1)!, humanToolGroups);
+  const retention = retentionBoundary(start, safe, permitted, recent.start,
+    compactionTokenCounter(messages, recent.retainedIndexes));
+  const candidates = safe.filter(end => end <= retention.end
+    && (retention.expanded || !permitted || permitted.has(end)));
   if (!candidates.length) return null;
   const history = messages.slice(start);
   const sourceTokens = estimateCompactionTokens(history);
   const target = sourceTokens * options.prefixRatio;
   const end = options.mode === 'full' ? candidates.at(-1)!
-    : nearestBoundary(messages, start, candidates, target);
+    : nearestBoundary(start, candidates, target, countTokens);
   if (end <= start) return null;
+  const retainedIndexes = [...recent.retainedIndexes.filter(index => index < end),
+    ...Array.from({ length: messages.length - end }, (_, index) => end + index)];
   // Rewriting only an existing handoff adds no newly completed work to the summary.
-  if (messages.slice(start, end).every(message => message.role === 'system')) return null;
+  const retained = new Set(retainedIndexes);
+  if (messages.slice(start, end).every((message, index) => message.role === 'system'
+    || retained.has(start + index))) return null;
   return { before: [...messages], protected: messages.slice(0, start),
-    prefix: messages.slice(start, end), tail: messages.slice(end), sourceTokens };
+    prefix: messages.slice(start, end), tail: retainedIndexes.map(index => messages[index]),
+    retainedIndexes, sourceTokens };
+}
+
+function retentionBoundary(start: number, safe: number[], permitted: Set<number> | null,
+  recentStart: number, countTokens: CompactionTokenCounter): { end: number; expanded: boolean } {
+  const fits = (end: number) => countTokens(end) <= RECENT_CONTEXT_TOKENS;
+  if (recentStart === start && fits(start)) return { end: start, expanded: false };
+  const completeRounds = safe.filter(end => end <= recentStart && (!permitted || permitted.has(end)) && fits(end));
+  if (completeRounds.length) return { end: completeRounds.at(-1)!, expanded: false };
+  return { end: safe.find(end => end >= recentStart && fits(end)) ?? safe.at(-1)!, expanded: true };
 }
 
 function protectedCount(messages: readonly ContextMessage[], explicit?: number): number {
@@ -46,30 +70,43 @@ function protectedCount(messages: readonly ContextMessage[], explicit?: number):
   return first < 0 ? messages.length : first;
 }
 
-function safeBoundaries(messages: readonly ContextMessage[], start: number, opts: CompactionSplitOptions): number[] {
-  const permitted = opts.boundaries ? new Set(opts.boundaries(messages)) : null;
+function safeBoundaries(messages: readonly ContextMessage[], start: number, permitted: Set<number> | null): {
+  boundaries: number[]; humanToolGroups: Map<number, CompletedHumanToolGroup>;
+} {
+  const completedEnd = permitted ? Math.max(start, ...permitted) : messages.length;
   const pending = new Set<string>();
   const result: number[] = [];
-  for (let index = start; index < messages.length; index++) {
+  const humanToolGroups = new Map<number, CompletedHumanToolGroup>();
+  let groupStart = -1;
+  let humanResults: number[] = [];
+  for (let index = start; index < Math.min(messages.length, completedEnd); index++) {
     const message = messages[index];
+    const textResult = message.role === 'user' ? parseTextToolResult(message.content) : null;
+    const matchedResult = (message.role === 'tool' && message.toolCallId && pending.has(message.toolCallId))
+      || (textResult && pending.has(`text:${textResult.name}`));
     for (const call of message.toolCalls ?? []) pending.add(call.id);
     if (message.role === 'tool' && message.toolCallId) pending.delete(message.toolCallId);
     updateTextPending(message, pending);
     const end = index + 1;
-    if (pending.size || (permitted && !permitted.has(end))) continue;
+    if (groupStart < 0 && pending.size) groupStart = index;
+    if (matchedResult && isHumanContextMessage(message)) humanResults.push(index);
+    if (groupStart >= 0 && !pending.size) {
+      const group = { start: groupStart, end };
+      for (const humanIndex of humanResults) humanToolGroups.set(humanIndex, group);
+      groupStart = -1; humanResults = [];
+    }
+    if (pending.size) continue;
     const turnEnds = end === messages.length || isHumanTurnStart(messages[end])
       || completedWorkBoundary(message, messages[end]);
-    if (!permitted && !turnEnds) continue;
-    if (opts.mode === 'partial' && end === messages.length) continue;
+    if (!turnEnds && !permitted?.has(end)) continue;
     result.push(end);
   }
-  return result;
+  return { boundaries: result, humanToolGroups };
 }
 
 function completedWorkBoundary(message: ContextMessage, next: ContextMessage | undefined): boolean {
   if (!next || /^(?:\[System: continuation|【系统：续写指令)/.test(next.content.trim())) return false;
-  return message.role === 'tool' || (message.role === 'user' && !!parseTextToolResult(message.content))
-    || (message.role === 'user' && !isHumanContextMessage(message))
+  return message.role === 'tool' || message.role === 'user'
     || (message.role === 'assistant' && !message.toolCalls?.length
       && parseTextToolResponse(message.content).kind === 'final');
 }
@@ -89,14 +126,11 @@ function isHumanTurnStart(message: ContextMessage | undefined): boolean {
   return !!message && isHumanContextMessage(message);
 }
 
-function nearestBoundary(messages: readonly ContextMessage[], start: number, candidates: number[], target: number): number {
+function nearestBoundary(start: number, candidates: number[], target: number, countTokens: CompactionTokenCounter): number {
   let chosen = candidates[0];
   let distance = Infinity;
-  let cursor = start;
-  let prefixTokens = 0;
   for (const candidate of candidates) {
-    while (cursor < candidate) prefixTokens += estimateMessageTokens(messages[cursor++]);
-    const current = Math.abs(prefixTokens - target);
+    const current = Math.abs(countTokens(start, candidate) - target);
     if (current < distance) { distance = current; chosen = candidate; }
   }
   return chosen;

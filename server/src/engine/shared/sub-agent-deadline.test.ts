@@ -5,7 +5,7 @@ import { SUB_AGENT_MAX_DURATION_MS, withSubAgentDeadline } from './sub-agent-dea
 import type { SubAgentEvent, SubAgentResult } from './sub-agent-types.js';
 
 for (const requested of [undefined, SUB_AGENT_MAX_DURATION_MS * 2]) {
-  test(`SubAgent total deadline is capped at sixty minutes: ${requested ?? 'default'}`, async t => {
+  test(`SubAgent total deadline is capped at two hours: ${requested ?? 'default'}`, async t => {
     t.mock.timers.enable({ apis: ['setTimeout'] });
     const parent = new AbortController();
     const events: SubAgentEvent[] = [];
@@ -16,7 +16,7 @@ for (const requested of [undefined, SUB_AGENT_MAX_DURATION_MS * 2]) {
       emit({ type: 'tool_call', data: { tool: 'read_file', args: {} } });
       return new Promise<SubAgentResult>(() => {});
     });
-    assert.equal(SUB_AGENT_MAX_DURATION_MS, 3_600_000);
+    assert.equal(SUB_AGENT_MAX_DURATION_MS, 7_200_000);
     t.mock.timers.tick(SUB_AGENT_MAX_DURATION_MS - 1);
     assert.equal(signal.aborted, false);
     t.mock.timers.tick(1);

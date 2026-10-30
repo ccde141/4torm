@@ -84,6 +84,8 @@ export interface ConvectionMessage {
   agentId?: string;
   speaker: string;
   content: string;
+  /** Effective model continuation after compaction; display evidence remains independent. */
+  modelContent?: string;
   timestamp: number;
   /** Agent 回复的原始 LLM 输出（含标签），前端解析渲染用 */
   rawContent?: string;

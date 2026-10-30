@@ -55,5 +55,6 @@ export function convectionChairBoundaries(messages: readonly ContextMessage[]): 
 }
 
 function recordHash(message: ConvectionMessage): string {
-  return createHash('sha256').update(`${message.speaker}\n${message.content}`).digest('hex');
+  return createHash('sha256').update(`${message.speaker}\n${message.content}`
+    + (typeof message.modelContent === 'string' ? `\n${message.modelContent}` : '')).digest('hex');
 }

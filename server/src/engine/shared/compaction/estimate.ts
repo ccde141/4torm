@@ -6,6 +6,32 @@ export function estimateCompactionTokens(messages: readonly ContextMessage[]): n
   const total = messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
   const toolImages = messages.reduce((sum, message) =>
     sum + Math.min(message.toolImages?.length ?? 0, MAX_MODEL_TOOL_IMAGES), 0);
+  return countedTokens(total, toolImages);
+}
+
+export type CompactionTokenCounter = (start: number, end?: number) => number;
+
+/** Precompute ranges plus selected original records, using the same global image allowance. */
+export function compactionTokenCounter(
+  messages: readonly ContextMessage[], retainedIndexes: readonly number[] = [],
+): CompactionTokenCounter {
+  const totals = [0], imageCounts = [0], retainedTotals = [0], retainedImages = [0];
+  const retained = new Set(retainedIndexes);
+  messages.forEach((message, index) => {
+    const tokens = estimateMessageTokens(message);
+    const images = Math.min(message.toolImages?.length ?? 0, MAX_MODEL_TOOL_IMAGES);
+    totals.push(totals[index] + tokens);
+    imageCounts.push(imageCounts[index] + images);
+    retainedTotals.push(retainedTotals[index] + (retained.has(index) ? tokens : 0));
+    retainedImages.push(retainedImages[index] + (retained.has(index) ? images : 0));
+  });
+  return (start, end = messages.length) => countedTokens(
+    totals[end] - totals[start] + retainedTotals[start] + retainedTotals.at(-1)! - retainedTotals[end],
+    imageCounts[end] - imageCounts[start] + retainedImages[start] + retainedImages.at(-1)! - retainedImages[end],
+  );
+}
+
+function countedTokens(total: number, toolImages: number): number {
   return total - Math.max(0, toolImages - MAX_MODEL_TOOL_IMAGES) * 1_000;
 }
 

@@ -1,7 +1,7 @@
 import { compactMessages, splitCompactionMessages } from '../../../engine/shared/compaction/index.js';
 import { saveSession, type ConvectionSessionData, type ConvectionMessage } from '../infrastructure/session-store.js';
 import { loadAgent } from '../../../engine/shared/agent-loader.js';
-import { convectionContext, convectionRecordText } from '../execution/compaction-context.js';
+import { convectionContext, convectionRecordText, retainedConvectionRecords } from '../execution/compaction-context.js';
 import { buildConvectionChairMessages } from '../execution/request-context.js';
 
 export interface ConvectionSummary {
@@ -13,7 +13,7 @@ export function retainedConvectionMessages(messages: readonly ConvectionMessage[
   const plan = splitCompactionMessages(convectionContext(messages), {
     mode: 'full', prefixRatio: 1, protectedPrefixCount: 0, recentHumanTurns: 3,
   });
-  return plan ? messages.slice(messages.length - plan.tail.length) : [...messages];
+  return plan ? retainedConvectionRecords(messages, plan) : [...messages];
 }
 
 export async function summarizeConvectionSession(
@@ -38,6 +38,5 @@ export async function summarizeConvectionSession(
     },
   });
   if (!plan) throw new Error('没有可压缩的会议记录');
-  return { summary: plan.summary,
-    retained: session.publicMessages.slice(plan.before.length - plan.tail.length) };
+  return { summary: plan.summary, retained: retainedConvectionRecords(session.publicMessages, plan) };
 }

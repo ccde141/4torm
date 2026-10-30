@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ContextMessage, RoomData, RoomMessage } from './types.js';
+import { roomRecordText } from './room-context.js';
 
 /** A chair observes this room's complete history; only identity remains protected. */
 export function buildCycloneChairContext(room: RoomData, system: ContextMessage): ContextMessage[] {
@@ -11,8 +12,7 @@ export function buildCycloneChairContext(room: RoomData, system: ContextMessage)
   return [system, ...(active ? room.chairActiveContext! : []),
     ...room.publicMessages.slice(active ? seen + 1 : 0).map(message => ({ role: 'user' as const,
       origin: message.speaker === '人类' ? 'human' as const : 'framework' as const,
-      content: `[公共会议：${message.speaker}] ${message.content}${message.toolCalls?.length
-        ? `\n[工具执行事实]\n${JSON.stringify(message.toolCalls)}` : ''}` })),
+      content: `[公共会议：${message.speaker}] ${roomRecordText(message, true)}` })),
     ...(room.chairMessages ?? []).slice(active ? room.chairContextRawCount ?? 0 : 0)
       .map(message => ({ ...message }))];
 }
@@ -51,5 +51,6 @@ export function cycloneChairBoundaries(messages: readonly ContextMessage[]): num
 }
 
 function recordHash(message: RoomMessage): string {
-  return createHash('sha256').update(JSON.stringify([message.speaker, message.content, message.toolCalls])).digest('hex');
+  return createHash('sha256').update(JSON.stringify([message.speaker, message.content, message.toolCalls,
+    ...(typeof message.modelContent === 'string' ? [message.modelContent] : [])])).digest('hex');
 }

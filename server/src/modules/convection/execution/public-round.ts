@@ -16,6 +16,7 @@ import { recordPublicUsage } from './session-view.js';
 import type { ConvectionEventSink } from './stream-events.js';
 import { withConvectionModelUsage } from './model-usage.js';
 import { ConvectionParticipantDisplay } from './participant-display.js';
+import { convectionParticipantModelContext } from './participant-model-context.js';
 
 export async function handleSpeak(
   dataDir: string,
@@ -81,7 +82,7 @@ async function executeParticipant(context: SequenceContext, agentId: string): Pr
     runParticipantModel(dataDir, session, agent, native, emit, signal, context.runId)
   ));
   persistParticipantResult(session, agent, execution.result, execution.reasoning, emit, context.runId,
-    execution.compactions, execution.displayContent);
+    execution.compactions, execution.displayContent, execution.modelContent);
 }
 
 async function runParticipantModel(
@@ -93,7 +94,7 @@ async function runParticipantModel(
   signal?: AbortSignal,
   runId?: string,
 ): Promise<{ result: AgentReActResult; reasoning: string;
-  compactions: NonNullable<ConvectionMessage['compactions']>; displayContent: string }> {
+  compactions: NonNullable<ConvectionMessage['compactions']>; displayContent: string; modelContent?: string }> {
   const display = new ConvectionParticipantDisplay(agent, runId);
   const compactionEvents: ConvectionEventSink = event => {
     if (event.type === 'compact-done' && event.summary) {
@@ -112,12 +113,14 @@ async function runParticipantModel(
   };
   const built = await buildAgentMessages(dataDir, session, agent, native);
   const chair = await loadRequiredAgent(dataDir, session.chairAgentId);
+  const projection = convectionParticipantModelContext(createConvectionCompactionCaller({ dataDir, session, agent, chair,
+    messages: built.messages, kind: 'public', emit: compactionEvents,
+    displayDraft: (compaction, modelContent) => display.snapshot(compaction, modelContent) }),
+    built.messages, () => session.publicMessages.length);
   const common = { dataDir, model: built.agent.model, temperature: built.agent.temperature,
     agentId: agent.id, sessionId: session.id, label: built.agent.name,
     messages: built.messages, onEvent: forward, signal,
-    llm: createConvectionCompactionCaller({ dataDir, session, agent, chair,
-      messages: built.messages, kind: 'public', emit: compactionEvents,
-      displayDraft: compaction => display.snapshot(compaction) }),
+    llm: projection.llm,
     onUsage: async (usage: import('../../../engine/shared/llm-bridge.js').TokenUsage | null) => {
       recordPublicUsage(session, usage);
       await saveSession(dataDir, session);
@@ -126,11 +129,13 @@ async function runParticipantModel(
     const result = native
       ? await runConvectionReActNative({ ...common, toolDefs: built.toolDefs })
       : await runConvectionReAct({ ...common, allowedTools: built.toolDefs.map(tool => tool.name) });
-    if (result.termination.status === 'aborted') await display.preserve(dataDir, session, undefined, true);
+    const modelContent = projection.project(display.compactions.length > 0);
+    if (result.termination.status === 'aborted') await display.preserve(dataDir, session, undefined, true, modelContent);
     else resolveConvectionContent(result.cleanContent, result.termination);
-    return { result, reasoning: display.reasoning, compactions: display.compactions, displayContent: display.content };
+    return { result, reasoning: display.reasoning, compactions: display.compactions,
+      displayContent: display.content, modelContent };
   } catch (error) {
-    await display.preserve(dataDir, session, error, signal?.aborted);
+    await display.preserve(dataDir, session, error, signal?.aborted, projection.project(display.compactions.length > 0));
     throw error;
   }
 }
@@ -161,7 +166,7 @@ function persistParticipantResult(
   reasoning: string,
   emit?: ConvectionEventSink,
   runId?: string,
-  compactions?: ConvectionMessage['compactions'], displayContent?: string,
+  compactions?: ConvectionMessage['compactions'], displayContent?: string, modelContent?: string,
 ): void {
   const content = resolveConvectionContent(result.cleanContent, result.termination);
   if (!content) return;
@@ -169,6 +174,7 @@ function persistParticipantResult(
   session.publicMessages.push({ ...buildConvectionMessage({
     agentId: agent.id, speaker: agent.name, content, timestamp: Date.now(),
     rawContent: result.rawContent || undefined, reasoning: reasoning || undefined,
+    ...(typeof modelContent === 'string' ? { modelContent } : {}),
     toolCalls: result.toolCalls,
     compactions, displayContent,
   }), ...(runId ? { runId } : {}) });

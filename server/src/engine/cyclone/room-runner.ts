@@ -53,6 +53,8 @@ import { createRoomCompactionCaller, cycloneMeetingContext } from './meeting-com
 import { throwForReActFailure, type ReActTermination } from '../shared/react/outcome.js';
 import { executeSeatFactTool, isSeatFactTool, withSeatFactTools } from './seat-fact-tools.js';
 import { withSeatContinuity } from './seat-continuity.js';
+import { serializeCompactionMessages } from '../shared/compaction/index.js';
+import { roomRecordText } from './room-context.js';
 
 /** 群聊执行事件 */
 export type RoomEvent = import('../shared/model-request-usage.js').ModelRequestUsageEvent
@@ -78,13 +80,14 @@ export type RoomEvent = import('../shared/model-request-usage.js').ModelRequestU
 function formatPublicContext(room: RoomData): string {
   if (room.publicMessages.length === 0) return '（暂无发言）';
   return '以下是群聊记录：\n\n' + room.publicMessages
-    .map(m => `[${m.speaker}] ${m.content}`)
+    .map(m => `[${m.speaker}] ${roomRecordText(m)}`)
     .join('\n\n');
 }
 
 interface RoomSeatResult {
   content: string;
   rawContent: string;
+  modelContent?: string;
   reasoning?: string;
   segments: RoomMessageSegment[];
   toolCalls: Array<{ tool: string; args: Record<string, unknown>; result: string }>;
@@ -242,12 +245,16 @@ async function runSeatInRoom(
   }), seatCollaborationPolicy(seat));
   const segmentCollector = createRoomMessageSegments();
   let reasoningAcc = '';
+  let pendingText = '';
   const emit = (event: RoomEvent) => {
-    if (event.type === 'token') segmentCollector.token(event.content);
-    if (event.type === 'tool-call') segmentCollector.toolCall(event.tool, event.args);
+    if (event.type === 'token') { segmentCollector.token(event.content); pendingText += event.content; }
+    if (event.type === 'tool-call') { segmentCollector.toolCall(event.tool, event.args); pendingText = ''; }
     if (event.type === 'tool-result') segmentCollector.toolResult(event.result, event.ok, event.toolImages);
     if (event.type === 'dispatch-created') segmentCollector.dispatch(event.dispatch.id);
-    if (event.type === 'compact-done' && event.summary) segmentCollector.compact(event.id, event.summary, reasoningAcc.length);
+    if (event.type === 'compact-done' && event.summary) {
+      segmentCollector.compact(event.id, event.summary, reasoningAcc.length);
+      pendingText = '';
+    }
     onEvent(event);
   };
   const toolCaller = makeRoomToolCaller({
@@ -270,13 +277,15 @@ async function runSeatInRoom(
   };
   const messages: ContextMessage[] = [system, ...cycloneMeetingContext(room.publicMessages)];
   const previousHistorySeen = seat.historySeen;
+  const model = withSeatContinuity(makeLLM(dataDir, agent.model, agent.temperature), seat, 'room');
   const llm = await createRoomCompactionCaller({ dataDir, workshopId, room, agent, messages,
-    llm: withSeatContinuity(makeLLM(dataDir, agent.model, agent.temperature), seat, 'room'),
+    llm: { ...model, call: (...args) => { pendingText = ''; return model.call(...args); } },
     onNotice: emit, onProgress: emit,
-    displaySnapshot: boundary => {
+    displaySnapshot: ({ modelContent, ...boundary }) => {
       const segments = structuredClone(segmentCollector.segments);
       segments.push({ kind: 'compaction', ...boundary, reasoningOffset: reasoningAcc.length });
       return { id: turnId, turnId, roundSeq, speaker: seat.title, timestamp: Date.now(), executionStatus: 'running',
+        modelContent,
         content: segments.filter(segment => segment.kind === 'text').map(segment => segment.content).join('\n\n'),
         reasoning: reasoningAcc || undefined, segments,
         toolCalls: segments.flatMap(segment => segment.kind === 'tools' ? segment.tools
@@ -290,7 +299,7 @@ async function runSeatInRoom(
   // 累积本轮思考流：既实时推给前端，也攒下来随发言落盘（重载可恢复）
   const result = native
     ? await runReActLoopNative({
-        messages, llm, tools: toolCaller, toolDefs: nativeToolDefs,
+        messages, llm, tools: toolCaller, toolDefs: nativeToolDefs, retainFinalContext: true,
         onEvent: (ev) => {
           if (ev.type === 'reasoning') reasoningAcc += ev.chunk;
           const progress = toRoomProgressEvent(seat.title, ev);
@@ -322,8 +331,15 @@ async function runSeatInRoom(
   if (result.termination.status === 'succeeded') segmentCollector.reconcile(result.content);
   const content = result.termination.status === 'succeeded' ? result.content
     : segmentCollector.segments.filter(segment => segment.kind === 'text').map(segment => segment.content).join('\n\n');
+  const active = messages.slice(1 + room.publicMessages.length);
+  if (result.termination.status !== 'succeeded' && pendingText.trim()
+    && !(active.at(-1)?.role === 'assistant' && active.at(-1)?.content.endsWith(pendingText))) {
+    active.push({ role: 'assistant', content: pendingText });
+  }
   return {
     content,
+    ...(segmentCollector.segments.some(segment => segment.kind === 'compaction')
+      ? { modelContent: serializeCompactionMessages(active) } : {}),
     rawContent: result.rawContent,
     reasoning: reasoningAcc || undefined,
     segments: segmentCollector.segments,
@@ -385,6 +401,7 @@ export async function speakInRoom(
           ? r.termination.error.message : '本次执行已停止';
         retainRoomExecutionDraft(room, signal?.aborted || r.termination.status === 'aborted' ? 'stopped' : 'failed', error,
           { id: turnId, turnId, roundSeq, speaker: currentSeat.title, content: r.content,
+            modelContent: r.modelContent,
             timestamp: Date.now(), rawContent: r.rawContent, reasoning: r.reasoning, segments: r.segments, toolCalls: r.toolCalls });
         await saveRoom(dataDir, workshopId, room);
       }
@@ -394,6 +411,7 @@ export async function speakInRoom(
         room.publicMessages.push({
           id: genId('msg'), turnId, roundSeq,
           speaker: currentSeat.title, content, timestamp: Date.now(),
+          modelContent: r.modelContent,
           rawContent: r.rawContent || undefined, reasoning: r.reasoning,
           toolCalls: r.toolCalls.length > 0 ? r.toolCalls : undefined,
           segments: r.segments.length > 0 ? r.segments : undefined,

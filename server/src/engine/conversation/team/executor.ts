@@ -8,6 +8,7 @@ import { snapshotContext } from '../input-runtime.js';
 import { createCompactionCaller } from '../../shared/compaction/controller.js';
 import { archiveTeamContext } from './storage.js';
 import type { ToolDef } from '../../shared/tool-defs-loader.js';
+import { memberContextCapture } from './member-context.js';
 
 const reportTool: ToolDef = { name: 'team_report', description: '向本任务主 Agent 汇报关键进展、发现或阻塞。发送不代表任务完成，汇报后可继续工作；身份由框架绑定。',
   parameters: { type: 'object', properties: { content: { type: 'string' },
@@ -32,6 +33,7 @@ export function memberExecutor(parent: SessionRunnerOpts): MemberExecutor {
       ...member.context.filter(message => message.role !== 'system'
         || message.content.startsWith('[历史压缩记录]')), { role: 'user', content: task, origin: 'framework' },
     ]);
+    const capture = memberContextCapture(!!parent.native);
     const runner = new SessionRunner({
       ...parent, extension: { definitions: [reportTool], silentTools: ['team_report'],
         call: async (name, args) => {
@@ -41,8 +43,9 @@ export function memberExecutor(parent: SessionRunnerOpts): MemberExecutor {
       toolNames: member.permissions.tools, toolMode: 'selected', skillIds: member.permissions.skills,
       sandboxLevel: member.permissions.sandboxLevel, memberTools: allTools.map(tool => tool.name),
       allowAsk: false, allowDelegate: false, maxTurns: undefined, signal,
-      llmTransform: (llm, _emit, rebase) => createCompactionCaller({ llm, dataDir: parent.dataDir,
+      llmTransform: (llm, emit, rebase) => capture.wrap(createCompactionCaller({ llm, dataDir: parent.dataDir,
         area: 'monsoon', kind: 'conversation', model: parent.model, protectedPrefixCount: 1,
+        onProgress: emit, onNotice: emit,
         archive: async before => {
           if (!parent.sessionId) throw new Error('工作队缺少所属会话');
           await archiveTeamContext(parent.dataDir, { agentId: parent.agentId, sessionId: parent.sessionId }, member.id, before);
@@ -51,9 +54,12 @@ export function memberExecutor(parent: SessionRunnerOpts): MemberExecutor {
           await checkpoint(snapshotContext(plan.messages.filter(message => message.role !== 'system'
             || message.content.startsWith('[历史压缩记录]')))); },
         onCompacted: plan => rebase(plan.messages),
-      }),
-      checkpoint: messages => checkpoint(snapshotContext(messages.filter(message => message.role !== 'system'
-        || message.content.startsWith('[历史压缩记录]')))),
+      })),
+      checkpoint: messages => {
+        capture.preserve(messages);
+        return checkpoint(snapshotContext(messages.filter(message => message.role !== 'system'
+          || message.content.startsWith('[历史压缩记录]'))));
+      },
     });
     const result = await runner.chat(prompt, context, control.observe);
     return result.content;

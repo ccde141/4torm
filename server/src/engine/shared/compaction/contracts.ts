@@ -48,7 +48,10 @@ export interface CompactionCommit {
   mode: CompactionMode;
   before: ContextMessage[];
   prefix: ContextMessage[];
+  /** Ordered original records retained after the handoff, including selected human directions. */
   tail: ContextMessage[];
+  /** Original indexes in before; tail need not be a contiguous suffix. */
+  retainedIndexes?: number[];
   summary: string;
   messages: ContextMessage[];
   sourceTokens: number;
@@ -98,9 +101,9 @@ export interface CompactionOptions {
   /** Estimate of the request associated with initialPromptTokens, before new human input is appended. */
   initialEstimateTokens?: number;
   protectedPrefixCount?: number;
-  /** Complete human-led turns retained verbatim; meetings use three and private sessions four. */
+  /** Preferred recent human-led turns, subject to the recent-context token budget. */
   recentHumanTurns?: 3 | 4;
-  /** Available space for the handoff after protected prompts and recent complete turns. */
+  /** Available space for the handoff after protected prompts and retained recent context. */
   summaryTokenBudget?: number;
   /** Tool schemas and other request framing outside the history array. */
   requestOverheadTokens?: number;

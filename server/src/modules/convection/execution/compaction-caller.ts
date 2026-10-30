@@ -3,12 +3,12 @@ import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { atomicWriteFile } from '../../../engine/shared/atomic-io.js';
 import { callLLM } from '../../../engine/shared/llm-bridge.js';
-import { createCompactionCaller, estimateCompactionTokens, type CompactionCommit, type CompactionNotice } from '../../../engine/shared/compaction/index.js';
+import { createCompactionCaller, estimateCompactionTokens, serializeCompactionMessages, type CompactionCommit, type CompactionNotice } from '../../../engine/shared/compaction/index.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import type { LoadedAgent } from '../../../engine/shared/agent-loader.js';
 import type { LLMCaller } from '../../../engine/shared/react/native-loop.js';
 import { saveSession, sessionWorkspace, type ConvectionSessionData, type ConvectionMessage } from '../infrastructure/session-store.js';
-import { convectionRoundBoundaries } from './compaction-context.js';
+import { convectionRoundBoundaries, retainedConvectionRecords } from './compaction-context.js';
 import type { ConvectionEventSink } from './stream-events.js';
 import { rememberChairContextBoundary, clearConvectionChairContext, convectionChairBoundaries } from './chair-context.js';
 import { recordConvectionCompaction } from '../application/compaction-progress.js';
@@ -23,7 +23,7 @@ interface CallerOptions {
   emit?: ConvectionEventSink;
   initialPromptTokens?: number;
   messages: ContextMessage[];
-  displayDraft?: (compaction: { id: string; summary: string }) => ConvectionMessage;
+  displayDraft?: (compaction: { id: string; summary: string }, modelContent: string) => ConvectionMessage;
 }
 
 /** Called under the existing session lease: manual, threshold and overflow share one owner. */
@@ -70,12 +70,12 @@ async function commitCompaction(options: CallerOptions, plan: CompactionCommit, 
     rememberChairContextBoundary(next);
     next.chairTokenUsage = undefined;
   } else {
-    const consumed = Math.min(plan.prefix.length, session.publicMessages.length);
     next.publicMessages = [{ speaker: '系统', content: `[对话历史摘要]\n${plan.summary}`, timestamp: Date.now(), compactionId: progress?.id },
-      ...session.publicMessages.slice(consumed)];
+      ...retainedConvectionRecords(session.publicMessages, plan, 1)];
     retainConvectionDisplay({ ...session, publicExecutionDraft: undefined }, next, next.publicMessages[0]);
     if (options.displayDraft && progress?.id) {
-      next.publicExecutionDraft = options.displayDraft({ id: progress.id, summary: plan.summary });
+      next.publicExecutionDraft = options.displayDraft({ id: progress.id, summary: plan.summary },
+        serializeCompactionMessages(plan.messages.slice(1 + next.publicMessages.length)));
     }
     next.tokenUsage = undefined;
     next.publicLatestTokenUsage = undefined;

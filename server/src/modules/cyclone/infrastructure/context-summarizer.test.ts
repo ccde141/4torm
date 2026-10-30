@@ -90,3 +90,43 @@ test('近期不足轮数且不足30K时不调用摘要模型、不改变输入',
   assert.deepEqual(messages, before);
   assert.equal(requests.length, 0);
 });
+
+test('工位长轮次压缩保留四条人类方向但不恢复已经归纳的旧工具链', async t => {
+  const { dataDir } = await fixture(t);
+  const feature = createCycloneFeature({ dataDir });
+  const workshop = await feature.workshops.create({ title: '长轮次' });
+  const seat = await feature.workshops.addSeat({ workshopId: workshop.id, agentId: 'worker', title: '核验' });
+  const source: ContextMessage[] = Array.from({ length: 4 }, (_, index): ContextMessage[] => [
+    { role: 'user', content: `人类方向-${index}` },
+    { role: 'assistant', content: '', toolCalls: [{ id: `long-${index}`, name: 'read_file', arguments: '{}' }] },
+    { role: 'tool', content: `证据-${index}:${'原'.repeat(12_000)}`, toolCallId: `long-${index}` },
+  ]).flat();
+  await saveSeat(dataDir, workshop.id, { ...seat, messages: source });
+  await feature.seats.reset(workshop.id, seat.id, { mode: 'summary' });
+  const saved = await loadSeat(dataDir, workshop.id, seat.id);
+  assert.ok(saved);
+  assert.deepEqual(saved.messages.filter(record => record.role === 'user').map(record => record.content),
+    source.filter(record => record.role === 'user').map(record => record.content));
+  assert.ok(!saved.messages.some(record => record.toolCallId === 'long-0'));
+  assert.ok(saved.messages.some(record => record.toolCallId === 'long-3'));
+  assert.deepEqual(saved.displayHistory?.messages.slice(0, source.length), source);
+});
+
+test('公共群聊大轮次按完成发言切开，保留近期议题而不把旧工具事实带回', async t => {
+  const { dataDir } = await fixture(t);
+  const feature = createCycloneFeature({ dataDir });
+  const workshop = await feature.workshops.create({ title: '长讨论', chairAgentId: 'worker' });
+  const room = await feature.rooms.create({ workshopId: workshop.id, title: '评审' });
+  room.publicMessages = Array.from({ length: 4 }, (_, index) => [
+    { speaker: '人类', content: `讨论议题-${index}`, timestamp: index * 2 },
+    { speaker: '研究员', content: `第${index}次执行${'原'.repeat(12_000)}`, timestamp: index * 2 + 1,
+      toolCalls: [{ tool: 'read_file', args: {}, result: `工具事实-${index}` }] },
+  ]).flat();
+  await saveRoom(dataDir, workshop.id, room);
+  await feature.rooms.reset(workshop.id, room.id, { mode: 'summary', scope: 'public' });
+  const saved = await loadRoom(dataDir, workshop.id, room.id);
+  assert.ok(saved);
+  assert.ok(saved.publicMessages.some(record => record.content === '讨论议题-1'));
+  assert.ok(!saved.publicMessages.some(record => record.toolCalls?.some(tool => tool.result === '工具事实-1')));
+  assert.ok(saved.publicMessages.some(record => record.toolCalls?.some(tool => tool.result === '工具事实-3')));
+});

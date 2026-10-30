@@ -32,7 +32,7 @@ export interface SubAgentParams {
   agentId: string;
   dataDir: string;
   signal: AbortSignal;
-  /** 本次委托总时限（毫秒），默认且最多 60 分钟。 */
+  /** 本次委托总时限（毫秒），默认且最多 120 分钟。 */
   timeout?: number;
   maxRounds: number;
   /** 母 Agent 的文件工具权限。Sub-agent 直接继承使用。缺省项目级。 */

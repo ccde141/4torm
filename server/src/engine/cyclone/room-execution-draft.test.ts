@@ -3,6 +3,21 @@ import test from 'node:test';
 import type { RoomData } from './types.js';
 import { retainRoomExecutionDraft } from './room-execution-draft.js';
 import { cycloneMeetingContext } from './meeting-compaction-caller.js';
+import { createHash } from 'node:crypto';
+import { buildCycloneChairContext } from './chair-context.js';
+
+test('legacy chair anchors keep their exact compacted context when no participant projection field exists', () => {
+  const publicRecord = { speaker: 'Writer', content: 'Public checkpoint', timestamp: 1 };
+  const room: RoomData = { id: 'room', title: 'Review', topic: '', participantSeatIds: [],
+    createdAt: '', updatedAt: '', publicMessages: [publicRecord],
+    chairMessages: [{ role: 'user', content: 'ARCHIVED_PRIVATE_INPUT' }],
+    chairActiveContext: [{ role: 'system', content: 'Compacted chair handoff' }], chairContextRawCount: 1,
+    chairContextPublicVersion: 0, chairContextPublicAnchor: { timestamp: 1,
+      hash: createHash('sha256').update(JSON.stringify([publicRecord.speaker, publicRecord.content, undefined])).digest('hex') } };
+  const context = buildCycloneChairContext(room, { role: 'system', content: 'Chair rules' });
+  assert.match(JSON.stringify(context), /Compacted chair handoff/);
+  assert.doesNotMatch(JSON.stringify(context), /ARCHIVED_PRIVATE_INPUT/);
+});
 
 test('interrupted compaction progress remains an unfinished execution fact with its actual side effects', () => {
   const room: RoomData = { id: 'room', title: 'Review', topic: '', participantSeatIds: [], publicMessages: [],

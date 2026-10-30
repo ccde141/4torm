@@ -60,6 +60,49 @@ function summarySse(content: string): Response {
     + '\n\ndata: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } });
 }
 
+test('群聊自动压缩按原索引保存独立人类议题和近期发言，不恢复旧工具记录', async t => {
+  const { dataDir, workshop } = await fixture(t);
+  const room = await createRoom(dataDir, workshop.id, { title: '长执行评审' });
+  room.publicMessages = Array.from({ length: 3 }, (_, index) => [
+    { speaker: '人类', content: `当前议题-${index}`, timestamp: index * 2 },
+    { speaker: 'Worker', content: `执行${index}:${'原'.repeat(20_000)}`, timestamp: index * 2 + 1,
+      toolCalls: [{ tool: 'read_file', args: {}, result: `旧记录-${index}` }] },
+  ]).flat();
+  room.publicMessages.push({ speaker: '人类', content: '继续交付', timestamp: 7 });
+  await saveRoom(dataDir, workshop.id, room);
+  summarizeFetch(t, () => {});
+  const messages: ContextMessage[] = [{ role: 'system', content: '群聊规则' }, ...cycloneMeetingContext(room.publicMessages)];
+  const caller = await createRoomCompactionCaller({ dataDir, workshopId: workshop.id, room, agent, messages,
+    llm: { call: async context => {
+      assert.match(JSON.stringify(context), /当前议题-1/);
+      assert.doesNotMatch(JSON.stringify(context), /旧记录-1/);
+      return { content: '继续交付', finishReason: 'stop' };
+    } } });
+  await callPreparedModel(caller, messages, undefined, {});
+  const saved = await loadRoom(dataDir, workshop.id, room.id);
+  assert.ok(saved?.publicMessages.some(record => record.content === '当前议题-1'));
+  assert.ok(!saved?.publicMessages.some(record => record.toolCalls?.some(tool => tool.result === '旧记录-1')));
+  assert.ok(saved?.publicMessages.some(record => record.toolCalls?.some(tool => tool.result === '旧记录-2')));
+});
+
+test('群聊压缩边界止于运行中发言之前，不把后续记录误当成已完成前缀', async t => {
+  const { dataDir, workshop } = await fixture(t);
+  const room = await createRoom(dataDir, workshop.id, { title: '执行边界' });
+  room.publicMessages = [{ speaker: '人类', content: '核验当前目标', timestamp: 1 },
+    { speaker: 'Worker', content: `COMPLETED:${'旧'.repeat(50_000)}`, timestamp: 2 },
+    { speaker: 'Worker', content: `RUNNING-BARRIER:${'近'.repeat(20_000)}`, timestamp: 3, executionStatus: 'running' },
+    { speaker: 'Worker', content: `AFTER-BARRIER:${'近'.repeat(20_000)}`, timestamp: 4 }];
+  const pending = structuredClone(room.publicMessages.slice(2));
+  await saveRoom(dataDir, workshop.id, room);
+  summarizeFetch(t, body => assert.doesNotMatch(JSON.stringify(body.messages), /RUNNING-BARRIER|AFTER-BARRIER/));
+  const messages: ContextMessage[] = [{ role: 'system', content: '群聊规则' }, ...cycloneMeetingContext(room.publicMessages)];
+  const caller = await createRoomCompactionCaller({ dataDir, workshopId: workshop.id, room, agent, messages,
+    llm: { call: async () => ({ content: '继续工作', finishReason: 'stop' }) } });
+  await callPreparedModel(caller, messages, undefined, {});
+  assert.deepEqual(room.publicMessages.slice(-2), pending);
+  assert.doesNotMatch(JSON.stringify(room.publicMessages), /COMPLETED/);
+});
+
 test('工位下一次模型调用才压缩，热提高阈值取消旧触发，热降低后归档并提交', async t => {
   const { dataDir, workshop, policy } = await fixture(t);
   const seat = await addSeat(dataDir, workshop.id, { agentId: agent.id, title: '开发' });

@@ -1,5 +1,5 @@
 import { trackModelUsage } from '../shared/track-model-usage.js';
-import { createCompactionCaller, estimateCompactionTokens, type CompactionCommit, type CompactionNotice } from '../shared/compaction/index.js';
+import { createCompactionCaller, estimateCompactionTokens, serializeCompactionMessages, type CompactionCommit, type CompactionNotice } from '../shared/compaction/index.js';
 import { loadAgent, type LoadedAgent } from '../shared/agent-loader.js';
 import type { LLMCaller } from '../shared/react/native-loop.js';
 import type { ContextMessage } from '../shared/types.js';
@@ -12,6 +12,7 @@ import { clearCycloneChairContext } from './chair-context.js';
 import type { CompactionProgress } from '../shared/compaction/index.js';
 import { finishCycloneCompaction } from './compaction-progress.js';
 import { captureCycloneCompaction } from './conversation-transcript.js';
+export { cycloneMeetingContext } from './room-context.js';
 
 interface MeetingCallerOptions {
   dataDir: string;
@@ -23,22 +24,16 @@ interface MeetingCallerOptions {
   onNotice?: (notice: CompactionNotice) => void;
   onCompacted?: () => void;
   onProgress?: (progress: CompactionProgress) => void;
-  displaySnapshot?: (boundary: { id: string; summary: string }) => RoomMessage;
-}
-
-export function cycloneMeetingContext(records: readonly RoomMessage[]): ContextMessage[] {
-  return records.map(record => ({ role: 'user', content: `[${record.speaker}] ${record.content}`
-    + (record.executionStatus ? `\n[执行状态：${record.executionStatus}] ${record.executionError ?? ''}`
-      + (record.toolCalls?.length ? `\n[已执行工具事实]\n${JSON.stringify(record.toolCalls)}` : '') : ''),
-    origin: record.speaker === '人类' ? 'human' : 'framework' }));
+  displaySnapshot?: (boundary: { id: string; summary: string; modelContent: string }) => RoomMessage;
 }
 
 /** Completed public replies and transient tool chains allow a long round to keep its latest work. */
 function roundBoundaries(messages: readonly ContextMessage[], room: RoomData): number[] {
   const boundaries: number[] = [];
-  room.publicMessages.forEach((record, index) => {
-    if (index > 0 && room.publicMessages[index - 1].executionStatus !== 'running') boundaries.push(index + 1);
-  });
+  for (let index = 0; index < room.publicMessages.length; index++) {
+    if (room.publicMessages[index].executionStatus === 'running') return boundaries;
+    boundaries.push(index + 2);
+  }
   for (let index = room.publicMessages.length + 1; index <= messages.length; index++) {
     if (index === messages.length || messages[index]?.role === 'user'
       || messages[index - 1]?.role === 'tool') boundaries.push(index);
@@ -88,11 +83,14 @@ export async function createRoomCompactionCaller(options: MeetingCallerOptions):
 
 async function commitRoom(options: MeetingCallerOptions, plan: CompactionCommit, signal?: AbortSignal): Promise<void> {
   const { dataDir, workshopId, room } = options;
-  const consumed = Math.min(plan.prefix.length, room.publicMessages.length);
+  const retained = plan.retainedIndexes
+    ? plan.retainedIndexes.filter(index => index >= 1 && index <= room.publicMessages.length)
+      .map(index => room.publicMessages[index - 1])
+    : room.publicMessages.slice(Math.min(plan.prefix.length, room.publicMessages.length));
   const next: RoomData = { ...room,
     compaction: room.compaction ? finishCycloneCompaction(room.compaction) : undefined,
     publicMessages: [{ speaker: '系统', content: `[群聊历史摘要]\n${plan.summary}`, timestamp: Date.now() },
-      ...room.publicMessages.slice(consumed)], tokenUsage: undefined,
+      ...retained], tokenUsage: undefined,
     publicLatestTokenUsage: undefined, publicUsageIncomplete: undefined,
     compactState: { disabled: false, archiveSeq: (room.compactState?.archiveSeq ?? 0) + 1,
       lastCompactAt: new Date().toISOString() },
@@ -100,7 +98,8 @@ async function commitRoom(options: MeetingCallerOptions, plan: CompactionCommit,
   next.publicDisplayHistory = captureCycloneCompaction(room.publicDisplayHistory, room.publicMessages,
     next.publicMessages);
   if (options.displaySnapshot) next.publicExecutionDraft = options.displaySnapshot({
-    id: room.compaction?.id ?? `compact-${Date.now()}`, summary: plan.summary });
+    id: room.compaction?.id ?? `compact-${Date.now()}`, summary: plan.summary,
+    modelContent: serializeCompactionMessages(plan.messages.slice(1 + next.publicMessages.length)) });
   clearCycloneChairContext(next);
   next.chairTokenUsage = undefined;
   await saveRoom(dataDir, workshopId, next, signal);

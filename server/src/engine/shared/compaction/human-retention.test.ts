@@ -52,25 +52,28 @@ test('public group history keeps three human-led rounds with all participating r
   assert.equal(messages.filter(message => message.origin === 'framework').length, 3);
 });
 
-test('fewer human turns retain thirty thousand recent tokens and complete native tool pairs', async () => {
+test('fewer human turns retain their direction and recent complete native pairs within the allowance', async () => {
   const messages: ContextMessage[] = [{ role: 'system', content: 'Rules' },
     { role: 'user', origin: 'human', content: 'Do the task' },
     { role: 'assistant', toolCalls: [{ id: 'old', name: 'read', arguments: '{}' }], content: '' },
     { role: 'tool', content: '旧'.repeat(40_000), toolCallId: 'old' },
     { role: 'assistant', toolCalls: [{ id: 'new', name: 'read', arguments: '{}' }], content: '' },
-    { role: 'tool', content: '新'.repeat(30_000), toolCallId: 'new' }];
-  const recent = messages.slice(4);
+    { role: 'tool', content: '新'.repeat(28_000), toolCallId: 'new' }];
+  const recent = [messages[1], ...messages.slice(4)];
   const plan = await compactMessages({ ...options, messages });
   assert.deepEqual(plan?.tail, recent);
   assert.deepEqual(messages.slice(2), recent);
 });
 
-test('four complete turns are not shortened by the thirty-thousand-token fallback budget', async () => {
+test('four human directions remain exact without protecting their oversized tool and reply history', async () => {
   const messages = rounds(5);
   messages.at(-2)!.content = '近'.repeat(40_000);
-  const recent = messages.slice(4);
+  const humans = messages.filter(message => message.origin === 'human').slice(-4);
+  const lastReport = messages.at(-1)!;
   await compactMessages({ ...options, messages });
-  assert.deepEqual(messages.slice(2), recent);
+  assert.deepEqual(messages.slice(2), [...humans, lastReport]);
+  assert.ok(humans.every(message => messages.includes(message)));
+  assert.ok(!messages.some(message => message.content === '近'.repeat(40_000)));
 });
 
 test('short protected history neither invokes the model nor creates a committed marker', async () => {

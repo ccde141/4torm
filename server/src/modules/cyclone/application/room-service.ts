@@ -30,6 +30,7 @@ import type { CycloneWorkshopService } from './workshop-service.js';
 import type { CycloneChangeFeed } from './change-feed.js';
 import { archiveCycloneCompaction } from '../../../engine/cyclone/compaction-archive.js';
 import { buildCycloneChairContext, clearCycloneChairContext } from '../../../engine/cyclone/chair-context.js';
+import { cycloneMeetingContext } from '../../../engine/cyclone/room-context.js';
 import { withCycloneContextChange } from './context-compaction-transaction.js';
 import { finishCycloneCompaction, recoveredCycloneCompaction } from '../../../engine/cyclone/compaction-progress.js';
 
@@ -115,7 +116,11 @@ export class CycloneRoomService {
       }
       const before = [...room.publicMessages];
       if (content === undefined) room.publicMessages.splice(index, 1);
-      else { message.content = content; message.rawContent = undefined; }
+      else {
+        message.content = content;
+        message.rawContent = undefined;
+        if (message.modelContent !== undefined) message.modelContent = content;
+      }
       alignCycloneTranscript(room.publicDisplayHistory, before, room.publicMessages);
       clearCycloneChairContext(room);
       room.chairTokenUsage = undefined;
@@ -183,7 +188,7 @@ export class CycloneRoomService {
         },
         subject: `群聊「${room.title}」公共上下文`,
         target: { workshopId, kind: 'room', id: room.id },
-        messages: toCycloneSummaryMessages(room.publicMessages || []) }))
+        messages: toCycloneSummaryMessages(cycloneMeetingContext(room.publicMessages || [])) }))
       : undefined;
     const chairContext = buildCycloneChairContext(room, { role: 'system', content: '' }).slice(1);
     const chairCompaction = (scope === 'chair' || scope === 'both')

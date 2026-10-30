@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { convectionDisplayMessages, editConvectionDisplay, retainConvectionDisplay } from './display-history.js';
 import { createSession, loadSession, saveSession } from '../infrastructure/session-store.js';
+import { convectionContext } from '../execution/compaction-context.js';
 
 test('display history preserves raw evidence through repeated compactions without reentering model records', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'convection-display-history-'));
@@ -73,4 +74,20 @@ test('editing repeated source records updates only their retained model counterp
   assert.equal(saved.publicDisplayContextCount, 4);
   assert.equal(saved.publicMessages.some(message => message.recordId === humans[3].recordId), false);
   assert.equal(convectionDisplayMessages(saved).filter(message => message.speaker === '人类').length, 5);
+});
+
+test('editing a compacted reply replaces its model projection without restoring archived tool output', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'convection-edited-model-context-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const session = await createSession(directory, { chairAgentId: 'chair', participantAgentIds: ['member'] });
+  session.publicMessages = [{ recordId: 'reply', speaker: 'member', content: '原答复', timestamp: 1,
+    modelContent: '[assistant]\n原投影', toolCalls: [{ tool: 'read', args: {}, result: '旧工具证据' }] }];
+  session.publicDisplayHistory = structuredClone(session.publicMessages);
+  session.publicDisplayContextCount = 1;
+  await saveSession(directory, session);
+  const saved = (await loadSession(directory, session.id))!;
+  assert.equal(editConvectionDisplay(saved, 0, '人类修正后的答复'), true);
+  assert.match(convectionContext(saved.publicMessages)[0].content, /人类修正后的答复/);
+  assert.doesNotMatch(convectionContext(saved.publicMessages)[0].content, /原投影|旧工具证据/);
+  assert.equal(saved.publicMessages[0].toolCalls?.[0].result, '旧工具证据');
 });

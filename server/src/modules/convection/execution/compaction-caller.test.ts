@@ -86,6 +86,93 @@ test('公共会议同一入口在下一轮压缩，先归档再调用会长模�
   assert.match(saved?.publicMessages.at(-1)?.content || '', /新意见/);
 });
 
+test('公共自动压缩持久化稀疏保留的近期人类议题，不恢复被归纳的长发言', async t => {
+  const { dataDir, session } = await fixture(t);
+  session.publicMessages = Array.from({ length: 3 }, (_, index) => [
+    { speaker: '人类', content: `保留议题-${index}`, timestamp: index * 2 },
+    { speaker: 'Member', content: `执行记录-${index}:${'原'.repeat(20_000)}`, timestamp: index * 2 + 1,
+      toolCalls: [{ tool: 'read_file', args: {}, result: `工具证据-${index}` }] },
+  ]).flat();
+  session.tokenUsage = undefined;
+  await saveSession(dataDir, session);
+  let summaries = 0;
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (isCompactionRequest(body)) { summaries++; return summarySse('此前证据已核验，继续当前议题。'); }
+    assert.match(JSON.stringify(body.messages), /保留议题-1/);
+    assert.doesNotMatch(JSON.stringify(body.messages), /工具证据-1/);
+    return summarySse('<answer>继续交付</answer>');
+  });
+  await handleSpeak(dataDir, session, '继续当前议题');
+  assert.equal(summaries, 1);
+  const saved = await loadSession(dataDir, session.id);
+  assert.ok(saved?.publicMessages.some(record => record.content === '保留议题-1'));
+  assert.ok(!saved?.publicMessages.some(record => record.toolCalls?.some(tool => tool.result === '工具证据-1')));
+  assert.ok(saved?.publicMessages.some(record => record.toolCalls?.some(tool => tool.result === '工具证据-2')));
+});
+
+for (const failed of [false, true]) test(`compacted public tools stay archived after ${failed ? 'failure' : 'completion'}, reload and another participant`, async t => {
+  const { dataDir, session } = await fixture(t);
+  await fs.writeFile(path.join(dataDir, 'agents', 'registry.json'), JSON.stringify({
+    chair: { name: 'Chair', model: 'p:chair' },
+    member: { name: 'Member', model: 'p:member', config: { tools: [], toolMode: 'selected' } },
+    observer: { name: 'Observer', model: 'p:observer', config: { tools: [], toolMode: 'selected' } },
+  }));
+  await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [
+    { id: 'p', baseUrl: 'https://compact.test/v1', models: ['chair', 'member', 'observer'], nativeMode: 'native' },
+  ] }));
+  session.participantAgentIds = ['member', 'observer'];
+  session.publicMessages = [{ speaker: '人类', content: '核验资料', timestamp: 1 },
+    { speaker: 'Member', content: `OLD_PUBLIC:${'旧'.repeat(20_000)}`, timestamp: 2 }];
+  session.tokenUsage = undefined;
+  await saveSession(dataDir, session);
+  const policy = defaultCompactionPolicy();
+  policy.enabled = true; policy.thresholds.convection = 60_000;
+  await saveCompactionPolicy(dataDir, policy);
+  for (const [summary, detail] of [['old-evidence', `OLD_TOOL:${'旧'.repeat(70_000)}`],
+    ['recent-evidence', `RECENT_TOOL:${'近'.repeat(2_000)}`]]) {
+    await executeConvectionMemoryTool(dataDir, 'member', 'memory_write', { summary, detail, category: 'fact', tags: 'audit' });
+  }
+  const entries = await listMemory(dataDir, 'member');
+  let calls = 0, observations = 0;
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (isCompactionRequest(body)) return summarySse('早期资料已核验。');
+    if (body.model === 'observer') {
+      observations++;
+      const context = JSON.stringify(body.messages);
+      assert.doesNotMatch(context, /OLD_TOOL|OLD_PUBLIC|PRECOMPACT_TEXT/);
+      assert.match(context, /RECENT_TOOL/);
+      if (!failed) assert.equal(context.match(/FINAL-ONCE/g)?.length, 1);
+      return summarySse('观察完成');
+    }
+    if (++calls <= 2) {
+      if (calls === 2) {
+        const draft = (await loadSession(dataDir, session.id))?.publicExecutionDraft;
+        assert.equal(typeof draft?.modelContent, 'string');
+        assert.doesNotMatch(draft!.modelContent!, /OLD_TOOL|PRECOMPACT_TEXT/);
+      }
+      const slug = entries.find(entry => entry.summary === (calls === 1 ? 'old-evidence' : 'recent-evidence'))!.slug;
+      return new Response(`data: ${JSON.stringify({ choices: [{ delta: {
+        content: calls === 1 ? 'PRECOMPACT_TEXT' : 'POSTCOMPACT_TEXT', tool_calls: [{ index: 0,
+          id: `memory-${calls}`, type: 'function', function: { name: 'memory_read', arguments: JSON.stringify({ slug }) } }],
+      }, finish_reason: 'tool_calls' }] })}\n\ndata: [DONE]\n\n`, { headers: { 'Content-Type': 'text/event-stream' } });
+    }
+    return failed ? new Response('{"error":{"message":"fixture rejected"}}', { status: 400 }) : summarySse('FINAL-ONCE');
+  });
+  await handleSpeak(dataDir, session, '继续核验');
+  const saved = await loadSession(dataDir, session.id);
+  assert.ok(saved);
+  const record = saved.publicMessages.find(message => message.speaker === 'Member');
+  assert.match(record?.toolCalls?.[0].result ?? '', /OLD_TOOL/);
+  assert.doesNotMatch(record?.modelContent ?? '', /OLD_TOOL|PRECOMPACT_TEXT/);
+  assert.match(record?.modelContent ?? '', /RECENT_TOOL/);
+  saved.participantAgentIds = ['observer'];
+  await saveCompactionPolicy(dataDir, defaultCompactionPolicy());
+  await handleSpeak(dataDir, saved, '下一轮复核');
+  assert.equal(observations, 2);
+});
+
 for (const failed of [false, true]) test(`native public work preserves its internal compaction boundary on ${failed ? 'failure' : 'completion'}`, async t => {
   const { dataDir, session } = await fixture(t);
   session.publicMessages = [{ speaker: '人类', content: '请核验资料', timestamp: 1 },
