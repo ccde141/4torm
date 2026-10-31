@@ -1,7 +1,9 @@
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
-import { partitionToolActivity, type ToolActivityLike } from './tool-activity-group';
+import { isFrameworkTool, partitionToolActivity, type ToolActivityLike } from './tool-activity-group';
 import { useLocale } from '../../i18n/LocaleContext';
 import { toolActivitySummary } from './tool-activity-summary';
+import { worklogRunStart, worklogWindow } from './worklog-window';
+import WorklogPager from './WorklogPager';
 
 export interface ToolActivityItem extends ToolActivityLike {
   status?: string;
@@ -45,16 +47,26 @@ function Group<T extends ToolActivityItem>({ items, renderItem, stopped }: {
   );
 }
 
-export default function ToolActivityList<T extends ToolActivityItem>({ items, renderItem, stopped }: {
+export default function ToolActivityList<T extends ToolActivityItem>({ items, renderItem, stopped, offset = 0, source = items }: {
   stopped?: boolean;
   items: T[];
+  /** Full tool source and absolute offset when the caller already selected a display window. */
+  source?: readonly T[];
+  offset?: number;
   renderItem: (item: T, index: number) => ReactNode;
 }) {
-  let offset = 0;
-  return partitionToolActivity(items).map((part, partIndex) => {
-    const start = offset;
-    offset += part.items.length;
-    if (part.kind === 'single') return <Fragment key={partIndex}>{renderItem(part.items[0], start)}</Fragment>;
-    return <Group key={partIndex} items={part.items} stopped={stopped} renderItem={(item, index) => renderItem(item, start + index)} />;
-  });
+  const [selectedEnd, select] = useState<number | null>(null);
+  const page = worklogWindow(items, selectedEnd);
+  let consumed = 0;
+  return <><WorklogPager page={page} select={select} />{partitionToolActivity(page.items).map(part => {
+    const start = page.start + consumed;
+    consumed += part.items.length;
+    const absoluteStart = offset + start;
+    const ordinary = !isFrameworkTool(part.items[0].tool);
+    const anchor = worklogRunStart(source, absoluteStart, item => !isFrameworkTool(item.tool));
+    const next = source[absoluteStart + part.items.length];
+    const continues = ordinary && (anchor < absoluteStart || (next && !isFrameworkTool(next.tool)));
+    if (part.kind === 'single' && !continues) return <Fragment key={`tool-${absoluteStart}`}>{renderItem(part.items[0], start)}</Fragment>;
+    return <Group key={`group-${anchor}`} items={part.items} stopped={stopped} renderItem={(item, index) => renderItem(item, start + index)} />;
+  })}</>;
 }

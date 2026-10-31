@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { McpToolOutcome } from './mcp-types.js';
 import type { ProviderImage, ToolImageRef } from './types.js';
+import { frameworkError } from './framework-error.js';
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGES = 4;
@@ -68,17 +69,33 @@ export async function persistToolOutcome(
 }
 
 export async function readToolImage(dataDir: string, ref: ToolImageRef): Promise<ProviderImage> {
-  const image = readToolImageRefs([ref])[0];
-  const directory = await mediaDirectory(dataDir, false);
-  const file = path.join(directory, `${image.id}.${IMAGE_TYPES[image.mimeType]}`);
-  const stat = await fs.lstat(file);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== image.size || stat.size > MAX_IMAGE_BYTES) {
-    throw new Error('工具图片文件类型或大小无效');
-  }
-  const data = await fs.readFile(file);
-  if (data.length !== image.size || !hasImageSignature(image.mimeType, data)) throw new Error('工具图片内容与引用不一致');
+  const { data, image } = await readToolImageBytes(dataDir, ref);
   return { id: image.id, name: image.name, mimeType: image.mimeType,
     dataUrl: `data:${image.mimeType};base64,${data.toString('base64')}` };
+}
+
+/** Human previews do not need the model transport's intermediate base64 copy. */
+export async function readToolImageBytes(dataDir: string, ref: ToolImageRef): Promise<{
+  data: Buffer; image: ToolImageRef;
+}> {
+  const image = readToolImageRefs([ref])[0];
+  try {
+    const directory = await mediaDirectory(dataDir, false);
+    const file = path.join(directory, `${image.id}.${IMAGE_TYPES[image.mimeType]}`);
+    const stat = await fs.lstat(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== image.size || stat.size > MAX_IMAGE_BYTES) {
+      throw new Error('工具图片文件类型或大小无效');
+    }
+    const data = await fs.readFile(file);
+    if (data.length !== image.size || !hasImageSignature(image.mimeType, data)) throw new Error('工具图片内容与引用不一致');
+    return { data, image };
+  } catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException)?.code ?? '')) {
+      throw frameworkError({ code: 'TOOL_IMAGE_FILE_MISSING', kind: 'not_found',
+        message: '原图可能已删除或移动，请确认文件位置', source: 'tool-media', retryable: false });
+    }
+    throw error;
+  }
 }
 
 async function mediaDirectory(dataDir: string, create: boolean): Promise<string> {

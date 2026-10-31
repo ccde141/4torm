@@ -80,6 +80,10 @@ export function attachmentUrl(agentId: string, sessionId: string, attachmentId: 
   return backendUrl(`/api/conversation/attachments/${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}/${encodeURIComponent(attachmentId)}`);
 }
 
+export function attachmentPreviewUrl(agentId: string, sessionId: string, attachmentId: string): string {
+  return `${attachmentUrl(agentId, sessionId, attachmentId)}?preview=1`;
+}
+
 export async function deleteConversationImages(agentId: string, sessionId: string): Promise<void> {
   const response = await backendFetch(
     `/api/conversation/attachments/${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}`,

@@ -29,7 +29,8 @@ test('归档运行截图使用该轮身份读取，不依赖当前绑定Agent或
     toolImages: [{ id: 'shot-a', name: 'desktop.png', mimeType: 'image/png', size: 128 }] }] }],
     { agentId: 'new-agent' });
   assert.match(html, /api\/tool-media\/tide\/shot-a\?taskId=tide-history-fixture&amp;runId=history-run-fixture/);
-  assert.match(html, /alt="desktop.png"/);
+  assert.match(html, /aria-label="查看原图：desktop.png"/);
+  assert.doesNotMatch(html, /<img/);
   assert.doesNotMatch(html, /agentId=new-agent/);
 });
 

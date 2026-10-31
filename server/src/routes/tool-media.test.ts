@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import Fastify from 'fastify';
+import sharp from 'sharp';
 import { CollaborationRouter } from '../engine/collaboration/router.js';
 import { toolMediaRoutes } from './tool-media.js';
 import { installFrameworkErrorHandler } from './error-handler.js';
@@ -21,7 +22,7 @@ import { execToolUnifiedOutcome } from '../engine/shared/exec-tool.js';
 const timestamp = '2026-10-21T00:00:00.000Z';
 const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
-async function fixture(t: { after(callback: () => Promise<unknown>): void }) {
+async function fixture(t: { after(callback: () => Promise<unknown>): void }, bytes = png) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-tool-image-http-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
   await fs.mkdir(path.join(dataDir, 'agents'), { recursive: true });
@@ -29,7 +30,7 @@ async function fixture(t: { after(callback: () => Promise<unknown>): void }) {
     chair: { id: 'chair', name: 'Chair', config: {} }, member: { id: 'member', name: 'Member', config: {} },
   }));
   const outcome = await persistMcpToolOutcome(dataDir, { result: 'metadata', ok: true,
-    inlineImages: [{ mimeType: 'image/png', data: png.toString('base64') }] });
+    inlineImages: [{ mimeType: 'image/png', data: bytes.toString('base64') }] });
   const image = outcome.toolImages![0];
   const monsoon = createMonsoonFeature({ dataDir });
   const convection = createConvectionFeature({ dataDir });
@@ -131,4 +132,41 @@ test('图片读取经过人类observe权限校验，不凭媒体ID绕过功能�
   const result = await app.inject({ method: 'GET',
     url: `/monsoon/${f.image.id}?agentId=member&sessionId=live` });
   assert.equal(result.statusCode, 403);
+});
+
+test('authorized previews use bounded WebP while original reads stay byte-identical', async t => {
+  const original = await sharp({ create: { width: 2400, height: 1600, channels: 3,
+    background: '#773399' } }).png().toBuffer();
+  const f = await fixture(t, original);
+  await f.monsoon.sessions.create({ id: 'preview-session', agentId: 'member', agentName: 'Member',
+    title: 'Preview fixture', model: 'fixture', systemPrompt: '', createdAt: timestamp, updatedAt: timestamp,
+    messages: [{ id: 'answer', role: 'assistant', content: 'done', timestamp,
+      toolSteps: [{ tool: 'read_image', args: {}, status: 'done', toolImages: [f.image] }] }] });
+  const target = { agentId: 'member', sessionId: 'preview-session' };
+  const result = await f.read('monsoon', { ...target, preview: '1' });
+  assert.equal(result.statusCode, 200, result.body);
+  assert.match(String(result.headers['content-type']), /^image\/webp/);
+  const dimensions = await sharp(result.rawPayload).metadata();
+  assert.equal(dimensions.width, 640);
+  assert.ok(dimensions.height! <= 640);
+  assert.deepEqual((await f.read('monsoon', target)).rawPayload, original);
+  // This request hits the preview cache only after checking the new owner's access.
+  assert.equal((await f.read('monsoon', { agentId: 'chair', sessionId: 'preview-session', preview: '1' })).statusCode, 404);
+  assert.equal((await f.read('monsoon', { ...target, preview: 'original' })).statusCode, 400);
+  await fs.unlink(path.join(f.dataDir, 'mcp', 'media', `${f.image.id}.png`));
+  const missing = await f.read('monsoon', { ...target, preview: '1' });
+  assert.equal(missing.statusCode, 404);
+  assert.equal(missing.json().errorCode, 'TOOL_IMAGE_FILE_MISSING');
+  assert.equal((await f.read('monsoon', target)).statusCode, 404);
+});
+
+test('a corrupt preview does not silently deliver the original image', async t => {
+  const f = await fixture(t);
+  await f.monsoon.sessions.create({ id: 'broken-preview', agentId: 'member', agentName: 'Member',
+    title: 'Broken preview fixture', model: 'fixture', systemPrompt: '', createdAt: timestamp, updatedAt: timestamp,
+    messages: [{ id: 'answer', role: 'assistant', content: 'done', timestamp,
+      toolSteps: [{ tool: 'capture', args: {}, status: 'done', toolImages: [f.image] }] }] });
+  const result = await f.read('monsoon', { agentId: 'member', sessionId: 'broken-preview', preview: '1' });
+  assert.equal(result.statusCode, 400);
+  assert.equal(result.json().errorCode, 'TOOL_IMAGE_PREVIEW_UNAVAILABLE');
 });

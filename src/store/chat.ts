@@ -4,6 +4,7 @@ import { getAgents } from './agent';
 import { nameSessionOnce, requestSessionTitle, withSessionWrite } from './session-naming';
 import type { TokenUsage } from './chat-token';
 import { hydratePendingRuns, type PendingMonsoonRun } from '../engine/chat/pending-runs';
+import { ChatMessageCache } from './chat-message-cache';
 
 const BASE = '/api/conversation/sessions';
 
@@ -30,8 +31,9 @@ export interface ChatSession {
   messageRevision?: number;
 }
 
-const sessions = new Map<string, ChatSession>();
-const messages = new Map<string, ChatMessage[]>();
+// Identity lookups do not need to retain complete conversation snapshots.
+const sessionAgents = new Map<string, string>();
+const messages = new ChatMessageCache();
 
 function nextId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -66,7 +68,7 @@ export async function createSession(agent: Agent, model?: string): Promise<ChatS
 export async function getSessionsByAgent(agentId: string): Promise<ChatSession[]> {
   const response = await backendFetch(`${BASE}/${encodeURIComponent(agentId)}`);
   const result = await responseJson<ChatSession[]>(response, '读取会话列表失败');
-  for (const session of result) remember(session);
+  for (const session of result) remember(session, false);
   return result;
 }
 
@@ -78,11 +80,11 @@ export async function getSession(id: string, knownAgentId?: string): Promise<Cha
 
 /** Read a fresh hydrated snapshot without changing the cached session. */
 export async function getSessionSnapshot(id: string, knownAgentId?: string): Promise<ChatSession | null> {
-  const agentId = knownAgentId ?? sessions.get(id)?.agentId ?? agentIdFromSessionId(id);
+  const agentId = knownAgentId ?? sessionAgents.get(id) ?? agentIdFromSessionId(id);
   const wire = await readSessionWire(agentId, id);
   if (!wire) return null;
   const { pendingRuns = [], ...stored } = wire;
-  return hydratePendingRuns(stored, pendingRuns);
+  return pendingRuns.length ? hydratePendingRuns(stored, pendingRuns) : stored;
 }
 
 async function readSessionWire(agentId: string, id: string): Promise<
@@ -107,7 +109,7 @@ export async function previewSessionInput(agentId: string, sessionId: string, mo
 }
 
 export async function markSessionRead(sessionId: string): Promise<void> {
-  const agentId = sessions.get(sessionId)?.agentId ?? agentIdFromSessionId(sessionId);
+  const agentId = sessionAgents.get(sessionId) ?? agentIdFromSessionId(sessionId);
   await withSessionWrite(agentId, async () => {
     const wire = await readSessionWire(agentId, sessionId);
     if (!wire) return;
@@ -115,7 +117,7 @@ export async function markSessionRead(sessionId: string): Promise<void> {
     // Reading is metadata: pending-run projections must never become another persisted copy.
     const saved = await replace({ ...stored, messages: [], lastReadAt: new Date().toISOString() },
       stored.revision ?? 0, 'read');
-    remember(hydratePendingRuns(saved, pendingRuns));
+    remember(pendingRuns.length ? hydratePendingRuns(saved, pendingRuns) : saved);
   });
 }
 
@@ -134,16 +136,16 @@ export async function saveSession(
 }
 
 export async function deleteSession(id: string, knownAgentId?: string): Promise<void> {
-  const agentId = knownAgentId ?? sessions.get(id)?.agentId ?? agentIdFromSessionId(id);
+  const agentId = knownAgentId ?? sessionAgents.get(id) ?? agentIdFromSessionId(id);
   await withSessionWrite(agentId, async () => {
     const response = await backendFetch(sessionUrl(agentId, id), { method: 'DELETE' });
     await responseJson(response, '删除会话失败');
-    sessions.delete(id); messages.delete(id);
+    sessionAgents.delete(id); messages.delete(id);
   });
 }
 
 export async function nameCompletedSession(id: string): Promise<void> {
-  const agentId = sessions.get(id)?.agentId ?? agentIdFromSessionId(id);
+  const agentId = sessionAgents.get(id) ?? agentIdFromSessionId(id);
   await nameSessionOnce(id, {
     claim: () => withSessionWrite(agentId, async () => {
       const session = await getSession(id, agentId);
@@ -198,10 +200,9 @@ async function saveTitleState(session: ChatSession): Promise<void> {
   remember(await replace(session, revision, 'rename'));
 }
 
-function remember(session: ChatSession): void {
-  const clone = structuredClone(session);
-  sessions.set(session.id, clone);
-  if (session.messages.length) messages.set(session.id, clone.messages);
+function remember(session: ChatSession, includeMessages = true): void {
+  sessionAgents.set(session.id, session.agentId);
+  if (includeMessages) messages.set(session.id, session.messages);
 }
 
 function sessionUrl(agentId: string, sessionId: string): string {

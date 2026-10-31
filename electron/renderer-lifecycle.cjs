@@ -1,16 +1,19 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { createRendererMemoryProbe } = require('./renderer-memory.cjs');
 
 const MAX_LOG_BYTES = 128 * 1024;
 const GONE_REASONS = new Set(['clean-exit', 'abnormal-exit', 'killed', 'crashed', 'oom', 'launch-failed', 'integrity-failure', 'memory-eviction']);
 
 /** Recover the desktop UI only. Backend operations are never restarted or replayed. */
-function createRendererLifecycle({ app, window, dialog, url, record, beforeRecover, sampleIntervalMs = 10_000, unresponsiveDelayMs = 15_000 }) {
+function createRendererLifecycle({ app, window, dialog, ipcMain, url, record, beforeRecover, monitorMemory = false, sampleIntervalMs = 10_000, unresponsiveDelayMs = 15_000 }) {
   const state = {
     app, window, contents: window.webContents, dialog, url, beforeRecover,
     record: record || createDiagnosticWriter(app.getPath('logs')),
     stage: 'starting', stopped: false, loading: false, automaticUsed: false,
-    epoch: 0, lastPid: 0, samples: [], listeners: [], pending: null, watchdog: null, prompt: null,
+    epoch: 0, lastPid: 0, reportedMemoryPid: 0, samples: [], listeners: [], pending: null, watchdog: null, prompt: null,
+    memoryProbe: createRendererMemoryProbe({ ipcMain, contents: window.webContents }),
+    monitorMemory, lastMonitoredMemoryKey: '',
   };
   listen(state, state.contents, 'render-process-gone', (_event, details) => onGone(state, details));
   listen(state, state.contents, 'unresponsive', () => onUnresponsive(state, unresponsiveDelayMs));
@@ -164,17 +167,33 @@ function sampleMemory(state) {
     }
     state.samples.push(sample);
     if (state.samples.length > 12) state.samples.shift();
+    state.memoryProbe.request(sample);
+    recordMemoryObservation(state, pid);
   } catch { /* The renderer can disappear between querying its PID and its metrics. */ }
 }
 
-function diagnostic(state, event, details = {}) {
+function recordMemoryObservation(state, pid) {
+  const sample = state.samples.findLast(value => value.pid === pid && value.renderer);
+  if (!sample) return;
+  if (state.reportedMemoryPid !== pid) {
+    state.reportedMemoryPid = pid;
+    diagnostic(state, 'renderer-memory-ready');
+  }
+  const key = `${pid}:${sample.time}`;
+  if (state.monitorMemory && state.lastMonitoredMemoryKey !== key) {
+    state.lastMonitoredMemoryKey = key;
+    diagnostic(state, 'renderer-memory-sample', {}, [sample]);
+  }
+}
+
+function diagnostic(state, event, details = {}, samples = state.samples) {
   if (state.stopped) return;
   try {
     state.record({
       time: new Date().toISOString(), event, rendererPid: state.lastPid,
       electronVersion: process.versions.electron || null,
       chromiumVersion: process.versions.chrome || null,
-      ...details, memorySamples: state.samples.slice(),
+      ...details, memorySamples: samples.slice(),
     });
   } catch (error) {
     console.error('[electron] renderer diagnostic write failed:', error.code || error.name);
@@ -197,6 +216,7 @@ function stop(state) {
   clearWatchdog(state); cancelPrompt(state);
   if (state.pending) clearImmediate(state.pending);
   clearInterval(state.sampler);
+  state.memoryProbe.stop();
   for (const remove of state.listeners) remove();
   state.listeners.length = 0;
 }

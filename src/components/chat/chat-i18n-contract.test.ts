@@ -10,9 +10,12 @@ test('interactive shared chat cards resolve framework labels through locale cont
   }
   assert.match(source('AskCard'), /chat\.ask\.composerHint/);
   assert.match(source('DelegateCard'), /chat\.delegate\.executionSteps/);
-  assert.match(source('MessageImages'), /chat\.images\.open/);
-  assert.match(source('MessageImages'), /chat\.images\.missing/);
-  assert.match(source('MessageImages'), /onError/);
+  assert.match(source('MessageImages'), /ImageReferencePreview/);
+  const imagePreview = fs.readFileSync('src/components/common/ImageReferencePreview.tsx', 'utf8');
+  assert.match(imagePreview, /useLocale/);
+  assert.match(imagePreview, /chat\.images\.open/);
+  assert.match(imagePreview, /toolImageFailureKey/);
+  assert.match(imagePreview, /onError/);
   assert.match(source('QueuedChips'), /chat\.queue\.count/);
   assert.match(source('StructuredMessage'), /chat\.tool\.params/);
 });

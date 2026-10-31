@@ -17,8 +17,18 @@ export type ToolMediaScope =
   | ({ feature: 'tide' } & ({ taskId: string; runId: string } | { agentId: string; sessionId: string }));
 
 export function toolImageUrl(scope: ToolMediaScope, imageId: string): string {
+  return mediaUrl(scope, imageId, false);
+}
+
+/** Display-sized media only; loading a failed preview must never fall back to original bytes. */
+export function toolImagePreviewUrl(scope: ToolMediaScope, imageId: string): string {
+  return mediaUrl(scope, imageId, true);
+}
+
+function mediaUrl(scope: ToolMediaScope, imageId: string, preview: boolean): string {
   const { feature, ...identity } = scope;
   const query = new URLSearchParams(Object.entries(identity)
     .filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  if (preview) query.set('preview', '1');
   return backendUrl(`/api/tool-media/${feature}/${encodeURIComponent(imageId)}?${query}`);
 }

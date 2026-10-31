@@ -150,7 +150,8 @@ function createWindow() {
   });
 
   const rendererLifecycle = createRendererLifecycle({
-    app, window: mainWindow, dialog, url: backendMode.url,
+    app, window: mainWindow, dialog, ipcMain, url: backendMode.url,
+    monitorMemory: process.env.FOURTORM_RENDERER_MONITOR === '1',
     beforeRecover: () => executionSurfaceRegistry.detachAll(),
   });
   void rendererLifecycle.load();

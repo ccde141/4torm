@@ -5,7 +5,13 @@ import { DesktopDropLayer } from './components/desktop/DesktopDropLayer.tsx';
 import { LocaleProvider } from './i18n/LocaleContext.tsx';
 import ErrorBoundary from './components/layout/ErrorBoundary.tsx';
 import { ConnectionGate } from './components/connection/ConnectionGate.tsx';
+import { installReactMeasureCleanup } from './lib/react-performance-buffer';
 import './components/common/tool-result-images.css';
+
+if (import.meta.env.DEV) {
+  const stopTimingCleanup = installReactMeasureCleanup();
+  import.meta.hot?.dispose(stopTimingCleanup);
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

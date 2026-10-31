@@ -1,8 +1,8 @@
-import { useState } from 'react';
 import type { ImageAttachment } from '../../types';
 import type { ImageDraft } from '../../engine/chat/image-attachments';
-import { attachmentUrl } from '../../engine/chat/image-attachments';
+import { attachmentPreviewUrl, attachmentUrl } from '../../engine/chat/image-attachments';
 import { useLocale } from '../../i18n/LocaleContext';
+import ImageReferencePreview from '../common/ImageReferencePreview';
 
 export function ImageDrafts({ images, onRemove }: {
   images: ImageDraft[];
@@ -30,28 +30,10 @@ export function MessageImages({ images, agentId, sessionId }: {
   if (!images.length) return null;
   return (
     <div className={`chat__message-images chat__message-images--${images.length}`}>
-      {images.map(image => <MessageImage key={image.id} image={image}
-        agentId={agentId} sessionId={sessionId} />)}
+      {images.map(image => <ImageReferencePreview key={`${agentId}:${sessionId}:${image.id}`}
+        source={attachmentUrl(agentId, sessionId, image.id)}
+        preview={attachmentPreviewUrl(agentId, sessionId, image.id)}
+        name={image.name} size={image.size} />)}
     </div>
   );
-}
-
-function MessageImage({ image, agentId, sessionId }: {
-  image: ImageAttachment;
-  agentId: string;
-  sessionId: string;
-}) {
-  const { t } = useLocale();
-  const [missing, setMissing] = useState(false);
-  if (missing) {
-    return <div className="chat__message-image-missing" role="status">
-      <span aria-hidden="true">×</span>
-      <span>{t('chat.images.missing', { name: image.name })}</span>
-    </div>;
-  }
-  const src = attachmentUrl(agentId, sessionId, image.id);
-  return <a href={src} target="_blank" rel="noreferrer"
-    title={t('chat.images.open', { name: image.name })}>
-    <img src={src} alt={image.name} loading="lazy" onError={() => setMissing(true)} />
-  </a>;
 }

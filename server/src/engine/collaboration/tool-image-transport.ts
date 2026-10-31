@@ -1,7 +1,7 @@
 import type { FeatureModule } from './contracts.js';
 import { frameworkError } from '../shared/framework-error.js';
 import type { ToolImageRef } from '../shared/types.js';
-import { readToolImage, readToolImageRefs } from '../shared/tool-media-store.js';
+import { readToolImageBytes, readToolImageRefs } from '../shared/tool-media-store.js';
 import { recentToolImage } from '../shared/tool-media-access.js';
 
 export interface ToolImageLookup { imageId: string; target: Record<string, string> }
@@ -23,9 +23,8 @@ export function withToolImageTransport(module: FeatureModule, dataDir: string,
       const ref = findToolImage(sources, imageId) ?? recentToolImage({ dataDir,
         feature: module.manifest.id, target }, imageId);
       if (!ref) throw missingToolImage();
-      const image = await readToolImage(dataDir, ref);
-      return { mimeType: image.mimeType,
-        data: Buffer.from(image.dataUrl.slice(image.dataUrl.indexOf(',') + 1), 'base64') };
+      const { data, image } = await readToolImageBytes(dataDir, ref);
+      return { mimeType: image.mimeType, data };
     } } } };
 }
 

@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { CollaborationRouter } from '../../../engine/collaboration/router.js';
 import { humanContext } from '../../../routes/collaboration-context.js';
+import { toolImagePreview } from '../../../engine/shared/tool-image-preview.js';
+import { frameworkError } from '../../../engine/shared/framework-error.js';
 
 const UPLOAD_BODY_LIMIT = 12 * 1024 * 1024;
 
@@ -11,11 +13,15 @@ export async function conversationAttachmentRoutes(
     reply.send(await prepare(options.router, 'attachmentUpload', request.body, request))
   ));
 
-  app.get('/attachments/:agentId/:sessionId/:attachmentId', async (request, reply) => {
+  app.get<{ Querystring: { preview?: string } }>('/attachments/:agentId/:sessionId/:attachmentId', async (request, reply) => {
+    const preview = request.query.preview;
+    if (preview !== undefined && preview !== '1') throw frameworkError({ code: 'IMAGE_PREVIEW_INPUT_INVALID',
+      kind: 'validation', message: '图片预览参数无效', source: 'monsoon.attachments', retryable: false });
     const image = await prepare(options.router, 'attachmentRead', request.params,
       request) as { data: Buffer; mimeType: string };
-    return reply.header('Cache-Control', 'private, max-age=31536000, immutable')
-      .type(image.mimeType).send(image.data);
+    const data = preview === '1' ? await toolImagePreview(image.data) : image.data;
+    return reply.header('Cache-Control', 'private, no-store').header('X-Content-Type-Options', 'nosniff')
+      .type(preview === '1' ? 'image/webp' : image.mimeType).send(data);
   });
 
   app.delete('/attachments/:agentId/:sessionId/:attachmentId', async (request, reply) => (

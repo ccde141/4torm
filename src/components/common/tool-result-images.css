@@ -1,3 +1,5 @@
+@import './tool-image-viewer.css';
+
 .tool-result-images { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 10px; margin-top: 10px; max-width: 720px; }
 .tool-result-image { margin: 0; min-width: 0; overflow: hidden; border: 1px solid var(--border-color); border-radius: var(--radius-md, 10px); background: color-mix(in srgb, var(--color-bg-secondary) 36%, transparent); }
 .tool-result-image a { display: block; line-height: 0; }

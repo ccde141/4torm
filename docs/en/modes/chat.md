@@ -16,6 +16,10 @@ Select images with the attachment button, paste them, or drag them into the comp
 
 A message can include up to four PNG, JPEG, WebP, or GIF images, each no larger than 8 MB. Images are saved with the conversation and remain viewable when you reopen it. The selected model must also support image input for the agent to understand them.
 
+Click an image preview to view the original image. The viewer provides **Open in new tab** and **Close image** buttons in the upper-right corner. You can also press **Esc** to exit. After closing the image, you can continue working in the window underneath.
+
+If an image cannot be read, the viewer explains why and provides a **Reload image** button. If it says the image has been deleted or moved, check the file location first.
+
 ## Watch Execution
 
 While the agent replies, the interface shows its current activity. If the model provides reasoning, it appears separately from the final reply. Tool calls create expandable records where you can inspect arguments, results, and errors. File changes also show diffs.

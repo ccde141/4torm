@@ -3,6 +3,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 const { resolveBackendMode, prepareBackend } = require('./backend-runtime.cjs');
 
 test('remote Electron loads the backend origin without starting or waiting for a local backend', async () => {
@@ -33,14 +34,22 @@ test('the real preload exposes local file/surface capabilities only in local mod
   const source = fs.readFileSync(path.join(__dirname, 'preload.cjs'), 'utf8');
   for (const remote of [false, true]) {
     let exposed;
+    let unload;
+    const ipcRenderer = new EventEmitter();
+    ipcRenderer.invoke = () => Promise.resolve();
     vm.runInNewContext(source, {
-      process: { argv: remote ? ['--4torm-remote-client'] : [] },
-      require: () => ({ contextBridge: { exposeInMainWorld: (_name, api) => { exposed = api; } },
-        ipcRenderer: { invoke: () => Promise.resolve() },
-        webUtils: { getPathForFile: () => '/client-only/file.txt' } }),
+      process: { pid: 17, argv: remote ? ['--4torm-remote-client'] : [] },
+      window: { addEventListener: (event, listener) => { assert.equal(event, 'unload'); unload = listener; } },
+      require: name => name === './renderer-memory.cjs' ? require(name)
+        : ({ contextBridge: { exposeInMainWorld: (_name, api) => { exposed = api; } }, ipcRenderer,
+          webUtils: { getPathForFile: () => '/client-only/file.txt' } }),
     });
     assert.equal(exposed.backendMode, remote ? 'remote' : 'local');
     assert.equal(exposed.getPathForFile({}), remote ? '' : '/client-only/file.txt');
     assert.equal(Boolean(exposed.executionSurface), !remote);
+    assert.equal(Object.keys(exposed).some(key => /memory|diagnostic/i.test(key)), false);
+    assert.equal(ipcRenderer.listenerCount('renderer-memory:request'), 1);
+    unload();
+    assert.equal(ipcRenderer.listenerCount('renderer-memory:request'), 0);
   }
 });

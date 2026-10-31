@@ -248,6 +248,102 @@ test('recent memory observations are bounded and GPU failures are distinguished 
   assert.doesNotMatch(JSON.stringify(entry), /private data/);
 });
 
+test('renderer measurements pair with the existing bounded OS observations', async t => {
+  const ipcMain = new EventEmitter();
+  const f = lifecycleFixture(t, { ipcMain });
+  f.window.webContents.mainFrame = {};
+  f.window.webContents.send = (_channel, request) => ipcMain.emit('renderer-memory:response', {
+    sender: f.window.webContents, senderFrame: f.window.webContents.mainFrame,
+  }, { ...request, memory: { heap: { usedHeapSize: 70 }, blink: { allocated: 60 },
+    resources: { images: { count: 2, size: 50, liveSize: 40 } }, content: 'private-body' } });
+  await f.lifecycle.load();
+  for (let index = 0; index < 20; index++) f.window.webContents.emit('did-finish-load');
+  f.app.emit('child-process-gone', {}, { type: 'GPU', reason: 'crashed', exitCode: 1 });
+  const samples = f.entries.at(-1).memorySamples;
+  assert.equal(samples.length, 12);
+  assert.ok(samples.every(sample => sample.pid === 17 && sample.privateBytes === 19
+    && sample.renderer.heap.usedHeapSize === 70 && sample.renderer.blink.allocated === 60
+    && sample.renderer.resources.images.count === 2));
+  assert.doesNotMatch(JSON.stringify(f.entries), /private-body/);
+  assert.equal(f.entries.some(entry => entry.event === 'renderer-memory-sample'), false,
+    'continuous classification logging stays off by default');
+  f.lifecycle.stop();
+  assert.equal(ipcMain.listenerCount('renderer-memory:response'), 0);
+});
+
+test('the first classified memory observation is recorded once per renderer process after asynchronous IPC', async t => {
+  const ipcMain = new EventEmitter();
+  const f = lifecycleFixture(t, { ipcMain });
+  const requests = [];
+  let pid = 17;
+  f.window.webContents.mainFrame = {};
+  f.window.webContents.getOSProcessId = () => pid;
+  f.window.webContents.send = (_channel, request) => requests.push(request);
+  f.app.getAppMetrics = () => [{ pid, memory: { privateBytes: 40 } }];
+  const ready = () => f.entries.filter(entry => entry.event === 'renderer-memory-ready');
+  const reply = () => ipcMain.emit('renderer-memory:response', {
+    sender: f.window.webContents, senderFrame: f.window.webContents.mainFrame,
+  }, { ...requests.at(-1), memory: { heap: { usedHeapSize: 30 } } });
+  await f.lifecycle.load();
+  assert.equal(ready().length, 0);
+  reply();
+  assert.equal(ready().length, 0, 'the reply only enriches the existing ring');
+  f.window.webContents.emit('did-finish-load');
+  assert.equal(ready().length, 1);
+  assert.equal(ready()[0].rendererPid, 17);
+  assert.ok(ready()[0].memorySamples.some(sample => sample.pid === 17 && sample.renderer?.heap.usedHeapSize === 30));
+  for (let index = 0; index < 20; index++) f.window.webContents.emit('did-finish-load');
+  assert.equal(ready().length, 1, 'ordinary later sampling does not create periodic log records');
+  pid = 18;
+  f.window.webContents.emit('did-finish-load');
+  assert.equal(ready().length, 1, 'a previous PID measurement cannot mark the new renderer ready');
+  reply();
+  f.window.webContents.emit('did-finish-load');
+  assert.equal(ready().length, 2);
+  assert.equal(ready()[1].rendererPid, 18);
+  assert.ok(ready()[1].memorySamples.some(sample => sample.pid === 18 && sample.renderer?.heap.usedHeapSize === 30));
+});
+
+test('opt-in memory monitoring records each paired sample once and never attributes an old PID to the new renderer', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 0 });
+  const ipcMain = new EventEmitter();
+  const f = lifecycleFixture(t, { ipcMain, monitorMemory: true });
+  const requests = [];
+  let pid = 17;
+  f.window.webContents.mainFrame = {};
+  f.window.webContents.getOSProcessId = () => pid;
+  f.window.webContents.send = (_channel, request) => requests.push(request);
+  f.app.getAppMetrics = () => [{ pid, memory: { privateBytes: 40 } }];
+  const records = () => f.entries.filter(entry => entry.event === 'renderer-memory-sample');
+  const reply = () => ipcMain.emit('renderer-memory:response', {
+    sender: f.window.webContents, senderFrame: f.window.webContents.mainFrame,
+  }, { ...requests.at(-1), memory: { heap: { usedHeapSize: 30 } } });
+  const sample = () => { t.mock.timers.tick(10_000); f.window.webContents.emit('did-finish-load'); };
+  await f.lifecycle.load();
+  assert.equal(records().length, 0);
+  reply();
+  sample();
+  assert.equal(records().length, 1);
+  assert.equal(records()[0].memorySamples.length, 1);
+  assert.equal(records()[0].memorySamples[0].time, new Date(0).toISOString());
+  sample();
+  assert.equal(records().length, 1, 'another OS sample cannot duplicate an already recorded renderer measurement');
+  reply();
+  sample();
+  assert.equal(records().length, 2);
+  assert.equal(records()[1].memorySamples[0].time, new Date(20_000).toISOString());
+  pid = 18;
+  sample();
+  assert.equal(records().length, 2, 'old-PID classification is not logged as a new-PID sample');
+  reply();
+  sample();
+  assert.equal(records().length, 3);
+  assert.equal(records()[2].rendererPid, 18);
+  assert.equal(records()[2].memorySamples.length, 1);
+  assert.equal(records()[2].memorySamples[0].pid, 18);
+  assert.equal(records()[2].memorySamples[0].renderer.heap.usedHeapSize, 30);
+});
+
 test('local diagnostic files rotate within two bounded files', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), '4torm-renderer-log-'));
   try {

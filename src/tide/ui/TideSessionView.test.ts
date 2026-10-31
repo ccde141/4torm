@@ -29,7 +29,8 @@ test('潮汐工具截图按打开的会话身份展示，同时保留原始工�
     toolImages: [{ id: 'shot-a', name: 'desktop.png', mimeType: 'image/png', size: 128 }] }]));
   assert.match(html, /metadata/);
   assert.match(html, /api\/tool-media\/tide\/shot-a\?agentId=agent-test&amp;sessionId=tide-session-view/);
-  assert.match(html, /alt="desktop.png"/);
+  assert.match(html, /aria-label="查看原图：desktop.png"/);
+  assert.doesNotMatch(html, /<img/);
 });
 
 test('潮汐会话保留实际消息、独立会话身份及真实用量，不展示系统提示词', () => {

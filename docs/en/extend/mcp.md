@@ -112,6 +112,10 @@ Results explain unavailable or unconfirmed image support, invalid or oversized i
 
 Tool records include previews of saved images and links to their originals, scoped to the owning conversation or execution. Reloading an image only reads the saved file; it does not repeat capture or input tools. A visible frontend preview does not prove that a model received the image: model capability checks and the actual provider request still determine that.
 
+Click an image preview to view the original image. The viewer provides **Open in new tab** and **Close image** buttons in the upper-right corner. You can also press **Esc** to exit. After closing the image, you can continue working in the window underneath.
+
+If an image cannot be read, the viewer explains why and provides a **Reload image** button. If it says the image has been deleted or moved, check the file location first.
+
 ## Visual Desktop Example
 
 The general loop is **capture → model chooses an action from the image → invoke the action tool → receive a new screenshot → model checks the result**. It uses the existing agent execution loop. The MCP service performs the operation, the Skill describes how to use it, and 4torm manages tool selection, execution, and image delivery.

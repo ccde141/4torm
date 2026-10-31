@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   attachmentUrl,
+  attachmentPreviewUrl,
   deleteConversationAttachment,
   validateImageSelection,
 } from './image-attachments.js';
@@ -27,4 +28,10 @@ test('附件地址对会话索引逐段编码', () => {
     attachmentUrl('agent-a', 'session-a', 'image 1'),
     '/api/conversation/attachments/agent-a/session-a/image%201',
   );
+});
+
+test('附件预览使用同一归属地址并明确请求缩略图，原图地址不变', () => {
+  const original = '/api/conversation/attachments/agent%2Fa/session%20a/image%3F1';
+  assert.equal(attachmentUrl('agent/a', 'session a', 'image?1'), original);
+  assert.equal(attachmentPreviewUrl('agent/a', 'session a', 'image?1'), `${original}?preview=1`);
 });

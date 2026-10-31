@@ -238,3 +238,44 @@ test('each continuation has its own bubble and exact reasoning slice with one sh
   assert.equal((html.match(/class="chat__bubble-actions"/g) ?? []).length, 1);
   assert.deepEqual(message, original);
 });
+
+test('long worklogs mount a bounded latest window with original tool indexes', () => {
+  const steps = Array.from({ length: 241 }, (_, index) => ({ tool: 'framework_status',
+    args: { index }, result: `result-${index}`, status: 'done' as const }));
+  const message: ChatMessage = { ...fixture, content: '最终答复', toolSteps: steps,
+    activitySequence: [...steps.map((_, index) => ({ kind: 'tool' as const, index })),
+      { kind: 'text', content: '最终答复' }] };
+  const original = structuredClone(message);
+  const html = renderSequence(message, { streaming: true });
+  assert.equal((html.match(/data-fixture-tool=/g) ?? []).length, 80);
+  assert.doesNotMatch(html, /data-fixture-tool="0"/);
+  assert.match(html, /data-fixture-tool="161"/);
+  assert.match(html, /data-fixture-tool="240"/);
+  assert.match(html, /data-tool-start="162"/);
+  assert.match(html, /241 项工具操作/);
+  assert.match(html, /上一段/);
+  assert.match(html, /下一段/);
+  assert.match(html, /最终答复/);
+  assert.deepEqual(message, original);
+});
+
+test('bounded windows retain the exact tool offsets on both sides of compaction', () => {
+  const steps = Array.from({ length: 250 }, (_, index) => ({ tool: 'framework_status',
+    args: { index }, result: `result-${index}`, status: 'done' as const }));
+  const message: ChatMessage = { ...fixture, content: '继续执行', toolSteps: steps,
+    activitySequence: [...steps.slice(0, 125).map((_, index) => ({ kind: 'tool' as const, index })),
+      { kind: 'compact', markerId: 'long-window-boundary', toolOffset: 125, timestamp: '' },
+      ...steps.slice(125).map((_, index) => ({ kind: 'tool' as const, index: 125 + index })),
+      { kind: 'text', content: '继续执行' }] };
+  const original = structuredClone(message);
+  const html = renderSequence(message);
+  assert.equal((html.match(/data-fixture-tool=/g) ?? []).length, 160);
+  assert.match(html, /data-fixture-tool="45"/);
+  assert.match(html, /data-fixture-tool="124"/);
+  assert.match(html, /data-fixture-tool="170"/);
+  assert.match(html, /data-fixture-tool="249"/);
+  assert.equal((html.match(/data-tool-start="46"/g) ?? []).length, 2);
+  assert.equal((html.match(/data-marker-id="long-window-boundary"/g) ?? []).length, 1);
+  assert.match(html, /data-tool-offset="125"/);
+  assert.deepEqual(message, original);
+});

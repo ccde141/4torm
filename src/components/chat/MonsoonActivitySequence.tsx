@@ -9,6 +9,8 @@ import BoundedMessageText from './BoundedMessageText';
 import { useProcessFade } from './useProcessFade';
 import BoundedText from '../../engine/text-display/BoundedText';
 import { compactionHistoryContent } from '../common/compaction-history';
+import { worklogRunStart, worklogWindow } from './worklog-window';
+import WorklogPager from './WorklogPager';
 import './monsoon-activity.css';
 
 interface Props {
@@ -70,7 +72,13 @@ function TurnWorklog({ message, work, streaming, renderTools, continued, toolOff
   const pending = steps.some(step => step.status === 'running' || step.status === 'pending');
   const [open, setOpen] = useState(true);
   const [expanded, setExpanded] = useState(false);
-  const { viewport, content } = useProcessFade(open, expanded, streaming);
+  const [selectedEnd, setSelectedEnd] = useState<number | null>(null);
+  const page = worklogWindow(work, selectedEnd);
+  const { viewport, content } = useProcessFade(open, expanded, streaming && page.followingLatest);
+  const select = (end: number | null) => {
+    setSelectedEnd(end);
+    if (viewport.current) viewport.current.scrollTop = 0;
+  };
   const state = continued ? (english ? 'Continued' : '已接续')
     : message.streamStopped ? (english ? 'Turn stopped' : '本轮已停止')
     : failed ? t('chat.tool.failedCount', { count: failed })
@@ -94,17 +102,20 @@ function TurnWorklog({ message, work, streaming, renderTools, continued, toolOff
         aria-pressed={expanded} onClick={() => setExpanded(value => !value)}>{expanded
           ? (english ? 'Limit height' : '限高预览') : (english ? 'Full height' : '完整高度')}</button>}
     </div>
-    <div id={id} ref={viewport} hidden={!open} className={`monsoon-turn__worklog-body${expanded ? ' is-expanded' : ''}`} tabIndex={0}
+    {open && <WorklogPager page={page} select={select} />}
+    {open && <div id={id} ref={viewport} className={`monsoon-turn__worklog-body${expanded ? ' is-expanded' : ''}`} tabIndex={0}
       role="region" aria-label={english ? 'Execution process' : '执行过程'}>
       <div ref={content} className="monsoon-turn__worklog-content">
-        <WorklogItems sequence={work} message={message} renderTools={renderTools} toolOffset={toolOffset} />
+        <WorklogItems sequence={page.items} message={message} renderTools={renderTools}
+          toolOffset={toolOffset} activityOffset={page.start}
+          firstToolAnchor={worklogRunStart(work, page.start, item => item.kind === 'tool')} />
       </div>
-    </div>
+    </div>}
   </section>;
 }
 
-function WorklogItems({ sequence, message, renderTools, toolOffset }: Pick<Props, 'message' | 'renderTools'> & {
-  sequence: ChatActivity[]; toolOffset: number;
+function WorklogItems({ sequence, message, renderTools, toolOffset, activityOffset, firstToolAnchor }: Pick<Props, 'message' | 'renderTools'> & {
+  sequence: ChatActivity[]; toolOffset: number; activityOffset: number; firstToolAnchor: number;
 }) {
   const nodes: ReactNode[] = [];
   for (let index = 0; index < sequence.length; index++) {
@@ -118,18 +129,18 @@ function WorklogItems({ sequence, message, renderTools, toolOffset }: Pick<Props
         index++;
       }
       index--;
-      if (steps.length) nodes.push(<div className="monsoon-turn__tools" key={`tools-${start}`}
+      if (steps.length) nodes.push(<div className="monsoon-turn__tools" key={`tools-${start === 0 ? firstToolAnchor : activityOffset + start}`}
         data-tool-start={item.index - toolOffset + 1}>
         {renderTools(steps, item.index)}</div>);
     } else if (item.kind === 'team') {
       nodes.push(<TeamActivityRow key={teamActivityKey(item.event)} event={item.event} />);
     } else if (item.kind === 'text' && item.content.trim()) {
-      nodes.push(<div key={`text-${index}`} className="monsoon-turn__note">
-        <BoundedMessageText text={item.content} id={`${message.id}-note-${index}`} />
+      nodes.push(<div key={`text-${activityOffset + index}`} className="monsoon-turn__note">
+        <BoundedMessageText text={item.content} id={`${message.id}-note-${activityOffset + index}`} />
       </div>);
     }
   }
-  return <>{nodes.map((node, index) => <Fragment key={index}>{node}</Fragment>)}</>;
+  return <>{nodes}</>;
 }
 
 function CompactionBoundary({ boundary, marker }: { boundary: ExecutionBoundary; marker?: ChatMessage }) {

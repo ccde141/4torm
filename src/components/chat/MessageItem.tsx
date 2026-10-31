@@ -191,7 +191,7 @@ function MessageItemInner({
           phase={isStreaming && !compacting && <LivePhase phase={msg.streamingPhase ?? 'llm-waiting'}
             elapsed={msg.phaseElapsed} tool={msg.streamingTool || lastTool}
             argumentChars={msg.streamingArgumentChars} notice={msg.streamingStatus} />}
-          renderTools={(steps, offset) => <ToolActivityList items={steps} stopped={msg.streamStopped}
+          renderTools={(steps, offset) => <ToolActivityList items={steps} stopped={msg.streamStopped} offset={offset} source={msg.toolSteps}
             renderItem={(step, index) => renderToolStep(step, `${msg.id}-${offset + index}`, msg.timestamp, msg.streamStopped, mediaScope)} />}
           actions={!isStreaming ? <>
             <button className="chat__msg-action-btn" title={t('common.edit')} aria-label={t('chat.editMessage')} onClick={() => onStartEdit(msg)}>✏</button>

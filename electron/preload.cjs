@@ -5,8 +5,11 @@
  * 必须用 webUtils.getPathForFile(file)，且只能在 preload（主世界之外）调用。
  */
 
-const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webUtils, webFrame } = require('electron');
+const { installRendererMemoryReporter } = require('./renderer-memory.cjs');
 const remoteClient = process.argv.includes('--4torm-remote-client');
+const stopMemoryReporter = installRendererMemoryReporter({ ipcRenderer, process, webFrame });
+window.addEventListener('unload', stopMemoryReporter, { once: true });
 
 contextBridge.exposeInMainWorld('desktop', {
   isElectron: true,

@@ -63,3 +63,31 @@ test('framework tools and solitary ordinary tools remain immediately visible', (
   ]);
   assert.deepEqual(result.mounted, ['read_file', 'ask', 'write_file']);
 });
+
+test('large legacy tool lists keep their original absolute indexes in the bounded latest window', () => {
+  const indexes: number[] = [];
+  const items = Array.from({ length: 241 }, (_, index) => ({ tool: `team_fixture_${index}`, status: 'done' }));
+  const original = structuredClone(items);
+  const html = renderToStaticMarkup(createElement(LocaleProvider, null,
+    createElement(ToolActivityList, { items, renderItem: (item, index) => {
+      indexes.push(index);
+      return createElement('span', { key: item.tool }, item.tool);
+    } })));
+  assert.equal(indexes.length, 80);
+  assert.equal(indexes[0], 161);
+  assert.equal(indexes.at(-1), 240);
+  assert.match(html, /上一段/);
+  assert.match(html, /team_fixture_240/);
+  assert.doesNotMatch(html, /team_fixture_0</);
+  assert.deepEqual(items, original);
+});
+
+test('a single visible tool keeps its original multi-tool group at a display window edge', () => {
+  const items = [{ tool: 'read_file', status: 'done' }, { tool: 'write_file', status: 'done' },
+    ...Array.from({ length: 79 }, (_, index) => ({ tool: `team_fixture_${index}`, status: 'done' }))];
+  const html = renderToStaticMarkup(createElement(LocaleProvider, null,
+    createElement(ToolActivityList, { items, renderItem: (item, index) => createElement('span', { key: index }, item.tool) })));
+  assert.match(html, /tool-activity-group__summary/);
+  assert.match(html, /1 项工具操作/);
+  assert.doesNotMatch(html, /<span>write_file<\/span>/);
+});

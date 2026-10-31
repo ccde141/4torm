@@ -12,6 +12,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useLayoutE
 import { createPortal } from 'react-dom';
 import { useLocale } from '../../i18n/LocaleContext';
 import { createConfirmationController, type ConfirmationState } from './confirmation-controller';
+import { confirmationCapturesKey } from './native-modal-keys';
 
 export interface ConfirmOptions {
   title: string;
@@ -67,7 +68,7 @@ function ConfirmView({ state, onClose }: {
   }, []);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (!['Escape', 'Enter', 'Tab'].includes(event.key)) return;
+      if (!confirmationCapturesKey(event)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (closing || event.repeat) return;
