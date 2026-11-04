@@ -17,6 +17,8 @@ import { inspectToolNames } from '../tools/tool-name-policy.js';
 import type { McpToolOutcome } from '../engine/shared/mcp-types.js';
 import { legacyToolArguments, type ToolArguments } from '../engine/shared/tool-arguments.js';
 import { persistToolOutcome } from '../engine/shared/tool-media-store.js';
+import { executionCapabilities } from './builtin-execution-capabilities.js';
+import type { ExecutionCapabilityOwner } from './execution-capability-registry.js';
 
 export { ToolPermissionError } from '../engine/shared/tool-authorization.js';
 
@@ -96,10 +98,11 @@ export async function executeTool(
   onMeta?: (meta: unknown) => void,
   signal?: AbortSignal,
   onOutput?: (stream: 'stdout' | 'stderr', text: string) => void,
+  observation?: ExecutionCapabilityOwner,
 ): Promise<string> {
   return (await executeToolOutcome(
     dataDir, tool, args, agentId, workspaceDirOverride, sandboxLevelOverride,
-    onMeta, signal, onOutput,
+    onMeta, signal, onOutput, observation,
   )).result;
 }
 
@@ -108,8 +111,11 @@ export async function executeToolOutcome(
   ...params: Parameters<typeof executeTool>
 ): Promise<McpToolOutcome> {
   const [dataDir, tool, rawArgs, agentId, workspaceDirOverride, sandboxLevelOverride,
-    onMeta, signal, onOutput] = params;
+    onMeta, signal, onOutput, observation] = params;
   if (signal?.aborted) throw createAbortError();
+  const capability = executionCapabilities.findTool(tool);
+  if (capability) return { result: await capability.execute({ dataDir, agentId,
+    args: legacyToolArguments(rawArgs), observation, signal }), ok: true };
   if (tool.startsWith('mcp:')) return executeMcpToolOutcome(dataDir, tool, rawArgs, agentId, signal);
   const args = legacyToolArguments(rawArgs);
   const resolved = await resolveToolDefinition(dataDir, tool);

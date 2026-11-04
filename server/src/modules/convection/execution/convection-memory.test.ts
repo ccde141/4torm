@@ -33,9 +33,9 @@ test('对流参与者使用各自 Agent 的长期记忆且互不串线', async t
 });
 
 test('对流追加记忆工具但不复制已有同名定义', () => {
-  const existing = { name: 'memory_list', description: 'existing' };
+  const existing = { name: 'recall_search', description: 'existing' };
   const tools = withConvectionMemoryTools([existing]);
-  assert.deepEqual(tools.map(tool => tool.name), ['memory_list', 'memory_write', 'memory_read']);
+  assert.deepEqual(tools.map(tool => tool.name), ['recall_search', 'recall_read', 'memory_manage']);
   assert.equal(tools[0], existing);
 });
 

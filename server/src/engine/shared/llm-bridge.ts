@@ -49,6 +49,7 @@ import { parseAnthropicSSEStream } from './provider-transports/anthropic-stream.
 import type { ProviderProtocol } from './provider-transports/protocol.js';
 import { parseTextToolResponse } from './text-tool-protocol.js';
 import { TextToolStreamGate } from './text-tool-stream-gate.js';
+import { assertProviderStreamComplete } from './provider-stream-completion.js';
 import { resolveProviderSelection } from '../../model-runtime/config/provider-selection.js';
 import { resolveProviderAdapter } from '../../model-runtime/providers/registry.js';
 import { resolveLoggedProviderSelection } from '../../model-runtime/config/provider-selection-log.js';
@@ -654,6 +655,7 @@ async function parseSSEStream(
   let fullReasoning = '';
   let reasoningDetails: unknown[] = [];
   let finishReason: 'stop' | 'length' | 'tool_calls' | null = null;
+  let explicitEnd = false;
   let usage: TokenUsage | undefined;
   let inputReported = false;
   let outputReported = false;
@@ -712,7 +714,7 @@ async function parseSSEStream(
       const trimmed = line.trim();
       if (!trimmed || !trimmed.startsWith('data:')) return false;
       const payload = trimmed.slice(5).trim();
-      if (payload === '[DONE]') return true;
+      if (payload === '[DONE]') { explicitEnd = true; return true; }
 
       let parsed: unknown;
       try { parsed = JSON.parse(payload); } catch { return false; }
@@ -842,6 +844,8 @@ async function parseSSEStream(
   // 再把最后一段未被换行终结的内容处理掉——否则末尾（常是思维链/正文结尾）会丢。
   buffer += decoder.decode();
   if (buffer) for (const line of buffer.split('\n')) processLine(line);
+
+  assertProviderStreamComplete(explicitEnd || finishReason !== null);
 
   logAccum(`完成(finish=${finishReason ?? '无'})`);
 

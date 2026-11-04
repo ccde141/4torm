@@ -57,7 +57,7 @@ async function main() {
     const dir = await tmpData();
     await writeMemory(dir, AID, { summary: '用户偏好原子写', detail: '硬偏好', category: 'feedback', source: 's', now: NOW });
     const seg = await recallMemory(dir, AID); // 不给 taskHint
-    assert.match(seg, /你的经验记忆/);
+    assert.match(seg, /回想起的记忆/);
     assert.match(seg, /硬偏好/);
   });
 

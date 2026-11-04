@@ -69,6 +69,12 @@ The agent can inspect status, wait for tasks to finish, read results, and arrang
 
 A Monsoon agent can write a custom tool and request its registration. Once you confirm registration in the conversation, the tool enters the global list. You can then enable it for the relevant agents in the console.
 
+## Memory and Recall
+
+Ask the Agent to save preferences, agreements, and experience worth referring to across conversations. Under **Settings → Memory recall**, you can enable indexed and model-assisted recall separately. References actually included through automatic recall appear above the corresponding human message; expand them to inspect their content and sources.
+
+See [Memory and Recall](../guide/memory) for recall timing, model selection, and using compaction work records.
+
 ## Manage Long Conversations
 
 When a conversation grows long, send `/compact` after the current reply finishes to summarize its history and continue. Find the automatic compaction switch, thresholds, history retention fraction, and compaction model under **Configuration → Settings → Conversation compaction** in the sidebar.

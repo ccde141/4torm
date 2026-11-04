@@ -6,6 +6,8 @@ import {
 import { resolveProviderSelection } from '../config/provider-selection.js';
 import { normalizeChatRequestBody } from './request-normalization.js';
 import { providerRequestHeaders } from './runtime-fetch.js';
+import { mergeCustomRequestParameters } from './custom-request-parameters.js';
+import { createVisionProbe, matchesVisionProbe, type VisionProbe } from './vision-probe.js';
 
 type Capability = 'tools' | 'vision';
 export interface ToolProbeResult {
@@ -19,7 +21,6 @@ export interface VisionProbeResult {
   error?: string;
 }
 interface ProbeOptions { fetchImpl?: typeof fetch; timeoutMs?: number }
-const IMAGE = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 const PING = { name: 'ping', description: '连通性探测工具，调用它回复 pong',
   parameters: { type: 'object', properties: {}, required: [] } };
 
@@ -78,7 +79,8 @@ export async function requestProbe(
   }
   const headers = providerRequestHeaders(provider, anthropic ? 'anthropic-messages' : 'openai-chat-completions',
     { 'Content-Type': 'application/json', Accept: 'application/json' });
-  const body = buildProbeBody(provider, model, capability, anthropic);
+  const vision = createVisionProbe();
+  const body = buildProbeBody(provider, model, capability, anthropic, vision);
   const signal = AbortSignal.timeout(options.timeoutMs ?? 60_000);
   try {
     const response = await (options.fetchImpl ?? fetch)(url, {
@@ -91,7 +93,9 @@ export async function requestProbe(
       return rejected(capability, response.status, detail);
     }
     if (!isRecord(value)) return failed(capability, '模型服务未返回有效的探测响应');
-    if (capability === 'vision') return { status: 'supported' };
+    if (value.error) return failed(capability, errorDetail(value, provider) || '模型服务返回探测错误');
+    if (capability === 'vision') return matchesVisionProbe(value, vision)
+      ? { status: 'supported' } : failed(capability, '未能确认模型正确识别探测图片，请检查模型的视觉能力');
     const native = hasPingCall(value);
     return { reachable: true, native, status: native ? 'native-confirmed' : 'unknown' };
   } catch {
@@ -99,24 +103,26 @@ export async function requestProbe(
   }
 }
 
-export function buildProbeBody(provider: StoredProvider, model: string, capability: Capability, anthropic = false) {
-  if (anthropic) return {
-    model, max_tokens: capability === 'tools' ? 64 : 8,
+export function buildProbeBody(provider: StoredProvider, model: string, capability: Capability, anthropic = false,
+  vision: VisionProbe = createVisionProbe()): Record<string, unknown> {
+  const maxTokens = capability === 'tools' ? 64 : 32;
+  if (anthropic) return boundProbeOutput(mergeCustomRequestParameters({
+    model, max_tokens: maxTokens,
     messages: [{ role: 'user', content: capability === 'tools' ? '请调用 ping 工具。' : [
-      { type: 'text', text: 'Reply with OK after reading this image.' },
-      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: IMAGE } },
+      { type: 'text', text: vision.prompt },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: vision.image } },
     ] }],
     ...(capability === 'tools' ? { tools: [{ name: PING.name, description: PING.description,
       input_schema: PING.parameters }], tool_choice: { type: 'auto' } } : {}),
-  };
+  }, provider.customRequestParameters), maxTokens);
   const source: Record<string, unknown> = {
-    model, max_tokens: capability === 'tools' ? 64 : 8,
+    model, max_tokens: maxTokens,
     messages: capability === 'tools' ? [
       { role: 'system', content: '你是一个工具调用测试助手。' },
       { role: 'user', content: '请调用 ping 工具。' },
     ] : [{ role: 'user', content: [
-      { type: 'text', text: 'Reply with OK after reading this image.' },
-      { type: 'image_url', image_url: { url: `data:image/png;base64,${IMAGE}` } },
+      { type: 'text', text: vision.prompt },
+      { type: 'image_url', image_url: { url: `data:image/png;base64,${vision.image}` } },
     ] }],
     ...(capability === 'tools' ? { tools: [{ type: 'function', function: PING }], tool_choice: 'auto' } : {}),
   };
@@ -124,14 +130,24 @@ export function buildProbeBody(provider: StoredProvider, model: string, capabili
   const body = normalizeChatRequestBody({ baseUrl: provider.baseUrl, model,
     ...(selection.source === 'explicit' ? { providerType: selection.providerType } : {}),
     profile: provider.modelProfiles?.[model],
+    generationDefaults: provider.generationDefaults,
+    customRequestParameters: provider.customRequestParameters,
+    runtimePolicy: provider.runtimePolicy,
   }, source);
-  if (selection.providerType === 'llama-cpp') body.chat_template_kwargs = { enable_thinking: false };
+  return boundProbeOutput(body, maxTokens);
+}
+
+function boundProbeOutput(body: Record<string, unknown>, limit: number): Record<string, unknown> {
+  for (const key of ['max_tokens', 'max_completion_tokens']) {
+    if (typeof body[key] === 'number') body[key] = Math.min(body[key], limit);
+  }
   return body;
 }
 
 function probeIdentity(provider: StoredProvider, model: string): string {
   return createHash('sha256').update(JSON.stringify([
     resolveToolTransportContract(provider, model), provider.apiKey, provider.customHeaders ?? provider.headers,
+    provider.generationDefaults, provider.customRequestParameters, provider.runtimePolicy,
   ])).digest('hex');
 }
 function hasPingCall(value: Record<string, unknown>): boolean {

@@ -708,6 +708,7 @@ export class NodeRunner {
         nodeId: this.opts.nodeId, kind: 'node' } },
       agentId: this.opts.agentId,
       workspaceDir: this.opts.workspace,
+      observation: { scope: 'conversation', ownerId: `tradewind:${this.opts.workflowId}:${this.opts.executionId}:${this.opts.nodeId}` },
       sandboxLevel: this.opts.sandboxLevel,
       signal,
       onMeta,

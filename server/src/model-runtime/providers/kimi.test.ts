@@ -34,6 +34,19 @@ test('Kimi K3 rejects a disabled thinking selection instead of silently ignoring
   }, { ...source, model: 'kimi-k3' }), /Kimi K3.*不能关闭思考/);
 });
 
+test('Kimi K3 point releases retain reasoning controls and verified limits without matching unrelated names', () => {
+  for (const model of ['kimi-k3.1-pro', 'kimi-k3.1-pro-preview', 'KIMI-K3.1-PRO']) {
+    const identity = { baseUrl: 'https://api.moonshot.ai/v1', model, providerType: 'kimi' as const,
+      generationDefaults: { reasoningEffort: 'high' } };
+    const body = normalizeChatRequestBody(identity, { ...source, model });
+    assert.equal(body.reasoning_effort, 'high');
+    assert.equal(body.thinking, undefined);
+    assert.equal(resolveProviderAdapter(identity).generationLimits?.(identity).contextWindowTokens, 1_048_576);
+  }
+  assert.throws(() => normalizeChatRequestBody({ baseUrl: 'https://api.moonshot.ai/v1',
+    model: 'kimi-k30', providerType: 'kimi', generationDefaults: { reasoningEffort: 'high' } }, source), /仅适用于/);
+});
+
 test('Kimi K2.6 maps explicit thinking and keeps reasoning history', () => {
   const enabled = normalizeChatRequestBody({
     baseUrl: 'https://api.moonshot.ai/v1', model: 'kimi-k2.6', providerType: 'kimi',

@@ -33,6 +33,7 @@ export interface SessionToolExtension {
 }
 
 export interface SessionToolDispatcherInput {
+  executionOwner?: import('../../services/execution-capability-registry.js').ExecutionCapabilityOwner;
   toolMediaScope?: import('../shared/tool-media-access.js').ToolMediaScope;
   dataDir: string;
   agentId: string;
@@ -175,7 +176,7 @@ async function executeMemory(
 ): Promise<DispatchResult> {
   input.emit({ type: 'tool-call', tool, args });
   try {
-    const result = await execMemoryTool(input.dataDir, input.agentId, 'conversation', tool, args);
+    const result = await execMemoryTool(input.dataDir, input.agentId, 'conversation', tool, args, input.sessionId);
     input.emit({ type: 'tool-result', tool, result, ok: true });
     return result;
   } catch (error) {
@@ -235,14 +236,14 @@ async function executeDefault(
   try {
     let meta: unknown;
     const outcome = await execToolUnifiedOutcome({
-      tool, args, agentId: input.agentId, workspaceDir: input.workspace,
+      dataDir: input.dataDir, tool, args, agentId: input.agentId, workspaceDir: input.workspace,
       mediaAccess: input.toolMediaScope ? { dataDir: input.dataDir, ...input.toolMediaScope }
         : input.sessionId ? { dataDir: input.dataDir, feature: 'monsoon',
           target: { agentId: input.agentId, sessionId: input.sessionId } } : undefined,
       sandboxLevel: input.sandboxLevel, signal: input.signal,
       onMeta: value => { meta = value; },
-      observation: input.sessionId
-        ? { scope: 'conversation', ownerId: input.sessionId } : undefined,
+      observation: input.executionOwner ?? (input.sessionId
+        ? { scope: 'conversation', ownerId: input.sessionId } : undefined),
     });
     input.ledger.record(meta);
     input.emit({ type: 'tool-result', tool, ...outcome, meta });

@@ -116,23 +116,25 @@ function buildSelfDispatchSection(allowAsk: boolean, allowDelegate: boolean): st
 function buildMemoryAwarenessSection(): string {
   return `## 你的长期记忆
 
-你有跨会话、跨任务的长期记忆。这次记下的，下次相关对话开始时会自动出现在上方「你的经验记忆」里。
+你有跨会话、跨任务的长期记忆，可通过记忆工具查询，也可能作为历史参考随当前发言附带。
 
-### 积极记录（用 memory_write）
-**宁可多记，不要漏记**。只要出现对未来有复用价值的信息，就立刻记一条，别等：
+### 积极记录（用 memory_manage）
+记录已确认且对未来有复用价值的信息，优先维护已有条目：
 - 用户表达偏好、习惯、约定，或纠正了你的做法 → category=feedback
-- 用户说"记住/以后/务必/别再/我们约定"这类跨会话指令 → **必须** memory_write，这是硬信号
+- 用户说"记住/以后/务必/别再/我们约定"这类跨会话指令 → 应保存到记忆，已有条目则更新
 - 你踩坑并找到规避法 → category=pitfall
 - 确认了可复用的事实（项目约定、文件路径、接口、数据位置）→ category=fact
 - 值得回访的外部资源 → category=reference
 
 ### 防噪音（唯一约束）
-写入前先 memory_list 看有没有同类，**有则不重复写**；summary 要一句话说清（召回匹配的关键）。
+保存或修改前先 recall_search(kind=memory) 查同主题或旧版本，再 recall_read(id) 核对正文和 updated。已有条目用 memory_manage(action=update) 合并或修正，没有合适条目才用 action=create；暂时不用用 action=archive，恢复用 action=restore，确认过时或合并后可用 action=delete。除create外携带原memory:ID和expectedUpdated，冲突后重新读取。
 
 ### 工具
-- memory_write(summary, detail, category, tags?) — 记一条
-- memory_list() — 查已有，去重
-- memory_read(slug) — 读某条全文`;
+- recall_search — 搜索或分页浏览记忆与工作记录
+- recall_read — 读取正文、来源与更新版本
+- memory_manage — 创建、修改、归档、恢复或删除精选记忆
+
+回想起的记忆仅作历史参考，优先响应人类当前需求；只有人类当前明确要求按旧计划继续时，才将相应计划作为执行依据。`;
 }
 
 /** 原生模式的精简协议段 */

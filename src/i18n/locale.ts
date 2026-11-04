@@ -23,6 +23,8 @@ import { mcpEn, mcpZh } from './mcp-messages';
 import { modelSettingsEn, modelSettingsZh } from './model-settings-messages';
 import { dashboardEn, dashboardZh } from './dashboard-messages';
 import { compactionEn, compactionZh } from './compaction-messages';
+import { memoryRecallEn, memoryRecallZh } from './memory-recall-messages';
+import { workRecordEn, workRecordZh } from './work-record-messages';
 
 export type Locale = 'zh-CN' | 'en-US';
 
@@ -107,6 +109,14 @@ const coreZh = {
   'permission.projectHint': '文件工具可访问 4torm 项目和当前工作区，无论工作区位于何处；其他外部路径会被拒绝。',
   'permission.unrestrictedHint': '文件工具可访问任意路径；框架管理数据仍需通过专用工具修改。',
   'memory.feedback': '偏好/纠正',
+  'memory.archive': '归档', 'memory.restore': '恢复',
+  'memory.all': '全部', 'memory.frequent': '常用', 'memory.normal': '普通', 'memory.archived': '归档',
+  'memory.allHint': '按摘要浏览，展开查看原文', 'memory.frequentHint': '经常查阅的偏好、方法与约定',
+  'memory.normalHint': '按当前任务查找相关资料', 'memory.archivedHint': '保留备查，不参与自动召回',
+  'memory.libraryDescription': '整理偏好、经验和资料，按需要查找与维护。', 'memory.tierLabel': '记忆分层',
+  'memory.search': '搜索摘要、标签和正文', 'memory.allCategories': '全部类别', 'memory.resultCount': '{count} 条记忆',
+  'memory.noResults': '没有符合当前筛选的记忆', 'memory.showMore': '加载更多',
+  'memory.summaryLabel': '摘要', 'memory.summaryPlaceholder': '简述这条记忆的内容与适用范围', 'memory.refresh': '刷新',
   'memory.fact': '事实',
   'memory.pitfall': '踩坑',
   'memory.reference': '资源',
@@ -116,7 +126,7 @@ const coreZh = {
   'memory.category': '类别',
   'memory.addTags': '＋ 添加标签',
   'memory.tagsPlaceholder': '标签，逗号分隔（可选，留空即可，系统也会自动补）',
-  'memory.hint': '摘要与检索标签交给系统自动整理，专心写内容就好。',
+  'memory.hint': '摘要可留空，由正文生成；标签用于后续查找。',
   'memory.title': '🧠 长期记忆',
   'memory.subtitle': '{agent} · 跨会话积累的经验（您可以随时查看与编辑）',
   'memory.close': '关闭长期记忆',
@@ -236,6 +246,14 @@ const coreEn: Record<keyof typeof coreZh, string> = {
   'permission.projectHint': 'File tools can access the 4torm project and current workspace wherever it is located. Other external paths are denied.',
   'permission.unrestrictedHint': 'File tools can access any path. Framework-managed data still requires dedicated tools.',
   'memory.feedback': 'Preference / correction',
+  'memory.archive': 'Archive', 'memory.restore': 'Restore',
+  'memory.all': 'All', 'memory.frequent': 'Frequent', 'memory.normal': 'Standard', 'memory.archived': 'Archived',
+  'memory.allHint': 'Browse summaries; expand to read the full memory', 'memory.frequentHint': 'Frequently used preferences, methods and agreements',
+  'memory.normalHint': 'Find material relevant to the current task', 'memory.archivedHint': 'Kept for reference; excluded from automatic recall',
+  'memory.libraryDescription': 'Organize preferences, experience and references for future work.', 'memory.tierLabel': 'Memory tier',
+  'memory.search': 'Search summaries, tags and content', 'memory.allCategories': 'All categories', 'memory.resultCount': '{count} memories',
+  'memory.noResults': 'No memories match these filters', 'memory.showMore': 'Load more',
+  'memory.summaryLabel': 'Summary', 'memory.summaryPlaceholder': 'Describe the memory and when it applies', 'memory.refresh': 'Refresh',
   'memory.fact': 'Fact',
   'memory.pitfall': 'Pitfall',
   'memory.reference': 'Reference',
@@ -245,7 +263,7 @@ const coreEn: Record<keyof typeof coreZh, string> = {
   'memory.category': 'Category',
   'memory.addTags': '+ Add tags',
   'memory.tagsPlaceholder': 'Comma-separated tags (optional; the system can add them automatically)',
-  'memory.hint': 'The system organizes summaries and retrieval tags. Focus on the content itself.',
+  'memory.hint': 'Leave the summary blank to generate it from the content. Tags help with later searches.',
   'memory.title': '🧠 Long-term memory',
   'memory.subtitle': '{agent} · Experience retained across conversations (view or edit at any time)',
   'memory.close': 'Close long-term memory',
@@ -301,8 +319,8 @@ export function writeStoredLocale(storage: Pick<Storage, 'setItem'>, locale: Loc
 
 export type MessageValues = Record<string, string | number>;
 
-const zh = { ...coreZh, ...compactionZh, ...dashboardZh, ...agentConfigZh, ...chatZh, ...taskboardZh, ...chatPageZh, ...convectionZh, ...cycloneZh, ...cycloneSeatZh, ...cycloneShellZh, ...cycloneBulletinZh, ...cycloneRoomZh, ...cycloneSeatChatZh, ...tradewindShellZh, ...tradewindConfigZh, ...tradewindProfileZh, ...tradewindInfoZh, ...tradewindChatZh, ...tradewindMeetingZh, ...tradewindCanvasZh, ...tideZh, ...toolsZh, ...skillsZh, ...mcpZh, ...modelSettingsZh } as const;
-const en: Record<keyof typeof zh, string> = { ...coreEn, ...compactionEn, ...dashboardEn, ...agentConfigEn, ...chatEn, ...taskboardEn, ...chatPageEn, ...convectionEn, ...cycloneEn, ...cycloneSeatEn, ...cycloneShellEn, ...cycloneBulletinEn, ...cycloneRoomEn, ...cycloneSeatChatEn, ...tradewindShellEn, ...tradewindConfigEn, ...tradewindProfileEn, ...tradewindInfoEn, ...tradewindChatEn, ...tradewindMeetingEn, ...tradewindCanvasEn, ...tideEn, ...toolsEn, ...skillsEn, ...mcpEn, ...modelSettingsEn };
+const zh = { ...coreZh, ...workRecordZh, ...memoryRecallZh, ...compactionZh, ...dashboardZh, ...agentConfigZh, ...chatZh, ...taskboardZh, ...chatPageZh, ...convectionZh, ...cycloneZh, ...cycloneSeatZh, ...cycloneShellZh, ...cycloneBulletinZh, ...cycloneRoomZh, ...cycloneSeatChatZh, ...tradewindShellZh, ...tradewindConfigZh, ...tradewindProfileZh, ...tradewindInfoZh, ...tradewindChatZh, ...tradewindMeetingZh, ...tradewindCanvasZh, ...tideZh, ...toolsZh, ...skillsZh, ...mcpZh, ...modelSettingsZh } as const;
+const en: Record<keyof typeof zh, string> = { ...coreEn, ...workRecordEn, ...memoryRecallEn, ...compactionEn, ...dashboardEn, ...agentConfigEn, ...chatEn, ...taskboardEn, ...chatPageEn, ...convectionEn, ...cycloneEn, ...cycloneSeatEn, ...cycloneShellEn, ...cycloneBulletinEn, ...cycloneRoomEn, ...cycloneSeatChatEn, ...tradewindShellEn, ...tradewindConfigEn, ...tradewindProfileEn, ...tradewindInfoEn, ...tradewindChatEn, ...tradewindMeetingEn, ...tradewindCanvasEn, ...tideEn, ...toolsEn, ...skillsEn, ...mcpEn, ...modelSettingsEn };
 export type MessageKey = keyof typeof zh;
 
 export function resolveMessage(locale: Locale, key: string, values?: MessageValues): string {

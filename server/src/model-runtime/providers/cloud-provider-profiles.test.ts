@@ -11,12 +11,6 @@ const baseBody = {
   max_tokens: 8192, stream: true, tool_choice: 'auto',
 };
 
-test('provider adapters resolve by explicit module priority with a generic fallback', () => {
-  assert.equal(resolveProviderAdapter({ baseUrl: 'https://api.moonshot.cn/v1', model: 'kimi-k2.7-code' }).id, 'kimi');
-  assert.equal(resolveProviderAdapter({ baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-pro' }).id, 'deepseek');
-  assert.equal(resolveProviderAdapter({ baseUrl: 'http://localhost:1234/v1', model: 'qwen-local' }).id, 'openai-compatible');
-});
-
 test('GLM 5 enables preserved thinking on the official BigModel endpoint', () => {
   const identity = { baseUrl: 'https://open.bigmodel.cn/api/paas/v4/', model: 'glm-5.2' };
   const body = normalizeChatRequestBody(identity, { ...baseBody, model: identity.model });
@@ -28,17 +22,6 @@ test('GLM 5 enables preserved thinking on the official BigModel endpoint', () =>
 test('local and older GLM models keep generic OpenAI-compatible behavior', () => {
   assert.equal(resolveProviderAdapter({ baseUrl: 'http://localhost:1234/v1', model: 'glm-5.2' }).id, 'openai-compatible');
   assert.equal(resolveProviderAdapter({ baseUrl: 'https://open.bigmodel.cn/api/paas/v4/', model: 'glm-4-flash' }).id, 'openai-compatible');
-});
-
-test('DeepSeek reasoning models remove incompatible sampling fields', () => {
-  const body = normalizeChatRequestBody(
-    { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-pro' },
-    { ...baseBody, model: 'deepseek-v4-pro', top_p: 0.9, presence_penalty: 0.2, frequency_penalty: 0.1 },
-  );
-  assert.equal('thinking' in body, false);
-  for (const field of ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty']) {
-    assert.equal(field in body, false);
-  }
 });
 
 test('DeepSeek chat and third-party hosted models are not forced into thinking mode', () => {

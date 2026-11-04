@@ -12,10 +12,16 @@ import { atomicWriteFile } from './atomic-io';
 import type { ToolDef } from './tool-defs-loader';
 import { withAgentMemoryMutation } from './agent-memory-lock.js';
 import { FrameworkError } from './framework-error.js';
+import { recallToolDefs, executeRecallTool } from './memory-recall/read-tools.js';
+import { MEMORY_REFERENCE_NOTE, MEMORY_MAINTENANCE_GUIDANCE } from './memory-guidance.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
 export type MemoryCategory = 'feedback' | 'fact' | 'pitfall' | 'reference';
+export type MemoryTier = 'frequent' | 'normal' | 'archived';
+export function memoryTier(entry: { tier?: MemoryTier; category: MemoryCategory }): MemoryTier {
+  return entry.tier ?? (entry.category === 'feedback' ? 'frequent' : 'normal');
+}
 
 export interface MemoryEntry {
   slug: string;
@@ -27,11 +33,14 @@ export interface MemoryEntry {
   updated: string;
   hits: number;         // 命中次数；当前不参与排序
   source: string;       // 学到该条目的功能区（tradewind/convection/chat/cyclone/human）
+  scope?: string;
+  originSession?: string;
   /**
    * 摘要待精炼：true = summary 是系统从正文兜底截取的粗摘要（人只写了正文），
    * 等 agent 下次用到记忆时顺手精炼。false = 已由 agent/人给定正式摘要。
    */
   summaryPending: boolean;
+  tier?: MemoryTier;
 }
 
 /**
@@ -51,6 +60,7 @@ export interface MemoryIndexRow {
   category: MemoryCategory;
   tags: string[];
   summary: string;
+  tier?: MemoryTier;
 }
 
 // ── 路径 ──────────────────────────────────────────────────────────
@@ -100,18 +110,21 @@ function uniqueSlug(base: string, taken: Set<string>): string {
 function serializeIndexRow(r: MemoryIndexRow): string {
   const tags = r.tags.join(',');
   const summary = r.summary.replace(/\|/g, '／').replace(/\s+/g, ' ').trim();
-  return `- ${r.slug} | ${r.category} | ${tags} | ${summary}`;
+  return `- ${r.slug} | ${r.category} | ${tags} | ${summary} | tier=${memoryTier(r)}`;
 }
 
 function parseIndexRow(line: string): MemoryIndexRow | null {
   const m = line.match(/^-\s+(.+?)\s*\|\s*(.+?)\s*\|\s*(.*?)\s*\|\s*(.*)$/);
   if (!m) return null;
-  const [, slug, category, tagsRaw, summary] = m;
+  const [, slug, category, tagsRaw, rawSummary] = m;
+  const tierMatch = rawSummary.match(/\s*\|\s*tier=(frequent|normal|archived)$/);
+  const summary = tierMatch ? rawSummary.slice(0, tierMatch.index).trim() : rawSummary;
   return {
     slug,
     category: (category as MemoryCategory),
     tags: tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [],
     summary,
+    ...(tierMatch ? { tier: tierMatch[1] as MemoryTier } : {}),
   };
 }
 
@@ -154,6 +167,9 @@ function serializeEntry(e: MemoryEntry): string {
     `updated: ${e.updated}`,
     `hits: ${e.hits}`,
     `source: ${e.source}`,
+    `tier: ${memoryTier(e)}`,
+    ...(e.scope ? [`scope: ${e.scope.replace(/[\r\n]/g, ' ').slice(0, 400)}`] : []),
+    ...(e.originSession ? [`originSession: ${e.originSession.replace(/[\r\n]/g, ' ').slice(0, 180)}`] : []),
     `summaryPending: ${e.summaryPending}`,
     `summary: ${e.summary.replace(/\n/g, ' ')}`,
     '---',
@@ -183,6 +199,9 @@ function parseEntry(raw: string): MemoryEntry | null {
     updated: get('updated'),
     hits: Number(get('hits')) || 0,
     source: get('source'),
+    ...(['frequent', 'normal', 'archived'].includes(get('tier')) ? { tier: get('tier') as MemoryTier } : {}),
+    ...(get('scope') ? { scope: get('scope') } : {}),
+    ...(get('originSession') ? { originSession: get('originSession') } : {}),
     // 旧条目无此字段 → 默认 false（视为已定摘要，不强行重炼）
     summaryPending: get('summaryPending') === 'true',
   };
@@ -191,6 +210,9 @@ function parseEntry(raw: string): MemoryEntry | null {
 // ── 公开 API ──────────────────────────────────────────────────────
 
 export interface WriteMemoryInput {
+  tier?: MemoryTier;
+  scope?: string;
+  originSession?: string;
   /** 可选：人只写正文时省略，系统从正文兜底并标记 summaryPending。agent 应尽量给。 */
   summary?: string;
   detail: string;
@@ -236,11 +258,14 @@ async function writeMemoryMutation(
     updated: input.now,
     hits: 0,
     source: input.source,
+    ...(input.scope ? { scope: input.scope.replace(/[\r\n]/g, ' ').slice(0, 400) } : {}),
+    ...(input.originSession ? { originSession: input.originSession } : {}),
     summaryPending,
+    ...(input.tier ? { tier: input.tier } : {}),
   };
 
   await atomicWriteFile(entryPath(dataDir, agentId, slug), serializeEntry(entry));
-  rows.push({ slug, category: entry.category, tags: entry.tags, summary: entry.summary });
+  rows.push({ slug, category: entry.category, tags: entry.tags, summary: entry.summary, tier: memoryTier(entry) });
   await writeIndex(dataDir, agentId, rows);
   return { slug };
 }
@@ -281,8 +306,9 @@ export async function readMemory(
 }
 
 /** 删一条（人类在面板操作）：删条目文件 + 从 index 摘除。不存在则静默。 */
-export async function deleteMemory(dataDir: string, agentId: string, slug: string): Promise<void> {
+export async function deleteMemory(dataDir: string, agentId: string, slug: string, expectedUpdated?: string): Promise<void> {
   await withAgentMemoryMutation(dataDir, agentId, async () => {
+    if (expectedUpdated) assertMemoryVersion(await readMemory(dataDir, agentId, slug), expectedUpdated);
     const rows = (await readIndex(dataDir, agentId)).filter(r => r.slug !== slug);
     await fs.rm(entryPath(dataDir, agentId, slug), { force: true });
     await writeIndex(dataDir, agentId, rows);
@@ -290,6 +316,9 @@ export async function deleteMemory(dataDir: string, agentId: string, slug: strin
 }
 
 export interface UpdateMemoryInput {
+  tier?: MemoryTier;
+  scope?: string;
+  expectedUpdated?: string;
   summary?: string;
   detail?: string;
   category?: MemoryCategory;
@@ -313,6 +342,7 @@ async function updateMemoryMutation(
   const rows = await readIndex(dataDir, agentId);
   const cur = await readMemory(dataDir, agentId, slug);
   if (!cur) return null;
+  if (patch.expectedUpdated) assertMemoryVersion(cur, patch.expectedUpdated);
   const detail = patch.detail ?? cur.detail;
   const givenSummary = patch.summary?.trim();
 
@@ -335,11 +365,13 @@ async function updateMemoryMutation(
     detail,
     category: patch.category ?? cur.category,
     tags: patch.tags ?? cur.tags,
-    updated: patch.now,
+    updated: new Date(Math.max(Date.parse(patch.now), (Date.parse(cur.updated) || 0) + 1)).toISOString(),
+    ...(patch.tier ? { tier: patch.tier } : {}),
+    ...(patch.scope !== undefined ? { scope: patch.scope.replace(/[\r\n]/g, ' ').slice(0, 400) } : {}),
   };
   await atomicWriteFile(entryPath(dataDir, agentId, slug), serializeEntry(next));
   const i = rows.findIndex(r => r.slug === slug);
-  const row: MemoryIndexRow = { slug, category: next.category, tags: next.tags, summary: next.summary };
+  const row: MemoryIndexRow = { slug, category: next.category, tags: next.tags, summary: next.summary, tier: memoryTier(next) };
   if (i >= 0) rows[i] = row; else rows.push(row);
   await writeIndex(dataDir, agentId, rows);
   return next;
@@ -349,7 +381,7 @@ async function updateMemoryMutation(
 
 /** category=feedback 的记忆作为常驻档。 */
 function isPinned(row: MemoryIndexRow): boolean {
-  return row.category === 'feedback';
+  return row.category === 'feedback' && memoryTier(row) === 'frequent';
 }
 
 /**
@@ -386,7 +418,7 @@ export async function recallMemory(
   taskHint?: string,
   opts: RecallOptions = {},
 ): Promise<string> {
-  const rows = await readIndex(dataDir, agentId);
+  const rows = (await readIndex(dataDir, agentId)).filter(row => memoryTier(row) !== 'archived');
   if (rows.length === 0) return '';
 
   const maxContextual = opts.maxContextual ?? 5;
@@ -411,46 +443,30 @@ export async function recallMemory(
   }
   if (blocks.length === 0) return '';
 
-  return `# 你的经验记忆\n\n以下是你在过往工作中积累的、与当前任务相关的经验：\n\n${blocks.join('\n\n')}`;
+  return `# 回想起的记忆\n\n${MEMORY_REFERENCE_NOTE}\n\n${blocks.join('\n\n')}`;
 }
 
 // ── 工具层（四引擎共享：季风/对流/气旋/信风一致） ─────────────────
 
-export const MEMORY_TOOL_NAMES = ['memory_write', 'memory_list', 'memory_read'] as const;
+export const MEMORY_TOOL_NAMES = ['memory_manage', 'recall_search', 'recall_read', 'memory_write', 'memory_list', 'memory_read', 'memory_update', 'memory_delete'] as const;
 const CATEGORIES: MemoryCategory[] = ['feedback', 'fact', 'pitfall', 'reference'];
 
 /** 记忆工具的 ToolDef（native 模式注入 tools 参数；文本模式由 prompt 段承载）。 */
 export function buildMemoryToolDefs(): ToolDef[] {
-  return [
-    {
-      name: 'memory_write',
-      description: '把一条跨任务复用的经验写入你的长期记忆（自动带时间戳，下次相关任务自动召回）。积极使用：只要出现值得下次复用的信息就记——用户的偏好/纠正、踩坑教训、确认的事实（约定/路径/接口/数据位置）、值得回访的资源。写入前先 memory_list 查有无同类，有则不重复。',
-      parameters: {
-        type: 'object',
-        properties: {
-          summary: { type: 'string', description: '一句话摘要（召回匹配的关键，简洁准确）' },
-          detail: { type: 'string', description: '经验全文：是什么、为什么、下次怎么用' },
-          category: { type: 'string', description: 'feedback(偏好/纠正)|fact(可复用事实)|pitfall(踩坑)|reference(资源指针)' },
-          tags: { type: 'string', description: '可选，逗号分隔标签（利于召回），如"pdf,解析"' },
-        },
-        required: ['summary', 'detail', 'category'],
-      },
-    },
-    {
-      name: 'memory_list',
-      description: '列出你已有的长期记忆条目（slug+类别+摘要+标签），用于自查、避免重复写入。',
-      parameters: { type: 'object', properties: {} },
-    },
-    {
-      name: 'memory_read',
-      description: '按 slug 读取一条长期记忆全文（slug 用 memory_list 查看）。',
-      parameters: {
-        type: 'object',
-        properties: { slug: { type: 'string', description: '记忆条目 slug' } },
-        required: ['slug'],
-      },
-    },
-  ];
+  return [...recallToolDefs(), {
+    name: 'memory_manage',
+    description: `维护自己的精选长期记忆，不修改压缩工作记录。${MEMORY_MAINTENANCE_GUIDANCE}`,
+    parameters: { type: 'object', properties: {
+      action: { type: 'string', enum: ['create', 'update', 'archive', 'restore', 'delete'] },
+      id: { type: 'string', description: '除create外必填，recall_search/read返回的memory:开头ID' },
+      expectedUpdated: { type: 'string', description: '除create外必填，recall_read返回的updated，冲突后重新读取' },
+      summary: { type: 'string', description: 'create必填，一句话摘要' },
+      detail: { type: 'string', description: 'create必填，记忆正文及适用条件' },
+      category: { type: 'string', enum: CATEGORIES },
+      tags: { type: 'string', description: '逗号分隔；空字符串清空标签' },
+      scope: { type: 'string', description: '适用项目与前提条件' },
+    }, required: ['action'] },
+  }];
 }
 
 /**
@@ -463,7 +479,50 @@ export async function execMemoryTool(
   source: string,
   tool: string,
   args: Record<string, string>,
+  originSession?: string,
 ): Promise<string> {
+  if (tool === 'recall_search' || tool === 'recall_read') {
+    const { createRecallCatalog } = await import('./memory-recall/catalog.js');
+    return executeRecallTool(dataDir, agentId, createRecallCatalog(dataDir), tool, args);
+  }
+  if (tool === 'memory_manage') {
+    const action = args.action;
+    if (!['create', 'update', 'archive', 'restore', 'delete'].includes(action)) throw new Error('MEMORY_ACTION_INVALID');
+    const fields = ['summary', 'detail', 'category', 'tags', 'scope'];
+    const allowed = ['action', ...(action === 'create' ? fields : ['id', 'expectedUpdated', ...(action === 'update' ? fields : [])])];
+    if (Object.keys(args).some(key => !allowed.includes(key))) throw new Error('MEMORY_ARGUMENTS_INVALID');
+    const { action: _action, id, ...input } = args;
+    if (action === 'create') {
+      if (!args.summary?.trim() || !args.detail?.trim()) throw new Error('MEMORY_DETAIL_REQUIRED');
+      if (args.category !== undefined && !CATEGORIES.includes(args.category as MemoryCategory)) throw new Error('MEMORY_CATEGORY_INVALID');
+      return (await execMemoryTool(dataDir, agentId, source, 'memory_write', input, originSession))
+        .replace(/slug=([\p{L}\p{N}_-]+)/u, 'id=memory:$1');
+    }
+    if (!id?.startsWith('memory:') || !/^[\p{L}\p{N}_-]+$/u.test(id.slice(7))) throw new Error('MEMORY_ID_INVALID');
+    if (action === 'update' && !fields.some(key => args[key] !== undefined)) throw new Error('MEMORY_PATCH_REQUIRED');
+    return (await execMemoryTool(dataDir, agentId, source, action === 'delete' ? 'memory_delete' : 'memory_update', {
+      ...input, slug: id.slice(7), ...(action === 'archive' ? { tier: 'archived' } : action === 'restore' ? { tier: 'normal' } : {}),
+    }, originSession)).replace(/slug=([\p{L}\p{N}_-]+)/u, 'id=memory:$1');
+  }
+  if (tool === 'memory_update' || tool === 'memory_delete') {
+    if (!args.slug?.trim() || !args.expectedUpdated?.trim()) throw new Error('MEMORY_VERSION_REQUIRED');
+    const slug = args.slug.trim();
+    if (tool === 'memory_delete') {
+      await deleteMemory(dataDir, agentId, slug, args.expectedUpdated);
+      return `已删除长期记忆（slug=${slug}）。`;
+    }
+    if (args.detail !== undefined && !args.detail.trim()) throw new Error('MEMORY_DETAIL_REQUIRED');
+    if (args.category !== undefined && !CATEGORIES.includes(args.category as MemoryCategory)) throw new Error('MEMORY_CATEGORY_INVALID');
+    if (args.tier !== undefined && !['frequent', 'normal', 'archived'].includes(args.tier)) throw new Error('MEMORY_TIER_INVALID');
+    const entry = await updateMemory(dataDir, agentId, slug, { expectedUpdated: args.expectedUpdated,
+      summary: args.summary, detail: args.detail, category: args.category as MemoryCategory | undefined, scope: args.scope,
+      tier: args.tier as MemoryTier | undefined,
+      ...(args.tags !== undefined ? { tags: args.tags.split(/[,，]/).map(tag => tag.trim()).filter(Boolean) } : {}), now: new Date().toISOString() });
+    if (!entry) throw new Error('MEMORY_SOURCE_UNAVAILABLE');
+    const result = args.tier === 'archived' ? '已归档长期记忆，保留正文并退出自动召回'
+      : args.tier === 'normal' ? '已恢复长期记忆，可参与自动召回' : '已更新长期记忆';
+    return `${result}（slug=${slug}，updated=${entry.updated}）。`;
+  }
   if (tool === 'memory_write') {
     const summary = (args.summary || '').trim();
     const detail = (args.detail || '').trim();
@@ -474,18 +533,46 @@ export async function execMemoryTool(
       ? args.tags.split(/[,，]/).map(t => t.trim()).filter(Boolean) : [];
     const { slug } = await writeMemory(dataDir, agentId, {
       summary, detail, category, tags, source, now: new Date().toISOString(),
+      ...(typeof args.scope === 'string' ? { scope: args.scope.trim() } : {}),
+      ...(originSession ? { originSession } : {}),
     });
-    return `已记入长期记忆（slug=${slug}，类别=${category}）。下次相关任务会自动召回。`;
+    return `已记入长期记忆（slug=${slug}，类别=${category}）。`;
   }
   if (tool === 'memory_list') {
     const rows = await listMemory(dataDir, agentId);
     if (rows.length === 0) return '（长期记忆为空）';
-    return rows.map(r => `- ${r.slug} [${r.category}] ${r.summary}${r.tags.length ? ` #${r.tags.join(' #')}` : ''}`).join('\n');
+    return `${MEMORY_REFERENCE_NOTE}\n\n${memoryPage(rows, args)}`;
   }
   if (tool === 'memory_read') {
     const entry = await readMemory(dataDir, agentId, (args.slug || '').trim());
     if (!entry) return `未找到记忆条目：${args.slug}`;
-    return `## ${entry.summary}\n${entry.detail}`;
+    return `${MEMORY_REFERENCE_NOTE}\nslug: ${entry.slug}\nupdated: ${entry.updated}\ntier: ${memoryTier(entry)}\nscope: ${entry.scope ?? ''}\n\n## ${entry.summary}\n${entry.detail}`;
   }
   return `未知记忆工具：${tool}`;
+}
+
+function assertMemoryVersion(entry: MemoryEntry | null, expected: string): void {
+  if (!entry || entry.updated !== expected) throw new FrameworkError({ code: 'AGENT_MEMORY_CONFLICT', kind: 'conflict',
+    message: '记忆已修改或删除，请重新读取后合并。', source: 'agent.memory', retryable: false });
+}
+
+function memoryPage(rows: MemoryIndexRow[], args: Record<string, string>): string {
+  const offset = args.offset === undefined ? 0 : Number(args.offset);
+  const limit = args.limit === undefined ? 50 : Number(args.limit);
+  const query = (args.query ?? '').trim().toLowerCase();
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100
+    || query.length > 400) return '记忆列表参数无效：offset需为非负整数，limit为1至100，query最多400字符。';
+  const status = args.status ?? 'all';
+  if (!['all', 'active', 'archived'].includes(status)) throw new Error('MEMORY_STATUS_INVALID');
+  const selected = rows.filter(row => status === 'all' || (memoryTier(row) === 'archived') === (status === 'archived'));
+  const matches = query ? selected.filter(row => `${row.slug} ${row.summary} ${row.tags.join(' ')}`.toLowerCase().includes(query)) : selected;
+  const lines: string[] = [];
+  let size = 0;
+  for (const row of matches.slice(offset, offset + limit)) {
+    const line = `- ${row.slug} [${row.category}] [${memoryTier(row)}] ${row.summary.slice(0, 240)}${row.tags.length ? ` #${row.tags.slice(0, 10).map(tag => tag.slice(0, 40)).join(' #')}` : ''}`;
+    if (lines.length && size + line.length > 7500) break;
+    lines.push(line); size += line.length + 1;
+  }
+  const next = offset + lines.length;
+  return `${lines.join('\n')}\n共 ${matches.length} 条，本页 ${lines.length} 条。${next < matches.length ? `继续读取：offset=${next}。` : '已到末页。'}`;
 }

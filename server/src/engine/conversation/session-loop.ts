@@ -73,12 +73,13 @@ async function prepareLoop(input: SessionLoopInput,
       () => input.inputRuntime?.steering.hasPending() ?? false,
       members => input.emit({ type: 'heartbeat', phase: 'team-waiting', elapsed: 0, members })) ?? [];
     if (notices.length) input.inputRuntime?.recordContext();
-    const internal = !input.signal.aborted ? await opts.internalInbox?.(input.messages) : undefined;
+    const internal = !input.signal.aborted ? await opts.internalInbox?.(input.messages, input.signal) : undefined;
     return [...notices, ...(internal?.messages ?? [])];
   } : undefined;
   const toolCaller = createSessionToolCaller({
     dataDir: opts.dataDir, agentId: opts.agentId, model: opts.model,
     toolMediaScope: opts.toolMediaScope,
+    executionOwner: opts.executionOwner,
     workspace: opts.workspace, sandboxLevel: opts.sandboxLevel,
     sessionId: opts.sessionId, mainAgent: opts.mainAgent,
     allowAsk: opts.allowAsk, allowDelegate: opts.allowDelegate,
@@ -111,8 +112,10 @@ function createLlmCaller(
       msgs.push(...notices.map(content => ({ role: 'user' as const, content, origin: 'framework' as const })));
       if (notices.length) input.inputRuntime?.recordContext();
     }
-    const internal = !signal?.aborted ? await opts.internalInbox?.(msgs) : undefined;
-    if (internal) msgs.push(...internal.messages.map(content => ({ role: 'user' as const, content, origin: 'framework' as const })));
+    const internal = !signal?.aborted ? await opts.internalInbox?.(msgs, signal) : undefined;
+    if (internal) msgs.push(...internal.messages.map(content => ({ role: 'user' as const, content, origin: 'framework' as const,
+      ...(internal.placement ? { placement: internal.placement } : {}) })));
+    if (internal?.messages.length) input.inputRuntime?.recordContext();
     await opts.checkpoint?.(msgs);
     await input.inputRuntime?.beforeModel();
     if (input.inputRuntime && signal?.aborted) throw new Error('Conversation aborted');

@@ -44,6 +44,7 @@ const bridgeFetch: typeof fetch = async (input, init) => {
 };
 
 export interface ExecToolOpts {
+  dataDir?: string;
   mediaAccess?: ToolMediaAccess;
   tool: string;
   args: ToolArguments;
@@ -59,12 +60,24 @@ export interface ExecToolOpts {
 }
 
 export interface ExecToolDeps {
+  callCapability?: (opts: ExecToolOpts) => Promise<McpToolOutcome | undefined>;
   callMcp: (tool: string, args: ToolArguments, options?: McpInvocationOptions) => Promise<string>;
   callMcpOutcome?: (tool: string, args: ToolArguments, options?: McpInvocationOptions) => Promise<McpToolOutcome>;
   fetcher: typeof fetch;
 }
 
 const defaultDeps: ExecToolDeps = {
+  callCapability: async opts => {
+    const { executionCapabilities } = await import('../../services/builtin-execution-capabilities.js');
+    if (!executionCapabilities.hasTool(opts.tool)) return;
+    const { executeToolOutcome } = await import('../../services/tool-executor.js');
+    const { normalizeSandboxLevel } = await import('../../services/execution-context.js');
+    const dataDir = opts.dataDir ?? opts.mediaAccess?.dataDir;
+    if (!dataDir) throw new Error('执行能力缺少数据目录');
+    return executeToolOutcome(dataDir, opts.tool, opts.args,
+      opts.agentId, opts.workspaceDir, normalizeSandboxLevel(opts.sandboxLevel),
+      opts.onMeta, opts.signal, undefined, opts.observation);
+  },
   callMcp: async (tool, args, options) => {
     const { callMcpTool } = await import('./mcp-manager.js');
     return callMcpTool(tool, args, options);
@@ -80,8 +93,7 @@ export async function execToolUnified(
   opts: ExecToolOpts,
   deps: ExecToolDeps = defaultDeps,
 ): Promise<string> {
-  if (opts.tool.startsWith('mcp:')) return deps.callMcp(opts.tool, opts.args, opts);
-  return (await execLocalToolBridge(opts, deps)).result;
+  return (await execToolUnifiedOutcome(opts, deps)).result;
 }
 
 async function execLocalToolBridge(
@@ -123,6 +135,8 @@ export async function execToolUnifiedOutcome(
     if (opts.mediaAccess) rememberToolImages(opts.mediaAccess, outcome.toolImages);
     return outcome;
   }
+  const capability = await deps.callCapability?.(opts);
+  if (capability) return capability;
   const outcome = await execLocalToolBridge(opts, deps);
   if (opts.mediaAccess) rememberToolImages(opts.mediaAccess, outcome.toolImages);
   return outcome;

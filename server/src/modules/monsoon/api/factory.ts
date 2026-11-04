@@ -23,6 +23,9 @@ import { createMonsoonExternalSessionPort } from '../runtime/external-session-ad
 import type { MonsoonExternalSessionPort } from '../application/external-session-port.js';
 import { withMonsoonToolImages } from './tool-images.js';
 import { createMonsoonInputPreview } from '../runtime/current-input.js';
+import { MonsoonWorkRecordQuery } from '../application/work-record-query.js';
+import { monsoonRecallSources } from '../runtime/recall-adapter.js';
+import { loadAgent } from '../../../engine/shared/agent-loader.js';
 
 export interface MonsoonFeatureOptions { dataDir: string }
 
@@ -55,7 +58,9 @@ export function createMonsoonFeature(options: MonsoonFeatureOptions): MonsoonFea
   const title = createMonsoonTitleGenerator(options.dataDir);
   return {
     module: withMonsoonToolImages(createMonsoonModule(runtime, teams, runs, sessions, turns,
-      { sessions, journal, preview: createMonsoonInputPreview(options.dataDir,
+      { sessions, journal, workRecords: new MonsoonWorkRecordQuery(monsoonRecallSources(options.dataDir),
+        async agentId => Boolean(await loadAgent(options.dataDir, agentId))),
+        preview: createMonsoonInputPreview(options.dataDir,
         sessionId => runtime.get(sessionId)?.getCurrentInput?.()) },
       new MonsoonAttachmentService(options.dataDir, sessions), input, title,
       new MonsoonCompactionService(options.dataDir, sessions, summarizeMonsoonCompaction,

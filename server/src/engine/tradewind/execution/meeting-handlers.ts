@@ -98,7 +98,10 @@ async function execTool(
   mediaAccess?: import('../../shared/tool-media-access.js').ToolMediaAccess,
 ): Promise<ToolCallOutcome> {
   const { execToolUnifiedOutcome } = await import('../../shared/exec-tool');
-  return execToolUnifiedOutcome({ tool, args, agentId, workspaceDir: workspace, signal, onMeta, mediaAccess });
+  const target = mediaAccess?.target;
+  return execToolUnifiedOutcome({ tool, args, agentId, workspaceDir: workspace, signal, onMeta, mediaAccess,
+    ...(target ? { observation: { scope: 'conversation' as const,
+      ownerId: `tradewind:${target.workflowId}:${target.executionId}:${target.nodeId}:${agentId}` } } : {}) });
 }
 
 /**

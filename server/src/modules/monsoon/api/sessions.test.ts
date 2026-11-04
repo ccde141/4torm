@@ -116,6 +116,14 @@ test('read metadata uses the existing session gate and cannot replace messages o
   assert.equal(read.json().revision, 1);
   assert.equal(read.json().messageRevision, 1);
   assert.equal(read.json().updatedAt, created.json().updatedAt);
+  const acknowledged = await app.inject({ method: 'POST', url: '/sessions/agent-a/session-a/read',
+    payload: { lastReadAt } });
+  assert.equal(acknowledged.statusCode, 200);
+  assert.deepEqual(acknowledged.json(), { lastReadAt, unreadCount: 0 });
+  assert.deepEqual((await feature.sessions.get('agent-a', 'session-a'))?.messages, created.json().messages);
+  assert.equal((await feature.sessions.get('agent-a', 'session-a'))?.revision, 1);
+  assert.equal((await app.inject({ method: 'POST', url: '/sessions/agent-a/session-a/read',
+    payload: { lastReadAt, messages: [] } })).statusCode, 400);
   const older = await app.inject({ method: 'PUT', url: '/sessions/agent-a/session-a', payload: {
     ...payload, session: { ...payload.session, lastReadAt: '2026-01-01T01:00:01+01:00' },
   } });
@@ -185,4 +193,12 @@ test('session handlers expose only the estimate even if a preview mutates its in
   assert.equal((read as typeof stored).title, stored.title);
   assert.equal((read as { currentInput: { tokens: number } }).currentInput.tokens, 123);
   assert.deepEqual((await feature.sessions.get('agent-a', 'session-a'))?.messages, stored.messages);
+  let previews = 0;
+  const listing = monsoonSessionHandlers({ sessions: feature.sessions, journal: feature.journal,
+    preview: async value => { previews++; return value; } });
+  const summaries = await listing.listSessions.invoke(context, { agentId: 'agent-a' }) as Array<{
+    messages: unknown[]; currentInput?: { tokens: number };
+  }>;
+  assert.equal(previews, 0, 'listing does not compile or tokenize each conversation');
+  assert.deepEqual(summaries[0].messages, []);
 });

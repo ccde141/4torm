@@ -60,13 +60,15 @@ test('DeepSeek rejects malformed final output values before request dispatch', (
 });
 
 test('DeepSeek V4 auto mode preserves API default thinking and removes ignored sampling', () => {
-  const body = normalizeChatRequestBody(baseIdentity, {
-    model: baseIdentity.model, messages: [], max_tokens: 8192,
-    temperature: 0.7, top_p: 0.9, presence_penalty: 0.2, frequency_penalty: 0.1,
-  });
-  assert.equal('thinking' in body, false);
-  for (const field of ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty']) {
-    assert.equal(field in body, false);
+  for (const identity of [baseIdentity, { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-pro' }]) {
+    const body = normalizeChatRequestBody(identity, {
+      model: identity.model, messages: [], max_tokens: 8192,
+      temperature: 0.7, top_p: 0.9, presence_penalty: 0.2, frequency_penalty: 0.1,
+    });
+    assert.equal('thinking' in body, false, identity.model);
+    for (const field of ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty']) {
+      assert.equal(field in body, false, `${identity.model}: ${field}`);
+    }
   }
 });
 

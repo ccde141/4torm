@@ -20,20 +20,22 @@ test('initial and follow-up inputs display current estimates instead of unknown 
   assert.equal(mergeModelUsage(next, first)?.latest?.id, 'two');
   assert.equal(applyModelRequest(reported, request('one')), reported);
 });
-test('compaction contributes known totals without replacing main-conversation context display', () => {
-  const first = applyModelRequest(undefined, request('main'));
-  const next = applyModelRequest(first, request('summary', { purpose: 'compaction',
-    state: 'completed', usageComplete: true,
-    usage: { promptTokens: 20, completionTokens: 5, totalTokens: 25 } }));
-  assert.equal(next.total.totalTokens, 25);
-  assert.equal(next.latest?.id, 'main');
-  assert.match(formatModelUsage(next, 'en-US')!.title, /Estimated input/);
-  const summaryOnly = applyModelRequest(undefined, request('summary', { purpose: 'compaction',
-    state: 'failed', usage: { promptTokens: 15, completionTokens: 2, totalTokens: 17 } }));
-  assert.equal(formatModelUsage(summaryOnly, 'zh-CN', { promptTokens: 1200, completionTokens: 0, totalTokens: 1200 })?.label, '1.2K');
-  assert.equal(formatModelUsage(summaryOnly, 'zh-CN'), undefined);
-  assert.match(formatCurrentInput({ tokens: 1200, images: 0, model: 'fixture',
-    estimatedAt: '2026-10-24T01:00:00.000Z' }, 'zh-CN', summaryOnly)!.title, /17 token/);
+test('auxiliary model calls contribute totals without replacing main-conversation context display', () => {
+  for (const purpose of ['compaction', 'memory-recall'] as const) {
+    const first = applyModelRequest(undefined, request('main'));
+    const next = applyModelRequest(first, request('summary', { purpose,
+      state: 'completed', usageComplete: true,
+      usage: { promptTokens: 20, completionTokens: 5, totalTokens: 25 } }));
+    assert.equal(next.total.totalTokens, 25);
+    assert.equal(next.latest?.id, 'main');
+    assert.match(formatModelUsage(next, 'en-US')!.title, /Estimated input/);
+    const summaryOnly = applyModelRequest(undefined, request('summary', { purpose,
+      state: 'failed', usage: { promptTokens: 15, completionTokens: 2, totalTokens: 17 } }));
+    assert.equal(formatModelUsage(summaryOnly, 'zh-CN', { promptTokens: 1200, completionTokens: 0, totalTokens: 1200 })?.label, '1.2K');
+    assert.equal(formatModelUsage(summaryOnly, 'zh-CN'), undefined);
+    assert.match(formatCurrentInput({ tokens: 1200, images: 0, model: 'fixture',
+      estimatedAt: '2026-10-24T01:00:00.000Z' }, 'zh-CN', summaryOnly)!.title, /17 token/);
+  }
 });
 
 test('current context preview can decrease after an edit without changing actual billing', () => {

@@ -36,6 +36,8 @@ An agent's console card and details help you find recent activity. The full cont
 
 A Cyclone seat also has its own **seat memory** for this project's role experience, facts, and material references. It stays with the seat when its bound Agent changes, and does not automatically become the Agent's general experience in other workspaces.
 
+Monsoon can retrieve memories and compaction work records based on the current message, with optional selection by a separately configured model. See [Memory and Recall](./memory) for saving entries, configuring recall, and inspecting sources.
+
 Starting work, receiving a successful tool response, or getting a team member's report does not mean the overall goal is complete. To confirm the outcome, check the run status and actual deliverables in the relevant area. You can also continue observing work that is still running there.
 
 To get started, see [Monsoon Chat](../modes/chat), [Convection Meeting Rooms](../modes/convection), [Cyclone Workshops](../modes/cyclone), [Tradewind Workflows](../modes/tradewind), or [Tide Automation](../modes/tide).

@@ -7,6 +7,7 @@ import type { MonsoonSession } from '../domain/session.js';
 import type { CurrentInputEstimate } from '../../../engine/shared/model-request-usage.js';
 
 export interface MonsoonSessionPorts {
+  workRecords?: import('../application/work-record-query.js').MonsoonWorkRecordQuery;
   sessions: FileMonsoonSessionRepository;
   journal: FileMonsoonTurnJournal;
   preview?: (session: MonsoonSession, model?: string) => Promise<MonsoonSession & { currentInput?: CurrentInputEstimate }>;
@@ -17,6 +18,7 @@ export function monsoonSessionManifests(): ModuleMethodManifest[] {
     ['createSession', 'design'], ['listSessions', 'observe'], ['readSession', 'observe'],
     ['replaceSession', 'design'], ['deleteSession', 'administer'],
     ['previewInput', 'observe'],
+    ['markSessionRead', 'design'],
   ] as const;
   return names.map(([id, permission]) => ({ id,
     kind: permission === 'observe' ? 'query' : 'command', permission,
@@ -31,19 +33,21 @@ export function monsoonSessionHandlers(ports: MonsoonSessionPorts): Record<strin
     Promise<MonsoonSession & { currentInput?: CurrentInputEstimate }> => {
     if (!ports.preview) return session;
     const { currentInput } = await ports.preview(structuredClone(session), model);
+    await sessions.cacheInputEstimate(session, currentInput);
     return { ...session, currentInput };
   };
   return {
+    markSessionRead: { parse: parseRead,
+      invoke: async (_context, input) => {
+        const { agentId, sessionId, lastReadAt } = input as { agentId: string; sessionId: string; lastReadAt: string };
+        return sessions.markRead(agentId, sessionId, lastReadAt);
+      } },
     createSession: { parse: value => record(value),
       invoke: async (_context, input) => preview(await sessions.create(input)) },
     listSessions: { parse: value => lookup(value, false),
       invoke: async (_context, input) => {
         const agentId = (input as { agentId: string }).agentId;
-        const list = await sessions.list(agentId, Boolean(ports.preview));
-        if (!ports.preview) return list;
-        return Promise.all(list.map(async item => {
-          return { ...item, messages: [], currentInput: (await preview(item)).currentInput };
-        }));
+        return sessions.list(agentId);
       } },
     previewInput: { parse: parsePreview,
       invoke: async (_context, input) => {
@@ -63,8 +67,9 @@ export function monsoonSessionHandlers(ports: MonsoonSessionPorts): Record<strin
       invoke: async (_context, input) => {
         const item = input as { agentId: string; sessionId: string; session: Record<string, unknown>;
           expectedRevision: number; mode: SessionWriteMode };
-        return preview(await sessions.replace({ ...item.session, agentId: item.agentId, id: item.sessionId },
-          item.expectedRevision, item.mode));
+        const saved = await sessions.replace({ ...item.session, agentId: item.agentId, id: item.sessionId },
+          item.expectedRevision, item.mode);
+        return item.mode === 'content' ? preview(saved) : saved;
       } },
     deleteSession: { parse: value => lookup(value, true),
       invoke: async (_context, input) => {
@@ -73,6 +78,13 @@ export function monsoonSessionHandlers(ports: MonsoonSessionPorts): Record<strin
         return { ok: true };
       } },
   };
+}
+
+function parseRead(value: unknown) {
+  const item = record(value);
+  if (Object.keys(item).some(key => !['agentId', 'sessionId', 'lastReadAt'].includes(key))
+    || typeof item.lastReadAt !== 'string' || !Number.isFinite(Date.parse(item.lastReadAt))) throw invalid();
+  return { agentId: id(item.agentId), sessionId: id(item.sessionId), lastReadAt: item.lastReadAt };
 }
 
 function parsePreview(value: unknown) {

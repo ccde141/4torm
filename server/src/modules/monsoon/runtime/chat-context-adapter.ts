@@ -9,6 +9,7 @@ import { resolveNativeMode } from '../../../engine/shared/llm-bridge.js';
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import { contextOrigin } from '../../../engine/shared/context-origin.js';
 import { readToolImageRefs } from '../../../engine/shared/tool-media-store.js';
+import { buildMemoryToolDefs } from '../../../engine/shared/agent-memory.js';
 import type {
   MonsoonChatMessage, MonsoonChatPorts, MonsoonContextRequest, MonsoonPreparedContext,
 } from '../application/chat-preparation.js';
@@ -66,7 +67,7 @@ export async function buildMonsoonInputPrompt(
     agentId: agent.id, sessionId: input.sessionId,
   });
   const lastUser = input.messages.filter(message => message.role === 'user').pop();
-  const allTools = [...toolDefs, ...collaborationTools, ...ports.teamTools()];
+  const allTools = [...toolDefs, ...collaborationTools, ...ports.teamTools(), ...buildMemoryToolDefs()];
   const systemPrompt = await ports.buildPrompt({
     mainAgent: true, rolePrompt: agent.rolePrompt || '',
     toolDefs: allTools,

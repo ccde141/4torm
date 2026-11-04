@@ -1,20 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getAllModels } from '../../llm';
-import { getAgents, getOfflineAgentIds } from '../../store/agent';
+import { getAgents } from '../../store/agent';
 import { AGENTS_CHANGED_EVENT } from '../../store/agent-events';
 import type { Agent } from '../../types';
 
 export function useMonsoonCatalog(active: boolean, selectedAgent: Agent | null,
   setSelectedAgent: (agent: Agent | null) => void) {
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [offlineIds, setOfflineIds] = useState<Set<string>>(new Set());
   const [models, setModels] = useState<{ key: string; label: string }[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
 
   const refreshAgents = useCallback(async () => {
     const list = await getAgents();
     setAgents(list);
-    setOfflineIds(await getOfflineAgentIds(list));
   }, []);
   const refreshModels = useCallback(async () => {
     const list = await getAllModels();
@@ -42,5 +40,5 @@ export function useMonsoonCatalog(active: boolean, selectedAgent: Agent | null,
     }
   }, [agents, selectedAgent, models, setSelectedAgent]);
 
-  return { agents, offlineIds, models, selectedModel, setSelectedModel, refreshAgents };
+  return { agents, models, selectedModel, setSelectedModel, refreshAgents };
 }

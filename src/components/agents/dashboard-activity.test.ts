@@ -20,47 +20,46 @@ const snapshot = (items: unknown[], partial = false): CollaborationSnapshot => (
 test('只把明确携带 agentId 的运行归于该 Agent', () => {
   const state = projectAgentActivity({ ...agent, busy: true }, true, snapshot([
     { ...probe, agentId: undefined, title: '不能推断归属' }, probe,
-  ]), false);
+  ]));
   assert.equal(state.kind, 'running');
   assert.equal(state.item?.title, '核对材料');
   assert.equal(state.feature, 'monsoon');
 });
 
-test('探针或活动信息不完整时，缺少运行事实不等于空闲', () => {
-  assert.equal(projectAgentActivity(agent, true, null, false).kind, 'unknown');
-  assert.equal(projectAgentActivity(agent, false, snapshot([]), false).kind, 'unknown');
-  assert.equal(projectAgentActivity(agent, true, snapshot([], true), false).kind, 'unknown');
+test('活动接口确定忙闲，缺失或不完整的历史不覆盖空闲状态', () => {
+  assert.equal(projectAgentActivity(agent, true, null).kind, 'idle');
+  assert.equal(projectAgentActivity(agent, false, snapshot([])).kind, 'unknown');
+  assert.equal(projectAgentActivity(agent, true, snapshot([], true)).kind, 'idle');
 });
 
 test('活动源知道 Agent 忙但运行未关联时，保留工作中且不伪造标题', () => {
   const state = projectAgentActivity({ ...agent, busy: true,
-    activeSurfaces: ['cyclone'] }, true, snapshot([]), false);
+    activeSurfaces: ['cyclone'] }, true, snapshot([]));
   assert.equal(state.kind, 'running');
   assert.equal(state.item, undefined);
   assert.equal(state.label, '工作中 · 气旋');
   assert.equal(state.feature, 'cyclone');
   const conversation = projectAgentActivity({ ...agent, busy: true,
-    activeSurfaces: ['conversation'] }, true, snapshot([]), false);
+    activeSurfaces: ['conversation'] }, true, snapshot([]));
   assert.equal(conversation.label, '工作中 · 季风');
   assert.equal(conversation.feature, 'monsoon');
 });
 
-test('等待状态、模型不可用和确切空闲分别表达', () => {
+test('等待事项与确切空闲分别表达', () => {
   const waiting = projectAgentActivity(agent, true,
-    snapshot([{ ...probe, status: 'waiting' }]), false);
+    snapshot([{ ...probe, status: 'waiting' }]));
   assert.equal(waiting.kind, 'idle');
   assert.equal(waiting.recent?.status, 'waiting');
   assert.equal(projectAgentActivity({ ...agent, busy: true }, true,
-    snapshot([{ ...probe, status: 'queued' }]), false).label, '排队中');
+    snapshot([{ ...probe, status: 'queued' }])).label, '排队中');
   assert.equal(projectAgentActivity(agent, true,
-    snapshot([{ ...probe, status: 'running' }]), false).kind, 'unknown');
-  assert.equal(projectAgentActivity(agent, true, snapshot([]), true).kind, 'offline');
-  assert.equal(projectAgentActivity(agent, true, snapshot([]), false).kind, 'idle');
+    snapshot([{ ...probe, status: 'running' }])).kind, 'unknown');
+  assert.equal(projectAgentActivity(agent, true, snapshot([])).kind, 'idle');
 });
 
 test('空闲时保留最近事项所属功能区，供记录面板精准查找', () => {
   const state = projectAgentActivity(agent, true,
-    snapshot([{ ...probe, status: 'completed', title: probe.operationId }]), false);
+    snapshot([{ ...probe, status: 'completed', title: probe.operationId }]));
   assert.equal(state.kind, 'idle');
   assert.equal(state.recentFeature, 'monsoon');
   assert.equal(state.recent?.operationId, 'session-1');
@@ -69,7 +68,7 @@ test('空闲时保留最近事项所属功能区，供记录面板精准查找',
 test('已计划的潮汐任务不冒充 Agent 刚完成的活动', () => {
   const state = projectAgentActivity(agent, true,
     snapshot([{ ...probe, status: 'idle', title: '五分钟后再运行',
-      updatedAt: '2026-10-02T00:00:00Z' }]), false);
+      updatedAt: '2026-10-02T00:00:00Z' }]));
   assert.equal(state.kind, 'idle');
   assert.deepEqual(state.events, []);
 });
@@ -85,7 +84,7 @@ test('Agent 空闲与其事项等待确认分开，保留可追溯的跨功能�
       { ...probe, operationId: 'task-3', agentId: undefined,
         title: '不能归属的任务' }],
   } });
-  const state = projectAgentActivity(agent, true, fact, false);
+  const state = projectAgentActivity(agent, true, fact);
   assert.equal(state.kind, 'idle');
   assert.equal(state.recent?.title, '等待发布确认');
   assert.deepEqual(state.events.map(event => event.item.title),
@@ -96,8 +95,8 @@ test('Agent 空闲与其事项等待确认分开，保留可追溯的跨功能�
 test('探针截断时活动与统计范围明确为不完整', () => {
   const fact = snapshot([{ ...probe, status: 'completed' }]);
   fact.features[0]!.observation!.truncated = true;
-  const state = projectAgentActivity(agent, true, fact, false);
-  assert.equal(state.kind, 'unknown');
+  const state = projectAgentActivity(agent, true, fact);
+  assert.equal(state.kind, 'idle');
   assert.equal(state.complete, false);
   assert.equal(state.events.length, 1);
 });
@@ -111,7 +110,18 @@ test('Agent 当前在季风工作时，旧的信风等待事项不能改写当�
       title: '旧审核', updatedAt: '2026-10-01T09:00:00Z' }],
   } });
   const state = projectAgentActivity({ ...agent, busy: true,
-    activeSurfaces: ['conversation'] }, true, fact, false);
+    activeSurfaces: ['conversation'] }, true, fact);
   assert.equal(state.kind, 'running');
   assert.equal(state.item?.title, '核对材料');
+});
+
+
+test('历史截断不改变空闲状态，活动接口失败仍显示未知', () => {
+  assert.equal(projectAgentActivity(agent, true, snapshot([], true)).kind, 'idle');
+  assert.equal(projectAgentActivity(agent, false, snapshot([], true)).kind, 'unknown');
+  assert.equal(projectAgentActivity({ ...agent, busy: true }, true, null).kind, 'running');
+});
+
+test('未配置模型也不改变框架确认的空闲状态', () => {
+  assert.equal(projectAgentActivity({ ...agent, model: '' }, true, snapshot([])).kind, 'idle');
 });

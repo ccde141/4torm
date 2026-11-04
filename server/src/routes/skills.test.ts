@@ -6,6 +6,42 @@ import test from 'node:test';
 import Fastify from 'fastify';
 import { skillsRoutes } from './skills.js';
 
+test('custom categories persist, preserve skill contents and reject stale concurrent changes', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'skill-categories-'));
+  const app = Fastify();
+  app.decorate('dataDir', dataDir);
+  app.decorate('projectRoot', path.dirname(dataDir));
+  await app.register(skillsRoutes, { prefix: '/api/skills' });
+  t.after(async () => { await app.close(); await fs.rm(dataDir, { recursive: true, force: true }); });
+  await app.inject({ method: 'POST', url: '/api/skills/create', payload: {
+    id: 'demo', meta: { name: 'Demo', category: '文档', extension: { keep: true } }, content: '# Original',
+  } });
+  const file = path.join(dataDir, 'skills/demo/config.json');
+  const original = JSON.parse(await fs.readFile(file, 'utf8'));
+  for (const category of [undefined, '', '   ', 12, {}, 'x'.repeat(61)]) {
+    await fs.writeFile(file, JSON.stringify({ ...original, category }));
+    const rows = (await app.inject('/api/skills/list')).json();
+    assert.equal(rows[0].category, '');
+    const response = await app.inject({ method: 'PATCH', url: '/api/skills/demo/category', payload: { category: '文档', expectedCategory: '' } });
+    assert.equal(response.statusCode, 200);
+  }
+  const change = (category: string, expectedCategory = '文档') => app.inject({ method: 'PATCH', url: '/api/skills/demo/category', payload: { category, expectedCategory } });
+  const results = await Promise.all([change('办公资料'), change('项目研究')]);
+  assert.deepEqual(results.map(result => result.statusCode).sort(), [200, 409]);
+  const list = (await app.inject('/api/skills/list')).json();
+  assert.ok(['办公资料', '项目研究'].includes(list[0].category));
+  const configFile = path.join(dataDir, 'skills/demo/config.json');
+  const config = JSON.parse(await fs.readFile(configFile, 'utf8'));
+  assert.deepEqual(config.extension, { keep: true });
+  assert.equal(await fs.readFile(path.join(dataDir, 'skills/demo/SKILL.md'), 'utf8'), '# Original');
+  assert.equal((await change('x'.repeat(61))).statusCode, 400);
+  await fs.writeFile(configFile, 'broken');
+  assert.equal((await change('其他')).statusCode, 500);
+  assert.equal(await fs.readFile(configFile, 'utf8'), 'broken');
+  await app.inject({ method: 'DELETE', url: '/api/skills/demo' });
+  assert.equal((await change('其他')).statusCode, 404);
+});
+
 test('技能创建拒绝重复 ID，删除返回真实结果', async (t) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-skills-route-'));
   const app = Fastify();

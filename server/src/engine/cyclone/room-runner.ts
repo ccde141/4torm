@@ -199,6 +199,7 @@ export function makeRoomToolCaller(opts: {
       onEvent({ type: 'tool-call', speaker, tool, args: rawArgs });
       try {
         const outcome = await execToolUnifiedOutcome({ tool, args: rawArgs, agentId, workspaceDir: wsDir, sandboxLevel, signal,
+          observation: { scope: 'cyclone', ownerId: `${workshopId}:room:${roomId}:${seatId}` },
           mediaAccess: { dataDir, feature: 'cyclone', target: { workshopId, kind: 'room', targetId: roomId } } });
         onEvent({ type: 'tool-result', speaker, tool, ...outcome });
         return outcome;

@@ -12,6 +12,8 @@ import type { ContextMessage, LLMOptions, ProviderReasoningEnvelope, ToolImageRe
 import type { TokenUsage } from '../llm-bridge';
 import type { ModelRequestUsageEvent } from '../model-request-usage.js';
 import { callPreparedModel } from './model-call.js';
+import { ToolCallRecovery, unexecutedToolCall, toolReplyDisplayText } from '../tool-call-recovery.js';
+import { TextToolStreamGate } from '../text-tool-stream-gate.js';
 import { MAX_TURNS, HEARTBEAT_INTERVAL_MS } from './limits.js';
 export { MAX_TURNS, HEARTBEAT_INTERVAL_MS } from './limits.js';
 import type { ToolPreparationProgress } from '../tool-progress';
@@ -228,6 +230,7 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
   const allToolCalls: ToolCallRecord[] = [];
   let latestUsage: TokenUsage | undefined;
   const answerParts: string[] = [];
+  const protocolRecovery = new ToolCallRecovery();
   const allowedTools = new Set([
     ...toolDefs.map(tool => tool.name),
     ...(params.completion ? [params.completion.tool] : []),
@@ -244,8 +247,9 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
 
     applyPendingInput(params);
     let streamedContent = '';
+    const tokenGate = new TextToolStreamGate(chunk => onEvent?.({ type: 'token', chunk }));
     const onChunk = onEvent
-      ? (chunk: string) => { streamedContent += chunk; onEvent({ type: 'token', chunk }); }
+      ? (chunk: string) => { streamedContent += chunk; tokenGate.push(chunk); }
       : undefined;
     const onReasoning = onEvent
       ? (chunk: string) => onEvent({ type: 'reasoning', chunk }) : undefined;
@@ -267,9 +271,10 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       latestUsage = result.usage;
       onEvent?.({ type: 'usage', usage: result.usage ?? null });
     } catch (e) {
+      tokenGate.finish(false);
       latestUsage = undefined;
       onEvent?.({ type: 'usage', usage: null });
-      const partial = completeAnswer(answerParts, streamedContent);
+      const partial = completeAnswer(answerParts, toolReplyDisplayText(streamedContent, allowedTools));
       if (signal?.aborted) {
         return {
           content: partial || '[中止]', rawContent: partial, toolCalls: allToolCalls, turns: turn,
@@ -285,15 +290,18 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
       };
     }
 
+    const leakedCall = !toolCalls?.length && unexecutedToolCall(content, allowedTools);
+    tokenGate.finish(!leakedCall);
     if (signal?.aborted) {
-      const partial = completeAnswer(answerParts, content);
+      const partial = completeAnswer(answerParts, toolReplyDisplayText(content, allowedTools));
       return { content: partial || '[中止]', rawContent: partial, toolCalls: allToolCalls,
         turns: turn + 1, usage: latestUsage, termination: abortedTermination() };
     }
     if (params.steering?.hasPending()) {
       msgs.push(createAssistantContextMessage(content, toolCalls, reasoningContent, reasoningEnvelope));
       skipNativeTools(params, toolCalls ?? [], allToolCalls);
-      if (content.trim()) answerParts.push(content);
+      const visible = toolReplyDisplayText(content, allowedTools);
+      if (visible.trim()) answerParts.push(visible);
       continue;
     }
 
@@ -313,6 +321,15 @@ export async function runReActLoopNative(params: NativeReActLoopParams): Promise
 
     // 无工具调用：普通模式交付文本；显式终结模式继续等待终结工具。
     if (!toolCalls || toolCalls.length === 0) {
+      if (leakedCall) {
+        msgs.push(createAssistantContextMessage(content, undefined, reasoningContent, reasoningEnvelope));
+        if (protocolRecovery.retry(msgs, true)) continue;
+        const failure = reactErrorData('MODEL_PROTOCOL_ERROR', 'protocol',
+          '模型未能提交有效的工具调用，正文中的操作未执行', 'react.native.protocol');
+        onEvent?.({ type: 'error', message: failure.message });
+        return { content: completeAnswer(answerParts, `[错误] ${failure.message}`), rawContent: content,
+          toolCalls: allToolCalls, turns: turn + 1, usage: latestUsage, termination: failedTermination(failure) };
+      }
       // length 截断且有内容时继续生成，不把半句当最终结果。
       if (finishReason === 'length' && content.trim()) {
         answerParts.push(content);

@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   listMemory, createMemory, updateMemory, deleteMemory,
-  type MemoryEntry, type MemoryCategory, type MemoryDraft,
+  type MemoryEntry, type MemoryCategory, type MemoryDraft, type MemoryTier,
 } from '../../api/memory';
 import '../../styles/components/config-modal.css';
 import '../../styles/components/memory-panel.css';
@@ -22,7 +22,8 @@ interface Props {
   embedded: true;
 }
 
-const EMPTY_DRAFT: MemoryDraft = { detail: '', category: 'fact', tags: [] };
+const EMPTY_DRAFT: MemoryDraft = { summary: '', detail: '', category: 'fact', tier: 'normal', tags: [] };
+const entryTier = (entry: MemoryEntry): MemoryTier => entry.tier ?? (entry.category === 'feedback' ? 'frequent' : 'normal');
 
 export default function MemoryPanel({ agentId, agentName }: Props) {
   const { t } = useLocale();
@@ -35,23 +36,39 @@ export default function MemoryPanel({ agentId, agentName }: Props) {
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<MemoryDraft>(EMPTY_DRAFT);
   const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState('');
+  const [archived, setArchived] = useState(false);
+  const [category, setCategory] = useState<MemoryCategory | 'all'>('all');
+  const [limit, setLimit] = useState(40);
+  const loadGeneration = useRef(0);
 
   const reload = useCallback(() => {
+    const generation = ++loadGeneration.current;
     setLoading(true);
-    listMemory(agentId)
-      .then(es => { setEntries(es); setError(''); })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
+    return listMemory(agentId)
+      .then(es => { if (generation === loadGeneration.current) { setEntries(es); setError(''); } })
+      .catch(e => { if (generation === loadGeneration.current) setError(e.message); })
+      .finally(() => { if (generation === loadGeneration.current) setLoading(false); });
   }, [agentId]);
 
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    const generation = loadGeneration;
+    void reload();
+    return () => { generation.current++; };
+  }, [reload]);
+  const filtered = useMemo(() => {
+    const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    return entries.filter(entry => ((entryTier(entry) === 'archived') === archived) && (category === 'all' || entry.category === category)
+      && terms.every(term => `${entry.summary} ${entry.detail} ${entry.tags.join(' ')} ${entry.slug}`.toLocaleLowerCase().includes(term)))
+      .sort((a, b) => b.updated.localeCompare(a.updated));
+  }, [entries, query, archived, category]);
 
   const [showTags, setShowTags] = useState(false);
 
   const startEdit = (e: MemoryEntry) => {
     setCreating(false);
     setEditingSlug(e.slug);
-    setDraft({ detail: e.detail, category: e.category, tags: [...e.tags] });
+    setDraft({ summary: e.summary, detail: e.detail, category: e.category, tier: entryTier(e), tags: [...e.tags], expectedUpdated: e.updated });
     setShowTags(e.tags.length > 0);
   };
   const startCreate = () => {
@@ -83,7 +100,7 @@ export default function MemoryPanel({ agentId, agentName }: Props) {
       if (!await confirm({ title: t('memory.deleteTitle', { name: entry.summary || entry.detail.slice(0, 80) }),
         message: t('memory.deleteMessage', { agent: agentName }), confirmText: t('common.delete'), danger: true })) return;
       setBusy(true);
-      await deleteMemory(agentId, slug);
+      await deleteMemory(agentId, slug, entry.updated);
       reload();
     }
     catch (e) { setError((e as Error).message); }
@@ -91,9 +108,18 @@ export default function MemoryPanel({ agentId, agentName }: Props) {
   };
 
   const parseTags = (v: string) => setDraft(d => ({ ...d, tags: v.split(/[,，]/).map(t => t.trim()).filter(Boolean) }));
+  const move = async (entry: MemoryEntry, value: MemoryTier) => {
+    setBusy(true);
+    try { await updateMemory(agentId, entry.slug, { tier: value, expectedUpdated: entry.updated }); await reload(); }
+    catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  };
 
   const editor = (
     <div className="mem-editor">
+      <label className="mem-label" htmlFor="memory-summary">{t('memory.summaryLabel')}</label>
+      <input id="memory-summary" className="mem-input" value={draft.summary ?? ''}
+        placeholder={t('memory.summaryPlaceholder')} onChange={e => setDraft(d => ({ ...d, summary: e.target.value }))} />
       <label className="mem-label">{t('memory.prompt', { agent: agentName })}</label>
       <textarea
         className="mem-textarea" rows={5} autoFocus
@@ -129,19 +155,38 @@ export default function MemoryPanel({ agentId, agentName }: Props) {
   return (
     <div className="agent-detail__memory-content">
         <div className="config-modal-body" style={{ overflowY: 'auto' }}>
+          <div className="mem-overview">
+            <div><h3>{t('memory.title')}</h3><p>{t('memory.libraryDescription')}</p></div>
+            <div className="mem-overview-actions"><span className="mem-count">{entries.length}</span>
+              <button type="button" className="mem-btn" disabled={busy || loading} onClick={() => void reload()}>{t('memory.refresh')}</button></div>
+          </div>
+          <div className="mem-search-row">
+            <input type="search" className="mem-input" value={query} aria-label={t('memory.search')}
+              placeholder={t('memory.search')} onChange={e => { setQuery(e.target.value); setLimit(40); }} />
+            <select className="mem-select" value={category} aria-label={t('memory.category')}
+              onChange={e => { setCategory(e.target.value as MemoryCategory | 'all'); setLimit(40); }}>
+              <option value="all">{t('memory.allCategories')}</option>
+              {CATEGORIES.map(value => <option key={value} value={value}>{t(CATEGORY_META[value].label)}</option>)}
+            </select>
+            <button type="button" className="mem-btn mem-archive-filter" aria-pressed={archived}
+              onClick={() => { setArchived(value => !value); setLimit(40); }}>
+              {t('memory.archived')} <span>{entries.filter(entry => entryTier(entry) === 'archived').length}</span>
+            </button>
+          </div>
+          <p className="mem-hint mem-results">{t('memory.resultCount', { count: filtered.length })} · {t(archived ? 'memory.archivedHint' : 'memory.allHint')}</p>
           {error && <div className="mem-error">{error}</div>}
 
           {creating ? editor : (
             <button className="mem-btn mem-btn--add" onClick={startCreate}>{t('memory.add')}</button>
           )}
 
-          {loading ? (
+          {loading && entries.length === 0 ? (
             <div className="mem-empty">{t('common.loading')}</div>
           ) : entries.length === 0 && !creating ? (
             <div className="mem-empty">{t('memory.empty')}</div>
           ) : (
             <ul className="mem-list">
-              {entries.map(e => (
+              {filtered.slice(0, limit).map(e => (
                 <li key={e.slug} className="mem-item">
                   {editingSlug === e.slug ? editor : (
                     <>
@@ -154,8 +199,13 @@ export default function MemoryPanel({ agentId, agentName }: Props) {
                           <button className="mem-icon-btn mem-icon-btn--danger" disabled={busy} title={t('common.delete')} aria-label={t('memory.deleteLabel')} onClick={() => void remove(e.slug)}>🗑</button>
                         </span>
                       </div>
-                      <p className="mem-detail">{e.detail}</p>
+                      <details className="mem-content"><summary className="mem-summary">{e.summary || e.detail.slice(0, 80)}</summary>
+                        <p className="mem-detail">{e.detail}</p></details>
                       <div className="mem-foot">
+                        <button type="button" className="mem-btn mem-btn--archive" disabled={busy}
+                          onClick={() => void move(e, entryTier(e) === 'archived' ? 'normal' : 'archived')}>
+                          {t(entryTier(e) === 'archived' ? 'memory.restore' : 'memory.archive')}
+                        </button>
                         {e.tags.map(t => <span key={t} className="mem-tag">#{t}</span>)}
                         <span className="mem-meta">
                           {e.summaryPending && <span className="mem-pending" title={t('memory.pendingTitle')}>{t('memory.pending')}</span>}
@@ -168,6 +218,8 @@ export default function MemoryPanel({ agentId, agentName }: Props) {
               ))}
             </ul>
           )}
+          {!loading && entries.length > 0 && filtered.length === 0 && <div className="mem-empty">{t('memory.noResults')}</div>}
+          {!loading && filtered.length > limit && <button type="button" className="mem-btn mem-btn--add" onClick={() => setLimit(n => n + 40)}>{t('memory.showMore')}</button>}
         </div>
     </div>
   );

@@ -43,10 +43,10 @@ test('仅选择 MCP 工具时不预览本地工具', () => {
   assert.deepEqual(getEffectiveLocalTools(tools, new Set(['mcp:demo:search'])), []);
 });
 
-test('新建 Agent 默认启用全部普通已安装技能，但不授予浏览器', () => {
+test('新建 Agent 默认只启用浏览器技能，其余由人勾选', () => {
   assert.deepEqual(
     [...getDefaultSkillSelection([{ id: 'code' }, { id: 'browser' }, { id: 'docs' }], [], true)],
-    ['code', 'docs'],
+    ['browser'],
   );
 });
 

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { callPreparedModel } from './model-call.js';
+import { providerHttpError } from '../provider-request-error.js';
+import type { ContextMessage } from '../types.js';
 
 test('recovery can shrink several rejected requests inside the same task', async () => {
   let calls = 0;
@@ -28,4 +30,30 @@ test('owner cancellation stops model recovery immediately', async () => {
   await assert.rejects(callPreparedModel({ call: async () => { controller.abort(new Error('human stopped')); throw controller.signal.reason; },
     recover: async () => { recovered = true; return true; } }, [], controller.signal, {}), /human stopped/);
   assert.equal(recovered, false);
+});
+
+test('explicit context exhaustion retains streamed text for compaction and continues the same request boundary', async () => {
+  const messages: ContextMessage[] = [{ role: 'user', content: 'finish original task' }];
+  let calls = 0;
+  const result = await callPreparedModel({ call: async (_messages, _options, onChunk) => {
+    if (++calls === 1) { onChunk?.('verified partial result');
+      throw providerHttpError(400, '{"error":{"code":"context_window_exceeded"}}'); }
+    return { content: 'continued', finishReason: 'stop' };
+  }, recover: async (_error, current) => {
+    assert.deepEqual(current.at(-1), { role: 'assistant', content: 'verified partial result' }); return true;
+  } }, messages, undefined, { onChunk: () => {} });
+  assert.equal(result.content, 'continued'); assert.equal(calls, 2);
+  assert.equal(messages.filter(message => message.content === 'verified partial result').length, 1);
+});
+
+test('unsuccessful context recovery leaves canonical history untouched and never invents a completed tool', async () => {
+  for (const fail of [false, true]) {
+    const messages: ContextMessage[] = [{ role: 'user', content: 'original' }];
+    const original = structuredClone(messages);
+    await assert.rejects(callPreparedModel({ call: async (_messages, _options, onChunk) => {
+      onChunk?.('partial'); throw providerHttpError(400, '{"error":{"code":"context_window_exceeded"}}');
+    }, recover: async () => { if (fail) throw new Error('summary failed'); return false; } }, messages,
+    undefined, { onChunk: () => {} }));
+    assert.deepEqual(messages, original);
+  }
 });

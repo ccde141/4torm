@@ -11,7 +11,6 @@ const statusColors = Object.fromEntries(SYSTEM_STATUSES.map(status => [status.id
 
 export interface MonsoonSidebarProps {
   agents: Agent[];
-  offlineIds: Set<string>;
   selectedAgent: Agent | null;
   sessions: ChatSession[];
   displayUsage?: SessionUsageDisplay;
@@ -30,11 +29,8 @@ export function MonsoonSidebar(props: MonsoonSidebarProps) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {props.agents.map(agent => <button key={agent.id} onClick={() => props.selectAgent(agent)}
           style={agentStyle(agent.id === props.selectedAgent?.id)}>
-          <span style={dotStyle(props.offlineIds.has(agent.id) ? '#ef4444'
-            : agent.busy ? statusColors.busy : statusColors[agent.status] ?? statusColors.idle)}
-            title={props.offlineIds.has(agent.id) ? t('chat.page.offline')
-              : agent.busy ? t('chat.page.busy') : agent.status === 'idle'
-                ? t('chat.page.idle') : agent.status} />
+          <span style={dotStyle(agent.busy ? statusColors.busy : statusColors.idle)}
+            title={agent.busy ? t('chat.page.busy') : t('chat.page.idle')} />
           <span className="text-truncate">{agent.name}</span>
         </button>)}
       </div>

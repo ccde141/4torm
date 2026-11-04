@@ -41,6 +41,7 @@ export interface NativeContextMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   origin?: 'human' | 'framework';
+  placement?: 'before-human';
   images?: ImageAttachment[];
   toolImages?: ToolImageRef[];
   reasoningContent?: string;
@@ -96,7 +97,7 @@ export interface ChatMessage {
    */
   toolSteps?: ToolStep[];
   /** 流式阶段标识（运行时字段，不持久化） */
-  streamingPhase?: 'queued' | 'llm-waiting' | 'model-output' | 'tool-preparing' | 'tool-exec' | 'team-waiting';
+  streamingPhase?: 'queued' | 'llm-waiting' | 'model-output' | 'tool-preparing' | 'tool-exec' | 'team-waiting' | 'memory-recalling';
   /** 当前阶段已等待秒数（运行时字段） */
   phaseElapsed?: number;
   /** 正在准备或执行的工具名（运行时字段） */

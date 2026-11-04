@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Agent } from '../../types';
 import type { AgentActivityView } from './dashboard-activity';
@@ -15,6 +15,8 @@ import { useLocale } from '../../i18n/LocaleContext';
 import { activityStatusLabel } from './agent-card-view';
 import { useConfirm } from '../common/ConfirmDialog';
 import '../../styles/components/agent-detail.css';
+
+const WorkRecordsPanel = lazy(() => import('./WorkRecordsPanel'));
 
 interface Rect { left: number; top: number; width: number; height: number }
 interface Props {
@@ -56,7 +58,7 @@ export default function AgentDetailDialog(props: Props) {
   const [open, setOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const deletingRef = useRef(false);
-  const [section, setSection] = useState<'overview' | 'stats' | AgentConfigTab | 'memory'>('overview');
+  const [section, setSection] = useState<'overview' | 'stats' | AgentConfigTab | 'memory' | 'work-records'>('overview');
   const [configVisited, setConfigVisited] = useState(false);
   const [memoryVisited, setMemoryVisited] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
@@ -125,6 +127,7 @@ export default function AgentDetailDialog(props: Props) {
     ...AGENT_CONFIG_TABS.map(id => ({ id, label: t(id === 'basic'
       ? 'dashboard.detail.configure' : AGENT_CONFIG_TAB_LABELS[id]) })),
     { id: 'memory', label: t('dashboard.detail.memory') },
+    { id: 'work-records', label: t('workRecords.title') },
   ] as const;
   const selectSection = (id: typeof section) => {
     setSection(id);
@@ -174,7 +177,13 @@ export default function AgentDetailDialog(props: Props) {
           </section>
           <section className="agent-detail__section agent-detail__section--memory" hidden={section !== 'memory'}>
             <div className="agent-detail__section-title"><h3>{t('memory.title')}</h3></div>
-            {memoryVisited && <MemoryPanel embedded agentId={agent.id} agentName={agent.name} />}
+            {memoryVisited && <MemoryPanel key={agent.id} embedded agentId={agent.id} agentName={agent.name} />}
+          </section>
+          <section className="agent-detail__section" hidden={section !== 'work-records'}>
+            {section === 'work-records' && <Suspense fallback={<p role="status">{t('workRecords.loading')}</p>}>
+              <WorkRecordsPanel key={agent.id} agentId={agent.id} onOpenSession={onNavigate
+                ? sessionId => { close(); onNavigate('chat', sessionId); } : undefined} />
+            </Suspense>}
           </section>
           </div>
         </div>

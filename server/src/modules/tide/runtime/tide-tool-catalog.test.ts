@@ -8,6 +8,10 @@ import { buildTextToolProtocol } from '../../../engine/shared/text-tool-prompt.j
 import { resolveToolTransportContract } from '../../../model-runtime/config/tool-transport-contract.js';
 import type { TideTask } from '../domain/task.js';
 import { prepareConversation } from './tide-conversation.js';
+import { buildTideInputContext } from './input-context.js';
+import { loadAgent } from '../../../engine/shared/agent-loader.js';
+import { SessionRunner } from '../../../engine/conversation/session-runner.js';
+import { browserRuntime } from '../../../services/browser-runtime.js';
 
 test('Tide text prompt lists the same authorized virtual tools as SessionRunner', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tide-tool-catalog-'));
@@ -34,6 +38,27 @@ test('Tide text prompt lists the same authorized virtual tools as SessionRunner'
     allowAsk: false, allowDelegate: false,
   })).runtime;
   assert.equal(runtime.some(tool => tool.name === 'review_changes'), true);
-  assert.equal(runtime.some(tool => tool.name === 'memory_write'), true);
+  assert.equal(runtime.some(tool => tool.name === 'memory_manage'), true);
   assert.equal(prepared.systemPrompt.includes(buildTextToolProtocol(runtime)), true);
+});
+
+test('scheduled Tide context supplies its own browser owner without enabling interactive human tools', async t => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tide-browser-owner-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await fs.mkdir(path.join(dataDir, 'agents'), { recursive: true });
+  await fs.mkdir(path.join(dataDir, 'skills'), { recursive: true });
+  await fs.cp(new URL('../../../../../data/skills/browser/', import.meta.url), path.join(dataDir, 'skills/browser'), { recursive: true });
+  await fs.writeFile(path.join(dataDir, 'agents/registry.json'), JSON.stringify({ a: { id: 'a', name: 'A',
+    model: 'test:model', config: { skills: ['browser'], tools: [], toolMode: 'selected' } } }));
+  await fs.writeFile(path.join(dataDir, 'providers.json'), JSON.stringify({ providers: [{
+    id: 'test', baseUrl: 'https://unused.invalid/v1', nativeMode: 'native', models: ['model'] }] }));
+  const context = await buildTideInputContext(dataDir, (await loadAgent(dataDir, 'a'))!, 'task-session', { userMessage: 'inspect' });
+  let calls = 0, owner: string | undefined;
+  t.mock.method(browserRuntime, 'execute', async input => { owner = input.ownerId; return 'inspected'; });
+  const runner = new SessionRunner({ ...context.opts, native: true, llmTransform: () => ({ call: async () => ++calls === 1
+    ? { content: '', finishReason: 'tool_calls', toolCalls: [{ id: 'browser', name: 'browser', arguments: '{"action":"inspect"}' }] }
+    : { content: 'done', finishReason: 'stop' } }) });
+  await runner.chat(context.systemPrompt, [{ role: 'user', content: 'inspect' }], () => {});
+  assert.equal(owner, 'tide:a:task-session'); assert.equal(context.opts.sessionId, undefined);
+  assert.equal(context.opts.allowAsk, false); assert.equal(context.opts.allowDelegate, false);
 });

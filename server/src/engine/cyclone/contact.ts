@@ -285,6 +285,7 @@ export async function runContactedTurn(
       }
       try {
         return await execToolUnifiedOutcome({ tool, args: rawArgs, agentId: agent.id, workspaceDir: wsDir, sandboxLevel: agent.sandboxLevel, signal,
+          observation: { scope: 'cyclone', ownerId: `${workshopId}:${seat.id}` },
           mediaAccess: { dataDir, feature: 'cyclone', target: { workshopId, kind: 'seat', targetId: seat.id } } });
       } catch (e) {
         return { result: `工具执行失败: ${(e as Error).message}`, ok: false };

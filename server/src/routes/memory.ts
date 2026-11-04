@@ -9,12 +9,14 @@
 
 import type { FastifyInstance } from 'fastify';
 import { getAppContext } from '../services/app-context.js';
+import { FrameworkError, frameworkErrorToHttp } from '../engine/shared/framework-error.js';
 import {
   listMemoryFull,
   writeMemory,
   updateMemory,
   deleteMemory,
   type MemoryCategory,
+  type MemoryTier,
 } from '../engine/shared/agent-memory.js';
 
 const CATEGORIES: MemoryCategory[] = ['feedback', 'fact', 'pitfall', 'reference'];
@@ -25,6 +27,11 @@ function coerceTags(v: unknown): string[] | undefined {
   if (Array.isArray(v)) return v.map(String).map(s => s.trim()).filter(Boolean);
   if (typeof v === 'string') return v.split(/[,，]/).map(s => s.trim()).filter(Boolean);
   return undefined;
+}
+function coerceTier(v: unknown): MemoryTier | undefined {
+  if (v === undefined) return undefined;
+  if (v === 'frequent' || v === 'normal' || v === 'archived') return v;
+  throw new Error('MEMORY_TIER_INVALID');
 }
 
 export async function memoryRoutes(app: FastifyInstance): Promise<void> {
@@ -37,6 +44,7 @@ export async function memoryRoutes(app: FastifyInstance): Promise<void> {
     try {
       return reply.send(await listMemoryFull(dataDir, agentId));
     } catch (e) {
+      if (e instanceof FrameworkError) { const result = frameworkErrorToHttp(e); return reply.status(result.statusCode).send(result.body); }
       return reply.status(500).send({ error: (e as Error).message });
     }
   });
@@ -52,12 +60,14 @@ export async function memoryRoutes(app: FastifyInstance): Promise<void> {
       const summary = typeof b?.summary === 'string' && b.summary.trim() ? b.summary.trim() : undefined;
       const r = await writeMemory(dataDir, agentId, {
         summary, detail,
+        tier: coerceTier(b?.tier),
         category: coerceCategory(b?.category) ?? 'fact',
         tags: coerceTags(b?.tags) ?? [],
         source: 'human', now: new Date().toISOString(),
       });
       return reply.send(r);
     } catch (e) {
+      if (e instanceof FrameworkError) { const result = frameworkErrorToHttp(e); return reply.status(result.statusCode).send(result.body); }
       return reply.status(500).send({ error: (e as Error).message });
     }
   });
@@ -74,11 +84,14 @@ export async function memoryRoutes(app: FastifyInstance): Promise<void> {
         detail: typeof b?.detail === 'string' ? b.detail : undefined,
         category: coerceCategory(b?.category),
         tags: coerceTags(b?.tags),
+        tier: coerceTier(b?.tier),
+        expectedUpdated: typeof b?.expectedUpdated === 'string' ? b.expectedUpdated : undefined,
         now: new Date().toISOString(),
       });
       if (!entry) return reply.status(404).send({ error: '条目不存在' });
       return reply.send(entry);
     } catch (e) {
+      if (e instanceof FrameworkError) { const result = frameworkErrorToHttp(e); return reply.status(result.statusCode).send(result.body); }
       return reply.status(500).send({ error: (e as Error).message });
     }
   });
@@ -90,9 +103,10 @@ export async function memoryRoutes(app: FastifyInstance): Promise<void> {
     const slug = b?.slug as string;
     if (!agentId || !slug) return reply.status(400).send({ error: 'agentId/slug 必填' });
     try {
-      await deleteMemory(dataDir, agentId, slug);
+      await deleteMemory(dataDir, agentId, slug, typeof b?.expectedUpdated === 'string' ? b.expectedUpdated : undefined);
       return reply.send({ ok: true });
     } catch (e) {
+      if (e instanceof FrameworkError) { const result = frameworkErrorToHttp(e); return reply.status(result.statusCode).send(result.body); }
       return reply.status(500).send({ error: (e as Error).message });
     }
   });

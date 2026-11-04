@@ -34,7 +34,7 @@ export function DashboardStatusFilters({ statuses, filter, onSelect }: {
       aria-pressed={filter === 'all'} onClick={() => onSelect('all')}>
       {t('dashboard.all')}
     </button>
-    {statuses.map(opt => <button type="button" key={opt.id} value={opt.id}
+    {statuses.filter(opt => opt.id !== 'offline').map(opt => <button type="button" key={opt.id} value={opt.id}
       className={stateClass(opt.id)} aria-pressed={filter === opt.id}
       onClick={() => onSelect(opt.id)}
       style={filter === opt.id ? { borderColor: opt.color, color: opt.color, background: `${opt.color}18` } : undefined}>

@@ -1,13 +1,16 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { historyRevision } from '../domain/history-revision.js';
+import { retireRecallSession } from '../../../engine/shared/memory-recall/index.js';
 import { atomicWriteFile } from '../../../engine/shared/atomic-io.js';
 import { agentSessionFile, agentSessionsDir } from '../../../services/data-paths.js';
 import {
   parseMonsoonSession, sessionUnread, type MonsoonSession, type MonsoonTokenUsage,
   type SessionWriteMode,
 } from '../domain/session.js';
-import { readSessionProjection, sessionMeta, type SessionIndexEntry } from './session-index.js';
-import { recordModelRequest, type ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
+import { readSessionProjection, sessionFingerprint, sessionMeta, sessionSummary, type SessionIndexEntry } from './session-index.js';
+import { recordModelRequest, type CurrentInputEstimate, type ModelRequestUsage } from '../../../engine/shared/model-request-usage.js';
 
 export class SessionRevisionConflictError extends Error {
   constructor(readonly current: MonsoonSession) {
@@ -29,6 +32,23 @@ export class FileMonsoonSessionRepository {
     return this.lock(agentId, () => this.readList(agentId, includeMessages));
   }
 
+  markRead(agentId: string, sessionId: string, lastReadAt: string): Promise<{ lastReadAt?: string; unreadCount: number } | null> {
+    return this.lock(agentId, async () => {
+      const current = await this.read(agentId, sessionId);
+      if (!current) return null;
+      const saved = readMetadata(current, { ...current, lastReadAt });
+      saved.unreadCount = sessionUnread(saved);
+      await this.write(saved);
+      await this.upsertIndex(saved);
+      return { lastReadAt: saved.lastReadAt, unreadCount: saved.unreadCount };
+    });
+  }
+
+  listMetadata(agentId: string): Promise<Array<{ id: string; title: string; compactions?: number; sourceVersion?: string }>> {
+    return this.lock(agentId, async () => (await this.readIndex(agentId)).map(entry =>
+      typeof entry === 'string' ? { id: entry, title: '' } : { id: entry.i, title: entry.t, compactions: entry.cp, sourceVersion: entry.sv }));
+  }
+
   titles(agentId: string): Promise<ReadonlyMap<string, string>> {
     return this.lock(agentId, async () => {
       const index = await this.readIndex(agentId);
@@ -37,11 +57,26 @@ export class FileMonsoonSessionRepository {
     });
   }
 
+  /** A derived estimate never changes a conversation revision or its canonical transcript. */
+  cacheInputEstimate(session: MonsoonSession, estimate: CurrentInputEstimate | undefined): Promise<void> {
+    if (!estimate || estimate.active || estimate.contextRevision !== session.messageRevision
+      || estimate.model !== session.model) return Promise.resolve();
+    return this.lock(session.agentId, async () => {
+      const index = await this.readIndex(session.agentId, false);
+      const entry = index.find(item => typeof item !== 'string' && item.i === session.id);
+      if (!entry || typeof entry === 'string' || !entry.d
+        || entry.d.messageRevision !== session.messageRevision || entry.d.incarnation !== session.incarnation
+        || entry.d.model !== estimate.model) return;
+      entry.ce = estimate;
+      await this.writeIndex(session.agentId, index);
+    });
+  }
+
   create(value: unknown): Promise<MonsoonSession> {
     const session = parseMonsoonSession(value);
     return this.lock(session.agentId, async () => {
       if (await this.read(session.agentId, session.id)) throw new Error('会话已经存在');
-      const created = { ...session, revision: 1, messageRevision: 1 };
+      const created = { ...session, revision: 1, messageRevision: 1, historyRevision: 0, incarnation: randomUUID() };
       await this.write(created);
       await this.upsertIndex(created);
       return created;
@@ -68,12 +103,14 @@ export class FileMonsoonSessionRepository {
       saved.unreadCount = sessionUnread(saved);
       if (options?.clearTokenUsage) {
         // A context commit has one point of no return. Prepare its recoverable projection first.
-        await this.upsertIndex(saved);
+        await this.upsertIndex(saved, false);
         await this.write(saved, options.signal);
       } else {
         await this.write(saved, options?.signal);
         await this.upsertIndex(saved);
       }
+      if (saved.historyRevision !== current.historyRevision) await retireRecallSession(this.dataDir,
+        { agentId: saved.agentId, sessionId: saved.id });
       return saved;
     });
   }
@@ -125,6 +162,7 @@ export class FileMonsoonSessionRepository {
         fs.rm(path.join(dir, `${sessionId}.compactions`), { recursive: true, force: true }),
       ]);
       await this.removeIndex(agentId, sessionId);
+      await retireRecallSession(this.dataDir, { agentId, sessionId }, true);
       return true;
     });
   }
@@ -141,6 +179,10 @@ export class FileMonsoonSessionRepository {
 
   private async readList(agentId: string, includeMessages = false): Promise<MonsoonSession[]> {
     const index = await this.readIndex(agentId);
+    if (!includeMessages) return index.map(entry => {
+      if (typeof entry === 'string') throw new Error('会话索引尚未恢复');
+      return sessionSummary(entry);
+    }).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     const sessions: MonsoonSession[] = [];
     for (const entry of index) {
       const id = typeof entry === 'string' ? entry : entry.i;
@@ -148,7 +190,7 @@ export class FileMonsoonSessionRepository {
       if (session) sessions.push(session);
     }
     const ordered = sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-    return includeMessages ? ordered : ordered.map(summary);
+    return ordered;
   }
 
   private async write(session: MonsoonSession, signal?: AbortSignal): Promise<void> {
@@ -158,28 +200,27 @@ export class FileMonsoonSessionRepository {
       JSON.stringify(session, null, 2), signal);
   }
 
-  private async upsertIndex(session: MonsoonSession): Promise<void> {
-    const sessions = await this.readAllIndexed(session.agentId, false);
-    const index = sessions.findIndex(item => item.id === session.id);
-    if (index >= 0) sessions[index] = session; else sessions.push(session);
-    sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-    await this.writeIndex(session.agentId, sessions.map(sessionMeta));
+  private async upsertIndex(session: MonsoonSession, committed = true): Promise<void> {
+    const entries = await this.readIndex(session.agentId, false, session);
+    const index = entries.findIndex(item => (typeof item === 'string' ? item : item.i) === session.id);
+    const prior = entries[index];
+    const fingerprint = committed
+      ? await sessionFingerprint(agentSessionFile(this.dataDir, session.agentId, session.id)) : undefined;
+    const entry = sessionMeta(session, fingerprint);
+    if (prior && typeof prior !== 'string' && prior.d?.messageRevision === session.messageRevision
+      && prior.d.model === session.model && prior.d.incarnation === session.incarnation) entry.ce = prior.ce;
+    if (index >= 0) entries[index] = entry; else entries.push(entry);
+    entries.sort((a, b) => (typeof b === 'string' ? '' : b.u).localeCompare(typeof a === 'string' ? '' : a.u));
+    await this.writeIndex(session.agentId, entries);
   }
 
   private async removeIndex(agentId: string, sessionId: string): Promise<void> {
-    const sessions = await this.readAllIndexed(agentId, false);
-    await this.writeIndex(agentId, sessions.filter(item => item.id !== sessionId).map(sessionMeta));
+    const index = await this.readIndex(agentId, false);
+    await this.writeIndex(agentId, index.filter(item => (typeof item === 'string' ? item : item.i) !== sessionId));
   }
 
-  private async readAllIndexed(agentId: string, persistRecovery = true): Promise<MonsoonSession[]> {
-    const index = await this.readIndex(agentId, persistRecovery);
-    const values = await Promise.all(index.map(entry => this.read(agentId,
-      typeof entry === 'string' ? entry : entry.i)));
-    return values.filter((value): value is MonsoonSession => value !== null);
-  }
-
-  private async readIndex(agentId: string, persistRecovery = true): Promise<SessionIndexEntry[]> {
-    const projection = await readSessionProjection(this.dataDir, agentId, id => this.read(agentId, id));
+  private async readIndex(agentId: string, persistRecovery = true, replacing?: MonsoonSession): Promise<SessionIndexEntry[]> {
+    const projection = await readSessionProjection(this.dataDir, agentId, id => this.read(agentId, id), replacing);
     if (persistRecovery && projection.recovered) await this.writeIndex(agentId, projection.entries);
     return projection.entries;
   }
@@ -209,8 +250,14 @@ function content(
 ): MonsoonSession {
   const merged = { ...incoming, title: current.title, titleManual: current.titleManual,
     titleState: current.titleState, createdAt: current.createdAt,
+    incarnation: current.incarnation, historyRevision: historyRevision(current, incoming),
     lastReadAt: latestReadAt(current.lastReadAt, incoming.lastReadAt) };
   merged.modelUsage = current.modelUsage;
+  if (merged.historyRevision !== (current.historyRevision ?? 0)) {
+    const old = new Map(current.messages.map(message => [message.id, message]));
+    merged.messages = merged.messages.map(message => message.type === 'compact-marker'
+      && old.get(message.id)?.content !== message.content ? { ...message, historyRevision: merged.historyRevision } : message);
+  }
   if (clearTokenUsage || current.tokenUsage === undefined) delete merged.tokenUsage;
   else merged.tokenUsage = current.tokenUsage;
   return merged;
@@ -231,8 +278,4 @@ function readMetadata(current: MonsoonSession, incoming: MonsoonSession): Monsoo
 function latestReadAt(current: string | undefined, incoming: string | undefined): string | undefined {
   if (!current || !Number.isFinite(Date.parse(current))) return incoming ?? current;
   return incoming && Date.parse(incoming) > Date.parse(current) ? incoming : current;
-}
-
-function summary(session: MonsoonSession): MonsoonSession {
-  return { ...session, messages: [] };
 }

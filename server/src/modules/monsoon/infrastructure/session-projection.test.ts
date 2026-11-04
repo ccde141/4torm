@@ -35,7 +35,7 @@ test('failed index commit leaves a discoverable primary after the IO fault is re
   assert.equal(JSON.parse(await fs.readFile(indexFile, 'utf8'))[0].i, 'session-a');
 });
 
-test('title lookup repairs an orphan while preserving valid legacy index entries', async t => {
+test('title lookup repairs an orphan and upgrades legacy entries to recoverable summaries', async t => {
   const { dataDir, dir, indexFile, repository } = await fixture(t);
   await repository.create(session());
   await fs.writeFile(indexFile, JSON.stringify(['session-a']));
@@ -43,7 +43,8 @@ test('title lookup repairs an orphan while preserving valid legacy index entries
   const reopened = new FileMonsoonSessionRepository(dataDir);
   assert.equal((await reopened.titles('agent-a')).get('session-b'), 'session-b');
   const index = JSON.parse(await fs.readFile(indexFile, 'utf8'));
-  assert.equal(index[0], 'session-a');
+  assert.equal(index[0].i, 'session-a');
+  assert.equal(index[0].d.title, 'session-a');
   assert.equal(index[1].i, 'session-b');
 });
 

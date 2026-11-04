@@ -8,6 +8,7 @@ import { backendFetch } from '../lib/backend-client';
 const BASE = '/api/memory';
 
 export type MemoryCategory = 'feedback' | 'fact' | 'pitfall' | 'reference';
+export type MemoryTier = 'frequent' | 'normal' | 'archived';
 
 export interface MemoryEntry {
   slug: string;
@@ -20,6 +21,7 @@ export interface MemoryEntry {
   hits: number;
   source: string;
   summaryPending: boolean;
+  tier?: MemoryTier;
 }
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
@@ -37,6 +39,9 @@ export async function listMemory(agentId: string): Promise<MemoryEntry[]> {
 // 人只对 detail 负责；summary 由系统生成/AI 精炼，不进人类草稿。
 // tags 为可选高级项。
 export interface MemoryDraft {
+  summary?: string;
+  tier?: MemoryTier;
+  expectedUpdated?: string;
   detail: string;
   category: MemoryCategory;
   tags: string[];
@@ -58,10 +63,10 @@ export async function updateMemory(agentId: string, slug: string, patch: Partial
   }));
 }
 
-export async function deleteMemory(agentId: string, slug: string): Promise<void> {
+export async function deleteMemory(agentId: string, slug: string, expectedUpdated?: string): Promise<void> {
   await jsonOrThrow(await backendFetch(`${BASE}/delete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agentId, slug }),
+    body: JSON.stringify({ agentId, slug, expectedUpdated }),
   }));
 }

@@ -1,4 +1,6 @@
 import type { ChatMessage } from '../../types';
+import { HumanMemoryGroup } from './MemoryRecallPreview';
+import type { MemoryReference } from './memory-references';
 import { useLocale } from '../../i18n/LocaleContext';
 import { humanInputStatus, summarizeSkippedInputNotice, type HumanInputActivity,
   type SkippedInputNotice as Notice } from './human-input-presentation';
@@ -11,12 +13,13 @@ function SkippedNotice({ notice }: { notice: Notice }) {
   </div>;
 }
 
-export default function HumanInputList({ message, pending = [], isWorking, onCheck, activity }: {
+export default function HumanInputList({ message, pending = [], isWorking, onCheck, activity, memories }: {
   message: ChatMessage;
   pending?: readonly PendingInput[];
   isWorking?: (id: string) => boolean;
   onCheck?: (entry: PendingInput) => void;
   activity?: HumanInputActivity;
+  memories?: ReadonlyMap<string, MemoryReference[]>;
 }) {
   const { locale } = useLocale();
   const english = locale === 'en-US';
@@ -24,7 +27,8 @@ export default function HumanInputList({ message, pending = [], isWorking, onChe
   const skippedNotice = summarizeSkippedInputNotice(message.inputSkipped ?? [], english ? 'en-US' : 'zh-CN');
   if (!message.humanInputs?.length && !message.inputRecoveryError && !message.inputSkipped?.length) return null;
   return <section className="chat__human-inputs" aria-label={english ? 'Human steering' : '人类插话'}>
-    {inputs.map((input, index) => <article className="chat__message chat__message--user chat__message--steering" key={input.id}>
+    {inputs.map((input, index) => <HumanMemoryGroup key={input.id} sources={memories?.get(input.id)} messageId={input.id}>
+    <article className="chat__message chat__message--user chat__message--steering">
       <div className="chat__avatar">{english ? 'You' : '你'}</div>
       <div className="chat__bubble">
         <div className="md-bubble">{input.content}</div>
@@ -37,7 +41,7 @@ export default function HumanInputList({ message, pending = [], isWorking, onChe
             onCheck={() => onCheck(entry)} />)}
         {index === inputs.length - 1 && skippedNotice && <SkippedNotice notice={skippedNotice} />}
       </div>
-    </article>)}
+    </article></HumanMemoryGroup>)}
     {!inputs.length && skippedNotice && <article className="chat__message chat__message--user chat__message--steering">
       <div className="chat__avatar">{english ? 'You' : '你'}</div>
       <div className="chat__bubble"><SkippedNotice notice={skippedNotice} /></div>

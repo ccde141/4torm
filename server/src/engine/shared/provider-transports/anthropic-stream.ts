@@ -6,6 +6,7 @@ import { providerResponseError } from '../provider-request-error.js';
 import type { ProviderOutputControl } from '../provider-output-control.js';
 import type { TokenUsage } from '../llm-bridge.js';
 import { createToolProgressTracker, type ToolPreparationProgress } from '../tool-progress.js';
+import { assertProviderStreamComplete } from '../provider-stream-completion.js';
 
 export async function parseAnthropicSSEStream(
   response: Response,
@@ -21,39 +22,63 @@ export async function parseAnthropicSSEStream(
 
   const decoder = new TextDecoder();
   const accumulator = createAnthropicStreamAccumulator(nameMap, onChunk, onReasoning);
+  const consumer = createEventConsumer(accumulator, nameMap, outputControl, onUsage, onToolProgress);
   let buffer = '';
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const consumed = consumeFrames(buffer, consumer.push);
+      buffer = consumed.buffer;
+      if (consumed.stopped) return consumer.finish();
+    }
+    buffer += decoder.decode();
+    consumeFrames(`${buffer}\n\n`, consumer.push);
+    return consumer.finish();
+  } finally {
+    try { await reader.cancel(); } catch { /* Preserve the original provider or abort error. */ }
+    reader.releaseLock();
+  }
+}
+
+function createEventConsumer(accumulator: ReturnType<typeof createAnthropicStreamAccumulator>,
+  nameMap: Map<string, string>, outputControl?: ProviderOutputControl,
+  onUsage?: (usage: TokenUsage) => void, onToolProgress?: (progress: ToolPreparationProgress) => void) {
+  let ended = false;
+  let limited = false;
+  const openBlocks = new Set<number>();
   const progress = createToolProgressTracker({ startedAt: Date.now(), onProgress: onToolProgress,
     restoreName: name => nameMap.get(name) ?? name });
   const push = (event: Record<string, any>): boolean => {
-    accumulator.push(event);
+    try { accumulator.push(event); } finally {
+      if (event.type === 'message_start' || event.type === 'message_delta') {
+        const usage = accumulator.finish().usage;
+        if (usage) onUsage?.(usage);
+      }
+    }
+    if (event.type === 'content_block_start') openBlocks.add(event.index ?? 0);
+    if (event.type === 'content_block_stop') openBlocks.delete(event.index ?? 0);
+    if (event.type === 'message_stop') {
+      assertProviderStreamComplete(openBlocks.size === 0 && accumulator.finish().finishReason !== null);
+      ended = true;
+    }
     if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
       progress.push([{ index: event.index, function: { name: event.content_block.name } }]);
     } else if (event.type === 'content_block_delta' && event.delta?.type === 'input_json_delta'
       && event.delta.partial_json) {
       progress.push([{ index: event.index, function: { arguments: event.delta.partial_json } }]);
     }
-    if (event.type === 'message_start' || event.type === 'message_delta') {
-      const usage = accumulator.finish().usage;
-      if (usage) onUsage?.(usage);
-    }
-    return outputControl?.shouldStop?.() ?? false;
+    limited = outputControl?.shouldStop?.() ?? false;
+    return ended || limited;
   };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const consumed = consumeFrames(buffer, push);
-    buffer = consumed.buffer;
-    if (consumed.stopped) {
-      await reader.cancel();
-      return { ...accumulator.finish(), finishReason: 'length' };
-    }
-  }
-  buffer += decoder.decode();
-  const consumed = consumeFrames(`${buffer}\n\n`, push);
-  const result = accumulator.finish();
-  return consumed.stopped ? { ...result, finishReason: 'length' } : result;
+  return { push, finish(): AnthropicResult {
+    assertProviderStreamComplete(ended || limited);
+    const result = accumulator.finish();
+    return limited && !ended ? { ...result, finishReason: 'length' } : result;
+  } };
 }
 
 function consumeFrames(

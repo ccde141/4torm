@@ -18,6 +18,8 @@ Select a card to open the detail window. Its navigation includes **Overview**, *
 - **Statistics** counts only visible items explicitly attributed to this agent. It indicates when some features could not be read.
 - **Configuration, Prompt, Tools, Skills, and Memory** contain the agent's persistent settings. Save configuration changes to apply them.
 
+See [Memory and Recall](./memory) for saving memories, retrieval, model selection, and recall timing.
+
 ![Agent details and current status](/images/guide/agent-detail-current.png)
 
 ## Create an Agent

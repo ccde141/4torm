@@ -23,3 +23,8 @@ test('tool target selects common file and command arguments', () => {
   assert.equal(getToolTarget({ command: 'npm test' }), 'npm test');
   assert.equal(getToolTarget({ content: 'do not expose this' }), undefined);
 });
+
+test('memory recall is a distinct bilingual phase', () => {
+  assert.equal(formatStreamStatus('memory-recalling', 2), 'Agent 回忆中 2s...');
+  assert.equal(formatStreamStatus('memory-recalling', 2, undefined, undefined, 'en-US'), 'Agent is recalling memories 2s...');
+});

@@ -41,6 +41,7 @@ export function memberExecutor(parent: SessionRunnerOpts): MemberExecutor {
           return JSON.stringify(await control.report(args.content, args.messageId));
         } }, interceptTool: undefined, sessionId: undefined, internalInbox: control.inbox,
       toolNames: member.permissions.tools, toolMode: 'selected', skillIds: member.permissions.skills,
+      executionOwner: { scope: 'conversation', ownerId: `team:${parent.sessionId}:${member.id}` },
       sandboxLevel: member.permissions.sandboxLevel, memberTools: allTools.map(tool => tool.name),
       allowAsk: false, allowDelegate: false, maxTurns: undefined, signal,
       llmTransform: (llm, emit, rebase) => capture.wrap(createCompactionCaller({ llm, dataDir: parent.dataDir,

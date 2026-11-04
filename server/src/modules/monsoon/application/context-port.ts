@@ -6,6 +6,7 @@ import type { CompactionCommit, CompactionReason } from '../../../engine/shared/
 import type { ContextMessage } from '../../../engine/shared/types.js';
 import type { MonsoonSession } from '../domain/session.js';
 import { FileMonsoonSessionRepository } from '../infrastructure/session-repository.js';
+import { syncMonsoonRecallRecords } from '../infrastructure/recall-records.js';
 import { projectMonsoonContext, storedMonsoonContext } from './active-context.js';
 import { hydrateMonsoonContext, persistMonsoonContext, persistMonsoonMessageImages,
   type StoredMonsoonContextMessage } from './context-images.js';
@@ -15,6 +16,7 @@ export type MonsoonContextMarker = {
   type: 'compact-marker'; contextExact: true; nativeContext: StoredMonsoonContextMessage[];
   execution?: { assistantId: string; toolOffset: number; textOffset: number; reasoningOffset?: number; eventOffset: number };
   committedRevision?: number;
+  historyRevision?: number;
 };
 
 /** Stable cross-island port: archive records and active model context have separate ownership. */
@@ -70,12 +72,17 @@ export class MonsoonContextPort {
       content: plan.summary, timestamp: new Date().toISOString(), type: 'compact-marker',
       contextExact: true, nativeContext: persistMonsoonContext(plan.messages.slice(protectedPrefixCount)),
       committedRevision: expectedRevision + 1,
+      historyRevision: current.historyRevision ?? 0,
       ...(position ? { execution: { assistantId: current.messages[index].id, toolOffset: position.toolOffset,
         textOffset: position.textOffset, eventOffset: position.eventOffset,
         ...(position.reasoningOffset !== undefined ? { reasoningOffset: position.reasoningOffset } : {}) } } : {}) };
     const messages = [...current.messages];
     messages.splice(index < 0 ? messages.length : index, 0, marker);
-    return this.sessions.replace({ ...current, messages }, expectedRevision, 'content',
+    const saved = await this.sessions.replace({ ...current, messages }, expectedRevision, 'content',
       { clearTokenUsage: true, signal });
+    await syncMonsoonRecallRecords(this.dataDir, agentId).catch(() => {
+      console.warn('[memory-recall] WORK_RECORD_INDEX_PENDING');
+    });
+    return saved;
   }
 }

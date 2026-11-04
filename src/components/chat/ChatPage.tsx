@@ -79,7 +79,7 @@ export default function ChatPage({ active = true, preselectSession, onClearPrese
   };
 
   return <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-    <MonsoonSidebar agents={catalog.agents} offlineIds={catalog.offlineIds}
+    <MonsoonSidebar agents={catalog.agents}
       selectedAgent={selectedAgent} sessions={sessions.sessions} displayUsage={sessions.displayUsage}
       activeSessionId={sessions.activeSessionId} selectAgent={sessions.selectAgent}
       selectSession={sessions.selectSession} newSession={sessions.newSession}

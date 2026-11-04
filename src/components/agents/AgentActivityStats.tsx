@@ -14,8 +14,7 @@ export default function AgentActivityStats({ activity }: Props) {
   return <div className="agent-detail__stats">
     <header><h3>{t('dashboard.detail.statistics')}</h3>
       <p>{t('dashboard.detail.statsScope')}</p>
-      {!metrics.complete && <p className="agent-detail__coverage">
-        {t('dashboard.card.partialActivity')}</p>}</header>
+    </header>
     <div className="agent-detail__stat-count"><strong>{metrics.visibleItems}</strong>
       <span>{t('dashboard.detail.visibleItems')}</span></div>
     <section><h4>{t('dashboard.detail.byFeature')}</h4>

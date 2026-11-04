@@ -31,7 +31,7 @@ const ACTIVE = new Set(['queued', 'running', 'waiting']);
 
 export function projectAgentActivity(
   agent: Agent, activityAvailable: boolean,
-  snapshot: CollaborationSnapshot | null, modelUnavailable: boolean,
+  snapshot: CollaborationSnapshot | null,
 ): AgentActivityView {
   const matches: AgentActivityEvent[] = snapshot?.features.flatMap(feature =>
     (feature.observation?.items ?? [])
@@ -70,12 +70,9 @@ export function projectAgentActivity(
       summary: '活动已确认，尚无可关联的运行详情', source: 'Agent 活动状态',
       ...common, feature };
   }
-  if (!complete || (active && active.item.status !== 'waiting'))
+  if (!activityAvailable || (active && active.item.status !== 'waiting'))
     return { kind: 'unknown', label: '状态未知',
     summary: '当前无法完整确认执行状态', source: '状态源暂不可用',
-    ...common };
-  if (modelUnavailable) return { kind: 'offline', label: '模型不可用',
-    summary: '当前模型配置不可用', source: '模型配置',
     ...common };
   return { kind: 'idle', label: '空闲', summary: '当前未观察到执行中的事项',
     source: 'Agent 活动状态', ...common };

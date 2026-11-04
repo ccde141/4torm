@@ -4,6 +4,7 @@ import type { ToolPreparationProgress } from '../tool-progress.js';
 import { observeModelRequests } from '../model-request-usage.js';
 import type { LLMCaller, ReActStreamEvent } from './native-loop.js';
 import { HEARTBEAT_INTERVAL_MS } from './limits.js';
+import { isProviderContextOverflow } from '../provider-request-error.js';
 
 /** Preparation and recovery remain inside the same task; cancellation belongs to its owner. */
 export function callPreparedModel(llm: LLMCaller, messages: ContextMessage[], signal: AbortSignal | undefined,
@@ -15,13 +16,28 @@ export function callPreparedModel(llm: LLMCaller, messages: ContextMessage[], si
     for (;;) {
       if (signal?.aborted) throw signal.reason ?? new Error('Model request cancelled');
       let received = false;
+      let partialText = '';
       const progress = { ...callbacks,
-        onChunk: callbacks.onChunk && ((chunk: string) => { received ||= !!chunk; callbacks.onChunk!(chunk); }),
+        onChunk: callbacks.onChunk && ((chunk: string) => {
+          received ||= !!chunk; partialText += chunk; callbacks.onChunk!(chunk);
+        }),
         onReasoning: callbacks.onReasoning && ((chunk: string) => { received ||= !!chunk; callbacks.onReasoning!(chunk); }),
         onToolProgress: callbacks.onToolProgress && ((event: ToolPreparationProgress) => { received = true; callbacks.onToolProgress!(event); }) };
       try { return await observedCall(llm, messages, signal, progress, tools); }
       catch (error) {
-        if (received || signal?.aborted || !await llm.recover?.(error, messages, signal)) throw error;
+        if ((received && !isProviderContextOverflow(error)) || signal?.aborted || !llm.recover) throw error;
+        const partial: ContextMessage | undefined = partialText
+          ? { role: 'assistant', content: partialText } : undefined;
+        if (partial) messages.push(partial);
+        let recovered = false;
+        try { recovered = await llm.recover(error, messages, signal); }
+        finally {
+          if (!recovered && partial) {
+            const index = messages.indexOf(partial);
+            if (index >= 0) messages.splice(index, 1);
+          }
+        }
+        if (!recovered) throw error;
       }
     }
   });

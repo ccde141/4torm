@@ -65,8 +65,6 @@ export default function AgentCard({
           <span title={workspace}>{workspace}</span>
         </span>
       </span>
-      {!activity.complete && <span className="agent-card__foot">
-        {t('dashboard.card.partialActivity')}</span>}
     </button>
   );
 }

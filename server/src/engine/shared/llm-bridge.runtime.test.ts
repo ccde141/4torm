@@ -348,11 +348,14 @@ test('callLLM isolates configured concurrency by provider instance', async t => 
     dataDir, fullModelKey: 'local-b:qwen', messages: [{ role: 'user', content: 'independent' }],
   });
 
-  await waitUntil(() => requests.some(url => url.includes('b.test')));
-  assert.equal(requests.filter(url => url.includes('a.test')).length, 1);
-  firstResponse.resolve(new Response(JSON.stringify({
-    choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
-  })));
-  await Promise.all([first, queued, independent]);
+  try {
+    await waitUntil(() => requests.some(url => url.includes('a.test')) && requests.some(url => url.includes('b.test')));
+    assert.equal(requests.filter(url => url.includes('a.test')).length, 1);
+  } finally {
+    firstResponse.resolve(new Response(JSON.stringify({
+      choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+    })));
+    await Promise.all([first, queued, independent]);
+  }
   assert.equal(requests.filter(url => url.includes('a.test')).length, 2);
 });

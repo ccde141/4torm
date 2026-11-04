@@ -22,8 +22,6 @@ export default function AgentActivityList({ activity, selectedKey, onSelect }: P
       <span>{summaryKey ? t(summaryKey) : activity.summary}</span>
     </div>
     <h3>{t('dashboard.card.activity')}</h3>
-    {!activity.complete && <p className="agent-detail__coverage">
-      {t('dashboard.card.partialActivity')}</p>}
     {entries.length === 0 && <p>{t('dashboard.detail.noAttributedActivity')}</p>}
     <div className="agent-detail__activity-list">
       {entries.map(entry => <button type="button" key={entry.key}

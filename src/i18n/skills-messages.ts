@@ -1,4 +1,14 @@
 export const skillsZh = {
+  'skills.search': '搜索技能名称、分类和描述',
+  'skills.noResults': '没有匹配的技能',
+  'skills.category.invalid': '分类名称需为1至60个字符',
+  'skills.category.conflict': '分类已更改，请刷新后重新调整',
+  'skills.category.failed': '保存分类失败，请重试',
+  'skills.category.unclassified': '未分类',
+  'skills.category.search': '搜索或输入分类名称',
+  'skills.category.createMove': '新建「{name}」并移入',
+  'skills.category.saving': '保存中…',
+  'skills.category.select': '更改「{name}」的分类',
   'skills.page.title': '技能',
   'skills.page.subtitle': 'Skill = 提示词注入 + 专属工具（可选）— 为 Agent 赋予领域专长',
   'skills.page.refresh': '刷新',
@@ -38,6 +48,16 @@ export const skillsZh = {
 } as const;
 
 export const skillsEn: Record<keyof typeof skillsZh, string> = {
+  'skills.search': 'Search skill names, categories and descriptions',
+  'skills.noResults': 'No matching skills',
+  'skills.category.invalid': 'Category names must contain 1–60 characters',
+  'skills.category.conflict': 'Category changed. Refresh before trying again.',
+  'skills.category.failed': 'Could not save the category. Try again.',
+  'skills.category.unclassified': 'Unclassified',
+  'skills.category.search': 'Search or enter a category',
+  'skills.category.createMove': 'Create “{name}” and move here',
+  'skills.category.saving': 'Saving…',
+  'skills.category.select': 'Change category for “{name}”',
   'skills.page.title': 'Skills',
   'skills.page.subtitle': 'Skills combine prompt instructions with optional dedicated tools to give Agents domain expertise.',
   'skills.page.refresh': 'Refresh',

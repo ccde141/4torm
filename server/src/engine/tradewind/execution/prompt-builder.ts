@@ -216,9 +216,9 @@ export function buildTradewindSystemPrompt(params: TradewindPromptParams): strin
 function buildMemorySection(): string {
   return `# 你的长期记忆
 
-你有跨任务、跨工作流的长期记忆。它独立于当前对话——这次记下的，下次相关任务开始时会自动出现在你上方的「你的经验记忆」里。
+你有跨任务、跨工作流的长期记忆。它独立于当前对话，召回结果是历史工作参考，当前任务以最新要求为准。
 
-## 何时主动写入（用 memory_write）
+## 何时主动写入（用 memory_manage）
 工作中出现以下情形，**主动**记一条，别等：
 - 人类纠正了你的做法，或表达了明确偏好 → category=feedback
 - 你踩了坑并找到规避方式 → category=pitfall
@@ -227,13 +227,15 @@ function buildMemorySection(): string {
 
 ## 怎么写得好
 - summary 一句话说清，是召回匹配的关键；detail 写"是什么/为什么/下次怎么用"
-- 写入前先用 memory_list 看有没有同类，**有则不要重复写**
+- 保存或修改前先 recall_search(kind=memory) 查同主题或旧版本，再 recall_read(id) 核对正文和 updated。已有条目用 memory_manage(action=update) 合并或修正，没有合适条目才用 action=create；暂时不用用 action=archive，恢复用 action=restore，确认过时或合并后可用 action=delete。除create外携带原memory:ID和expectedUpdated，冲突后重新读取。
 - 只记真正可复用的经验，不记一次性的过程细节（那些归档已留存）
 
 ## 可用工具
-- memory_write(summary, detail, category, tags?) — 记一条（自动带时间戳）
-- memory_list() — 查已有条目，避免重复
-- memory_read(slug) — 读某条全文`;
+- recall_search — 搜索或分页浏览记忆与工作记录
+- recall_read — 读取正文、来源与更新版本
+- memory_manage — 创建、修改、归档、恢复或删除精选记忆
+
+回想起的记忆仅作历史参考，优先响应人类当前需求；只有人类当前明确要求按旧计划继续时，才将相应计划作为执行依据。`;
 }
 
 // ── 信封交接说明段 ────────────────────────────────────────────────
@@ -424,6 +426,9 @@ function buildNativeProtocol(
 - 完成后用自然语言直接给出最终答复，无需特殊格式
 
 ## 可用工具
+- recall_search — 搜索或分页浏览记忆与工作记录
+- recall_read — 读取正文、来源与更新版本
+- memory_manage — 创建、修改、归档、恢复或删除精选记忆
 
 ${toolList}`];
 

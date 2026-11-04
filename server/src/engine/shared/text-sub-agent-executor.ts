@@ -1,4 +1,9 @@
 import { callLLM } from './llm-bridge.js';
+import { randomUUID } from 'node:crypto';
+import { TextToolStreamGate } from './text-tool-stream-gate.js';
+import { unexecutedToolCall } from './tool-call-recovery.js';
+import type { ExecutionCapabilityOwner } from '../../services/execution-capability-registry.js';
+import { closeExecutionCapabilityScope } from '../../services/execution-capability-scope.js';
 import type { LoadedAgent } from './agent-loader.js';
 import type { ToolDef } from './tool-defs-loader.js';
 import type { SandboxLevel } from './sandbox-prompt.js';
@@ -11,6 +16,7 @@ import { callPreparedModel } from './react/model-call.js';
 import type { CompactionArea } from './compaction/contracts.js';
 
 export interface TextSubAgentParams {
+  executionOwner?: ExecutionCapabilityOwner;
   compactionArea?: CompactionArea;
   agent: LoadedAgent;
   model: string;
@@ -37,6 +43,8 @@ function failed(params: TextSubAgentParams, cause: unknown): SubAgentResult {
 }
 
 export async function runTextSubAgent(params: TextSubAgentParams): Promise<SubAgentResult> {
+  params = { ...params, executionOwner: params.executionOwner
+    ?? { scope: 'conversation', ownerId: `delegate:${randomUUID()}` } };
   const messages: ContextMessage[] = [
     {
       role: 'system',
@@ -58,16 +66,22 @@ export async function runTextSubAgent(params: TextSubAgentParams): Promise<SubAg
     const result = await runTextSubAgentLoop({
       messages,
       maxRounds: params.maxRounds,
+      allowedTools: params.tools.map(tool => tool.name),
       signal: params.signal,
-      callModel: onPartial => callPreparedModel(llm, messages, params.signal, {
-        onChunk: chunk => { onPartial?.(chunk); params.emitEvent({ type: 'token', data: { t: chunk } }); },
+      callModel: async onPartial => {
+        const gate = new TextToolStreamGate(chunk => params.emitEvent({ type: 'token', data: { t: chunk } }));
+        const response = await callPreparedModel(llm, messages, params.signal, {
+        onChunk: chunk => { onPartial?.(chunk); gate.push(chunk); },
         onReasoning: chunk => params.emitEvent({ type: 'reasoning', data: { t: chunk } }),
-      }),
+        });
+        gate.finish(!unexecutedToolCall(response.content, new Set(params.tools.map(tool => tool.name))));
+        return response;
+      },
       callTool: async (tool, args) => {
         const { executeToolOutcome } = await import('../../services/tool-executor.js');
         return executeToolOutcome(
           params.dataDir, tool, args, params.agent.id, undefined,
-          params.parentSandboxLevel, undefined, params.signal,
+          params.parentSandboxLevel, undefined, params.signal, undefined, params.executionOwner,
         );
       },
       onToolCall: (tool, args) => params.emitEvent({ type: 'tool_call', data: { tool, args } }),
@@ -79,5 +93,7 @@ export async function runTextSubAgent(params: TextSubAgentParams): Promise<SubAg
     return result;
   } catch (cause) {
     return failed(params, cause);
+  } finally {
+    await closeExecutionCapabilityScope(params.executionOwner!);
   }
 }

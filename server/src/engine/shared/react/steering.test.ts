@@ -33,7 +33,9 @@ test('native steering lets the running tool finish, skips remaining calls and pa
     messages, steering: { ...steering, onSkipped: tool => skipped.push(tool) }, toolDefs,
     llm: { call: async () => {
       if (++modelCalls === 1) return batch;
-      assert.deepEqual(messages.map(message => message.role), ['system', 'assistant', 'tool', 'tool', 'user', 'user']);
+      assert.deepEqual(messages.slice(0, 4).map(message => message.role), ['system', 'assistant', 'tool', 'tool']);
+      assert.equal(messages[4].origin, 'framework');
+      assert.match(messages[4].content, /\[插话接续\]/);
       assert.equal(messages[1].reasoningContent, 'original reasoning');
       assert.equal(messages[2].content, 'read finished');
       assert.equal((messages[2] as ContextMessage & { toolOk?: boolean }).toolOk, true);
@@ -64,7 +66,9 @@ test('native input received during model output skips the entire not-yet-started
     messages, steering, toolDefs,
     llm: { call: async () => {
       if (++calls === 1) { steering.pending.push('Change direction'); return batch; }
-      assert.deepEqual(messages.map(message => message.role), ['assistant', 'tool', 'tool', 'user']);
+      assert.deepEqual(messages.slice(0, 3).map(message => message.role), ['assistant', 'tool', 'tool']);
+      assert.equal(messages[3].origin, 'framework');
+      assert.equal(messages.at(-1)?.content, 'Change direction');
       return final;
     } },
     tools: { call: async name => { executed.push(name); return 'unexpected'; } },
@@ -130,7 +134,8 @@ test('text steering skips a proposed tool without claiming a successful result',
       const skipped = JSON.parse(messages[1].content);
       assert.equal(skipped.ok, false);
       assert.equal(skipped.name, 'write');
-      assert.equal(messages[2].content, 'Do not write');
+      assert.equal(messages[2].origin, 'framework');
+      assert.equal(messages.at(-1)?.content, 'Do not write');
       return final;
     } },
     tools: { call: async () => { assert.fail('No tool should execute'); } },

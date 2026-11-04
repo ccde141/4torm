@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import type { TokenUsage } from './llm-bridge.js';
 
-export type ModelRequestPurpose = 'conversation' | 'compaction';
+export type ModelRequestPurpose = 'conversation' | 'compaction' | 'memory-recall';
 /** A read-only context preview; never a sent request or a billing observation. */
 export interface CurrentInputEstimate {
   runId?: string;
@@ -121,7 +121,7 @@ export function parseModelUsageProgress(value: unknown): ModelUsageProgress {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('模型请求计量无效');
     const entry = item as ModelRequestUsage;
     if (entry.id !== id || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(id)
-      || !['conversation', 'compaction'].includes(entry.purpose)
+      || !['conversation', 'compaction', 'memory-recall'].includes(entry.purpose)
       || !['prepared', 'sent', 'streaming', 'completed', 'failed', 'cancelled'].includes(entry.state)
       || !Number.isFinite(Date.parse(entry.startedAt)) || !Number.isFinite(Date.parse(entry.updatedAt))
       || !Number.isSafeInteger(entry.estimatedInputTokens) || entry.estimatedInputTokens < 0

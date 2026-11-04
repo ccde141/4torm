@@ -100,6 +100,7 @@ data/mcp/media/
 
 # Local, hot-switchable conversation settings belong to the current installation.
 data/compaction-policy.json
+data/memory-recall-settings.json
 
 # User-installed skills stay local. Built-in skills remain versioned.
 data/skills/*

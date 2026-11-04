@@ -11,6 +11,21 @@ import {
   MAIN_CAPABILITIES, activeMainCapabilities, renderCapabilityRouter, renderMainCapabilityGuide,
 } from './main-capabilities.js';
 import { TIDE_META } from '../../modules/tide/public.js';
+import { writeMemory } from '../shared/agent-memory.js';
+import { saveMemoryRecallSettings } from '../shared/memory-recall/index.js';
+
+test('显式关闭两级召回时主提示词不回退到旧的自动记忆注入', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'main-recall-disabled-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeMemory(root, 'a', { summary: '气旋卡片专属约定', detail: '这段历史资料不得在关闭后自动注入',
+    category: 'feedback', tags: ['气旋'], source: 'test', now: new Date().toISOString() });
+  const options = { mainAgent: true, rolePrompt: '', toolDefs: [], workspace: 'workspace', workspaceAbs: root,
+    projectDir: root, sandboxLevel: 'project' as const, skillIds: [], dataDir: root, agentId: 'a',
+    sessionId: 's', native: true, userMessage: '气旋卡片' };
+  assert.match(await buildConversationSystemPrompt(options), /这段历史资料不得在关闭后自动注入/);
+  await saveMemoryRecallSettings(root, { version: 1, model: null, level1Enabled: false, level2Enabled: false });
+  assert.doesNotMatch(await buildConversationSystemPrompt(options), /这段历史资料不得在关闭后自动注入/);
+});
 
 test('主入口能力登记保持唯一工具归属', () => {
   const ids = MAIN_CAPABILITIES.map(capability => capability.id);

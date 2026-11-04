@@ -83,7 +83,7 @@ function normalizeK3(
 
 function kimiFamily(model: string): 'k3' | 'k2.6' | 'k2.7-code' | 'other' {
   const normalized = model.toLowerCase();
-  if (normalized === 'kimi-k3' || normalized.startsWith('kimi-k3-')) return 'k3';
+  if (/^kimi-(?:k3|k3\.1-pro)(?:-|$)/.test(normalized)) return 'k3';
   if (normalized === 'kimi-k2.6' || normalized.startsWith('kimi-k2.6-')) return 'k2.6';
   if (normalized === 'kimi-k2.7-code' || normalized.startsWith('kimi-k2.7-code-')) return 'k2.7-code';
   return 'other';

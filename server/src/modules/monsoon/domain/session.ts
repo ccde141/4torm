@@ -33,6 +33,8 @@ export interface MonsoonSession {
   unreadCount?: number;
   revision: number;
   messageRevision: number;
+  historyRevision?: number;
+  incarnation?: string;
 }
 
 export type SessionWriteMode = 'content' | 'rename' | 'read';
@@ -76,6 +78,8 @@ function findLast(values: MonsoonMessage[], predicate: (value: MonsoonMessage) =
 }
 
 function optionalFields(value: Record<string, unknown>, session: MonsoonSession): void {
+  if (value.historyRevision !== undefined) session.historyRevision = revision(value.historyRevision);
+  if (value.incarnation !== undefined) session.incarnation = text(value.incarnation, 'incarnation', 100);
   if (typeof value.titleManual === 'boolean') session.titleManual = value.titleManual;
   if (['pending', 'attempted', 'generated'].includes(String(value.titleState))) {
     session.titleState = value.titleState as MonsoonSession['titleState'];
@@ -88,6 +92,10 @@ function optionalFields(value: Record<string, unknown>, session: MonsoonSession)
   if (Number.isInteger(value.unreadCount) && Number(value.unreadCount) >= 0) {
     session.unreadCount = Number(value.unreadCount);
   }
+}
+
+export function sessionSourceVersion(session: MonsoonSession): string {
+  return `${session.incarnation ?? session.createdAt}:${session.historyRevision ?? 0}`;
 }
 
 function messages(value: unknown): MonsoonMessage[] {

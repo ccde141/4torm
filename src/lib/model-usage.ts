@@ -33,7 +33,7 @@ export function formatCurrentInput(estimate: CurrentInputEstimate | undefined, l
 
 export interface ModelRequestUsage {
   id: string;
-  purpose: 'conversation' | 'compaction';
+  purpose: 'conversation' | 'compaction' | 'memory-recall';
   state: 'prepared' | 'sent' | 'streaming' | 'completed' | 'failed' | 'cancelled';
   startedAt: string;
   updatedAt: string;

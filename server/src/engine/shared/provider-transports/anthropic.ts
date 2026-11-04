@@ -2,6 +2,11 @@ import type { ContextMessage, ProviderReasoningEnvelope } from '../types.js';
 import type { ToolDef } from '../tool-defs-loader.js';
 import { providerRequestHeaders } from '../../../model-runtime/providers/runtime-fetch.js';
 import { mapAnthropicTools } from './anthropic-tools.js';
+import { placeFrameworkReferences } from '../model-request/reference-placement.js';
+import { normalizeSystemMessages } from '../system-messages.js';
+import { parseAnthropicUsage } from './anthropic-usage.js';
+import { providerHttpError } from '../provider-request-error.js';
+import { frameworkError } from '../framework-error.js';
 import {
   completeHistoricalToolNameMap,
   downgradeIncompleteNativeToolHistory,
@@ -43,10 +48,11 @@ export interface AnthropicResult {
 
 export function buildAnthropicRequest(input: AnthropicRequestInput): AnthropicRequest {
   const { tools, nameMap, forwardMap } = mapAnthropicTools(input.tools ?? []);
+  const ordered = normalizeSystemMessages(placeFrameworkReferences(input.messages));
   const nativeHistory = input.historyToolTransport ? input.historyToolTransport === 'native' : tools.length > 0;
   const history = nativeHistory
-    ? restoreTextToolHistory(input.messages)
-    : encodeNativeToolHistoryForText(input.messages, forwardMap);
+    ? restoreTextToolHistory(ordered)
+    : encodeNativeToolHistoryForText(ordered, forwardMap);
   const historyNames = nativeHistory
     ? completeHistoricalToolNameMap(history, forwardMap)
     : forwardMap;
@@ -167,8 +173,7 @@ export function parseAnthropicResponse(
     reasoningContent: reasoning || undefined,
     ...(reasoningEnvelope ? { reasoningEnvelope } : {}),
     finishReason: normalizeStopReason(source.stop_reason),
-    usage: normalizeUsage(source.usage?.input_tokens, source.usage?.output_tokens),
-    usageComplete: Number.isSafeInteger(source.usage?.input_tokens) && Number.isSafeInteger(source.usage?.output_tokens),
+    ...parseAnthropicUsage(source.usage),
     toolCalls: toolCalls.length ? toolCalls : undefined,
   };
 }
@@ -179,8 +184,7 @@ export function createAnthropicStreamAccumulator(
   onReasoning?: (chunk: string) => void,
 ) {
   const state: StreamState = {
-    content: '', reasoning: '', finishReason: null, inputTokens: 0, outputTokens: 0,
-    inputReported: false, outputReported: false,
+    content: '', reasoning: '', finishReason: null, usage: {},
     tools: new Map(), thinkingBlocks: new Map(),
   };
 
@@ -202,8 +206,7 @@ export function createAnthropicStreamAccumulator(
         reasoningContent: state.reasoning || undefined,
         ...(reasoningEnvelope ? { reasoningEnvelope } : {}),
         finishReason: state.finishReason,
-        usage: normalizeUsage(state.inputTokens, state.outputTokens),
-        usageComplete: state.inputReported && state.outputReported,
+        ...parseAnthropicUsage(state.usage),
         toolCalls: toolCalls.length ? toolCalls : undefined,
       };
     },
@@ -214,10 +217,7 @@ interface StreamState {
   content: string;
   reasoning: string;
   finishReason: AnthropicResult['finishReason'];
-  inputTokens: number;
-  outputTokens: number;
-  inputReported: boolean;
-  outputReported: boolean;
+  usage: Record<string, unknown>;
   tools: Map<number, { id: string; name: string; json: string }>;
   thinkingBlocks: Map<number, ContentBlock>;
 }
@@ -228,9 +228,8 @@ function applyStreamEvent(
   onChunk: (chunk: string) => void,
   onReasoning?: (chunk: string) => void,
 ) {
-  if (event.type === 'message_start' && Number.isSafeInteger(event.message?.usage?.input_tokens)) {
-    state.inputTokens = event.message.usage.input_tokens;
-    state.inputReported = true;
+  if (event.type === 'message_start') {
+    Object.assign(state.usage, event.message?.usage);
   }
   if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
     state.tools.set(event.index ?? 0, {
@@ -261,9 +260,8 @@ function applyStreamEvent(
     if (tool) tool.json += delta.partial_json ?? '';
   }
   if (event.type === 'message_delta') {
+    Object.assign(state.usage, event.usage);
     state.finishReason = normalizeStopReason(event.delta?.stop_reason);
-    state.outputTokens = event.usage?.output_tokens ?? state.outputTokens;
-    state.outputReported ||= Number.isSafeInteger(event.usage?.output_tokens);
   }
 }
 
@@ -287,15 +285,13 @@ function thinkingEnvelope(blocks: unknown[]): ProviderReasoningEnvelope | undefi
 }
 
 function normalizeStopReason(value: unknown): AnthropicResult['finishReason'] {
+  if (value === 'model_context_window_exceeded') throw providerHttpError(422,
+    JSON.stringify({ error: { code: 'context_window_exceeded', message: 'Model context window exceeded' } }));
+  if (value === 'pause_turn') throw frameworkError({ code: 'MODEL_PROVIDER_CONTINUATION_UNSUPPORTED',
+    kind: 'protocol', message: '模型要求续接服务器端工具执行，当前传输不支持此类续接',
+    source: 'llm-bridge.anthropic', retryable: false });
   if (value === 'tool_use') return 'tool_calls';
   if (value === 'max_tokens') return 'length';
-  if (value === 'end_turn' || value === 'stop_sequence' || value === 'pause_turn') return 'stop';
+  if (value === 'end_turn' || value === 'stop_sequence' || value === 'refusal') return 'stop';
   return null;
-}
-
-function normalizeUsage(input: unknown, output: unknown): AnthropicResult['usage'] {
-  const promptTokens = typeof input === 'number' ? input : 0;
-  const completionTokens = typeof output === 'number' ? output : 0;
-  if (!promptTokens && !completionTokens) return undefined;
-  return { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
 }

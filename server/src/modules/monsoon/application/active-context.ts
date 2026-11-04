@@ -5,23 +5,35 @@ import { persistMonsoonContext, readStoredMonsoonContext, textMonsoonContext,
   type StoredMonsoonContextMessage } from './context-images.js';
 
 /** Display records remain intact. Only this projection decides what enters a model. */
-export function activeMonsoonMessages(session: Pick<MonsoonSession, 'messages'>): MonsoonMessage[] {
+type ContextSource = Pick<MonsoonSession, 'messages'> & Partial<Pick<MonsoonSession, 'historyRevision'>>;
+export function activeMonsoonMessages(session: ContextSource): MonsoonMessage[] {
   let start = -1;
   for (let index = session.messages.length - 1; index >= 0; index--) {
-    if (session.messages[index]?.type === 'compact-marker') { start = index; break; }
+    const message = session.messages[index];
+    if (checkpointContext(message, session.historyRevision ?? 0)
+      || message?.type === 'compact-marker' && (Number(message.historyRevision) || 0) === (session.historyRevision ?? 0)) { start = index; break; }
   }
-  return session.messages.slice(Math.max(0, start));
+  return session.messages.slice(Math.max(0, start)).filter(message => message.type !== 'compact-marker'
+    || (Number(message.historyRevision) || 0) === (session.historyRevision ?? 0));
 }
 
-export function projectMonsoonContext(session: Pick<MonsoonSession, 'messages'>): ContextMessage[] {
+export function projectMonsoonContext(session: ContextSource): ContextMessage[] {
   return textMonsoonContext(storedMonsoonContext(session));
 }
 
-export function storedMonsoonContext(session: Pick<MonsoonSession, 'messages'>): StoredMonsoonContextMessage[] {
-  return activeMonsoonMessages(session).flatMap(projectMessage);
+export function storedMonsoonContext(session: ContextSource): StoredMonsoonContextMessage[] {
+  return activeMonsoonMessages(session).flatMap(message => projectMessage(message, session.historyRevision ?? 0));
 }
 
-function projectMessage(message: MonsoonMessage): StoredMonsoonContextMessage[] {
+function checkpointContext(message: MonsoonMessage, revision: number): StoredMonsoonContextMessage[] | undefined {
+  const checkpoint = message.contextCheckpoint;
+  if (!isRecord(checkpoint) || checkpoint.historyRevision !== revision || !Array.isArray(checkpoint.messages)) return;
+  return readStoredMonsoonContext(checkpoint.messages);
+}
+
+function projectMessage(message: MonsoonMessage, revision: number): StoredMonsoonContextMessage[] {
+  const checkpoint = checkpointContext(message, revision);
+  if (checkpoint) return checkpoint;
   if (message.contextOmitted === true) return [];
   if (message.runCommitted === false && !message.content && !Array.isArray(message.toolSteps)) return [];
   let context: StoredMonsoonContextMessage[];

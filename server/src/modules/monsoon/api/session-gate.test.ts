@@ -29,6 +29,7 @@ test('季风会话读写均先经过中心方法路由', async t => {
     ['POST', '/sessions', { agentId: 'agent-a', id: 'session-a' }, 'createSession'],
     ['GET', '/sessions/agent-a', undefined, 'listSessions'],
     ['GET', '/sessions/agent-a/session-a', undefined, 'readSession'],
+    ['POST', '/sessions/agent-a/session-a/read', { lastReadAt: '2026-01-01T00:00:00.000Z' }, 'markSessionRead'],
     ['PUT', '/sessions/agent-a/session-a', { session: {}, expectedRevision: 1, mode: 'rename' },
       'replaceSession'],
     ['PUT', '/sessions/agent-a/session-a', {

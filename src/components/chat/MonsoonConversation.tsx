@@ -1,9 +1,12 @@
 import { backendFetch } from '../../lib/backend-client';
-import { Fragment, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Agent, ChatMessage } from '../../types';
 import { IMAGE_ACCEPT } from '../../engine/chat/image-attachments';
 import { useLocale } from '../../i18n/LocaleContext';
 import MessageItem from './MessageItem';
+import { HumanMemoryGroup } from './MemoryRecallPreview';
+import { memoryReferencesByHuman } from './memory-references';
+import './memory-recall-preview.css';
 import HumanInputList from './HumanInputList';
 import PendingHumanInput, { HumanInputRecovery } from './PendingHumanInput';
 import { pendingUserRecovery, unrepresentedHumanInputs, type HumanInputActivity } from './human-input-presentation';
@@ -53,12 +56,14 @@ interface MonsoonConversationProps {
 export function MonsoonConversation(props: MonsoonConversationProps) {
   const { t, locale } = useLocale();
   const sessionId = props.sessions.activeSessionId;
-  const latestAsk = findLatestAnswerableAsk(props.messages);
+  const latestAsk = useMemo(() => findLatestAnswerableAsk(props.messages), [props.messages]);
   const [historyState, setHistoryState] = useState({ sessionId: '', limit: HISTORY_BATCH });
   const historyAnchor = useRef<{ sessionId: string; height: number; top: number } | null>(null);
   const limit = historyState.sessionId === sessionId ? historyState.limit : HISTORY_BATCH;
-  const history = historyWindow(props.messages, props.streaming, limit);
-  const compactions = executionCompactions(props.messages);
+  const history = useMemo(() => historyWindow(props.messages, props.streaming, limit),
+    [props.messages, props.streaming, limit]);
+  const compactions = useMemo(() => executionCompactions(props.messages), [props.messages]);
+  const memories = useMemo(() => memoryReferencesByHuman(props.messages), [props.messages]);
   const inputRun = props.streaming ? props.messages.findLast(message => message.role === 'assistant' && message.inputRunId) : undefined;
   const inputActivity: HumanInputActivity | undefined = inputRun?.inputRunId ? {
     runId: inputRun.inputRunId, phase: inputRun.streamingPhase, ready: inputRun.inputReady === true,
@@ -120,8 +125,7 @@ export function MonsoonConversation(props: MonsoonConversationProps) {
           }}>{t('chat.page.loadOlder', { count: Math.min(history.hiddenCount, HISTORY_BATCH) })}</button>}
         {history.messages.map(message => {
           const pendingUser = pendingUserRecovery(message, props.human.pending, props.messages);
-          return <Fragment key={message.id}>
-            <MessageItem msg={message} agent={props.agent} sessionId={sessionId}
+          const item = <MessageItem msg={message} agent={props.agent} sessionId={sessionId}
               compactionMarkers={compactions.byAssistant.get(message.id)}
               inlineCompaction={compactions.inlineMarkerIds.has(message.id)}
               userNotice={pendingUser ? <HumanInputRecovery pending={pendingUser}
@@ -139,9 +143,11 @@ export function MonsoonConversation(props: MonsoonConversationProps) {
               isEditing={props.editor.editingMsgId === message.id} editContent={props.editor.editContent}
               setEditContent={props.editor.setEditContent} onSaveEdit={props.editor.saveEdit}
               onCancelEdit={props.editor.cancelEdit} onStartEdit={props.editor.startEdit}
-              onDeleteMessage={props.editor.deleteMessage} onAskReply={props.answer} />
+              onDeleteMessage={props.editor.deleteMessage} onAskReply={props.answer} />;
+          return <Fragment key={message.id}>
+            {message.role === 'user' ? <HumanMemoryGroup sources={memories.get(message.id)} messageId={message.id}>{item}</HumanMemoryGroup> : item}
             <HumanInputList message={message} pending={props.human.pending}
-              isWorking={props.human.isWorking} onCheck={entry => { void props.human.check(entry); }} activity={inputActivity} />
+              isWorking={props.human.isWorking} onCheck={entry => { void props.human.check(entry); }} activity={inputActivity} memories={memories} />
           </Fragment>;
         })}
         {unrepresentedHumanInputs(props.messages, props.human.pending).map(entry => <PendingHumanInput key={entry.input.id} pending={entry}

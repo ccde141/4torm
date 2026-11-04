@@ -6,9 +6,11 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 import Fastify from 'fastify';
+import sharp from 'sharp';
 import { modelRuntimeRoutes } from '../../routes/model-runtime.js';
 import { createProvider, findProvider, mutateProviderDocument, patchProvider, type StoredProvider } from '../config/provider-store.js';
 import { buildProbeBody, probeConfiguredProvider, requestProbe } from './capability-probe.js';
+import { resolveToolTransportContract } from '../config/tool-transport-contract.js';
 
 const provider: StoredProvider = { id: 'fixture', baseUrl: 'https://provider.test/v1', models: ['model'] };
 const ping = { choices: [{ message: { tool_calls: [{ function: { name: 'ping' } }] } }] };
@@ -26,29 +28,50 @@ test('backend probes preserve ordinary, Kimi, proxy-profile and llama.cpp reques
     assert.equal(body.max_completion_tokens, 64); assert.equal(body.max_tokens, undefined);
   }
   const llama = buildProbeBody({ ...provider, modelProfiles: { model: 'llama-cpp' } }, 'model', 'tools');
-  assert.deepEqual(llama.chat_template_kwargs, { enable_thinking: false });
+  assert.equal(llama.chat_template_kwargs, undefined);
   assert.equal(llama.max_tokens, 64);
   const proxy = buildProbeBody({ ...provider, modelProfiles: { 'vendor-model': 'kimi' } }, 'vendor-model', 'tools');
   assert.equal(proxy.max_completion_tokens, 64);
+  const enabled = buildProbeBody({ ...provider, providerType: 'llama-cpp', generationDefaults: { thinkingMode: 'enabled' },
+    customRequestParameters: { max_tokens: 2000 } }, 'model', 'tools');
+  assert.deepEqual(enabled.chat_template_kwargs, { enable_thinking: true }); assert.equal(enabled.max_tokens, 64);
+  const configured = buildProbeBody({ ...provider, providerType: 'zhipu', generationDefaults: { thinkingMode: 'disabled' },
+    customRequestParameters: { top_k: 12, max_tokens: 2000 } }, 'glm-5.3', 'tools');
+  assert.deepEqual(configured.thinking, { type: 'disabled' });
+  assert.equal(configured.top_k, 12); assert.equal(configured.max_tokens, 64);
 });
 
-test('backend vision and Anthropic probes retain their native image/tool block shapes', () => {
-  const vision = buildProbeBody(provider, 'model', 'vision') as {
-    temperature?: unknown; messages: Array<{ content: Array<{ image_url: { url: string } }> }>;
-  };
-  assert.equal(vision.temperature, undefined);
-  assert.match(vision.messages[0].content[1].image_url.url, /^data:image\/png;base64,/);
-  const anthropic = buildProbeBody(provider, 'model', 'tools', true) as {
-    tool_choice: unknown; tools: Array<{ name: string; input_schema: { type: string } }>;
-  };
-  assert.deepEqual(anthropic.tool_choice, { type: 'auto' });
-  assert.equal(anthropic.tools[0].name, 'ping'); assert.equal(anthropic.tools[0].input_schema.type, 'object');
-  const image = buildProbeBody(provider, 'model', 'vision', true) as {
-    messages: Array<{ content: Array<{ source: { data: string } }> }>;
-  };
-  assert.deepEqual(image.messages[0].content[1].source, {
-    type: 'base64', media_type: 'image/png', data: image.messages[0].content[1].source.data,
-  });
+test('only correct image answers confirm vision; empty, ignored, wrong and embedded errors stay inconclusive', async () => {
+  for (const protocol of ['openai-chat-completions', 'anthropic-messages'] as const) {
+    for (const response of ['correct', 'empty', 'ignored', 'wrong', 'error']) {
+      const result = await requestProbe({ ...provider, providerType: protocol === 'anthropic-messages'
+        ? 'anthropic' : 'openai-compatible', transport: protocol }, 'model', 'vision', {
+        fetchImpl: async (_url, init) => {
+          const body = JSON.parse(String(init?.body));
+          const [, image] = body.messages[0].content;
+          const png = protocol === 'anthropic-messages' ? image.source.data : image.image_url.url.split(',')[1];
+          const { data } = await sharp(Buffer.from(png, 'base64')).raw().toBuffer({ resolveWithObject: true });
+          const correct = ['RED', 'GREEN', 'BLUE'][data.indexOf(Math.max(...data.subarray(0, 3)))];
+          const answer = response === 'correct' ? correct : response === 'wrong'
+            ? ['RED', 'GREEN', 'BLUE'].find(value => value !== correct) : 'OK';
+          return Response.json(response === 'empty' ? {} : response === 'error' ? { error: { message: 'probe failed' } }
+            : protocol === 'anthropic-messages' ? { content: [{ type: 'text', text: answer }] }
+              : { choices: [{ message: { content: answer } }] });
+        },
+      });
+      assert.equal(result.status, response === 'correct' ? 'supported' : 'inconclusive', `${protocol}: ${response}`);
+    }
+  }
+});
+
+test('settings changes invalidate native evidence without exposing custom parameter values', () => {
+  const configured = { ...provider, generationDefaults: { thinkingMode: 'disabled' } };
+  const fingerprint = resolveToolTransportContract(configured, 'model').fingerprint;
+  for (const change of [{ generationDefaults: { thinkingMode: 'enabled' } },
+    { customRequestParameters: { private_value: 'not-for-logs' } }, { runtimePolicy: { sentinel: true } }]) {
+    const next = resolveToolTransportContract({ ...configured, ...change }, 'model').fingerprint;
+    assert.notEqual(next, fingerprint); assert.ok(!next.includes('not-for-logs'));
+  }
 });
 
 test('only actual ping calls confirm native support; ordinary successful replies remain unknown', async () => {
@@ -108,18 +131,24 @@ test('empty-address draft probes are rejected before making a provider request',
 });
 
 test('a changed configuration cannot receive stale probe evidence or overwrite a concurrent edit', async t => {
-  const dataDir = await temporaryData(t);
-  const configured = await createProvider(dataDir, { ...providerPatch(), apiKey: 'first-key' });
-  const result = await probeConfiguredProvider(dataDir, { providerId: configured.id, model: 'model', capability: 'tools' }, {
-    fetchImpl: async () => {
-      await patchProvider(dataDir, configured.id, { apiKey: 'new-key', label: 'Concurrent edit' });
-      return Response.json(ping);
-    },
-  });
-  assert.equal('persisted' in result && result.persisted, false);
-  const current = await findProvider(dataDir, configured.id);
-  assert.equal(current.nativeProbe, undefined); assert.equal(current.apiKey, 'new-key');
-  assert.equal(current.label, 'Concurrent edit');
+  for (const [name, patch] of [['credentials', { apiKey: 'new-key' }],
+    ['generation', { generationDefaults: { thinkingMode: 'enabled' } }],
+    ['custom parameters', { customRequestParameters: { top_k: 24 } }]] as const) {
+    const dataDir = await temporaryData(t);
+    const configured = await createProvider(dataDir, { ...providerPatch(), apiKey: 'first-key', providerType: 'zhipu',
+      transport: 'openai-chat-completions', models: ['glm-5.3'], generationDefaults: { thinkingMode: 'disabled' } });
+    const result = await probeConfiguredProvider(dataDir, { providerId: configured.id, model: 'glm-5.3', capability: 'tools' }, {
+      fetchImpl: async () => {
+        await patchProvider(dataDir, configured.id, { ...patch, label: 'Concurrent edit' });
+        return Response.json(ping);
+      },
+    });
+    assert.equal('persisted' in result && result.persisted, false, name);
+    const current = await findProvider(dataDir, configured.id);
+    assert.equal(current.nativeProbe, undefined); assert.equal(current.toolTransports, undefined);
+    assert.equal(current.apiKey, 'apiKey' in patch ? patch.apiKey : 'first-key');
+    assert.equal(current.label, 'Concurrent edit');
+  }
 });
 
 test('configuration-backed model lists and probes use backend credentials against a real service without CORS', async t => {
@@ -141,7 +170,8 @@ test('configuration-backed model lists and probes use backend credentials agains
   });
   const configured = await createProvider(dataDir, { ...providerPatch(),
     baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
-    providerType: 'anthropic', transport: 'anthropic-messages', apiKey: 'server-only-secret' });
+    providerType: 'anthropic', transport: 'anthropic-messages', apiKey: 'server-only-secret',
+    customRequestParameters: { top_k: 12, max_tokens: 2000 } });
   const list = await app.inject({ method: 'POST', url: '/api/model-runtime/models', payload: { providerId: configured.id } });
   assert.equal(list.statusCode, 200); assert.deepEqual(list.json(), { data: [{ id: 'model' }] });
   const probe = await app.inject({ method: 'POST', url: '/api/model-runtime/probes',
@@ -154,7 +184,9 @@ test('configuration-backed model lists and probes use backend credentials agains
     assert.equal(request.headers['x-api-key'], 'server-only-secret');
     assert.equal(request.headers.authorization, undefined);
   }
-  assert.equal(JSON.parse(observed[1].body).tools[0].name, 'ping');
+  const body = JSON.parse(observed[1].body);
+  assert.equal(body.tools[0].name, 'ping'); assert.equal(body.tools[0].input_schema.type, 'object');
+  assert.deepEqual(body.tool_choice, { type: 'auto' }); assert.equal(body.top_k, 12); assert.equal(body.max_tokens, 64);
   assert.equal((await findProvider(dataDir, configured.id)).nativeProbe?.model.native, true);
   assert.ok(!probe.body.includes('server-only-secret'));
   await mutateProviderDocument(dataDir, document => {

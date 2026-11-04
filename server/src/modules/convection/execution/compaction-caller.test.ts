@@ -155,7 +155,7 @@ for (const failed of [false, true]) test(`compacted public tools stay archived a
       const slug = entries.find(entry => entry.summary === (calls === 1 ? 'old-evidence' : 'recent-evidence'))!.slug;
       return new Response(`data: ${JSON.stringify({ choices: [{ delta: {
         content: calls === 1 ? 'PRECOMPACT_TEXT' : 'POSTCOMPACT_TEXT', tool_calls: [{ index: 0,
-          id: `memory-${calls}`, type: 'function', function: { name: 'memory_read', arguments: JSON.stringify({ slug }) } }],
+          id: `memory-${calls}`, type: 'function', function: { name: 'recall_read', arguments: JSON.stringify({ id: `memory:${slug}`, limit: 100000 }) } }],
       }, finish_reason: 'tool_calls' }] })}\n\ndata: [DONE]\n\n`, { headers: { 'Content-Type': 'text/event-stream' } });
     }
     return failed ? new Response('{"error":{"message":"fixture rejected"}}', { status: 400 }) : summarySse('FINAL-ONCE');
@@ -197,7 +197,7 @@ for (const failed of [false, true]) test(`native public work preserves its inter
     memberCalls++;
     if (memberCalls === 1) return new Response(`data: ${JSON.stringify({ choices: [{ delta: {
       content: '先查证据。', tool_calls: [{ index: 0, id: 'memory-call', type: 'function',
-        function: { name: 'memory_read', arguments: JSON.stringify({ slug: entry.slug }) } }],
+        function: { name: 'recall_read', arguments: JSON.stringify({ id: `memory:${entry.slug}`, limit: 100000 }) } }],
     }, finish_reason: 'tool_calls' }] })}\n\ndata: [DONE]\n\n`,
     { headers: { 'Content-Type': 'text/event-stream' } });
     const checkpoint = await loadSession(dataDir, session.id);

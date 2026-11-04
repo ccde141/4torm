@@ -9,7 +9,7 @@ import { findRuntimeSkillTool, isRuntimeSkillToolName } from './runtime-skill-ca
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
 const VIRTUAL_NAMES = new Set([
   // Runtime-owned calls never dispatch to custom/skill executors.
-  'done', 'memory_write', 'memory_list', 'memory_read',
+  'done', 'memory_manage', 'memory_write', 'memory_list', 'memory_read', 'memory_update', 'memory_delete',
   'seat_memory_read', 'seat_memory_write',
   'seat_activity_read', 'seat_dispatch_read',
   'contact_read', 'supervisor_message', 'supervisor_memory',

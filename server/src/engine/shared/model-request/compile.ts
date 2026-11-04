@@ -1,5 +1,6 @@
 import type { ContextMessage } from '../types.js';
 import { normalizeSystemMessages } from '../system-messages.js';
+import { placeFrameworkReferences } from './reference-placement.js';
 import { projectChatToolImages } from './tool-image-projection.js';
 import {
   mapProviderMessages,
@@ -23,7 +24,7 @@ export function compileModelMessages(
   messages: ContextMessage[],
   options: ModelRequestMessageOptions,
 ): Array<Record<string, unknown>> {
-  const providerSafeMessages = normalizeSystemMessages(messages);
+  const providerSafeMessages = normalizeSystemMessages(placeFrameworkReferences(messages));
   if (options.toolTransport === 'text') {
     return mapProviderMessages(
       projectChatToolImages(encodeNativeToolHistoryForText(providerSafeMessages, options.forwardToolNames)),

@@ -11,4 +11,16 @@ export async function runtimeSettingsRoutes(app: FastifyInstance,
     'writeCompaction', request.body, humanContext(request)));
   app.post('/compaction/test-model', request => options.router.globalSettings(
     'testCompactionModel', request.body, humanContext(request)));
+  app.get('/memory-recall', request => options.router.globalSettings(
+    'readMemoryRecall', {}, humanContext(request)));
+  app.put('/memory-recall', request => options.router.globalSettings(
+    'writeMemoryRecall', request.body, humanContext(request)));
+  app.post('/memory-recall/test-model', async (request, reply) => {
+    const controller = new AbortController();
+    const abort = () => { if (!reply.raw.writableEnded) controller.abort(); };
+    reply.raw.once('close', abort);
+    try { return await options.router.globalSettings('testMemoryRecallModel', request.body,
+      { ...humanContext(request), signal: controller.signal }); }
+    finally { reply.raw.off('close', abort); }
+  });
 }

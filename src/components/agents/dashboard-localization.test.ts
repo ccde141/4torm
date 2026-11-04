@@ -41,14 +41,14 @@ test('内置状态筛选全部跟随语言，切换语言不改变筛选标识�
     const html = render(locale, createElement(DashboardStatusFilters,
       { statuses: SYSTEM_STATUSES, filter: 'busy', onSelect: () => {} }));
     assert.deepEqual([...html.matchAll(/value="([^"]+)"/g)].map(match => match[1]),
-      ['all', 'idle', 'busy', 'offline', 'waiting', 'unknown']);
+      ['all', 'idle', 'busy', 'waiting', 'unknown']);
     assert.match(html, /value="busy"[^>]*aria-pressed="true"/);
     assert.equal((html.match(/aria-pressed="true"/g) ?? []).length, 1);
     if (locale === 'zh-CN') {
-      for (const label of ['全部', '空闲', '工作中', '离线', '等待中', '状态未知']) assert.ok(html.includes(label));
+      for (const label of ['全部', '空闲', '工作中', '等待中', '状态未知']) assert.ok(html.includes(label));
       assert.doesNotMatch(html, />All<|>Idle<|>Working<|>Offline<|>Waiting<|>Unknown</);
     } else {
-      for (const label of ['All', 'Idle', 'Working', 'Offline', 'Waiting', 'Unknown']) assert.ok(html.includes(label));
+      for (const label of ['All', 'Idle', 'Working', 'Waiting', 'Unknown']) assert.ok(html.includes(label));
       assert.doesNotMatch(html, /[\u4e00-\u9fff]/);
     }
   }
@@ -89,7 +89,7 @@ test('忙碌但没有关联事项时，保留已知功能区的本地化提示',
     ['cyclone', '工作中 · 气旋', 'Working · Cyclone'],
   ] as const) {
     const activity = projectAgentActivity({ ...agent, busy: true, activeSurfaces: [surface] },
-      true, null, false);
+      true, null);
     assert.equal(activity.item, undefined);
     for (const [locale, label] of [['zh-CN', zh], ['en-US', en]] as const) {
       const html = render(locale, createElement(AgentCard, { agent, activity, onClick: () => {} }));

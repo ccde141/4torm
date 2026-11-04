@@ -25,6 +25,7 @@ export async function buildTideInputContext(dataDir: string, agent: LoadedAgent,
   const opts: SessionRunnerOpts = {
     dataDir, agentId: agent.id, model: agent.model, temperature: agent.temperature,
     toolMediaScope: { feature: 'tide', target: { agentId: agent.id, sessionId } },
+    executionOwner: { scope: 'conversation', ownerId: `tide:${agent.id}:${sessionId}` },
     toolNames: agent.tools, toolMode: agent.toolMode, skillIds: agent.skills,
     workspace: agent.workspace, sandboxLevel: agent.sandboxLevel,
     native, allowAsk: false, allowDelegate: false, signal: input.signal,

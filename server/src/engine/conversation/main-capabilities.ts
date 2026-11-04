@@ -63,11 +63,11 @@ export const MAIN_CAPABILITIES: MainCapability[] = [
   {
     id: 'memory',
     title: '长期记忆',
-    tools: ['memory_write', 'memory_list', 'memory_read'],
+    tools: ['recall_search', 'recall_read', 'memory_manage'],
     route: '已验证的信息跨会话仍有价值，例如稳定偏好、项目约定和失败原因。',
     guidance: guidance.memory,
     examples: [{ scenario: '确认了一条跨会话仍适用的项目约定',
-      actions: ['memory_list', 'memory_write'],
+      actions: ['recall_search', 'recall_read', 'memory_manage'],
       confirmation: '先查重再写入明确事实，不把临时进度当长期记忆。' }],
   },
   {

@@ -34,3 +34,13 @@ test('没有会话定位的入口不提供会话任务板', () => {
   });
   assert.equal(interactive.runtime.some(tool => tool.name === 'task_board'), true);
 });
+
+
+test('memory has exactly three public entries even when recall extensions are attached', () => {
+  const tools = assembleSessionToolSets({ loaded: [], interactive: true, mainAgent: true,
+    extensionTools: [{ name: 'recall_read', description: 'extension', parameters: {} }],
+  }).runtime;
+  assert.deepEqual(tools.filter(tool => /^(memory_|recall_)/.test(tool.name)).map(tool => tool.name).sort(),
+    ['memory_manage', 'recall_read', 'recall_search']);
+  assert.equal(new Set(tools.map(tool => tool.name)).size, tools.length);
+});

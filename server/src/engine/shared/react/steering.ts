@@ -26,6 +26,14 @@ function recordSkippedTool(params: ReActLoopParams, records: ToolCallRecord[], t
   params.steering?.onSkipped?.(tool, STEERING_SKIP_REASON);
 }
 
+function appendContinuation(params: ReActLoopParams, tools: readonly string[]): void {
+  if (!tools.length) return;
+  params.messages.push({ role: 'user', origin: 'framework', content: `[插话接续]
+因人类插话，以下工具未执行：${[...new Set(tools)].join('、')}。
+这些步骤对应的工作尚未完成。先按人类最新要求调整计划；继续原任务时，重新安排仍需完成的步骤，并核对是否漏项。
+已成功执行的操作保持有效，未执行的调用不可计为完成。人类要求暂停、停止或改变范围时，以其最新要求为准。` });
+}
+
 export function skipNativeTools(
   params: ReActLoopParams, calls: readonly NativeToolCall[], records: ToolCallRecord[],
 ): void {
@@ -34,6 +42,7 @@ export function skipNativeTools(
       content: STEERING_SKIP_REASON, toolOk: false });
     recordSkippedTool(params, records, call.name);
   }
+  appendContinuation(params, calls.map(call => call.name));
 }
 
 export function skipTextTool(params: ReActLoopParams, tool: string, records: ToolCallRecord[]): void {
@@ -42,4 +51,5 @@ export function skipTextTool(params: ReActLoopParams, tool: string, records: Too
   };
   params.messages.push(message);
   recordSkippedTool(params, records, tool);
+  appendContinuation(params, [tool]);
 }

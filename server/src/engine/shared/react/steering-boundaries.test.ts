@@ -122,7 +122,9 @@ test('native steering does not resume the old truncated-tool plan', async () => 
     } },
   });
   assert.equal(result.termination.status, 'succeeded');
-  assert.deepEqual(messages.map(message => message.role), ['assistant', 'tool', 'user', 'assistant']);
+  const visible = messages.filter(message => !(message.role === 'user' && message.origin === 'framework'));
+  assert.deepEqual(visible.map(message => message.role), ['assistant', 'tool', 'user', 'assistant']);
   assert.equal(messages[1].toolCallId, 'partial');
-  assert.equal(messages[2].content, 'New plan');
+  assert.equal(messages[2].origin, 'framework');
+  assert.equal(visible[2].content, 'New plan');
 });

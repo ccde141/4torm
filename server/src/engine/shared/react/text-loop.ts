@@ -9,6 +9,7 @@ import {
   type TextToolResponse,
 } from '../text-tool-protocol.js';
 import { TextToolStreamGate } from '../text-tool-stream-gate.js';
+import { ToolCallRecovery, unexecutedToolCall } from '../tool-call-recovery.js';
 import { applyPendingInput, skipTextTool } from './steering.js';
 import {
   HEARTBEAT_INTERVAL_MS,
@@ -149,6 +150,7 @@ async function executeTool(
 }
 
 export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopResult> {
+  const protocolRecovery = new ToolCallRecovery();
   const toolCalls: ToolCallRecord[] = [];
   const maxTurns = params.maxTurns ?? MAX_TURNS;
   let usage: TokenUsage | undefined;
@@ -228,6 +230,15 @@ export async function runReActLoop(params: ReActLoopParams): Promise<ReActLoopRe
       const failure = modelOutputLimitError('react.text.output');
       params.onEvent?.({ type: 'error', message: failure.message });
       return { content: partial || `[错误] ${failure.message}`, rawContent: reply,
+        toolCalls, turns: turn + 1, usage, termination: failedTermination(failure) };
+    }
+    if (parsed.kind === 'final' && unexecutedToolCall(reply, new Set(params.allowedTools ?? []))) {
+      tokenGate.finish(false);
+      if (protocolRecovery.retry(params.messages, false)) continue;
+      const failure = reactErrorData('MODEL_PROTOCOL_ERROR', 'protocol',
+        '模型未能提交有效的工具调用，正文中的操作未执行', 'react.text.protocol');
+      params.onEvent?.({ type: 'error', message: failure.message });
+      return { content: `[错误] ${failure.message}`, rawContent: reply,
         toolCalls, turns: turn + 1, usage, termination: failedTermination(failure) };
     }
     if (parsed.kind === 'invalid') {

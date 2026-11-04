@@ -8,11 +8,13 @@ import { createConvectionFeature } from '../../modules/convection/public.js';
 import { createCycloneFeature } from '../../modules/cyclone/public.js';
 import { createTideFeature } from '../../modules/tide/public.js';
 import { createTradewindFeature } from '../../modules/tradewind/public.js';
+import { createMonsoonFeature } from '../../modules/monsoon/public.js';
 
 test('前端中心调用的方法全部存在于对应功能岛运行时清单', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-frontend-contract-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
   const manifests = [
+    createMonsoonFeature({ dataDir }).module.manifest,
     createConvectionFeature({ dataDir }).module.manifest,
     createCycloneFeature({ dataDir }).module.manifest,
     createTideFeature({ dataDir }).module.manifest,

@@ -100,3 +100,43 @@ test('all feature media scopes receive local image references through the same t
     assert.doesNotMatch(JSON.stringify(outcome), /base64|iVBOR|inlineImages/);
   }
 });
+
+for (const native of [true, false]) {
+  test(`${native ? 'native' : 'text'} image work retains skipped writes and a continuation cue before human steering`, async t => {
+    const f = await fixture(t);
+    const definitions = [...await loadAgentToolDefs(f.dataDir, ['read_image'], [], 'selected'),
+      { name: 'write_file', description: 'test writer', parameters: { type: 'object' } }];
+    const pending: string[] = [], human = 'Use the revised tags and finish every file.';
+    let calls = 0, writes = 0;
+    t.mock.method(globalThis, 'fetch', async (_url, init) => {
+      const body = JSON.parse(String(init?.body)); calls++;
+      if (calls === 2) pending.push(human);
+      if (calls === 3) {
+        assert.equal(body.messages.at(-1).content, human);
+        assert.ok(body.messages.some((message: { content: unknown }) => typeof message.content === 'string'
+          && message.content.includes('[插话接续]')));
+        assert.ok(body.messages.some((message: { content: unknown }) => Array.isArray(message.content)
+          && message.content.some(part => part.type === 'image_url')));
+      }
+      const name = calls === 1 ? 'read_image' : 'write_file';
+      const args = calls === 1 ? { filePath: 'pixel.png' } : { revision: calls === 2 ? 'old' : 'revised' };
+      const message = calls === 4 ? { content: 'done' } : native
+        ? { content: '', tool_calls: [{ id: `step-${calls}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }
+        : { content: JSON.stringify({ type: 'tool_call', name, arguments: args }) };
+      return Response.json({ choices: [{ message, finish_reason: native && calls < 4 ? 'tool_calls' : 'stop' }] });
+    });
+    const messages: ContextMessage[] = [{ role: 'user', origin: 'human', content: 'Label every image.' }];
+    const llm: LLMCaller = { call: (history, _options, _chunk, signal, tools) => callLLM({
+      dataDir: f.dataDir, fullModelKey: 'fixture:model', messages: history, signal, tools }) };
+    const result = await (native ? runReActLoopNative : runReActLoop)({ messages, llm, toolDefs: definitions,
+      allowedTools: ['read_image', 'write_file'], maxTurns: 5,
+      steering: { hasPending: () => pending.length > 0, drain: () => pending.splice(0) },
+      tools: { call: async (name, args) => {
+        if (name === 'read_image') return f.read();
+        assert.equal(args.revision, 'revised'); writes++; return 'saved';
+      } } });
+    assert.equal(result.termination.status, 'succeeded'); assert.equal(calls, 4); assert.equal(writes, 1);
+    assert.equal(result.toolCalls.filter(call => (call.meta as { skipped?: boolean } | undefined)?.skipped).length, 1);
+    assert.doesNotMatch(JSON.stringify(messages), /data:image|iVBOR/);
+  });
+}

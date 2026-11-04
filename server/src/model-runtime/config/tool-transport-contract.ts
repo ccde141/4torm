@@ -1,4 +1,5 @@
 import { resolveProviderSelection, type ProviderSelectionInput } from './provider-selection.js';
+import { createHash } from 'node:crypto';
 import type { TransportId } from '../contracts/provider-config.js';
 
 const TOOL_TRANSPORT_PROBE_VERSION = 2;
@@ -9,6 +10,9 @@ export interface ToolTransportProvider extends ProviderSelectionInput {
   id: string;
   baseUrl: string;
   protocol?: 'auto' | ProviderProtocol;
+  generationDefaults?: unknown;
+  customRequestParameters?: unknown;
+  runtimePolicy?: unknown;
 }
 
 export interface ToolTransportContract {
@@ -55,8 +59,14 @@ export function resolveToolTransportContract(
   const profile = provider.modelProfiles?.[model] ?? 'auto';
   const fingerprint = JSON.stringify(selection.source === 'explicit'
     ? [provider.id, normalizeBaseUrl(provider.baseUrl), selection.transport,
-      selection.providerType, model, profile, TOOL_TRANSPORT_PROBE_VERSION]
+      selection.providerType, model, profile, TOOL_TRANSPORT_PROBE_VERSION, ...settingsFingerprint(provider)]
     : [provider.id, normalizeBaseUrl(provider.baseUrl), protocol,
-      model, profile, TOOL_TRANSPORT_PROBE_VERSION]);
+      model, profile, TOOL_TRANSPORT_PROBE_VERSION, ...settingsFingerprint(provider)]);
   return { protocol, fingerprint };
+}
+
+function settingsFingerprint(provider: ToolTransportProvider): string[] {
+  const settings = [provider.generationDefaults, provider.customRequestParameters, provider.runtimePolicy];
+  return settings.every(value => value === undefined) ? []
+    : [createHash('sha256').update(JSON.stringify(settings)).digest('hex')];
 }

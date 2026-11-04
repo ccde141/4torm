@@ -111,13 +111,13 @@ export async function previewSessionInput(agentId: string, sessionId: string, mo
 export async function markSessionRead(sessionId: string): Promise<void> {
   const agentId = sessionAgents.get(sessionId) ?? agentIdFromSessionId(sessionId);
   await withSessionWrite(agentId, async () => {
-    const wire = await readSessionWire(agentId, sessionId);
-    if (!wire) return;
-    const { pendingRuns = [], ...stored } = wire;
-    // Reading is metadata: pending-run projections must never become another persisted copy.
-    const saved = await replace({ ...stored, messages: [], lastReadAt: new Date().toISOString() },
-      stored.revision ?? 0, 'read');
-    remember(pendingRuns.length ? hydratePendingRuns(saved, pendingRuns) : saved);
+    // An acknowledgement neither downloads the transcript nor replaces the message cache.
+    const response = await backendFetch(`${sessionUrl(agentId, sessionId)}/read`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lastReadAt: new Date().toISOString() }),
+    });
+    if (response.status === 404) return;
+    await responseJson(response, '标记会话已读失败');
   });
 }
 

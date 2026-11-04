@@ -13,7 +13,7 @@ function session(id = 'session-a') {
   };
 }
 
-test('session repository reads a legacy index without mutating it', async t => {
+test('session repository rebuilds a legacy index without modifying the primary conversation', async t => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), '4torm-monsoon-session-'));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
   const repository = new FileMonsoonSessionRepository(dataDir);
@@ -23,13 +23,17 @@ test('session repository reads a legacy index without mutating it', async t => {
   assert.equal(created.messageRevision, 1);
   await fs.writeFile(path.join(dataDir, 'agents', 'agent-a', 'sessions', '_index.json'),
     JSON.stringify(['session-a']), 'utf8');
+  const primary = path.join(dataDir, 'agents', 'agent-a', 'sessions', 'session-a.json');
+  const original = await fs.readFile(primary, 'utf8');
 
   const listed = await repository.list('agent-a');
   assert.equal(listed[0]?.id, 'session-a');
   assert.equal(listed[0]?.revision, 1);
-  const unchanged = JSON.parse(await fs.readFile(
+  const rebuilt = JSON.parse(await fs.readFile(
     path.join(dataDir, 'agents', 'agent-a', 'sessions', '_index.json'), 'utf8'));
-  assert.deepEqual(unchanged, ['session-a']);
+  assert.equal(rebuilt[0].d.id, 'session-a');
+  assert.equal(typeof rebuilt[0].f, 'string');
+  assert.equal(await fs.readFile(primary, 'utf8'), original);
 });
 
 test('listing an absent Agent never recreates its deleted directory', async t => {

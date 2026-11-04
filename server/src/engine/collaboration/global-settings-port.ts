@@ -1,7 +1,8 @@
 import type { CollaborationContext } from './contracts.js';
 import { routerError } from './router-guards.js';
 
-export type GlobalSettingsMethod = 'readCompaction' | 'writeCompaction' | 'testCompactionModel';
+export type GlobalSettingsMethod = 'readCompaction' | 'writeCompaction' | 'testCompactionModel'
+  | 'readMemoryRecall' | 'writeMemoryRecall' | 'testMemoryRecallModel';
 export interface GlobalSettingsPort {
   invoke(method: GlobalSettingsMethod, input: unknown, context: CollaborationContext): Promise<unknown>;
 }

@@ -5,8 +5,19 @@ import {
   createAnthropicStreamAccumulator,
   parseAnthropicResponse,
 } from './anthropic.js';
+import type { ContextMessage } from '../types.js';
+import { parseAnthropicUsage } from './anthropic-usage.js';
 
-test('Anthropic request separates system text and maps tool history', () => {
+test('Anthropic request preserves canonical history while ordering references, system and tool pairs', () => {
+  const messages: ContextMessage[] = [
+    { role: 'system', content: 'You are precise.' },
+    { role: 'user', origin: 'human', content: 'Inspect this.' },
+    { role: 'user', origin: 'framework', placement: 'before-human', content: 'Reference memory' },
+    { role: 'assistant', content: '',
+      toolCalls: [{ id: 'toolu_1', name: 'read_file', arguments: '{"path":"a.txt"}' }] },
+    { role: 'tool', toolCallId: 'toolu_1', content: 'hello' },
+  ];
+  const saved = structuredClone(messages);
   const request = buildAnthropicRequest({
     baseUrl: 'https://api.anthropic.com/v1',
     apiKey: 'secret',
@@ -14,15 +25,7 @@ test('Anthropic request separates system text and maps tool history', () => {
     stream: false,
     maxTokens: 2048,
     temperature: 0.4,
-    messages: [
-      { role: 'system', content: 'You are precise.' },
-      { role: 'user', content: 'Inspect this.' },
-      {
-        role: 'assistant', content: '',
-        toolCalls: [{ id: 'toolu_1', name: 'read_file', arguments: '{"path":"a.txt"}' }],
-      },
-      { role: 'tool', toolCallId: 'toolu_1', content: 'hello' },
-    ],
+    messages,
     tools: [{
       name: 'read_file', description: 'Read a file',
       parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
@@ -33,6 +36,9 @@ test('Anthropic request separates system text and maps tool history', () => {
   assert.equal(request.headers['x-api-key'], 'secret');
   assert.equal(request.headers['anthropic-version'], '2023-06-01');
   assert.equal(request.body.system, 'You are precise.');
+  assert.deepEqual(messages, saved);
+  assert.deepEqual(request.body.messages[0], { role: 'user', content: [
+    { type: 'text', text: 'Reference memory' }, { type: 'text', text: 'Inspect this.' }] });
   assert.deepEqual(request.body.tools, [{
     name: 'read_file', description: 'Read a file',
     input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
@@ -178,7 +184,7 @@ test('Anthropic response normalizes text, thinking, tools, usage and finish reas
       { type: 'tool_use', id: 'toolu_2', name: 'read_file', input: { path: 'a.txt' } },
     ],
     stop_reason: 'tool_use',
-    usage: { input_tokens: 12, output_tokens: 8 },
+    usage: { input_tokens: 12, cache_read_input_tokens: 100000, cache_creation_input_tokens: 2000, output_tokens: 8 },
   }, new Map());
 
   assert.equal(result.content, 'I will inspect it.');
@@ -194,7 +200,12 @@ test('Anthropic response normalizes text, thinking, tools, usage and finish reas
   assert.deepEqual(result.toolCalls, [
     { id: 'toolu_2', name: 'read_file', arguments: '{"path":"a.txt"}' },
   ]);
-  assert.deepEqual(result.usage, { promptTokens: 12, completionTokens: 8, totalTokens: 20 });
+  assert.deepEqual(result.usage, { promptTokens: 102012, completionTokens: 8, totalTokens: 102020 });
+  assert.equal(result.usageComplete, true);
+  assert.deepEqual(parseAnthropicUsage({ input_tokens: 0, output_tokens: 0 }), {
+    usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, usageComplete: true });
+  assert.equal(parseAnthropicUsage({ input_tokens: 1, output_tokens: 2, cache_read_input_tokens: -1 }).usageComplete, false);
+  assert.equal(parseAnthropicUsage({ input_tokens: 1 }).usageComplete, false);
 });
 
 test('Anthropic stream accumulator keeps tool JSON fragments separate from text', () => {

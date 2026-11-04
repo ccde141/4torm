@@ -3,6 +3,7 @@ import type { ToolArguments } from './tool-arguments.js';
 import type { SubAgentResult } from './sub-agent-types.js';
 import type { ToolCallOutcome } from './react/native-loop.js';
 import { formatTextToolResult, parseTextToolResponse } from './text-tool-protocol.js';
+import { ToolCallRecovery, unexecutedToolCall } from './tool-call-recovery.js';
 
 interface ModelResult {
   content: string;
@@ -10,6 +11,7 @@ interface ModelResult {
 }
 
 export interface TextSubAgentLoopParams {
+  allowedTools?: readonly string[];
   messages: ContextMessage[];
   maxRounds: number;
   signal: AbortSignal;
@@ -65,6 +67,7 @@ export async function runTextSubAgentLoop(
   params: TextSubAgentLoopParams,
 ): Promise<SubAgentResult> {
   let rounds = 0;
+  const recovery = new ToolCallRecovery();
   while (rounds < params.maxRounds) {
     if (params.signal.aborted) {
       return { status: 'aborted', summary: 'SubAgent 被外部中止', rounds };
@@ -76,6 +79,8 @@ export async function runTextSubAgentLoop(
     const parsed = parseTextToolResponse(response.content);
     if (parsed.kind === 'invalid') return failure(parsed.error, rounds);
     if (parsed.kind === 'final') {
+      const names = new Set(params.allowedTools ?? ['done']);
+      if (unexecutedToolCall(response.content, names) && recovery.retry(params.messages, false)) { rounds++; continue; }
       return failure('SubAgent must call done instead of returning natural language.', rounds);
     }
     const args = parsed.arguments;

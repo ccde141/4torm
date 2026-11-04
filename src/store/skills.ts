@@ -45,3 +45,12 @@ export async function deleteSkill(skillId: string): Promise<void> {
   }
   cache = null;
 }
+
+export async function changeSkillCategory(skill: SkillMeta, category: string): Promise<void> {
+  const response = await backendFetch(`/api/skills/${encodeURIComponent(skill.id)}/category`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ category, expectedCategory: typeof skill.category === 'string' && skill.category.trim().length <= 60 ? skill.category.trim() : '' }),
+  });
+  if (!response.ok) throw new Error(response.status === 409 ? 'SKILL_CATEGORY_CONFLICT' : 'SKILL_CATEGORY_FAILED');
+  cache = null;
+}

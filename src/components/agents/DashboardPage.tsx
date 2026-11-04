@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { getAgentsWithActivity, deleteAgent, getOfflineAgentIds } from '../../store/agent';
+import { getAgentsWithActivity, deleteAgent } from '../../store/agent';
 import { getAllSessions } from '../../store/chat';
 import { SYSTEM_STATUSES } from '../../store/statuses';
 import type { Agent, DashboardStats } from '../../types';
@@ -28,7 +28,6 @@ export default function DashboardPage({ active = true, onNavigate }: {
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
-  const [offlineIds, setOfflineIds] = useState<Set<string>>(new Set());
   const [activityAvailable, setActivityAvailable] = useState(false);
   const [probeSnapshot, setProbeSnapshot] = useState<CollaborationSnapshot | null>(null);
   const [probeError, setProbeError] = useState('');
@@ -50,7 +49,7 @@ export default function DashboardPage({ active = true, onNavigate }: {
   const refresh = useCallback(async () => {
     const request = refreshGuard.current.begin();
     const snapshot = await loadDashboardSnapshot(
-      { getAgentsWithActivity, getAllSessions, getOfflineAgentIds },
+      { getAgentsWithActivity, getAllSessions },
       (nextAgents, nextActivityAvailable) => {
         if (!request.isCurrent()) return;
         setAgents(deletionFlow.current.visibleAgents(nextAgents));
@@ -59,7 +58,6 @@ export default function DashboardPage({ active = true, onNavigate }: {
       },
     );
     if (!request.isCurrent()) return;
-    setOfflineIds(snapshot.offlineIds);
     setActivityAvailable(snapshot.activityAvailable);
     setStats(snapshot.stats);
   }, []);
@@ -117,7 +115,7 @@ export default function DashboardPage({ active = true, onNavigate }: {
 
   function agentActivity(agent: Agent) {
     const activity = projectAgentActivity(agent, activityAvailable,
-      probeSnapshot, offlineIds.has(agent.id));
+      probeSnapshot);
     const record = recent.records[agent.id];
     return record ? mergeAgentRecords(activity, [record]) : activity;
   }
@@ -139,7 +137,7 @@ export default function DashboardPage({ active = true, onNavigate }: {
     <div className="dashboard">
       {stats && <DashboardStatusSummary totalAgents={stats.totalAgents}
         idleAgents={agents.filter(agent => projectAgentActivity(agent, activityAvailable,
-          probeSnapshot, offlineIds.has(agent.id)).kind === 'idle').length}
+          probeSnapshot).kind === 'idle').length}
         totalSessions={stats.totalSessions} />}
 
       <div className="dashboard__toolbar">

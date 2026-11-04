@@ -40,17 +40,14 @@ class ExternalSessionAdapter implements MonsoonExternalSessionPort {
     user: MonsoonExternalMessage, assistant: MonsoonExternalMessage,
     activeContext?: ContextMessage[]): Promise<void> {
     const current = await this.requireWritable(agentId, sessionId, expectedRevision);
-    const messages = activeContext ? current.messages.map(message => message.type === 'compact-marker'
-      ? { ...message, contextOmitted: true } : message) : current.messages;
     const userMessage = externalMessage(user, 'user');
     const assistantMessage = externalMessage(assistant, 'assistant');
     if (activeContext) {
-      userMessage.contextOmitted = true;
-      assistantMessage.contextExact = true;
-      assistantMessage.nativeContext = persistMonsoonContext(activeContext);
+      assistantMessage.contextCheckpoint = { historyRevision: current.historyRevision ?? 0,
+        messages: persistMonsoonContext(activeContext) };
     }
     await translateConflict(() => this.sessions.replace({ ...current,
-      messages: [...messages, userMessage, assistantMessage] }, expectedRevision, 'content'));
+      messages: [...current.messages, userMessage, assistantMessage] }, expectedRevision, 'content'));
   }
 
   async recordUsage(agentId: string, sessionId: string, expectedRevision: number,

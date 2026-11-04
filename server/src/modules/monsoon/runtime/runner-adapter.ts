@@ -10,11 +10,15 @@ import type { MonsoonTurn, MonsoonTurnSpec } from './turn-contract.js';
 import { monsoonCompactionTransform } from './automatic-compaction.js';
 import { createMonsoonTeamDeliveryEvidence } from './team-delivery-evidence.js';
 import { MonsoonExecutionTrace } from './execution-trace.js';
+import { MonsoonRecallAdapter } from './recall-adapter.js';
+import { recallToolDefs, drainRecallWorkers } from '../../../engine/shared/memory-recall/index.js';
 
 /** The only Monsoon dependency on the former shared runner. */
 export class MonsoonRunnerAdapter {
   private readonly teams = new SessionTeams();
   private readonly options = new WeakMap<MonsoonTurn, SessionRunnerOpts>();
+  private readonly recalls = new WeakMap<MonsoonTurn, MonsoonRecallAdapter>();
+  private readonly dataDirectories = new Set<string>();
 
   constructor(
     private readonly loadCollaboration: typeof AgentCollaborationTools.load
@@ -24,8 +28,12 @@ export class MonsoonRunnerAdapter {
   create(spec: MonsoonTurnSpec): MonsoonTurn {
     const trace = new MonsoonExecutionTrace();
     const options = runnerOptions(spec, trace);
-    const runner = trace.wrap(new SessionRunner(options));
+    const recall = new MonsoonRecallAdapter(spec, () => trace.position()?.runId);
+    options.internalInbox = (context, signal) => recall.beforeModel(context, signal);
+    const runner = recall.wrap(trace.wrap(new SessionRunner(options)));
     this.options.set(runner, options);
+    this.recalls.set(runner, recall);
+    this.dataDirectories.add(spec.dataDir);
     return runner;
   }
 
@@ -38,19 +46,24 @@ export class MonsoonRunnerAdapter {
     const collaboration = await this.loadCollaboration({
       agentId: options.agentId, sessionId: options.sessionId,
     }, reservedNames());
+    const recall = this.recalls.get(turn)!;
     options.extension = {
-      definitions: [...team.definitions, ...collaboration.runtimeDefinitions],
-      guideDefinitions: [...team.definitions, ...collaboration.definitions],
+      definitions: [...team.definitions, ...collaboration.runtimeDefinitions, ...recallToolDefs()],
+      guideDefinitions: [...team.definitions, ...collaboration.definitions, ...recallToolDefs()],
       createHandoff: team.createHandoff,
       silentTools: team.silentTools,
-      call: (name, args, signal) => collaboration.handles(name)
+      call: (name, args, signal) => recall.handles(name) ? recall.call(name, args, signal) : collaboration.handles(name)
         ? collaboration.call(name, args, signal)
         : team.call(name, args, signal),
     };
   }
 
   stopTeam(sessionId: string): boolean { return this.teams.stop(sessionId); }
-  shutdown(): Promise<void> { return this.teams.shutdown(); }
+  async shutdown(): Promise<void> {
+    await Promise.all([...this.dataDirectories].map(drainRecallWorkers));
+    this.dataDirectories.clear();
+    await this.teams.shutdown();
+  }
 }
 
 function reservedNames(): string[] {

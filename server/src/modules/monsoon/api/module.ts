@@ -18,6 +18,7 @@ import { monsoonAuxiliaryHandlers, monsoonAuxiliaryManifests } from './auxiliary
 import type { MonsoonTitleGenerator } from '../runtime/title-adapter.js';
 import { monsoonCompactionHandler, monsoonCompactionManifest } from './compaction-port.js';
 import type { MonsoonCompactionService } from '../application/compaction-service.js';
+import { workRecordHandlers, workRecordManifests } from './work-record-methods.js';
 
 interface MonsoonControlSource extends MonsoonSnapshotSource {
   abort(sessionId: string, runId?: string): Promise<boolean>;
@@ -36,14 +37,18 @@ export function createMonsoonModule(
   compaction?: MonsoonCompactionService,
 ): FeatureModule {
   const catalog = new MonsoonCatalog(source, titles);
+  const manifest = monsoonManifest(Boolean(runs), Boolean(sessionPorts), Boolean(input),
+    Boolean(title), Boolean(teams.context));
   return {
-    manifest: { ...monsoonManifest(Boolean(runs), Boolean(sessionPorts), Boolean(input),
-      Boolean(title), Boolean(teams.context)),
+    manifest: { ...manifest,
+      methods: [...manifest.methods,
+        ...(sessionPorts?.workRecords ? workRecordManifests() : [])],
       transports: [...(turns ? monsoonStreamManifests() : []),
         ...(attachments ? monsoonAttachmentManifests() : []),
         ...(compaction ? [monsoonCompactionManifest()] : [])] },
     handlers: { ...monsoonHandlers(source, teams, runs),
       ...(sessionPorts ? monsoonSessionHandlers(sessionPorts) : {}),
+      ...(sessionPorts?.workRecords ? workRecordHandlers(sessionPorts.workRecords) : {}),
       ...(input ? monsoonInputHandlers(input) : {}),
       ...monsoonAuxiliaryHandlers(title, teams.context ? { context: teams.context.bind(teams) } : undefined) },
     transports: { ...(turns ? monsoonStreamHandlers(turns) : {}),

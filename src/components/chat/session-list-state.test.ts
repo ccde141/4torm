@@ -117,12 +117,12 @@ test('selecting both a historical and a live session marks metadata without savi
       createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
       messages: [{ id: 'run-a', inputRunId: 'run-a', role: 'assistant', content: '',
         timestamp: '2026-01-01T00:00:00.000Z', runCommitted: false, reasoningContent: 'partial' }] };
-    const written = deferred<{ mode: string; session: ChatSession }>();
+    const written = deferred<{ lastReadAt: string }>();
     t.mock.method(globalThis, 'fetch', async (_input, init) => {
-      if (init?.method === 'PUT') {
+      if (init?.method === 'POST' && String(_input).endsWith('/read')) {
         const body = JSON.parse(String(init.body));
         written.resolve(body);
-        return Response.json({ ...stored, lastReadAt: body.session.lastReadAt });
+        return Response.json({ lastReadAt: body.lastReadAt });
       }
       return Response.json({ ...stored, pendingRuns: [{ runId: 'run-a', truncated: false,
         events: [{ type: 'reasoning', content: 'complete reasoning' }] }] });
@@ -136,9 +136,8 @@ test('selecting both a historical and a live session marks metadata without savi
     renderToString(createElement(LocaleProvider, null, createElement(Probe)));
     await select?.(id);
     const body = await written.promise;
-    assert.equal(body.mode, 'read', live ? 'live branch' : 'historical branch');
-    assert.deepEqual(body.session.messages, []);
-    assert.ok(body.session.lastReadAt);
+    assert.deepEqual(Object.keys(body), ['lastReadAt']);
+    assert.ok(body.lastReadAt, live ? 'live branch' : 'historical branch');
   }
 });
 

@@ -29,6 +29,7 @@ export function humanInputStatus(state: InputDeliveryState, runId: string, local
   if (state !== 'received' || !current) return INPUT_STATUS_LABELS[state][language];
   if (current.closed) return language ? 'Received · waiting for this turn to close' : '已接收 · 等待本轮结束';
   if (current.compacting) return language ? 'Received · waiting for compaction to finish' : '已接收 · 等待压缩结束';
+  if (current.phase === 'memory-recalling') return language ? 'Received · waiting for memory recall' : '已接收 · 等待记忆召回';
   if (current.phase === 'tool-exec') {
     return language ? 'Received · waiting for the current tool to finish' : '已接收 · 等待当前工具结束';
   }

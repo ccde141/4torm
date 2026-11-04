@@ -1,4 +1,7 @@
 import type { ToolArguments } from './tool-arguments.js';
+import { randomUUID } from 'node:crypto';
+import type { ExecutionCapabilityOwner } from '../../services/execution-capability-registry.js';
+import { closeExecutionCapabilityScope } from '../../services/execution-capability-scope.js';
 import { callLLM } from './llm-bridge.js';
 import type { LoadedAgent } from './agent-loader.js';
 import { subAgentCompaction } from './sub-agent-compaction.js';
@@ -29,6 +32,7 @@ export type NativeSubAgentEvent =
   | { type: 'done'; data: NativeSubAgentResult };
 
 export interface NativeSubAgentParams {
+  executionOwner?: ExecutionCapabilityOwner;
   compactionArea?: CompactionArea;
   agent: LoadedAgent;
   model: string;
@@ -127,7 +131,8 @@ async function executeRuntimeTool(
     const { executeToolOutcome } = await import('../../services/tool-executor.js');
     const outcome = await executeToolOutcome(
       runtime.params.dataDir, tool, args, runtime.params.agent.id, undefined,
-      runtime.params.parentSandboxLevel, undefined, runtime.mainAbort.signal,
+      runtime.params.parentSandboxLevel, undefined, runtime.mainAbort.signal, undefined,
+      runtime.params.executionOwner,
     );
     runtime.params.emitEvent({ type: 'tool_result', data: {
       tool, result: outcome.result, ok: outcome.ok,
@@ -278,11 +283,14 @@ function terminalFailure(runtime: Runtime, result: LoopResult): NativeSubAgentRe
 export async function runNativeSubAgent(
   params: NativeSubAgentParams,
 ): Promise<NativeSubAgentResult> {
+  params = { ...params, executionOwner: params.executionOwner
+    ?? { scope: 'conversation', ownerId: `delegate:${randomUUID()}` } };
   const runtime = createRuntime(params);
   try {
     const main = await runLoop(runtime, params.maxRounds, runtime.mainAbort.signal);
     return await finishAfterMain(runtime, main);
   } finally {
     runtime.mainAbort.dispose();
+    await closeExecutionCapabilityScope(params.executionOwner!);
   }
 }

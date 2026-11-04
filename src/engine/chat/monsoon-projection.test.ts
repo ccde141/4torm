@@ -17,6 +17,18 @@ test('team wait heartbeats identify waiting members without creating a tool step
   assert.equal(projection.messages[0].toolSteps, undefined);
 });
 
+test('recall status owns the initial wait and clears when main inference begins', () => {
+  const projection = new MonsoonMessageProjection([{ ...placeholder, streamingStatus: 'old queued notice' }], 'run-a', 'agent-a', () => 'next');
+  const recalling = projection.apply({ type: 'heartbeat', phase: 'memory-recalling', elapsed: 0 });
+  assert.equal(recalling.firstOutput, true);
+  assert.equal(recalling.flush, 'immediate');
+  assert.equal(projection.messages[0].streamingPhase, 'memory-recalling');
+  assert.equal(projection.messages[0].streamingStatus, undefined);
+  projection.apply({ type: 'heartbeat', phase: 'llm-waiting', elapsed: 0 });
+  assert.equal(projection.messages[0].streamingPhase, 'llm-waiting');
+  assert.equal(projection.messages[0].toolSteps, undefined);
+});
+
 test('MCP screenshots survive stream completion, reload and conversation history reconstruction', async () => {
   const { buildConversationHistory } = await import('./conversation-history');
   const images = [{ id: 'image-a', name: 'screen.png', mimeType: 'image/png', size: 10 }];

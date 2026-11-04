@@ -86,22 +86,25 @@ test('a cached newer revision cannot authorize an older message payload', async 
   assert.deepEqual(body?.session.messages.map(message => message.id), ['old']);
 });
 
-test('marking a recovered conversation read sends metadata without saving the journal projection', async t => {
+test('marking a recovered conversation read neither fetches nor saves the transcript', async t => {
   const current = { ...value, id: 'session-read-only', messageRevision: 4,
     messages: [{ id: 'run-a', inputRunId: 'run-a', role: 'assistant' as const, content: '',
       timestamp: value.createdAt, runCommitted: false }] };
-  let written: { mode: string; session: ChatSession } | undefined;
-  t.mock.method(globalThis, 'fetch', async (_input, init) => {
-    if (init?.method === 'PUT') {
+  const calls: string[] = [];
+  let written: { lastReadAt: string } | undefined;
+  t.mock.method(globalThis, 'fetch', async (input, init) => {
+    calls.push(`${init?.method ?? 'GET'} ${input}`);
+    if (init?.method === 'POST') {
       written = JSON.parse(String(init.body));
-      return Response.json({ ...current, revision: 2, lastReadAt: written?.session.lastReadAt });
+      return Response.json({ lastReadAt: written?.lastReadAt, unreadCount: 0 });
     }
     return Response.json({ ...current, pendingRuns: [{ runId: 'run-a', truncated: false,
       events: [{ type: 'reasoning', content: 'recovered reasoning' }] }] });
   });
   await getSession(current.id, current.agentId);
+  calls.length = 0;
   await markSessionRead(current.id);
-  assert.equal(written?.mode, 'read');
-  assert.deepEqual(written?.session.messages, []);
-  assert.ok(written?.session.lastReadAt);
+  assert.deepEqual(calls, [`POST /api/conversation/sessions/agent-a/${current.id}/read`]);
+  assert.ok(written?.lastReadAt);
+  assert.deepEqual(Object.keys(written!), ['lastReadAt']);
 });

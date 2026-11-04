@@ -3,6 +3,7 @@ import { buildSandboxSection } from '../shared/sandbox-prompt.js';
 import { buildTextToolProtocol, buildSelfManagementSection } from '../shared/prompt.js';
 import { buildFrameworkNavigationSection } from '../shared/framework-navigation.js';
 import { buildMemoryToolDefs, recallMemory } from '../shared/agent-memory.js';
+import { loadMemoryRecallSettings } from '../shared/memory-recall/index.js';
 import { buildBackgroundExecutionToolDefs } from '../shared/background-execution-tools.js';
 import { buildVirtualToolDefs } from './virtual-tools.js';
 import { withMainToolGuidance, renderMainToolDefinitions } from './main-tool-defs.js';
@@ -65,7 +66,9 @@ export async function buildMainAgentPrompt(opts: PromptBuildOpts): Promise<strin
   ));
   // 保持现有召回失败不阻断会话的行为。
   try {
-    const memory = await recallMemory(opts.dataDir, opts.agentId, opts.userMessage);
+    const recall = await loadMemoryRecallSettings(opts.dataDir);
+    const explicitRecallChoice = recall.enabled !== undefined || recall.level1Enabled !== undefined || recall.level2Enabled !== undefined;
+    const memory = explicitRecallChoice ? '' : await recallMemory(opts.dataDir, opts.agentId, opts.userMessage);
     if (memory) parts.push(memory);
   } catch { /* 与原构建器相同的召回降级 */ }
   parts.push(guidance.extension, buildSelfManagementSection({

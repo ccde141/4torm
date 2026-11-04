@@ -1,5 +1,7 @@
+import SkillCategoryPicker from './SkillCategoryPicker';
+import { skillCategory } from './skill-category';
 import { useState, useEffect, useRef } from 'react';
-import { listSkills, readSkillFile, readSkillToolDefs, createSkill, deleteSkill } from '../../store/skills';
+import { listSkills, readSkillFile, readSkillToolDefs, createSkill, deleteSkill, changeSkillCategory } from '../../store/skills';
 import type { SkillMeta } from '../../types';
 import { useActiveCapabilityList } from '../capabilities/useActiveCapabilityList';
 import '../../styles/components/capability-management.css';
@@ -12,11 +14,21 @@ export default function SkillsPage({ active }: { active: boolean }) {
   const confirm = useConfirm();
   const { items: skills, loadError, refresh } = useActiveCapabilityList(active, listSkills);
   const [preview, setPreview] = useState<{ meta: SkillMeta; content: string; tools: Array<{ name: string; description: string }> | null } | null>(null);
+  const [query, setQuery] = useState('');
+  const [savingCategory, setSavingCategory] = useState(false);
+  const groups = [...new Set(skills.map(skill => skillCategory(skill.category)))];
+  const matches = skills.filter(skill => `${skill.name} ${skill.id} ${skill.description} ${skillCategory(skill.category)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const saveCategory = async (skill: SkillMeta, category: string): Promise<boolean> => {
+    setSavingCategory(true);
+    try { await changeSkillCategory(skill, category); setError(''); await refresh(); return true; }
+    catch (error) { setError(t(error instanceof Error && error.message === 'SKILL_CATEGORY_CONFLICT' ? 'skills.category.conflict' : 'skills.category.failed')); return false; }
+    finally { setSavingCategory(false); }
+  };
   const [showCreate, setShowCreate] = useState(false);
 
   const [newId, setNewId] = useState('');
   const [newName, setNewName] = useState('');
-  const [newCategory, setNewCategory] = useState('通用');
+  const [newCategory, setNewCategory] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newContent, setNewContent] = useState(() => t('skills.create.template'));
   const [error, setError] = useState('');
@@ -69,7 +81,7 @@ export default function SkillsPage({ active }: { active: boolean }) {
       id: newId.trim().toLowerCase().replace(/\s+/g, '-'),
       name: newName.trim(),
       description: newDesc.trim(),
-      category: newCategory,
+      category: newCategory.trim(),
       version: '1.0.0',
       author: 'User',
       hasTools: false,
@@ -119,9 +131,7 @@ export default function SkillsPage({ active }: { active: boolean }) {
               </div>
               <div style={{ flex: 0.6 }}>
                 <label>{t('skills.create.category')}</label>
-                <select value={newCategory} onChange={e => setNewCategory(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }}>
-                  <option value="通用">{t('skills.category.general')}</option><option value="开发">{t('skills.category.development')}</option><option value="设计">{t('skills.category.design')}</option><option value="写作">{t('skills.category.writing')}</option><option value="分析">{t('skills.category.analysis')}</option><option value="其他">{t('skills.category.other')}</option>
-                </select>
+                <input list="skill-category-options" value={newCategory} maxLength={60} onChange={e => setNewCategory(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }} />
               </div>
             </div>
             <div>
@@ -137,6 +147,8 @@ export default function SkillsPage({ active }: { active: boolean }) {
         </div>
       )}
 
+      <datalist id="skill-category-options">{groups.map(name => <option key={name} value={name} />)}</datalist>
+      <div className="capability-form skills-search"><input type="search" aria-label={t('skills.search')} placeholder={t('skills.search')} value={query} onChange={event => setQuery(event.target.value)} /></div>
       <div className="skills-grid" style={{ marginTop: showCreate ? 'var(--space-6)' : 0 }}>
         {skills.length === 0 && (
           <div className="capability-empty" style={{ gridColumn: '1 / -1' }}>
@@ -144,11 +156,17 @@ export default function SkillsPage({ active }: { active: boolean }) {
             <span style={{ fontSize: 'var(--text-xs)' }}>{t('skills.empty.hint')}</span>
           </div>
         )}
-        {skills.map(skill => (
+        {groups.map(group => {
+          const items = matches.filter(skill => skillCategory(skill.category) === group);
+          return items.length > 0 && <details key={group} className="capability-panel skills-group" open>
+            <summary className="skills-group__summary"><span aria-hidden="true">›</span><strong>{group || t('skills.category.unclassified')}</strong><span className="capability-badge">{items.length}</span></summary>
+            <div className="capability-list skills-group__items">{items.map(skill => (
           <div key={skill.id} className="capability-panel capability-record skill-card">
             <div className="skill-card__header">
               <h4 className="skill-card__name">{skill.name}</h4>
-              <span className="capability-badge skill-card__badge">{skill.category}</span>
+              <span className="skill-card__id">{skill.id}</span>
+              <SkillCategoryPicker skill={skill} skills={skills} disabled={savingCategory || deletingId !== null}
+                onChange={category => saveCategory(skill, category)} />
             </div>
             <p className="skill-card__desc">{skill.description}</p>
             <div className="skill-card__meta">
@@ -158,12 +176,14 @@ export default function SkillsPage({ active }: { active: boolean }) {
             </div>
             <div className="capability-actions skill-card__actions">
               <button className="capability-button capability-button--secondary skill-btn-preview" onClick={() => handlePreview(skill)}>{t('skills.card.preview')}</button>
-              <button className="capability-button capability-button--danger skill-btn-delete" disabled={deletingId !== null} onClick={() => void handleDelete(skill)}>
+              <button className="capability-button capability-button--danger skill-btn-delete" disabled={deletingId !== null || savingCategory} onClick={() => void handleDelete(skill)}>
                 {deletingId === skill.id ? t('skills.delete.pending') : t('skills.card.remove')}
               </button>
             </div>
           </div>
-        ))}
+        ))}</div></details>;
+        })}
+        {skills.length > 0 && matches.length === 0 && <div className="capability-empty">{t('skills.noResults')}</div>}
       </div>
 
       {preview && (
@@ -173,7 +193,7 @@ export default function SkillsPage({ active }: { active: boolean }) {
             <div className="skill-preview-meta">
               <span>ID: {preview.meta.id}</span>
               <span>v{preview.meta.version}</span>
-              <span>{preview.meta.category}</span>
+              <span>{skillCategory(preview.meta.category) || t('skills.category.unclassified')}</span>
             </div>
             <div className="skill-preview-content">{preview.content}</div>
             {preview.tools && preview.tools.length > 0 && (

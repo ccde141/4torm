@@ -31,7 +31,8 @@ export function assembleSessionToolDefs(input: SessionToolAssemblyInput): ToolDe
     ...buildMemoryToolDefs(),
     ...(input.extensionTools ?? []),
   ].filter(tool => !input.memberTools || input.memberTools.includes(tool.name));
-  return input.mainAgent && input.interactive ? withMainToolGuidance(assembled) : assembled;
+  const unique = [...new Map(assembled.map(tool => [tool.name, tool])).values()];
+  return input.mainAgent && input.interactive ? withMainToolGuidance(unique) : unique;
 }
 
 export function assembleSessionToolSets(

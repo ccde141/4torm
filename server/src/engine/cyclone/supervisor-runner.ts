@@ -51,7 +51,7 @@ export async function buildSupervisorRequestContext(dataDir: string, workshopId:
   const messages: SupervisorMessage[] = [
     { role: 'system', content: [buildSupervisorPrompt(dataDir, workshopId, supervisor, agent, tools, native),
       await recallMemory(dataDir, agent.id, taskHint),
-      '项目资料和纠正写入 supervisor_memory；绑定 Agent 的 memory_list/read/write 用于跨项目通用经验，勿将本项目个例泛化到所有项目。'].filter(Boolean).join('\n\n') },
+      '项目资料和纠正写入 supervisor_memory；绑定 Agent 的 recall_search、recall_read、memory_manage 用于跨项目通用经验，勿将本项目个例泛化到所有项目。'].filter(Boolean).join('\n\n') },
     ...supervisor.messages,
   ];
   return { scoped, tools, messages };

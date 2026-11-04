@@ -9,7 +9,7 @@ interface SkillItem {
 
 export type ToolMode = 'all' | 'selected';
 
-const EXPLICIT_GRANT_SKILL_IDS = new Set(['browser']);
+const DEFAULT_SKILL_IDS = new Set(['browser']); // 新建 Agent 默认启用的技能；其余技能由人按需勾选，避免偶发问题
 
 export function getInitialToolSelection<T extends LocalTool>(
   allTools: readonly T[],
@@ -33,7 +33,7 @@ export function getDefaultSkillSelection<T extends SkillItem>(
 ): Set<string> {
   const selectedIds = isCreate
     ? allSkills
-      .filter(skill => !EXPLICIT_GRANT_SKILL_IDS.has(skill.id))
+      .filter(skill => DEFAULT_SKILL_IDS.has(skill.id))
       .map(skill => skill.id)
     : configuredIds;
   return new Set(selectedIds);

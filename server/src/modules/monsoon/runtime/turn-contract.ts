@@ -64,7 +64,7 @@ export type MonsoonEvent = MonsoonInputEvent | CompactionProgress | MonsoonTeamA
   | { type: 'notice'; message: string }
   | { type: 'compaction-notice'; message: string }
   | { type: 'context-compacted'; revision: number; marker: MonsoonContextMarker }
-  | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec' | 'team-waiting'; elapsed: number; members?: string[] }
+  | { type: 'heartbeat'; phase: 'llm-waiting' | 'tool-exec' | 'team-waiting' | 'memory-recalling'; elapsed: number; members?: string[] }
   | ({ type: 'tool-progress' } & ToolPreparationProgress)
   | { type: 'tool-call'; tool: string; args: Record<string, unknown> }
   | { type: 'tool-result'; tool: string; result: string; ok: boolean; meta?: unknown;

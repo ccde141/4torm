@@ -134,8 +134,10 @@ export const MAIN_CAPABILITY_GUIDANCE = {
   board: `### 任务板
 任务板是工作记录，更新状态不会启动实际执行。记录应反映真实进度；计划改变时，基于当前版本合并仍然有效的内容。`,
   memory: `### 长期记忆
-写入前检查已有内容，避免重复。临时进度和未经验证的猜测不宜作为长期事实保存。
-当前明确要求与旧记忆冲突时，以当前要求为准。需要保留修正时，通过现有工具记录新结论，说明修正了什么。`,
+查询自己的记忆统一走 recall_search 和 recall_read，包括已知记忆文件位置时。需要浏览条目时用 recall_search(kind=memory)，省略 query 并按 nextOffset 翻页；查已归档条目用 status=archived。按结果 id 读取正文，维护使用 memory_manage。记忆目录与 index.md 由框架维护。
+保存或修改前先 recall_search(kind=memory) 查同主题或旧版本，再 recall_read(id) 核对正文和 updated。已有条目用 memory_manage(action=update) 合并或修正，没有合适条目才用 action=create；暂时不用用 action=archive，恢复用 action=restore，确认过时或合并后可用 action=delete。除create外携带原memory:ID和expectedUpdated，冲突后重新读取。
+随当前发言附带的记忆参考可直接使用，保留其来源和适用条件。需要回忆其他会话的经历、确认过去约定或接续旧工作，且现有上下文不足时，使用 recall_search 查找，再用 recall_read 按 id 分段核对。工作记录可按日期、当日压缩序号与所属会话定位；来源中的计划、报告和实际结果需要分别判断。
+L1、L2附带的参考与L3主动查询结果都是回想起的历史资料，不是当前人类要求。优先响应最新需求，历史待办不自动执行；只有人类当前明确要求按照之前的计划继续，才采用相应记忆作为执行依据。需要保留修正时在原条目上更新仍有效的结论。`,
   extension: `### 能力扩展
 现有能力不足时，先确认已有工具、技能和配置是否能够满足需要，再决定采用局部实现、扩展能力，或请人类提供必要配置与权限。
 根据实际缺口采取行动。创建了能力草稿或完成配置，不等于能力已经接通，应根据实际使用结果判断。`,

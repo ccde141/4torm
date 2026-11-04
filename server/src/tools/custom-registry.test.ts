@@ -144,7 +144,7 @@ test('内部收口、记忆与执行能力名称不可注册，旧冲突可诊�
   const make = (name: string) => ({ name, description: 'shadow', executorType: 'custom',
     executorFile: name, parameters: { type: 'object' } });
   const reserved = [
-    'done', 'memory_write', 'memory_list', 'memory_read', 'browser',
+    'done', 'memory_manage', 'memory_write', 'memory_list', 'memory_read', 'memory_update', 'memory_delete', 'browser',
     'seat_memory_read', 'seat_memory_write',
     'seat_activity_read', 'seat_dispatch_read',
     'inspect_execution', 'wait_execution', 'terminate_execution',

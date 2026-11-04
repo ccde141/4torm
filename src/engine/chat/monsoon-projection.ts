@@ -149,13 +149,16 @@ export class MonsoonMessageProjection {
       return { flush: 'immediate' };
     }
     if (event.type === 'heartbeat') {
+      const recalling = event.phase === 'memory-recalling' || this.find()?.streamingPhase === 'memory-recalling';
       this.patch({ streamingPhase: event.phase === 'team-waiting' ? 'team-waiting'
+        : event.phase === 'memory-recalling' ? 'memory-recalling'
         : event.phase === 'tool-exec' ? 'tool-exec' : 'llm-waiting',
+        ...(recalling ? { streamingStatus: undefined, streamingTool: undefined, streamingArgumentChars: undefined } : {}),
         ...(event.phase === 'team-waiting' ? { streamingTool: Array.isArray(event.members)
           ? event.members.filter((value): value is string => typeof value === 'string').join('、') : undefined,
           streamingStatus: undefined } : {}),
         phaseElapsed: Math.round(Number(event.elapsed ?? 0) / 1000) });
-      return { flush: 'throttled' };
+      return recalling ? { flush: 'immediate', firstOutput: true } : { flush: 'throttled' };
     }
     if (event.type === 'usage') return { usage: event.usage === null ? null : usage(event.usage) };
     return {};

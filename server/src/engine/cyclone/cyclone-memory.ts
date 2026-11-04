@@ -12,11 +12,11 @@ const SEAT_MEMORY_TOOLS = ['seat_memory_read', 'seat_memory_write'];
 
 const MEMORY_GUIDANCE = `## 你的长期记忆
 
-你沿用绑定 Agent 的跨会话、跨功能区长期记忆。相关经验已在上方召回；需要检查时使用 memory_list、memory_read。
+你沿用绑定 Agent 的跨会话、跨功能区长期记忆。相关经验已在上方召回；需要检查时使用 recall_search、recall_read。
 
 - 本工作室的职责经验、资料索引、项目事实与纠正默认写入本工位记忆 seat_memory_write，不写到绑定 Agent 的通用记忆
-- 只有明确适合跨项目复用的偏好、方法或经验，才用 memory_write 写入绑定 Agent 的通用记忆
-- 写入前先 memory_list，已有同类则不要重复`;
+- 只有明确适合跨项目复用的偏好、方法或经验，才用 memory_manage(action=create) 写入绑定 Agent 的通用记忆
+- 保存或修改前先 recall_search(kind=memory) 查同主题或旧版本，再 recall_read(id) 核对正文和 updated。已有条目用 memory_manage(action=update) 合并或修正，没有合适条目才用 action=create；暂时不用用 action=archive，恢复用 action=restore，确认过时或合并后可用 action=delete。除create外携带原memory:ID和expectedUpdated，冲突后重新读取。`;
 
 export function withCycloneMemoryTools(toolDefs: ToolDef[], scope?: SeatMemoryScope): ToolDef[] {
   const names = new Set(toolDefs.map(tool => tool.name));

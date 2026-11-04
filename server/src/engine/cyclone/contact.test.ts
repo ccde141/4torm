@@ -147,10 +147,12 @@ test('contact接入前调用方取消撤回，接入后取消只停止等待而�
 
 test('contact迟于接入期限拿到锁也必须释放，不运行接收方', async t => {
   const { target, input } = await communicationFixture(t);
+  let clock = Date.now();
+  t.mock.method(Date, 'now', () => clock);
   let released = false;
   const outcome = await runContactCommunication(input, {
     id: target.id, title: target.title, kind: 'seat',
-    tryAcquire: async () => { await new Promise(resolve => setTimeout(resolve, 25)); return () => { released = true; }; },
+    tryAcquire: async () => { clock += 25; return () => { released = true; }; },
     execute: async () => { assert.fail('过期请求不得运行'); },
   }, { admissionMs: 10 });
   assert.equal(JSON.parse(outcome.result).status, 'busy'); assert.equal(released, true);
@@ -168,13 +170,13 @@ test('contact查询范围由源或接收岗位绑定，长回复转义后仍可�
   assert.equal((await readContactCommunicationOutcome({ ...input, sourceKind: 'supervisor' }, { contactId: id })).ok, false);
   assert.equal((await readContactCommunicationOutcome(input, { contactId: id, workshopId: 'other' })).ok, false);
   let offset = 0; let actual = '';
-  do {
+  for (;;) {
     const page = await readContactCommunicationOutcome(input, { contactId: id, offset: String(offset) });
     assert.equal(page.ok, true); assert.ok(page.result.length <= 18_000);
     const parsed = JSON.parse(page.result); actual += parsed.response;
     if (parsed.nextOffset === undefined) break;
     assert.ok(parsed.nextOffset > offset); offset = parsed.nextOffset;
-  } while (true);
+  }
   assert.equal(actual, content);
 });
 

@@ -68,4 +68,8 @@ export class ExecutionCapabilityRegistry {
     if (!surface) throw new Error(`execution surface provider ${viewer} is not registered`);
     return surface;
   }
+
+  findSurface(viewer: string): ExecutionCapabilityProvider['surface'] | undefined {
+    return this.surfaces.get(viewer);
+  }
 }

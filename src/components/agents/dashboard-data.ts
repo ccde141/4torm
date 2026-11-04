@@ -3,13 +3,11 @@ import type { Agent, DashboardStats } from '../../types';
 interface DashboardDataDeps {
   getAgentsWithActivity(): Promise<{ agents: Agent[]; activityAvailable: boolean }>;
   getAllSessions(): Promise<unknown[]>;
-  getOfflineAgentIds(agents: Agent[]): Promise<Set<string>>;
 }
 
 export interface DashboardSnapshot {
   agents: Agent[];
   activityAvailable: boolean;
-  offlineIds: Set<string>;
   stats: DashboardStats;
 }
 
@@ -21,17 +19,13 @@ export async function loadDashboardSnapshot(
   const sessionsPromise = deps.getAllSessions();
   const { agents, activityAvailable } = await agentsPromise;
   onAgentsReady(agents, activityAvailable);
-  const [sessions, offlineIds] = await Promise.all([
-    sessionsPromise,
-    deps.getOfflineAgentIds(agents),
-  ]);
+  const sessions = await sessionsPromise;
   const onlineAgents = agents.filter(agent => (
-    activityAvailable && agent.status === 'idle' && !agent.busy && !offlineIds.has(agent.id)
+    activityAvailable && !agent.busy
   )).length;
   return {
     agents,
     activityAvailable,
-    offlineIds,
     stats: {
       totalAgents: agents.length,
       onlineAgents,
